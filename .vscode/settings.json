@@ -1,0 +1,23 @@
+{
+    "python.args": [
+        "--init-hook",
+        "import sys; sys.path.insert(0, './')"
+    ],
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": true,
+        "editor.rulers": [88]
+    },
+    "black-formatter.args": [
+        "--preview",
+        "--enable-unstable-feature",
+        "string_processing",
+        "--line-length",
+        "88",
+    ],
+    "files.exclude": {
+        "**/__pycache__": true
+    },
+    "python.analysis.typeCheckingMode": "off",
+    "terminal.integrated.fontFamily": "MesloLGM Nerd Font"
+}
