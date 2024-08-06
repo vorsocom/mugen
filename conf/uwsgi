@@ -1,14 +1,17 @@
 [uwsgi]
-base = {/path/to/code}
+base = {/path/to/project}
+for-readline = {/path/to/project}/.env
+    env=%(_)
+end-for =
 processes = 4
 threads = 1
-home = %(base)/venv
+home = {/path/to/venv}
 chdir = %(base)
 socket = /tmp/com.vorsocomputing.gloria.sock
 chmod-socket = 666
 wsgi-file = %(base)/flaskman.py
 callable = app
 logto = /var/log/uwsgi/%n.log
-plugin = python35
+plugin = python312
 uid = {USER}
 gid = {USER}
