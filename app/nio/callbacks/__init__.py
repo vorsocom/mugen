@@ -65,9 +65,20 @@ class Callbacks:
         self, room: MatrixInvitedRoom, event: InviteMemberEvent
     ) -> None:
         """Handle InviteMemberEvents."""
-        is_direct = event.content.get("is_direct")
+        # If the assistant is in limited-beta mode, only process invites from the
+        # list of selected beta users.
+        if self._keyval_storage_gateway.get("gloria_limited_beta").lower() in (
+            "true",
+            "1",
+        ):
+            beta_users = self._keyval_storage_gateway.get(
+                "gloria_limited_beta_users"
+            ).split("|")
+            if event.sender not in beta_users:
+                return
 
         # Only accept invites to Direct Messages for now.
+        is_direct = event.content.get("is_direct")
         if is_direct is not None:
             # Join room.
             await self._client.join(room.room_id)
@@ -125,10 +136,12 @@ class Callbacks:
         self, room: MatrixRoom, message: RoomMessageText
     ) -> None:
         """Handle RoomMessageText."""
+        # Only process messages from direct chats for now.
         is_direct = await self.is_direct_message(room.room_id)
         if message.sender == self._client.user_id or not is_direct:
             return
 
+        # Load chat history
         chat_history_key = CHAT_HISTORY_KEY.format(room.room_id)
 
         agent_response = await self._messaging_service.handle_text_message(
