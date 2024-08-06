@@ -65,6 +65,15 @@ class Callbacks:
         self, room: MatrixInvitedRoom, event: InviteMemberEvent
     ) -> None:
         """Handle InviteMemberEvents."""
+        # Only process invites from allowed domains.
+        # Federated servers need to be in the allowed domains list for their users
+        # to initiate conversations with the assistant.
+        allowed_domains = self._keyval_storage_gateway.get(
+            "gloria_allowed_domains"
+        ).split("|")
+        if event.sender.split(":")[1] not in allowed_domains:
+            return
+
         # If the assistant is in limited-beta mode, only process invites from the
         # list of selected beta users.
         if self._keyval_storage_gateway.get("gloria_limited_beta").lower() in (

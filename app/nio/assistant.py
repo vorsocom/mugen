@@ -52,6 +52,9 @@ def load_config(basedir: str, keyval_storage_gateway: IKeyValStorageGateway) -> 
     keyval_storage_gateway.put(
         "gloria_limited_beta_users", os.getenv("GLORIA_LIMITED_BETA_USERS")
     )
+    keyval_storage_gateway.put(
+        "gloria_allowed_domains", os.getenv("GLORIA_ALLOWED_DOMAINS")
+    )
 
     with open(f"{basedir}/conf/persona.txt", encoding="utf8") as f:
         keyval_storage_gateway.put("matrix_agent_persona", f.read())
