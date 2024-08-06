@@ -47,6 +47,12 @@ def close_storage(keyval_storage_gateway: IKeyValStorageGateway) -> None:
 
 def load_config(basedir: str, keyval_storage_gateway: IKeyValStorageGateway) -> None:
     """Load configuration value from environment file to dbm storage."""
+
+    keyval_storage_gateway.put("gloria_limited_beta", os.getenv("GLORIA_LIMITED_BETA"))
+    keyval_storage_gateway.put(
+        "gloria_limited_beta_users", os.getenv("GLORIA_LIMITED_BETA_USERS")
+    )
+
     with open(f"{basedir}/conf/persona.txt", encoding="utf8") as f:
         keyval_storage_gateway.put("matrix_agent_persona", f.read())
 
@@ -61,11 +67,13 @@ def load_config(basedir: str, keyval_storage_gateway: IKeyValStorageGateway) -> 
     keyval_storage_gateway.put(
         "matrix_agent_display_name", os.getenv("MATRIX_AGENT_DISPLAY_NAME")
     )
+
     keyval_storage_gateway.put("groq_api_key", os.getenv("GROQ_API_KEY"))
     keyval_storage_gateway.put("groq_api_model", os.getenv("GROQ_API_MODEL"))
     keyval_storage_gateway.put(
         "groq_api_classification_model", os.getenv("GROQ_API_CLASSIFICATION_MODEL")
     )
+
     keyval_storage_gateway.put("qdrant_api_key", os.getenv("QDRANT_API_KEY"))
     keyval_storage_gateway.put("qdrant_endpoint_url", os.getenv("QDRANT_ENDPOINT_URL"))
 
