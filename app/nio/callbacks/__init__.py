@@ -22,6 +22,7 @@ from nio import (
 from app.contract.completion_gateway import ICompletionGateway
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
+from app.contract.logging_gateway import ILoggingGateway
 from app.contract.meeting_service import IMeetingService
 from app.contract.messaging_service import IMessagingService
 
@@ -45,6 +46,7 @@ class Callbacks:
         completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
         knowledge_retrieval_gateway: IKnowledgeRetrievalGateway,
+        logging_gateway: ILoggingGateway,
         meeting_service: IMeetingService,
         messaging_service: IMessagingService,
     ) -> None:
@@ -53,13 +55,14 @@ class Callbacks:
         self._completion_gateway = completion_gateway
         self._keyval_storage_gateway = keyval_storage_gateway
         self._knoweldge_retrieval_gateway = knowledge_retrieval_gateway
+        self._logging_gateway = logging_gateway
         self._meeting_service = meeting_service
         self._messaging_service = messaging_service
 
     # Events
     async def invite_alias_event(self, event: InviteAliasEvent) -> None:
         """Handle InviteAliasEvents."""
-        print(f"InviteAliasEvent: {event.sender}")
+        self._logging_gateway.info(f"InviteAliasEvent: {event.sender}")
 
     async def invite_member_event(
         self, room: MatrixInvitedRoom, event: InviteMemberEvent
@@ -134,7 +137,7 @@ class Callbacks:
         self, _room: MatrixInvitedRoom, event: InviteNameEvent
     ) -> None:
         """Handle InviteNameEvents."""
-        print(f"InviteNameEvent: {event.sender}")
+        self._logging_gateway.info(f"InviteNameEvent: {event.sender}")
 
     async def room_create_event(
         self, _room: MatrixRoom, event: RoomCreateEvent
@@ -179,7 +182,7 @@ class Callbacks:
 
     async def tag_event(self, event: TagEvent) -> None:
         """Handle TagEvents."""
-        print(f"TagEvent: {event.sender}")
+        self._logging_gateway.info(f"TagEvent: {event.sender}")
 
     # Responses
     async def sync_response(self, resp: SyncResponse):

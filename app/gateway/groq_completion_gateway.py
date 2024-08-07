@@ -10,6 +10,7 @@ from groq import AsyncGroq, GroqError
 
 from app.contract.completion_gateway import ICompletionGateway
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
+from app.contract.logging_gateway import ILoggingGateway
 
 
 INPERSON_MEETING_DATA = (
@@ -27,11 +28,15 @@ class GroqCompletionGateway(ICompletionGateway):
     """A Groq chat compeltion gateway."""
 
     def __init__(
-        self, api_key: str, keyval_storage_gateway: IKeyValStorageGateway
+        self,
+        api_key: str,
+        keyval_storage_gateway: IKeyValStorageGateway,
+        logging_gateway: ILoggingGateway,
     ) -> None:
         super().__init__()
         self._api = AsyncGroq(api_key=api_key)
         self._keyval_storage_gateway = keyval_storage_gateway
+        self._logging_gateway = logging_gateway
 
     @staticmethod
     def format_completion(response: Optional[str], default: str) -> str:
@@ -72,7 +77,9 @@ class GroqCompletionGateway(ICompletionGateway):
             )
             response = chat_completion.choices[0].message.content
         except GroqError:
-            print("An error was encountered while trying the Groq API.")
+            self._logging_gateway.warning(
+                "An error was encountered while trying the Groq API."
+            )
             traceback.print_exc()
         return response
 
@@ -86,7 +93,9 @@ class GroqCompletionGateway(ICompletionGateway):
             )
             response = chat_completion.choices[0].message.content
         except GroqError:
-            print("An error was encountered while trying the Groq API.")
+            self._logging_gateway.warning(
+                "An error was encountered while trying the Groq API."
+            )
             traceback.print_exc()
 
         return response

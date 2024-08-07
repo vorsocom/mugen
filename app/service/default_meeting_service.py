@@ -10,6 +10,7 @@ from nio import AsyncClient
 
 from app.contract.completion_gateway import ICompletionGateway
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
+from app.contract.logging_gateway import ILoggingGateway
 from app.contract.meeting_service import IMeetingService
 from app.contract.platform_gateway import IPlatformGateway
 
@@ -39,11 +40,13 @@ class DefaultMeetingService(IMeetingService):
         client: AsyncClient,
         completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
+        logging_gateway: ILoggingGateway,
         platform_gateway: IPlatformGateway,
     ) -> None:
         self._client = client
         self._completion_gateway = completion_gateway
         self._keyval_storage_gateway = keyval_storage_gateway
+        self._logging_gateway = logging_gateway
         self._platform_gateway = platform_gateway
         self._meeting_canceller = CancelScheduledMeetingInteractor(
             self._platform_gateway
@@ -90,7 +93,7 @@ class DefaultMeetingService(IMeetingService):
                 )
             )
         except TypeError:
-            print("TypeError")
+            self._logging_gateway.warning("default_meeting_service: TypeError.")
             traceback.print_exc()
             return
 
@@ -351,7 +354,7 @@ class DefaultMeetingService(IMeetingService):
                 )
             )
         except KeyError:
-            print("KeyError")
+            self._logging_gateway.warning("default_meeting_service: KeyError.")
             traceback.print_exc()
             return
 

@@ -15,6 +15,7 @@ from nio import (
 )
 
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
+from app.contract.logging_gateway import ILoggingGateway
 from app.contract.platform_gateway import IPlatformGateway
 
 from app.domain.entity.meeting import Meeting
@@ -74,9 +75,15 @@ MEETING_UPDATE = (
 class MatrixPlatformGateway(IPlatformGateway):
     """A platform gateway for Matrix."""
 
-    def __init__(self, client: AsyncClient, storage: IKeyValStorageGateway) -> None:
+    def __init__(
+        self,
+        client: AsyncClient,
+        keyval_storage_gateway: IKeyValStorageGateway,
+        logging_gateway: ILoggingGateway,
+    ) -> None:
         self._client = client
-        self._keyval_storage_gateway = storage
+        self._keyval_storage_gateway = keyval_storage_gateway
+        self._logging_gateway = logging_gateway
 
     ##########
     # MEETINGS
@@ -131,7 +138,9 @@ class MatrixPlatformGateway(IPlatformGateway):
                 },
             )
         except (SendRetryError, LocalProtocolError):
-            print("Error sending message.")
+            self._logging_gateway.warning(
+                "matrix_platform_gateway: Error sending message."
+            )
             traceback.print_exc()
 
         # Return the room_id as the location for the meeting.
@@ -173,7 +182,9 @@ class MatrixPlatformGateway(IPlatformGateway):
                     },
                 )
             except (SendRetryError, LocalProtocolError):
-                print("Error sending message.")
+                self._logging_gateway.warning(
+                    "matrix_platform_gateway: Error sending message."
+                )
                 traceback.print_exc()
                 return False
 
@@ -205,7 +216,9 @@ class MatrixPlatformGateway(IPlatformGateway):
                     },
                 )
             except (SendRetryError, LocalProtocolError):
-                print("Error sending message.")
+                self._logging_gateway.warning(
+                    "matrix_platform_gateway: Error sending message."
+                )
                 traceback.print_exc()
                 return False
 
@@ -234,7 +247,9 @@ class MatrixPlatformGateway(IPlatformGateway):
                     },
                 )
             except (SendRetryError, LocalProtocolError):
-                print("Error sending message.")
+                self._logging_gateway.warning(
+                    "matrix_platform_gateway: Error sending message."
+                )
                 traceback.print_exc()
                 return False
 
@@ -325,7 +340,9 @@ class MatrixPlatformGateway(IPlatformGateway):
                 },
             )
         except (SendRetryError, LocalProtocolError):
-            print("Error sending message.")
+            self._logging_gateway.warning(
+                "matrix_platform_gateway: Error sending message."
+            )
             traceback.print_exc()
             return False
 

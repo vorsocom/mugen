@@ -5,6 +5,7 @@ from importlib import import_module
 from abc import ABC, abstractmethod
 
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
+from app.contract.logging_gateway import ILoggingGateway
 
 
 class InvalidCompletionGatewayException(Exception):
@@ -22,11 +23,14 @@ class ICompletionGateway(ABC):
         completion_module: str,
         api_key: str,
         keyval_storage_gateway: IKeyValStorageGateway,
+        logging_gateway: ILoggingGateway,
     ):
         """Get an instance of CompletionGateway."""
         # Create a new instance.
         if not cls._instance:
-            print(f"Creating new ICompletionGateway instance: {completion_module}.")
+            logging_gateway.info(
+                f"Creating new ICompletionGateway instance: {completion_module}."
+            )
             import_module(name=completion_module)
             subclasses = cls.__subclasses__()
 
@@ -43,7 +47,9 @@ class ICompletionGateway(ABC):
                     + "ICompletionGateway."
                 )
 
-            cls._instance = subclasses[0](api_key, keyval_storage_gateway)
+            cls._instance = subclasses[0](
+                api_key, keyval_storage_gateway, logging_gateway
+            )
         return cls._instance
 
     @staticmethod
