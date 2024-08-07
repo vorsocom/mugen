@@ -12,6 +12,7 @@ from nltk.stem.snowball import SnowballStemmer
 from app.contract.completion_gateway import ICompletionGateway
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
+from app.contract.logging_gateway import ILoggingGateway
 from app.contract.messaging_service import IMessagingService
 from app.contract.platform_gateway import IPlatformGateway
 
@@ -26,12 +27,14 @@ class DefaultMessagingService(IMessagingService):
         completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
         knowledge_retrieval_gateway: IKnowledgeRetrievalGateway,
+        logging_gateway: ILoggingGateway,
         platform_gateway: IPlatformGateway,
     ) -> None:
         self._client = client
         self._completion_gateway = completion_gateway
         self._keyval_storage_gateway = keyval_storage_gateway
         self._knowledge_retrieval_gateway = knowledge_retrieval_gateway
+        self._logging_gateway = logging_gateway
         self._platform_gateway = platform_gateway
 
     async def handle_text_message(
@@ -55,7 +58,7 @@ class DefaultMessagingService(IMessagingService):
         knowledge_docs: list[str] = []
         if classification is not None:
             instruct = json.loads(classification)
-            print(json.dumps(instruct, indent=4))
+            self._logging_gateway.debug(json.dumps(instruct, indent=4))
             match instruct["classification"]:
                 case "search_orders":
                     hits = await self._knowledge_retrieval_gateway.search_similar(
@@ -63,7 +66,9 @@ class DefaultMessagingService(IMessagingService):
                         f"{instruct["subject"]} {instruct["event_type"]}"
                     )
                     if len(hits) > 0:
-                        print(len(hits))
+                        self._logging_gateway.debug(
+                            f"default_messaging_gateway: similarity search hits - {len(hits)}"
+                        )
                         hit_str = "In {0} Orders Serial {1} dated {2}, paragraph {3} states: {4}"
                         knowledge_docs = [
                             hit_str.format(
@@ -78,7 +83,7 @@ class DefaultMessagingService(IMessagingService):
 
                 case _:
                     pass
-        print(knowledge_docs)
+        self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
         chat_history = []
         if not self._keyval_storage_gateway.has_key(chat_history_key):
             chat_history.append(

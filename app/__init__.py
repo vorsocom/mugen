@@ -1,6 +1,8 @@
 """Flask application package."""
 
-__all__ = ["app"]
+__all__ = ["create_app"]
+
+import sys
 
 from flask import Flask, g
 
@@ -13,8 +15,14 @@ app = Flask(__name__)
 
 def create_app(config_name):
     """Application factory."""
+    # Check for valid configuration name.
+    if config_name not in ("default", "development", "testing", "production"):
+        print("Invalid configuration name.")
+        sys.exit(1)
+
     # Create application configuration object.
     app.config.from_object(AppConfig[config_name])
+    app.logger.info("Creating app with %s configuration.", config_name)
 
     # Initialize application.
     AppConfig[config_name].init_app(app)

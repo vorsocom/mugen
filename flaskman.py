@@ -14,4 +14,6 @@ app = create_app(os.getenv(f"{APP_PREFIX}_CONFIG", "default"))
 ipc_queue = Queue()
 
 # run_assistant(BASEDIR, ipc_queue)
-threading.Thread(target=run_assistant, args=(BASEDIR, ipc_queue)).start()
+threading.Thread(
+    target=run_assistant, args=(BASEDIR, app.config.get("LOG_LEVEL"), ipc_queue)
+).start()

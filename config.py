@@ -4,7 +4,7 @@ import os
 
 __all__ = ["AppConfig"]
 
-APP_PREFIX = "BLOGGINS"
+APP_PREFIX = "GLORIA"
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 
 
