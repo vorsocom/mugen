@@ -75,6 +75,11 @@ class Callbacks:
             "gloria_allowed_domains"
         ).split("|")
         if event.sender.split(":")[1] not in allowed_domains:
+            await self._client.room_leave(room.room_id)
+            self._logging_gateway.warning(
+                "callbacks:invite_member_event: Rejected invitation. Reason: Domain"
+                f" not allowed. ({event.sender})"
+            )
             return
 
         # If the assistant is in limited-beta mode, only process invites from the
@@ -87,51 +92,61 @@ class Callbacks:
                 "gloria_limited_beta_users"
             ).split("|")
             if event.sender not in beta_users:
+                await self._client.room_leave(room.room_id)
+                self._logging_gateway.warning(
+                    "callbacks:invite_member_event: Rejected invitation. Reason:"
+                    f" Non-beta user. ({event.sender})"
+                )
                 return
 
         # Only accept invites to Direct Messages for now.
         is_direct = event.content.get("is_direct")
-        if is_direct is not None:
-            # Join room.
-            await self._client.join(room.room_id)
-
-            # Flag room as direct chat.
-            await self._client.room_put_state(
-                room_id=room.room_id,
-                event_type=FLAGS_KEY,
-                content={"m.direct": 1},
+        if is_direct is None:
+            await self._client.room_leave(room.room_id)
+            self._logging_gateway.warning(
+                "callbacks:invite_member_event: Rejected invitation. Reason: Not direct"
+                f" message. ({event.sender})"
             )
+            return
 
-            # Get profile and add user to list of known users if required.
-            resp = await self._client.get_profile(event.sender)
-            if isinstance(resp, ProfileGetResponse):
-                known_users = {}
-                if not self._keyval_storage_gateway.has_key(KNOWN_USERS_LIST_KEY):
-                    # Create a new known user list.
-                    known_users[event.sender] = {
-                        "displayname": resp.displayname,
-                        "dm_id": room.room_id,
-                    }
-                else:
-                    # Load existing known user list.
-                    known_users = dict(
-                        pickle.loads(
-                            self._keyval_storage_gateway.get(
-                                KNOWN_USERS_LIST_KEY, False
-                            )
-                        )
+        # Join room.
+        await self._client.join(room.room_id)
+
+        # Flag room as direct chat.
+        await self._client.room_put_state(
+            room_id=room.room_id,
+            event_type=FLAGS_KEY,
+            content={"m.direct": 1},
+        )
+
+        # Get profile and add user to list of known users if required.
+        resp = await self._client.get_profile(event.sender)
+        if isinstance(resp, ProfileGetResponse):
+            known_users = {}
+            if not self._keyval_storage_gateway.has_key(KNOWN_USERS_LIST_KEY):
+                # Create a new known user list.
+                known_users[event.sender] = {
+                    "displayname": resp.displayname,
+                    "dm_id": room.room_id,
+                }
+            else:
+                # Load existing known user list.
+                known_users = dict(
+                    pickle.loads(
+                        self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
                     )
-                    # Add user to existing known user list.
-                    # Overwrite existing data just in case we are not working with
-                    # a clean data store.
-                    known_users[event.sender] = {
-                        "displayname": resp.displayname,
-                        "dm_id": room.room_id,
-                    }
-                self._keyval_storage_gateway.put(
-                    KNOWN_USERS_LIST_KEY, pickle.dumps(known_users)
                 )
-                self._messaging_service.update_known_users(KNOWN_USERS_LIST_KEY)
+                # Add user to existing known user list.
+                # Overwrite existing data just in case we are not working with
+                # a clean data store.
+                known_users[event.sender] = {
+                    "displayname": resp.displayname,
+                    "dm_id": room.room_id,
+                }
+            self._keyval_storage_gateway.put(
+                KNOWN_USERS_LIST_KEY, pickle.dumps(known_users)
+            )
+            self._messaging_service.update_known_users(KNOWN_USERS_LIST_KEY)
 
     async def invite_name_event(
         self, _room: MatrixInvitedRoom, event: InviteNameEvent
