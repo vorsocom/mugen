@@ -52,16 +52,11 @@ class ICompletionGateway(ABC):
             )
         return cls._instance
 
-    @staticmethod
     @abstractmethod
-    def format_completion(response: Optional[str], default: str) -> str:
-        """Format a completion response, returning a default value if it's None."""
-
-    @abstractmethod
-    async def classify_message(
-        self, message: str, model: str, response_format: str
+    async def get_chat_thread_classification(
+        self, context: list[dict], message: str, model: str, response_format: str
     ) -> Optional[str]:
-        """Classify user messages for RAG pipeline."""
+        """Given a user message and a chat thread, classify them as related or unrelated."""
 
     @abstractmethod
     async def get_completion(
@@ -70,5 +65,7 @@ class ICompletionGateway(ABC):
         """Get LLM response based on context (conversation history + relevant data)."""
 
     @abstractmethod
-    def get_scheduled_meetings_data(self, user_id: str) -> str:
-        """Get data on scheduled meetings to send to assistant."""
+    async def get_rag_classification(
+        self, message: str, model: str, response_format: str
+    ) -> Optional[str]:
+        """Classify user messages for RAG pipeline."""

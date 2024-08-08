@@ -26,13 +26,9 @@ from app.contract.logging_gateway import ILoggingGateway
 from app.contract.meeting_service import IMeetingService
 from app.contract.messaging_service import IMessagingService
 
-CHAT_HISTORY_KEY = "chat_history:{0}"
-
 FLAGS_KEY = "m.agent_flags"
 
 KNOWN_USERS_LIST_KEY = "known_users_list"
-
-SCHEDULED_MEETING_KEY = "scheduled_meeting:{0}"
 
 SYNC_KEY = "matrix_client_sync_next_batch"
 
@@ -146,7 +142,6 @@ class Callbacks:
             self._keyval_storage_gateway.put(
                 KNOWN_USERS_LIST_KEY, pickle.dumps(known_users)
             )
-            self._messaging_service.update_known_users(KNOWN_USERS_LIST_KEY)
 
     async def invite_name_event(
         self, _room: MatrixInvitedRoom, event: InviteNameEvent
@@ -168,32 +163,14 @@ class Callbacks:
         if message.sender == self._client.user_id or not is_direct:
             return
 
-        # Load chat history
-        chat_history_key = CHAT_HISTORY_KEY.format(room.room_id)
-
-        agent_response = await self._messaging_service.handle_text_message(
+        # Allow the messaging service to process the message.
+        await self._messaging_service.handle_text_message(
             room.room_id,
             message.event_id,
             message.sender,
             message.body,
-            chat_history_key,
             KNOWN_USERS_LIST_KEY,
         )
-
-        # If trigger detected to schedule meeting.
-        if "I'm arranging the requested meeting." in agent_response:
-            await self._meeting_service.schedule_meeting(
-                message.sender, room.room_id, chat_history_key
-            )
-        # If trigger detected to update scheduled meeting.
-        elif "I'm updating the specified meeting." in agent_response:
-            await self._meeting_service.update_scheduled_meeting(
-                message.sender, room.room_id, chat_history_key, SCHEDULED_MEETING_KEY
-            )
-        elif "I'm cancelling the specified meeting." in agent_response:
-            await self._meeting_service.cancel_scheduled_meeting(
-                message.sender, room.room_id, chat_history_key, SCHEDULED_MEETING_KEY
-            )
 
     async def tag_event(self, event: TagEvent) -> None:
         """Handle TagEvents."""
