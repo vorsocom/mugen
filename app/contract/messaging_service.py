@@ -10,6 +10,8 @@ from nio import AsyncClient
 from app.contract.completion_gateway import ICompletionGateway
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
+from app.contract.logging_gateway import ILoggingGateway
+from app.contract.meeting_service import IMeetingService
 from app.contract.platform_gateway import IPlatformGateway
 
 
@@ -30,12 +32,16 @@ class IMessagingService(ABC):
         completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
         knowledge_retrieval_gateway: IKnowledgeRetrievalGateway,
+        logging_gateway: ILoggingGateway,
         platform_gateway: IPlatformGateway,
+        meeting_service: IMeetingService,
     ):
         """Get an instance of IMessagingService."""
         # Create a new instance.
         if not cls._instance:
-            print(f"Creating new IMessagingService instance: {service_module}.")
+            logging_gateway.info(
+                f"Creating new IMessagingService instance: {service_module}."
+            )
             import_module(name=service_module)
             subclasses = cls.__subclasses__()
 
@@ -57,7 +63,9 @@ class IMessagingService(ABC):
                 completion_gateway,
                 keyval_storage_gateway,
                 knowledge_retrieval_gateway,
+                logging_gateway,
                 platform_gateway,
+                meeting_service,
             )
         return cls._instance
 
@@ -68,7 +76,6 @@ class IMessagingService(ABC):
         message_id: str,
         sender: str,
         content: str,
-        chat_history_key: str,
         known_users_list_key: str,
-    ) -> str:
+    ) -> None:
         """Handle a text message from a chat."""

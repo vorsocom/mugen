@@ -7,10 +7,12 @@ import sys
 from nio import AsyncClient, LoginResponse
 
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
+from app.contract.logging_gateway import ILoggingGateway
 
 
 def persist_login_details(
-    resp: LoginResponse, keyval_storage_gateway: IKeyValStorageGateway
+    resp: LoginResponse,
+    keyval_storage_gateway: IKeyValStorageGateway,
 ) -> None:
     """Persists login details using dbm.
 
@@ -24,31 +26,35 @@ def persist_login_details(
 
 
 async def login(
-    client: AsyncClient, keyval_storage_gateway: IKeyValStorageGateway
+    logging_gateway: ILoggingGateway,
+    client: AsyncClient,
+    keyval_storage_gateway: IKeyValStorageGateway,
 ) -> bool:
     """Login to matrix server."""
     if keyval_storage_gateway.get("client_access_token") is None:
-        print("First time use.")
+        logging_gateway.info("auth: First time use.")
         pw = keyval_storage_gateway.get("matrix_client_password")
         dn = keyval_storage_gateway.get("matrix_client_device_name")
+        logging_gateway.info("auth: Attempting login using password.")
         resp = await client.login(pw, dn)
 
         # check login successful
         if isinstance(resp, LoginResponse):
+            logging_gateway.info("auth: Login attempt using password successful.")
+            logging_gateway.info("auth: Persisting login credentials.")
             persist_login_details(resp, keyval_storage_gateway)
         else:
-            print(f"homeserver = {client.homeserver}; user = {client.user_id}")
-            print(f"Login failed: {resp}")
+            logging_gateway.info(
+                f"homeserver = {client.homeserver}; user = {client.user_id}"
+            )
+            logging_gateway.info(f"Login attempt using password failed: {resp}")
             sys.exit(1)
-        print(
-            "Logged in using password. Credentials stored."
-            + "Next login will use credentials.",
-        )
 
+        logging_gateway.info("auth: Next login will use persisted credentials.")
         return False
 
     # Otherwise the config file exists, so we'll use the stored credentials.
-    print("Logging in using saved credentials.")
+    logging_gateway.info("auth: Logging in using saved credentials.")
     # open the file in read-only mode.
     client.access_token = keyval_storage_gateway.get("client_access_token")
     client.device_id = keyval_storage_gateway.get("client_device_id")

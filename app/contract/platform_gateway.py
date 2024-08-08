@@ -9,6 +9,7 @@ from typing import Optional
 from nio import AsyncClient
 
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
+from app.contract.logging_gateway import ILoggingGateway
 
 from app.domain.entity.meeting import Meeting
 
@@ -28,11 +29,14 @@ class IPlatformGateway(ABC):
         platform_module: str,
         client: AsyncClient,
         keyval_storage_gateway: IKeyValStorageGateway,
+        logging_gateway: ILoggingGateway,
     ):
         """Get an instance of IPlatformGateway."""
         # Create a new instance.
         if not cls._instance:
-            print(f"Creating new IPlatformGateway instance: {platform_module}.")
+            logging_gateway.info(
+                f"Creating new IPlatformGateway instance: {platform_module}."
+            )
             import_module(name=platform_module)
             subclasses = cls.__subclasses__()
 
@@ -49,7 +53,9 @@ class IPlatformGateway(ABC):
                     + "IPlatformGateway."
                 )
 
-            cls._instance = subclasses[0](client, keyval_storage_gateway)
+            cls._instance = subclasses[0](
+                client, keyval_storage_gateway, logging_gateway
+            )
         return cls._instance
 
     @abstractmethod

@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from importlib import import_module
 from typing import Optional
 
+from app.contract.logging_gateway import ILoggingGateway
+
 
 class InvalidKeyValStorageGatewayException(Exception):
     """Custom exception."""
@@ -17,11 +19,15 @@ class IKeyValStorageGateway(ABC):
     _instance = None
 
     @classmethod
-    def instance(cls, storage_module: str, storage_path: str):
+    def instance(
+        cls, storage_module: str, storage_path: str, logging_gateway: ILoggingGateway
+    ):
         """Get an instance of IKeyValStorageGateway."""
         # Create a new instance.
         if not cls._instance:
-            print(f"Creating new IKeyValStorageGateway instance: {storage_module}.")
+            logging_gateway.info(
+                f"Creating new IKeyValStorageGateway instance: {storage_module}."
+            )
             import_module(name=storage_module)
             subclasses = cls.__subclasses__()
 
@@ -38,7 +44,7 @@ class IKeyValStorageGateway(ABC):
                     + "IKeyValStorageGateway."
                 )
 
-            cls._instance = subclasses[0](storage_path)
+            cls._instance = subclasses[0](storage_path, logging_gateway)
         return cls._instance
 
     @abstractmethod

@@ -12,6 +12,7 @@ from nio import AsyncClient
 from app.contract.completion_gateway import ICompletionGateway
 from app.contract.platform_gateway import IPlatformGateway
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
+from app.contract.logging_gateway import ILoggingGateway
 
 
 class InvalidMeetingServiceException(Exception):
@@ -30,12 +31,15 @@ class IMeetingService(ABC):
         client: AsyncClient,
         completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
+        logging_gateway: ILoggingGateway,
         platform_gateway: IPlatformGateway,
     ):
         """Get an instance of IMeetingService."""
         # Create a new instance.
         if not cls._instance:
-            print(f"Creating new IMeetingService instance: {service_module}.")
+            logging_gateway.info(
+                f"Creating new IMeetingService instance: {service_module}."
+            )
             import_module(name=service_module)
             subclasses = cls.__subclasses__()
 
@@ -56,6 +60,7 @@ class IMeetingService(ABC):
                 client,
                 completion_gateway,
                 keyval_storage_gateway,
+                logging_gateway,
                 platform_gateway,
             )
         return cls._instance
@@ -65,14 +70,27 @@ class IMeetingService(ABC):
         self,
         user_id: str,
         chat_id: str,
-        chat_history_key: str,
-        scheduled_meeting_key: str,
+        chat_thread_key: str,
     ) -> None:
         """Cancel a scheduled meeting."""
 
     @abstractmethod
+    def get_scheduled_meetings_data(self, user_id: str) -> str:
+        """Get data on scheduled meetings to send to assistant."""
+
+    @abstractmethod
+    async def handle_assistant_response(
+        self,
+        response: str,
+        user_id: str,
+        room_id: str,
+        chat_thread_key: str,
+    ) -> None:
+        """Check assistant response for conversational triggers."""
+
+    @abstractmethod
     async def schedule_meeting(
-        self, user_id: str, chat_id: str, chat_history_key: str
+        self, user_id: str, chat_id: str, chat_thread_key: str
     ) -> None:
         """Schedule a meeting."""
 
@@ -81,7 +99,6 @@ class IMeetingService(ABC):
         self,
         user_id: str,
         chat_id: str,
-        chat_history_key: str,
-        scheduled_meeting_key: str,
+        chat_thread_key: str,
     ) -> None:
         """Update a scheduled meeting."""

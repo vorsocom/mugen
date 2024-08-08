@@ -24,14 +24,15 @@ from app.nio.callbacks import Callbacks, SYNC_KEY
 from app.contract.completion_gateway import ICompletionGateway
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
+from app.contract.logging_gateway import ILoggingGateway
 from app.contract.meeting_service import IMeetingService
 from app.contract.messaging_service import IMessagingService
 from app.contract.platform_gateway import IPlatformGateway
 
 
-def handle_error() -> None:
+def handle_error(logging_gateway: ILoggingGateway) -> None:
     """Handle generic error."""
-    print(traceback.format_exc())
+    logging_gateway.error(traceback.format_exc())
     sys.exit(1)
 
 
@@ -47,8 +48,17 @@ def close_storage(keyval_storage_gateway: IKeyValStorageGateway) -> None:
 
 def load_config(basedir: str, keyval_storage_gateway: IKeyValStorageGateway) -> None:
     """Load configuration value from environment file to dbm storage."""
+
+    keyval_storage_gateway.put("gloria_limited_beta", os.getenv("GLORIA_LIMITED_BETA"))
+    keyval_storage_gateway.put(
+        "gloria_limited_beta_users", os.getenv("GLORIA_LIMITED_BETA_USERS")
+    )
+    keyval_storage_gateway.put(
+        "gloria_allowed_domains", os.getenv("GLORIA_ALLOWED_DOMAINS")
+    )
+
     with open(f"{basedir}/conf/persona.txt", encoding="utf8") as f:
-        keyval_storage_gateway.put("matrix_agent_persona", f.read())
+        keyval_storage_gateway.put("matrix_assistant_persona", f.read())
 
     keyval_storage_gateway.put("matrix_homeserver", os.getenv("MATRIX_HOMESERVER"))
     keyval_storage_gateway.put("matrix_client_user", os.getenv("MATRIX_CLIENT_USER"))
@@ -61,11 +71,15 @@ def load_config(basedir: str, keyval_storage_gateway: IKeyValStorageGateway) -> 
     keyval_storage_gateway.put(
         "matrix_agent_display_name", os.getenv("MATRIX_AGENT_DISPLAY_NAME")
     )
+
     keyval_storage_gateway.put("groq_api_key", os.getenv("GROQ_API_KEY"))
-    keyval_storage_gateway.put("groq_api_model", os.getenv("GROQ_API_MODEL"))
     keyval_storage_gateway.put(
         "groq_api_classification_model", os.getenv("GROQ_API_CLASSIFICATION_MODEL")
     )
+    keyval_storage_gateway.put(
+        "groq_api_completion_model", os.getenv("GROQ_API_COMPLETION_MODEL")
+    )
+
     keyval_storage_gateway.put("qdrant_api_key", os.getenv("QDRANT_API_KEY"))
     keyval_storage_gateway.put("qdrant_endpoint_url", os.getenv("QDRANT_ENDPOINT_URL"))
 
@@ -87,6 +101,7 @@ async def assistant(
     completion_gateway: ICompletionGateway,
     keyval_storage_gateway: IKeyValStorageGateway,
     knowledge_retrieval_gateway: IKnowledgeRetrievalGateway,
+    logging_gateway: ILoggingGateway,
     meeting_service: IMeetingService,
     messaging_service: IMessagingService,
 ) -> None:
@@ -95,7 +110,7 @@ async def assistant(
     load_config(basedir, keyval_storage_gateway)
 
     # Check login successful.
-    if not await login(client, keyval_storage_gateway):
+    if not await login(logging_gateway, client, keyval_storage_gateway):
         await close_client(client)
         return
 
@@ -113,6 +128,7 @@ async def assistant(
         completion_gateway,
         keyval_storage_gateway,
         knowledge_retrieval_gateway,
+        logging_gateway,
         meeting_service,
         messaging_service,
     )
@@ -134,10 +150,15 @@ async def assistant(
     )
 
 
-def run_assistant(basedir: str, _ipc_queue: Queue) -> None:
+def run_assistant(basedir: str, log_level: int, _ipc_queue: Queue) -> None:
     """Run the AI assistant application."""
     # Create new event loop to run shutdown tasks.
     loop = asyncio.new_event_loop()
+
+    # Initialise logger.
+    logging_gateway = ILoggingGateway.instance(
+        logging_module="app.gateway.default_logging_gateway", log_level=log_level
+    )
 
     # Initialise matrix-nio async client.
     client = AsyncClient(
@@ -148,6 +169,7 @@ def run_assistant(basedir: str, _ipc_queue: Queue) -> None:
     keyval_storage_gateway = IKeyValStorageGateway.instance(
         storage_module="app.gateway.dbm_keyval_storage_gateway",
         storage_path=f"{basedir}/data/storage.db",
+        logging_gateway=logging_gateway,
     )
 
     # Initialise Groq completion gateway.
@@ -155,6 +177,7 @@ def run_assistant(basedir: str, _ipc_queue: Queue) -> None:
         completion_module="app.gateway.groq_completion_gateway",
         api_key=os.getenv("GROQ_API_KEY"),
         keyval_storage_gateway=keyval_storage_gateway,
+        logging_gateway=logging_gateway,
     )
 
     # Initialise Qdrant knowledge retrieval gateway
@@ -162,6 +185,7 @@ def run_assistant(basedir: str, _ipc_queue: Queue) -> None:
         knowledge_retrieval_module="app.gateway.qdrant_knowledge_retrieval_gateway",
         api_key=os.getenv("QDRANT_API_KEY"),
         endpoint_url=os.getenv("QDRANT_ENDPOINT_URL"),
+        logging_gateway=logging_gateway,
     )
 
     # Initialise platform gateway.
@@ -169,25 +193,29 @@ def run_assistant(basedir: str, _ipc_queue: Queue) -> None:
         platform_module="app.gateway.matrix_platform_gateway",
         client=client,
         keyval_storage_gateway=keyval_storage_gateway,
+        logging_gateway=logging_gateway,
     )
 
     # Initialise meeting service
     meeting_service = IMeetingService.instance(
-        service_module="app.service.meeting",
+        service_module="app.service.default_meeting_service",
         client=client,
         completion_gateway=completion_gateway,
         keyval_storage_gateway=keyval_storage_gateway,
+        logging_gateway=logging_gateway,
         platform_gateway=platform_gateway,
     )
 
     # Initialise messaging service
     messaging_service = IMessagingService.instance(
-        service_module="app.service.messaging",
+        service_module="app.service.default_messaging_service",
         client=client,
+        completion_gateway=completion_gateway,
         keyval_storage_gateway=keyval_storage_gateway,
         knowledge_retrieval_gateway=knowledge_retrieval_gateway,
-        completion_gateway=completion_gateway,
+        logging_gateway=logging_gateway,
         platform_gateway=platform_gateway,
+        meeting_service=meeting_service,
     )
 
     try:
@@ -198,6 +226,7 @@ def run_assistant(basedir: str, _ipc_queue: Queue) -> None:
                 completion_gateway,
                 keyval_storage_gateway,
                 knowledge_retrieval_gateway,
+                logging_gateway,
                 meeting_service,
                 messaging_service,
             )
@@ -205,13 +234,12 @@ def run_assistant(basedir: str, _ipc_queue: Queue) -> None:
     except ValueError:
         loop.run_until_complete(close_client(client))
         close_storage(keyval_storage_gateway)
-        handle_error()
+        handle_error(logging_gateway)
     except RuntimeError:
         loop.run_until_complete(close_client(client))
         close_storage(keyval_storage_gateway)
-        handle_error()
+        handle_error(logging_gateway)
     except KeyboardInterrupt:
-        print("\nRceived keyboard interrupt.")
         loop.run_until_complete(close_client(client))
         close_storage(keyval_storage_gateway)
         sys.exit(0)
