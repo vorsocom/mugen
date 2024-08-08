@@ -70,14 +70,27 @@ class IMeetingService(ABC):
         self,
         user_id: str,
         chat_id: str,
-        chat_history_key: str,
-        scheduled_meeting_key: str,
+        chat_thread_key: str,
     ) -> None:
         """Cancel a scheduled meeting."""
 
     @abstractmethod
+    def get_scheduled_meetings_data(self, user_id: str) -> str:
+        """Get data on scheduled meetings to send to assistant."""
+
+    @abstractmethod
+    async def handle_assistant_response(
+        self,
+        response: str,
+        user_id: str,
+        room_id: str,
+        chat_thread_key: str,
+    ) -> None:
+        """Check assistant response for conversational triggers."""
+
+    @abstractmethod
     async def schedule_meeting(
-        self, user_id: str, chat_id: str, chat_history_key: str
+        self, user_id: str, chat_id: str, chat_thread_key: str
     ) -> None:
         """Schedule a meeting."""
 
@@ -86,7 +99,6 @@ class IMeetingService(ABC):
         self,
         user_id: str,
         chat_id: str,
-        chat_history_key: str,
-        scheduled_meeting_key: str,
+        chat_thread_key: str,
     ) -> None:
         """Update a scheduled meeting."""

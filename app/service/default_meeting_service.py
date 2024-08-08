@@ -2,6 +2,7 @@
 
 __all__ = ["DefaultMeetingService"]
 
+from datetime import datetime
 import json
 import pickle
 import traceback
@@ -31,6 +32,18 @@ from app.domain.use_case.update_scheduled_meeting import (
     UpdateScheduledMeetingResponse,
 )
 
+SCHEDULED_MEETING_KEY = "scheduled_meeting:{0}"
+
+INPERSON_MEETING_DATA = (
+    "{0} meeting secheduled for the {1} on {2} at {3}. The room link associated with"
+    " this meeting is {4}. The topic is {5} and the attendees are {6}"
+)
+
+VIRTUAL_MEETING_DATA = (
+    "{0} meeting using room {1}, secheduled for {2} at {3}. The topic is {4} and the"
+    " attendees are {5}"
+)
+
 
 class DefaultMeetingService(IMeetingService):
     """The default meeting service."""
@@ -58,19 +71,18 @@ class DefaultMeetingService(IMeetingService):
         self,
         user_id: str,
         chat_id: str,
-        chat_history_key: str,
-        scheduled_meeting_key: str,
+        chat_thread_key: str,
     ) -> None:
-        chat_history = pickle.loads(self._keyval_storage_gateway.get(chat_history_key, False))
+        chat_thread = pickle.loads(
+            self._keyval_storage_gateway.get(chat_thread_key, False)
+        )
         action_parameters = await self._completion_gateway.get_completion(
-            context=chat_history
+            context=chat_thread["messages"]
             + [
                 # Append info on tracked meetings
                 {
                     "role": "system",
-                    "content": self._completion_gateway.get_scheduled_meetings_data(
-                        user_id
-                    ),
+                    "content": self.get_scheduled_meetings_data(user_id),
                 },
                 {
                     "role": "user",
@@ -82,14 +94,14 @@ class DefaultMeetingService(IMeetingService):
                     ),
                 },
             ],
-            model=self._keyval_storage_gateway.get("groq_api_model"),
+            model=self._keyval_storage_gateway.get("groq_api_completion_model"),
         )
         cancel_id = "" if action_parameters is None else action_parameters
 
         try:
             scheduled_meeting: Meeting = pickle.loads(
                 self._keyval_storage_gateway.get(
-                    scheduled_meeting_key.format(cancel_id), False
+                    SCHEDULED_MEETING_KEY.format(cancel_id), False
                 )
             )
         except TypeError:
@@ -118,7 +130,7 @@ class DefaultMeetingService(IMeetingService):
             # Meeting cancellation was successful.
             # Inform the user that the meeting was cancelled and the room removed.
             action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_history
+                context=chat_thread["messages"]
                 + [
                     {
                         "role": "system",
@@ -136,19 +148,21 @@ class DefaultMeetingService(IMeetingService):
                         ),
                     },
                 ],
-                model=self._keyval_storage_gateway.get("groq_api_model"),
+                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
             )
-            chat_history.append(
+            chat_thread["messages"].append(
                 {
                     "role": "assistant",
-                    "content": self._completion_gateway.format_completion(
-                        action_response_completion, "Error"
+                    "content": (
+                        "Error"
+                        if action_response_completion is None
+                        else action_response_completion
                     ),
                 }
             )
         else:
             # Meeting cancellation was unsuccessful.
-            chat_history.append(
+            chat_thread["messages"].append(
                 {
                     "role": "system",
                     "content": (
@@ -160,20 +174,22 @@ class DefaultMeetingService(IMeetingService):
                 }
             )
             action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_history
+                context=chat_thread["messages"]
                 + [
                     {
                         "role": "user",
                         "content": "What is the reason for the cancellation failure?",
                     }
                 ],
-                model=self._keyval_storage_gateway.get("groq_api_model"),
+                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
             )
-            chat_history.append(
+            chat_thread["messages"].append(
                 {
                     "role": "assistant",
-                    "content": self._completion_gateway.format_completion(
-                        action_response_completion, "Error"
+                    "content": (
+                        "Error"
+                        if action_response_completion is None
+                        else action_response_completion
                     ),
                 }
             )
@@ -182,17 +198,82 @@ class DefaultMeetingService(IMeetingService):
             message_type="m.room.message",
             content={
                 "msgtype": "m.text",
-                "body": chat_history[-1]["content"],
+                "body": chat_thread["messages"][-1]["content"],
             },
         )
-        self._keyval_storage_gateway.put(chat_history_key, pickle.dumps(chat_history))
+        chat_thread["last_saved"] = datetime.now().strftime("%s")
+        self._keyval_storage_gateway.put(chat_thread_key, pickle.dumps(chat_thread))
+
+    def get_scheduled_meetings_data(self, user_id: str) -> str:
+        """Get data on scheduled meetings to send to assistant."""
+        meetings = [
+            x for x in self._keyval_storage_gateway.keys() if "scheduled_meeting:" in x
+        ]
+        filtered_meetings = [
+            x
+            for x in meetings
+            if user_id
+            in dict(pickle.loads(self._keyval_storage_gateway.get(x, False)))[
+                "attendees"
+            ]
+        ]
+        resp = "The following meetings are being tracked for the current user:\n\n"
+
+        for idx, meeting in enumerate(filtered_meetings, start=1):
+            resp = resp + f"{idx}. "
+            meeting_data = pickle.loads(
+                self._keyval_storage_gateway.get(meeting, False)
+            )
+
+            resp = resp + (
+                VIRTUAL_MEETING_DATA.format(
+                    meeting_data["type"],
+                    meeting_data["room_id"],
+                    meeting_data["time"],
+                    meeting_data["date"],
+                    meeting_data["topic"],
+                    ", ".join(meeting_data["attendees"]),
+                )
+                if meeting_data["type"] == "virtual"
+                else INPERSON_MEETING_DATA.format(
+                    meeting_data["type"],
+                    meeting_data["location"],
+                    meeting_data["date"],
+                    meeting_data["time"],
+                    meeting_data["room_id"],
+                    meeting_data["topic"],
+                    ", ".join(meeting_data["attendees"]),
+                )
+            )
+        return resp
+
+    async def handle_assistant_response(
+        self,
+        response: str,
+        user_id: str,
+        room_id: str,
+        chat_thread_key: str,
+    ) -> None:
+        # If trigger detected to schedule meeting.
+        if "I'm arranging the requested meeting." in response:
+            await self.schedule_meeting(user_id, room_id, chat_thread_key)
+
+        # If trigger detected to update scheduled meeting.
+        elif "I'm updating the specified meeting." in response:
+            await self.update_scheduled_meeting(user_id, room_id, chat_thread_key)
+
+        # If trigger detected to cancel meeting.
+        elif "I'm cancelling the specified meeting." in response:
+            await self.cancel_scheduled_meeting(user_id, room_id, chat_thread_key)
 
     async def schedule_meeting(
-        self, user_id: str, chat_id: str, chat_history_key: str
+        self, user_id: str, chat_id: str, chat_thread_key: str
     ) -> None:
-        chat_history = pickle.loads(self._keyval_storage_gateway.get(chat_history_key, False))
+        chat_thread = pickle.loads(
+            self._keyval_storage_gateway.get(chat_thread_key, False)
+        )
         action_parameters = await self._completion_gateway.get_completion(
-            context=chat_history
+            context=chat_thread["messages"]
             + [
                 {
                     "role": "user",
@@ -208,7 +289,7 @@ class DefaultMeetingService(IMeetingService):
                     ),
                 }
             ],
-            model=self._keyval_storage_gateway.get("groq_api_model"),
+            model=self._keyval_storage_gateway.get("groq_api_completion_model"),
             response_format="json_object",
         )
         meeting_params = dict(
@@ -237,14 +318,12 @@ class DefaultMeetingService(IMeetingService):
         # If scheduling the meeting was a success.
         if schedule_meeting_response.success:
             action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_history
+                context=chat_thread["messages"]
                 + [
                     # Append info on tracked meetings
                     {
                         "role": "system",
-                        "content": self._completion_gateway.get_scheduled_meetings_data(
-                            user_id
-                        ),
+                        "content": self.get_scheduled_meetings_data(user_id),
                     },
                     {
                         "role": "system",
@@ -254,18 +333,20 @@ class DefaultMeetingService(IMeetingService):
                     },
                     {"role": "user", "content": "Has the meeting been scheduled?"},
                 ],
-                model=self._keyval_storage_gateway.get("groq_api_model"),
+                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
             )
-            chat_history.append(
+            chat_thread["messages"].append(
                 {
                     "role": "assistant",
-                    "content": self._completion_gateway.format_completion(
-                        action_response_completion, "Error"
+                    "content": (
+                        "Error"
+                        if action_response_completion is None
+                        else action_response_completion
                     ),
                 }
             )
         else:
-            chat_history.append(
+            chat_thread["messages"].append(
                 {
                     "role": "system",
                     "content": (
@@ -277,20 +358,22 @@ class DefaultMeetingService(IMeetingService):
                 }
             )
             action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_history
+                context=chat_thread["messages"]
                 + [
                     {
                         "role": "user",
                         "content": "What is the reason for the scheduling failure?",
                     }
                 ],
-                model=self._keyval_storage_gateway.get("groq_api_model"),
+                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
             )
-            chat_history.append(
+            chat_thread["messages"].append(
                 {
                     "role": "assistant",
-                    "content": self._completion_gateway.format_completion(
-                        action_response_completion, "Error"
+                    "content": (
+                        "Error"
+                        if action_response_completion is None
+                        else action_response_completion
                     ),
                 }
             )
@@ -299,29 +382,29 @@ class DefaultMeetingService(IMeetingService):
             message_type="m.room.message",
             content={
                 "msgtype": "m.text",
-                "body": chat_history[-1]["content"],
+                "body": chat_thread["messages"][-1]["content"],
             },
         )
-        self._keyval_storage_gateway.put(chat_history_key, pickle.dumps(chat_history))
+        chat_thread["last_saved"] = datetime.now().strftime("%s")
+        self._keyval_storage_gateway.put(chat_thread_key, pickle.dumps(chat_thread))
 
     async def update_scheduled_meeting(
         self,
         user_id: str,
         chat_id: str,
-        chat_history_key: str,
-        scheduled_meeting_key: str,
+        chat_thread_key: str,
     ) -> None:
-        chat_history = pickle.loads(self._keyval_storage_gateway.get(chat_history_key, False))
+        chat_thread = pickle.loads(
+            self._keyval_storage_gateway.get(chat_thread_key, False)
+        )
 
         action_parameters = await self._completion_gateway.get_completion(
-            context=chat_history
+            context=chat_thread["messages"]
             + [
                 # Append info on tracked meetings
                 {
                     "role": "system",
-                    "content": self._completion_gateway.get_scheduled_meetings_data(
-                        user_id
-                    ),
+                    "content": self.get_scheduled_meetings_data(user_id),
                 },
                 {
                     "role": "user",
@@ -340,7 +423,7 @@ class DefaultMeetingService(IMeetingService):
                     ),
                 },
             ],
-            model=self._keyval_storage_gateway.get("groq_api_model"),
+            model=self._keyval_storage_gateway.get("groq_api_completion_model"),
             response_format="json_object",
         )
         meeting_params = dict(
@@ -350,7 +433,7 @@ class DefaultMeetingService(IMeetingService):
         try:
             scheduled_meeting: Meeting = pickle.loads(
                 self._keyval_storage_gateway.get(
-                    scheduled_meeting_key.format(meeting_params["room_id"]), False
+                    SCHEDULED_MEETING_KEY.format(meeting_params["room_id"]), False
                 )
             )
         except KeyError:
@@ -391,13 +474,13 @@ class DefaultMeetingService(IMeetingService):
         if update_meeting_response.success:
             # Meeting parameters update was successful.
             action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_history
+                context=chat_thread["messages"]
                 + [
                     {
                         "role": "system",
                         "content": (
-                            f"The meeting tracked by room {meeting_params["room_id"]}"
-                            f" at {meeting_params["time"]} on {meeting_params["date"]}"
+                            f'The meeting tracked by room {meeting_params["room_id"]}'
+                            f' at {meeting_params["time"]} on {meeting_params["date"]}'
                             " has been updated."
                         ),
                     },
@@ -406,19 +489,21 @@ class DefaultMeetingService(IMeetingService):
                         "content": "Confirm the meeting details have been updated.",
                     },
                 ],
-                model=self._keyval_storage_gateway.get("groq_api_model"),
+                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
             )
-            chat_history.append(
+            chat_thread["messages"].append(
                 {
                     "role": "assistant",
-                    "content": self._completion_gateway.format_completion(
-                        action_response_completion, "Error"
+                    "content": (
+                        "Error"
+                        if action_response_completion is None
+                        else action_response_completion
                     ),
                 }
             )
         else:
             # Meeting parameters update was unsuccessful.
-            chat_history.append(
+            chat_thread["messages"].append(
                 {
                     "role": "system",
                     "content": (
@@ -430,20 +515,22 @@ class DefaultMeetingService(IMeetingService):
                 }
             )
             action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_history
+                context=chat_thread["messages"]
                 + [
                     {
                         "role": "user",
                         "content": "What is the reason for the update failure?",
                     }
                 ],
-                model=self._keyval_storage_gateway.get("groq_api_model"),
+                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
             )
-            chat_history.append(
+            chat_thread["messages"].append(
                 {
                     "role": "assistant",
-                    "content": self._completion_gateway.format_completion(
-                        action_response_completion, "Error"
+                    "content": (
+                        "Error"
+                        if action_response_completion is None
+                        else action_response_completion
                     ),
                 }
             )
@@ -452,7 +539,8 @@ class DefaultMeetingService(IMeetingService):
             message_type="m.room.message",
             content={
                 "msgtype": "m.text",
-                "body": chat_history[-1]["content"],
+                "body": chat_thread["messages"][-1]["content"],
             },
         )
-        self._keyval_storage_gateway.put(chat_history_key, pickle.dumps(chat_history))
+        chat_thread["last_saved"] = datetime.now().strftime("%s")
+        self._keyval_storage_gateway.put(chat_thread_key, pickle.dumps(chat_thread))

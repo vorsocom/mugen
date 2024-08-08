@@ -4,24 +4,12 @@
 
 import traceback
 from typing import Optional
-import pickle
 
 from groq import AsyncGroq, GroqError
 
 from app.contract.completion_gateway import ICompletionGateway
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.logging_gateway import ILoggingGateway
-
-
-INPERSON_MEETING_DATA = (
-    "{0} meeting secheduled for the {1} on {2} at {3}. The room link associated with"
-    " this meeting is {4}. The topic is {5} and the attendees are {6}"
-)
-
-VIRTUAL_MEETING_DATA = (
-    "{0} meeting using room {1}, secheduled for {2} at {3}. The topic is {4} and the"
-    " attendees are {5}"
-)
 
 
 class GroqCompletionGateway(ICompletionGateway):
@@ -38,12 +26,65 @@ class GroqCompletionGateway(ICompletionGateway):
         self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway
 
-    @staticmethod
-    def format_completion(response: Optional[str], default: str) -> str:
-        """Format a completion response, returning a default value if it's None."""
-        return default if response is None else response
+    async def get_chat_thread_classification(
+        self,
+        context: list[dict],
+        message: str,
+        model: str,
+        response_format: str = "json_object",
+    ) -> Optional[str]:
+        response = None
+        classification_context = [x for x in context if x["role"] == "user"]
+        classification_context += [
+            {
+                "role": "system",
+                "content": (
+                    "Classify the next user message based on whether or not it is a"
+                    " likely continuation of the conversation based on semantic"
+                    " analysis of the previous user messages. Return your"
+                    " classification as properly formatted JSON. For example, if the"
+                    ' message is a continuation, return {"continuation": true},'
+                    ' otherwise return {"continuation": false}. If you are unable to'
+                    ' provide a continuation classification, return {"classification":'
+                    " null}."
+                ),
+            }
+        ]
+        classification_context += [{"role": "user", "content": message}]
+        try:
+            chat_completion = await self._api.chat.completions.create(
+                messages=classification_context,
+                model=model,
+                response_format={"type": response_format},
+            )
+            response = chat_completion.choices[0].message.content
+        except GroqError:
+            self._logging_gateway.warning(
+                "GroqCompletionGateway.get_chat_thread_classification: An error was"
+                " encountered while trying the Groq API."
+            )
+            traceback.print_exc()
+        return response
 
-    async def classify_message(
+    async def get_completion(
+        self, context: list[dict], model: str, response_format: str = "text"
+    ) -> Optional[str]:
+        response = None
+        try:
+            chat_completion = await self._api.chat.completions.create(
+                messages=context, model=model, response_format={"type": response_format}
+            )
+            response = chat_completion.choices[0].message.content
+        except GroqError:
+            self._logging_gateway.warning(
+                "GroqCompletionGateway.get_completion: An error was encountered while"
+                " trying the Groq API."
+            )
+            traceback.print_exc()
+
+        return response
+
+    async def get_rag_classification(
         self, message: str, model: str, response_format: str = "json_object"
     ) -> Optional[str]:
         response = None
@@ -78,67 +119,8 @@ class GroqCompletionGateway(ICompletionGateway):
             response = chat_completion.choices[0].message.content
         except GroqError:
             self._logging_gateway.warning(
-                "An error was encountered while trying the Groq API."
+                "GroqCompletionGateway.get_rag_classification: An error was encountered"
+                " while trying the Groq API."
             )
             traceback.print_exc()
         return response
-
-    async def get_completion(
-        self, context: list[dict], model: str, response_format: str = "text"
-    ) -> Optional[str]:
-        response = None
-        try:
-            chat_completion = await self._api.chat.completions.create(
-                messages=context, model=model, response_format={"type": response_format}
-            )
-            response = chat_completion.choices[0].message.content
-        except GroqError:
-            self._logging_gateway.warning(
-                "An error was encountered while trying the Groq API."
-            )
-            traceback.print_exc()
-
-        return response
-
-    def get_scheduled_meetings_data(self, user_id: str) -> str:
-        """Get data on scheduled meetings to send to assistant."""
-        meetings = [
-            x for x in self._keyval_storage_gateway.keys() if "scheduled_meeting:" in x
-        ]
-        filtered_meetings = [
-            x
-            for x in meetings
-            if user_id
-            in dict(pickle.loads(self._keyval_storage_gateway.get(x, False)))[
-                "attendees"
-            ]
-        ]
-        resp = "The following meetings are being tracked for the current user:\n\n"
-
-        for idx, meeting in enumerate(filtered_meetings, start=1):
-            resp = resp + f"{idx}. "
-            meeting_data = pickle.loads(
-                self._keyval_storage_gateway.get(meeting, False)
-            )
-
-            resp = resp + (
-                VIRTUAL_MEETING_DATA.format(
-                    meeting_data["type"],
-                    meeting_data["room_id"],
-                    meeting_data["time"],
-                    meeting_data["date"],
-                    meeting_data["topic"],
-                    ", ".join(meeting_data["attendees"]),
-                )
-                if meeting_data["type"] == "virtual"
-                else INPERSON_MEETING_DATA.format(
-                    meeting_data["type"],
-                    meeting_data["location"],
-                    meeting_data["date"],
-                    meeting_data["time"],
-                    meeting_data["room_id"],
-                    meeting_data["topic"],
-                    ", ".join(meeting_data["attendees"]),
-                )
-            )
-        return resp

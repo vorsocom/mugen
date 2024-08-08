@@ -58,7 +58,7 @@ def load_config(basedir: str, keyval_storage_gateway: IKeyValStorageGateway) -> 
     )
 
     with open(f"{basedir}/conf/persona.txt", encoding="utf8") as f:
-        keyval_storage_gateway.put("matrix_agent_persona", f.read())
+        keyval_storage_gateway.put("matrix_assistant_persona", f.read())
 
     keyval_storage_gateway.put("matrix_homeserver", os.getenv("MATRIX_HOMESERVER"))
     keyval_storage_gateway.put("matrix_client_user", os.getenv("MATRIX_CLIENT_USER"))
@@ -73,9 +73,11 @@ def load_config(basedir: str, keyval_storage_gateway: IKeyValStorageGateway) -> 
     )
 
     keyval_storage_gateway.put("groq_api_key", os.getenv("GROQ_API_KEY"))
-    keyval_storage_gateway.put("groq_api_model", os.getenv("GROQ_API_MODEL"))
     keyval_storage_gateway.put(
         "groq_api_classification_model", os.getenv("GROQ_API_CLASSIFICATION_MODEL")
+    )
+    keyval_storage_gateway.put(
+        "groq_api_completion_model", os.getenv("GROQ_API_COMPLETION_MODEL")
     )
 
     keyval_storage_gateway.put("qdrant_api_key", os.getenv("QDRANT_API_KEY"))
@@ -213,6 +215,7 @@ def run_assistant(basedir: str, log_level: int, _ipc_queue: Queue) -> None:
         knowledge_retrieval_gateway=knowledge_retrieval_gateway,
         logging_gateway=logging_gateway,
         platform_gateway=platform_gateway,
+        meeting_service=meeting_service,
     )
 
     try:
