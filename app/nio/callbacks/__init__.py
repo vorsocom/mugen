@@ -64,6 +64,11 @@ class Callbacks:
         self, room: MatrixInvitedRoom, event: InviteMemberEvent
     ) -> None:
         """Handle InviteMemberEvents."""
+        # Filter out events that do not have membership set to invite.
+        membership = event.content.get("membership")
+        if membership is not None and membership != "invite":
+            return
+
         # Only process invites from allowed domains.
         # Federated servers need to be in the allowed domains list for their users
         # to initiate conversations with the assistant.
