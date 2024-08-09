@@ -18,6 +18,8 @@ from app.contract.meeting_service import IMeetingService
 from app.contract.messaging_service import IMessagingService
 from app.contract.platform_gateway import IPlatformGateway
 
+CHAT_THREAD_VERSION: int = 1
+
 SCHEDULED_MEETING_KEY = "scheduled_meeting:{0}"
 
 
@@ -54,7 +56,7 @@ class DefaultMessagingService(IMessagingService):
         # message.
         await self._client.room_read_markers(room_id, message_id, message_id)
 
-        # Get the attention thread.
+        # Get the attention thread key.
         attention_thread_key = await self._get_attention_thread_key(room_id, content)
 
         # Initialise lists to store chat history.
@@ -65,9 +67,15 @@ class DefaultMessagingService(IMessagingService):
             attention_thread = pickle.loads(
                 self._keyval_storage_gateway.get(attention_thread_key, False)
             )
+            # Ensure that older threads are versioned.
+            # This can be removed after the application stabalises.
+            if "version" not in attention_thread.keys():
+                attention_thread["version"] = CHAT_THREAD_VERSION
         else:
+            attention_thread["version"] = CHAT_THREAD_VERSION
             attention_thread["created"] = datetime.now().strftime("%s")
-        # self._logging_gateway.debug(attention_thread)
+
+        self._logging_gateway.debug(f"attention_thread: {attention_thread}")
 
         # Send user message to assistant with history.
         attention_thread["messages"].append({"role": "user", "content": content})
@@ -79,6 +87,7 @@ class DefaultMessagingService(IMessagingService):
         completion_context += await self._get_rag_context(content)
 
         # Get assistant response based on chat history, system context, and RAG data.
+        self._logging_gateway.debug("Get completion.")
         chat_completion = await self._completion_gateway.get_completion(
             context=completion_context,
             model=self._keyval_storage_gateway.get("groq_api_completion_model"),
@@ -90,6 +99,7 @@ class DefaultMessagingService(IMessagingService):
             chat_completion = "Error"
 
         # Persist chat history.
+        self._logging_gateway.debug("Persist attention thread.")
         attention_thread["messages"].append(
             {"role": "assistant", "content": chat_completion}
         )
@@ -99,6 +109,7 @@ class DefaultMessagingService(IMessagingService):
         )
 
         # Send assistant response to the user.
+        self._logging_gateway.debug("Send response to user.")
         await self._client.room_send(
             room_id=room_id,
             message_type="m.room.message",
@@ -108,6 +119,7 @@ class DefaultMessagingService(IMessagingService):
             },
         )
 
+        self._logging_gateway.debug("Pass response to meeting service for processing.")
         await self._meeting_service.handle_assistant_response(
             chat_completion, sender, room_id, attention_thread_key
         )
