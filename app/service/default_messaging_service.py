@@ -131,22 +131,28 @@ class DefaultMessagingService(IMessagingService):
         # Get the key to retrieve the list of chat threads for this room.
         chat_threads_list_key = f"chat_threads_list:{room_id}"
 
-        # If the key does not exist...
+        # If chat threads list key does not exist.
         if not self._keyval_storage_gateway.has_key(chat_threads_list_key):
             # This is the first message in this room.
             # Create a new chat thread key and return it as the attention thread key.
-            self._logging_gateway.debug("New chat. Generating new chat thread.")
-            return self._get_new_chat_thread_key(chat_threads_list_key)
+            self._logging_gateway.debug("New chat. Generating new list and new thread.")
+            return self._get_new_chat_thread_key(chat_threads_list_key, True)
 
-        # else.
+        # else:
         # The key does exist.
         chat_threads_list = pickle.loads(
             self._keyval_storage_gateway.get(chat_threads_list_key, False)
         )
 
+        # Migrate old lists.
+        if isinstance(chat_threads_list, list):
+            chat_threads_list = {"threads": chat_threads_list}
+
+        self._logging_gateway.debug(f"chat_threads_list: {chat_threads_list}")
+
         # Check each thread for relevance to the message.
         hits = []
-        for item in chat_threads_list:
+        for item in chat_threads_list["threads"]:
             chat_thread = pickle.loads(self._keyval_storage_gateway.get(item, False))
             self._logging_gateway.debug(
                 "Checking user message for relevance to thread."
@@ -182,26 +188,65 @@ class DefaultMessagingService(IMessagingService):
 
         if len(hits) == 0:
             self._logging_gateway.debug("No relevant threads found. Starting new one.")
-            return self._get_new_chat_thread_key(chat_threads_list_key)
+            return self._get_new_chat_thread_key(chat_threads_list_key, False)
 
         if len(hits) == 1:
             self._logging_gateway.debug("One relevant thread found. Returning the key.")
+            self._set_attention_thread(chat_threads_list_key, hits[0])
             return hits[0]
 
         # If we get to this point it means we had multiple hits for relevant threads.
         # Start a new thread to avoid selecting the wrong one.
-        self._logging_gateway.debug(
-            "Multiple relevant threads found. Starting new one to avoid decision error."
-        )
-        return self._get_new_chat_thread_key(chat_threads_list_key)
+        self._logging_gateway.debug("Multiple relevant threads found.")
 
-    def _get_new_chat_thread_key(self, chat_threads_list_key: str) -> str:
+        # If the current attention thread is in the hit list, just return that.
+        if "attention_thread" in chat_threads_list.keys():
+            if chat_threads_list["attention_thread"] in hits:
+                self._logging_gateway.debug("Returning the current attention thread.")
+                return chat_threads_list["attention_thread"]
+
+        # else:
+        # If the attention thread is not in the hit list, return a new thread to avoid
+        # selecting the wrong one.
+        self._logging_gateway.debug("Returning a new attention thread.")
+        return self._get_new_chat_thread_key(chat_threads_list_key, False)
+
+    def _get_new_chat_thread_key(
+        self, chat_threads_list_key: str, new_list: bool
+    ) -> str:
         """Generate a new chat thread key."""
-        chat_thread_key = f"chat_thread:{uuid.uuid1()}"
+        # Generate new key.
+        self._logging_gateway.debug("Generating new chat thread key.")
+        key = f"chat_thread:{uuid.uuid1()}"
+
+        chat_threads_list = {}
+        # If its a new thread list.
+        if new_list:
+            # Create a new thread list, and make the new thread the attention thread.
+            self._logging_gateway.debug("Creating new thread list.")
+            chat_threads_list["attention_thread"] = key
+            chat_threads_list["threads"] = [key]
+        else:
+            # The thread list exists.
+            self._logging_gateway.debug("Load existing thread list.")
+            chat_threads_list = pickle.loads(
+                self._keyval_storage_gateway.get(chat_threads_list_key, False)
+            )
+
+            # Migrate old lists.
+            if isinstance(chat_threads_list, list):
+                self._logging_gateway.debug("Migrate old thread list to new format.")
+                chat_threads_list = {"threads": chat_threads_list}
+
+            # Set new key as attention thread and append it to the threads list.
+            chat_threads_list["attention_thread"] = key
+            chat_threads_list["threads"].append(key)
+
+        # Persist thread list.
         self._keyval_storage_gateway.put(
-            chat_threads_list_key, pickle.dumps([chat_thread_key])
+            chat_threads_list_key, pickle.dumps(chat_threads_list)
         )
-        return chat_thread_key
+        return key
 
     async def _get_rag_context(self, message: str) -> list[dict]:
         """Get a list of strings representing knowledge pulled from an RAG source."""
@@ -322,3 +367,25 @@ class DefaultMessagingService(IMessagingService):
         )
 
         return context
+
+    def _set_attention_thread(
+        self, chat_threads_list_key: str, attention_thread: str
+    ) -> None:
+        """Set the attention thread in a chat threads list."""
+        if self._keyval_storage_gateway.has_key(chat_threads_list_key):
+            # Load list.
+            chat_threads_list = pickle.loads(
+                self._keyval_storage_gateway.get(chat_threads_list_key, False)
+            )
+
+            # Migrate old lists to new format if necessary.
+            if isinstance(chat_threads_list, list):
+                self._logging_gateway.debug("Migrate old thread list to new format.")
+                chat_threads_list = {"threads": chat_threads_list}
+
+            chat_threads_list["attention_thread"] = attention_thread
+
+            # Persist thread list.
+            self._keyval_storage_gateway.put(
+                chat_threads_list_key, pickle.dumps(chat_threads_list)
+            )
