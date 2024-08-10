@@ -112,7 +112,7 @@ async def assistant(
     # Check login successful.
     if not await login(logging_gateway, client, keyval_storage_gateway):
         await close_client(client)
-        return
+        os._exit(0)
 
     # await leave_test_rooms(client)
 

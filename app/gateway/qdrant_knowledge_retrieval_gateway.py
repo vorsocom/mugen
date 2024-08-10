@@ -22,7 +22,9 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
         self._client = AsyncQdrantClient(api_key=api_key, url=endpoint_url, port=None)
         self._logging_gateway = logging_gateway
 
-    async def search_similar(self, collection_name: str, search_term: str) -> list:
+    async def search_similar(
+        self, collection_name: str, dataset: str, search_term: str
+    ) -> list:
         self._logging_gateway.debug(
             f"qdrant_knowledge_retrieval_gateway: {search_term}"
         )
@@ -33,8 +35,11 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
                 query_filter=models.Filter(
                     must=[
                         models.FieldCondition(
+                            key="dataset", match=models.MatchValue(value=dataset)
+                        ),
+                        models.FieldCondition(
                             key="data", match=models.MatchText(text=search_term)
-                        )
+                        ),
                     ]
                 ),
                 limit=10,

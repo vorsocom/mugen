@@ -18,6 +18,8 @@ from app.contract.meeting_service import IMeetingService
 from app.contract.messaging_service import IMessagingService
 from app.contract.platform_gateway import IPlatformGateway
 
+CHAT_THREAD_VERSION: int = 1
+
 SCHEDULED_MEETING_KEY = "scheduled_meeting:{0}"
 
 
@@ -54,7 +56,7 @@ class DefaultMessagingService(IMessagingService):
         # message.
         await self._client.room_read_markers(room_id, message_id, message_id)
 
-        # Get the attention thread.
+        # Get the attention thread key.
         attention_thread_key = await self._get_attention_thread_key(room_id, content)
 
         # Initialise lists to store chat history.
@@ -65,9 +67,15 @@ class DefaultMessagingService(IMessagingService):
             attention_thread = pickle.loads(
                 self._keyval_storage_gateway.get(attention_thread_key, False)
             )
+            # Ensure that older threads are versioned.
+            # This can be removed after the application stabalises.
+            if "version" not in attention_thread.keys():
+                attention_thread["version"] = CHAT_THREAD_VERSION
         else:
+            attention_thread["version"] = CHAT_THREAD_VERSION
             attention_thread["created"] = datetime.now().strftime("%s")
-        # self._logging_gateway.debug(attention_thread)
+
+        self._logging_gateway.debug(f"attention_thread: {attention_thread}")
 
         # Send user message to assistant with history.
         attention_thread["messages"].append({"role": "user", "content": content})
@@ -76,9 +84,10 @@ class DefaultMessagingService(IMessagingService):
         completion_context = []
         completion_context += attention_thread["messages"]
         completion_context += self._get_system_context(known_users_list_key, sender)
-        completion_context += await self._get_rag_context(content)
+        completion_context += await self._get_rag_context_orders(content)
 
         # Get assistant response based on chat history, system context, and RAG data.
+        self._logging_gateway.debug("Get completion.")
         chat_completion = await self._completion_gateway.get_completion(
             context=completion_context,
             model=self._keyval_storage_gateway.get("groq_api_completion_model"),
@@ -90,6 +99,7 @@ class DefaultMessagingService(IMessagingService):
             chat_completion = "Error"
 
         # Persist chat history.
+        self._logging_gateway.debug("Persist attention thread.")
         attention_thread["messages"].append(
             {"role": "assistant", "content": chat_completion}
         )
@@ -99,6 +109,7 @@ class DefaultMessagingService(IMessagingService):
         )
 
         # Send assistant response to the user.
+        self._logging_gateway.debug("Send response to user.")
         await self._client.room_send(
             room_id=room_id,
             message_type="m.room.message",
@@ -108,6 +119,7 @@ class DefaultMessagingService(IMessagingService):
             },
         )
 
+        self._logging_gateway.debug("Pass response to meeting service for processing.")
         await self._meeting_service.handle_assistant_response(
             chat_completion, sender, room_id, attention_thread_key
         )
@@ -119,22 +131,28 @@ class DefaultMessagingService(IMessagingService):
         # Get the key to retrieve the list of chat threads for this room.
         chat_threads_list_key = f"chat_threads_list:{room_id}"
 
-        # If the key does not exist...
+        # If chat threads list key does not exist.
         if not self._keyval_storage_gateway.has_key(chat_threads_list_key):
             # This is the first message in this room.
             # Create a new chat thread key and return it as the attention thread key.
-            self._logging_gateway.debug("New chat. Generating new chat thread.")
-            return self._get_new_chat_thread_key(chat_threads_list_key)
+            self._logging_gateway.debug("New chat. Generating new list and new thread.")
+            return self._get_new_chat_thread_key(chat_threads_list_key, True)
 
-        # else.
+        # else:
         # The key does exist.
         chat_threads_list = pickle.loads(
             self._keyval_storage_gateway.get(chat_threads_list_key, False)
         )
 
+        # Migrate old lists.
+        if isinstance(chat_threads_list, list):
+            chat_threads_list = {"threads": chat_threads_list}
+
+        self._logging_gateway.debug(f"chat_threads_list: {chat_threads_list}")
+
         # Check each thread for relevance to the message.
         hits = []
-        for item in chat_threads_list:
+        for item in chat_threads_list["threads"]:
             chat_thread = pickle.loads(self._keyval_storage_gateway.get(item, False))
             self._logging_gateway.debug(
                 "Checking user message for relevance to thread."
@@ -170,42 +188,85 @@ class DefaultMessagingService(IMessagingService):
 
         if len(hits) == 0:
             self._logging_gateway.debug("No relevant threads found. Starting new one.")
-            return self._get_new_chat_thread_key(chat_threads_list_key)
+            return self._get_new_chat_thread_key(chat_threads_list_key, False)
 
         if len(hits) == 1:
             self._logging_gateway.debug("One relevant thread found. Returning the key.")
+            self._set_attention_thread(chat_threads_list_key, hits[0])
             return hits[0]
 
         # If we get to this point it means we had multiple hits for relevant threads.
         # Start a new thread to avoid selecting the wrong one.
-        self._logging_gateway.debug(
-            "Multiple relevant threads found. Starting new one to avoid decision error."
-        )
-        return self._get_new_chat_thread_key(chat_threads_list_key)
+        self._logging_gateway.debug("Multiple relevant threads found.")
 
-    def _get_new_chat_thread_key(self, chat_threads_list_key: str) -> str:
+        # If the current attention thread is in the hit list, just return that.
+        if "attention_thread" in chat_threads_list.keys():
+            if chat_threads_list["attention_thread"] in hits:
+                self._logging_gateway.debug("Returning the current attention thread.")
+                return chat_threads_list["attention_thread"]
+
+        # else:
+        # If the attention thread is not in the hit list, return a new thread to avoid
+        # selecting the wrong one.
+        self._logging_gateway.debug("Returning a new attention thread.")
+        return self._get_new_chat_thread_key(chat_threads_list_key, False)
+
+    def _get_new_chat_thread_key(
+        self, chat_threads_list_key: str, new_list: bool
+    ) -> str:
         """Generate a new chat thread key."""
-        chat_thread_key = f"chat_thread:{uuid.uuid1()}"
-        self._keyval_storage_gateway.put(
-            chat_threads_list_key, pickle.dumps([chat_thread_key])
-        )
-        return chat_thread_key
+        # Generate new key.
+        self._logging_gateway.debug("Generating new chat thread key.")
+        key = f"chat_thread:{uuid.uuid1()}"
 
-    async def _get_rag_context(self, message: str) -> list[dict]:
+        chat_threads_list = {}
+        # If its a new thread list.
+        if new_list:
+            # Create a new thread list, and make the new thread the attention thread.
+            self._logging_gateway.debug("Creating new thread list.")
+            chat_threads_list["attention_thread"] = key
+            chat_threads_list["threads"] = [key]
+        else:
+            # The thread list exists.
+            self._logging_gateway.debug("Load existing thread list.")
+            chat_threads_list = pickle.loads(
+                self._keyval_storage_gateway.get(chat_threads_list_key, False)
+            )
+
+            # Migrate old lists.
+            if isinstance(chat_threads_list, list):
+                self._logging_gateway.debug("Migrate old thread list to new format.")
+                chat_threads_list = {"threads": chat_threads_list}
+
+            # Set new key as attention thread and append it to the threads list.
+            chat_threads_list["attention_thread"] = key
+            chat_threads_list["threads"].append(key)
+
+        # Persist thread list.
+        self._keyval_storage_gateway.put(
+            chat_threads_list_key, pickle.dumps(chat_threads_list)
+        )
+        return key
+
+    async def _get_rag_context_orders(self, message: str) -> list[dict]:
         """Get a list of strings representing knowledge pulled from an RAG source."""
-        classification = await self._completion_gateway.get_rag_classification(
-            message=message,
-            model=self._keyval_storage_gateway.get("groq_api_classification_model"),
+        orders_classification = (
+            await self._completion_gateway.get_rag_classification_orders(
+                message=message,
+                model=self._keyval_storage_gateway.get("groq_api_classification_model"),
+            )
         )
 
         knowledge_docs: list[str] = []
-        if classification is not None:
-            instruct = json.loads(classification)
+        if orders_classification is not None:
+            instruct = json.loads(orders_classification)
             # self._logging_gateway.debug(json.dumps(instruct, indent=4))
             match instruct["classification"]:
                 case "search_orders":
                     hits = await self._knowledge_retrieval_gateway.search_similar(
-                        "mil_orders", f'{instruct["subject"]} {instruct["event_type"]}'
+                        "guyana_defence_force",
+                        "orders",
+                        f'{instruct["subject"]} {instruct["event_type"]}',
                     )
                     if len(hits) > 0:
                         self._logging_gateway.debug(
@@ -229,6 +290,7 @@ class DefaultMessagingService(IMessagingService):
 
                 case _:
                     pass
+
         # self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
 
         context = []
@@ -310,3 +372,25 @@ class DefaultMessagingService(IMessagingService):
         )
 
         return context
+
+    def _set_attention_thread(
+        self, chat_threads_list_key: str, attention_thread: str
+    ) -> None:
+        """Set the attention thread in a chat threads list."""
+        if self._keyval_storage_gateway.has_key(chat_threads_list_key):
+            # Load list.
+            chat_threads_list = pickle.loads(
+                self._keyval_storage_gateway.get(chat_threads_list_key, False)
+            )
+
+            # Migrate old lists to new format if necessary.
+            if isinstance(chat_threads_list, list):
+                self._logging_gateway.debug("Migrate old thread list to new format.")
+                chat_threads_list = {"threads": chat_threads_list}
+
+            chat_threads_list["attention_thread"] = attention_thread
+
+            # Persist thread list.
+            self._keyval_storage_gateway.put(
+                chat_threads_list_key, pickle.dumps(chat_threads_list)
+            )
