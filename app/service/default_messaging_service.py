@@ -84,7 +84,7 @@ class DefaultMessagingService(IMessagingService):
         completion_context = []
         completion_context += attention_thread["messages"]
         completion_context += self._get_system_context(known_users_list_key, sender)
-        completion_context += await self._get_rag_context(content)
+        completion_context += await self._get_rag_context_orders(content)
 
         # Get assistant response based on chat history, system context, and RAG data.
         self._logging_gateway.debug("Get completion.")
@@ -248,21 +248,25 @@ class DefaultMessagingService(IMessagingService):
         )
         return key
 
-    async def _get_rag_context(self, message: str) -> list[dict]:
+    async def _get_rag_context_orders(self, message: str) -> list[dict]:
         """Get a list of strings representing knowledge pulled from an RAG source."""
-        classification = await self._completion_gateway.get_rag_classification(
-            message=message,
-            model=self._keyval_storage_gateway.get("groq_api_classification_model"),
+        orders_classification = (
+            await self._completion_gateway.get_rag_classification_orders(
+                message=message,
+                model=self._keyval_storage_gateway.get("groq_api_classification_model"),
+            )
         )
 
         knowledge_docs: list[str] = []
-        if classification is not None:
-            instruct = json.loads(classification)
+        if orders_classification is not None:
+            instruct = json.loads(orders_classification)
             # self._logging_gateway.debug(json.dumps(instruct, indent=4))
             match instruct["classification"]:
                 case "search_orders":
                     hits = await self._knowledge_retrieval_gateway.search_similar(
-                        "mil_orders", f'{instruct["subject"]} {instruct["event_type"]}'
+                        "guyana_defence_force",
+                        "orders",
+                        f'{instruct["subject"]} {instruct["event_type"]}',
                     )
                     if len(hits) > 0:
                         self._logging_gateway.debug(
@@ -286,6 +290,7 @@ class DefaultMessagingService(IMessagingService):
 
                 case _:
                     pass
+
         # self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
 
         context = []
