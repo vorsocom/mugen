@@ -84,7 +84,7 @@ class GroqCompletionGateway(ICompletionGateway):
 
         return response
 
-    async def get_rag_classification(
+    async def get_rag_classification_orders(
         self, message: str, model: str, response_format: str = "json_object"
     ) -> Optional[str]:
         response = None
@@ -92,14 +92,13 @@ class GroqCompletionGateway(ICompletionGateway):
             {
                 "role": "system",
                 "content": (
-                    "Classify the message based on if the user wants to do one of the"
-                    " following:\n1. Search orders (classification=search_orders).\nIf"
-                    " the user wants to search orders, you need to extract the subject"
-                    " of the search which would be the name of a person, and the orders"
-                    " event type which could include TOS, SOS, embodiment,"
+                    "Classify the message based on if the user wants to search orders."
+                    " If the user wants to search orders, you need to extract the"
+                    " subject of the search which would be the name of a person, and"
+                    " the orders event type which could include TOS, SOS, embodiment,"
                     " disembodiment, posting, appointment, allowances, leave, short"
                     " pass, exemption, marriage, AWOL, punishment, and forfeiture."
-                    " \nYou have to return the extracted information as properly"
+                    " You have to return the extracted information as properly"
                     ' formatted JSON. For example, if the user instructs "Search orders'
                     ' for the last time John Smith was posted." your response would be'
                     ' {"classification": "search_orders", "subject": "John Smith",'
@@ -119,8 +118,8 @@ class GroqCompletionGateway(ICompletionGateway):
             response = chat_completion.choices[0].message.content
         except GroqError:
             self._logging_gateway.warning(
-                "GroqCompletionGateway.get_rag_classification: An error was encountered"
-                " while trying the Groq API."
+                "GroqCompletionGateway.get_rag_classification_orders: An error was"
+                " encountered while trying the Groq API."
             )
             traceback.print_exc()
         return response
