@@ -65,6 +65,12 @@ class ICompletionGateway(ABC):
         """Get LLM response based on context (conversation history + relevant data)."""
 
     @abstractmethod
+    async def get_rag_classification_gdf_knowledge(
+        self, message: str, model: str, response_format: str
+    ) -> Optional[str]:
+        """Classify user messages for GDF Knowledge RAG pipeline."""
+
+    @abstractmethod
     async def get_rag_classification_orders(
         self, message: str, model: str, response_format: str
     ) -> Optional[str]:
