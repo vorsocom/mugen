@@ -84,6 +84,42 @@ class GroqCompletionGateway(ICompletionGateway):
 
         return response
 
+    async def get_rag_classification_gdf_knowledge(
+        self, message: str, model: str, response_format: str = "json_object"
+    ) -> Optional[str]:
+        response = None
+        context = [
+            {
+                "role": "system",
+                "content": (
+                    "Classify the message based on if the user wants to know something"
+                    " about the Guyana Defence Force (GDF). If the user wants to know"
+                    " something about the GDF, you need to perform key phrase"
+                    " extraction on their message. You have to return the extracted"
+                    " information as properly formatted JSON. For example, if the user"
+                    ' asks "Who is the head of the Guyana Defence Force?", you will'
+                    ' return {"classification": "gdf_knowledge", "subject": "head of'
+                    ' the Guyana Defence Force"}, where "subject" is the extracted'
+                    " key phrase. If you are unable to classify the message just return"
+                    ' {"classification": null}.'
+                ),
+            },
+            {"role": "user", "content": message},
+        ]
+        try:
+            chat_completion = await self._api.chat.completions.create(
+                messages=context, model=model, response_format={"type": response_format}
+            )
+            response = chat_completion.choices[0].message.content
+            self._logging_gateway.debug(response)
+        except GroqError:
+            self._logging_gateway.warning(
+                "GroqCompletionGateway.get_rag_classification_gdf_knowledge: An error"
+                " was encountered while trying the Groq API."
+            )
+            traceback.print_exc()
+        return response
+
     async def get_rag_classification_orders(
         self, message: str, model: str, response_format: str = "json_object"
     ) -> Optional[str]:

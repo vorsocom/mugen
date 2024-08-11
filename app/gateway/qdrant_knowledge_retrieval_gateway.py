@@ -46,6 +46,7 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
             )
         except ResponseHandlingException:
             self._logging_gateway.warning(
-                "qdrant_knowledge_retrieval_gateway: ResponseHandlingException"
+                "QdrantKnowledgeRetrievalGateway.search_similar:"
+                " ResponseHandlingException"
             )
             return []
