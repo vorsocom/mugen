@@ -94,14 +94,11 @@ class GroqCompletionGateway(ICompletionGateway):
                 "content": (
                     "Classify the message based on if the user wants to know something"
                     " about the Guyana Defence Force (GDF). If the user wants to know"
-                    " something about the GDF, you need to perform key phrase"
-                    " extraction on their message. You have to return the extracted"
+                    " something about the GDF, you have to return the extracted"
                     " information as properly formatted JSON. For example, if the user"
                     ' asks "Who is the head of the Guyana Defence Force?", you will'
-                    ' return {"classification": "gdf_knowledge", "subject": "head of'
-                    ' the Guyana Defence Force"}, where "subject" is the extracted'
-                    " key phrase. If you are unable to classify the message just return"
-                    ' {"classification": null}.'
+                    ' return {"classification": "gdf_knowledge"}. If you are unable to'
+                    ' classify the message just return {"classification": null}.'
                 ),
             },
             {"role": "user", "content": message},
@@ -111,7 +108,7 @@ class GroqCompletionGateway(ICompletionGateway):
                 messages=context, model=model, response_format={"type": response_format}
             )
             response = chat_completion.choices[0].message.content
-            self._logging_gateway.debug(response)
+            # self._logging_gateway.debug(response)
         except GroqError:
             self._logging_gateway.warning(
                 "GroqCompletionGateway.get_rag_classification_gdf_knowledge: An error"
