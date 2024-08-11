@@ -9,6 +9,7 @@ from typing import Mapping
 import uuid
 
 from nio import AsyncClient
+from qdrant_client.models import ScoredPoint
 
 from app.contract.completion_gateway import ICompletionGateway
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
@@ -84,6 +85,7 @@ class DefaultMessagingService(IMessagingService):
         completion_context = []
         completion_context += attention_thread["messages"]
         completion_context += self._get_system_context(known_users_list_key, sender)
+        completion_context += await self._get_rag_context_gdf_knowledge(content)
         completion_context += await self._get_rag_context_orders(content)
 
         # Get assistant response based on chat history, system context, and RAG data.
@@ -248,6 +250,66 @@ class DefaultMessagingService(IMessagingService):
         )
         return key
 
+    async def _get_rag_context_gdf_knowledge(self, message: str) -> list[dict]:
+        """Get a list of strings representing knowledge pulled from an RAG source."""
+        gdfk_classification = (
+            await self._completion_gateway.get_rag_classification_gdf_knowledge(
+                message=message,
+                model=self._keyval_storage_gateway.get("groq_api_classification_model"),
+            )
+        )
+
+        knowledge_docs: list[str] = []
+        if gdfk_classification is not None:
+            instruct = json.loads(gdfk_classification)
+            self._logging_gateway.debug(f"instruct: {instruct}")
+            if instruct["classification"] == "gdf_knowledge":
+                hits: list[ScoredPoint] = (
+                    await self._knowledge_retrieval_gateway.search_similar(
+                        "guyana_defence_force",
+                        "gdf_knowledge",
+                        f'{instruct["subject"]}',
+                    )
+                )
+                if len(hits) > 0:
+                    self._logging_gateway.debug(
+                        "default_messaging_gateway: similarity search hits -"
+                        f" {len(hits)}"
+                    )
+                    for hit in hits:
+                        if "source" in hit.payload.keys():
+                            knowledge_docs.append(
+                                f'Section {hit.payload["section"]} of'
+                                f' {hit.payload["chapter"]} of the'
+                                f' {hit.payload["source"]} states:'
+                                f' {hit.payload["data"]}'
+                            )
+                        else:
+                            knowledge_docs.append(hit.payload["data"])
+
+        # self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
+
+        context = []
+        if len(knowledge_docs) > 0:
+            context.append(
+                {
+                    "role": "system",
+                    "content": " || ".join(knowledge_docs),
+                }
+            )
+            context.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Only use the information provided to answers user queries"
+                        " about the Guyana Defence Force (GDF). If you do not know the"
+                        " answer, say so. It is absolutely vital that you do not make"
+                        " up information."
+                    ),
+                }
+            )
+        return context
+
     async def _get_rag_context_orders(self, message: str) -> list[dict]:
         """Get a list of strings representing knowledge pulled from an RAG source."""
         orders_classification = (
@@ -261,35 +323,30 @@ class DefaultMessagingService(IMessagingService):
         if orders_classification is not None:
             instruct = json.loads(orders_classification)
             # self._logging_gateway.debug(json.dumps(instruct, indent=4))
-            match instruct["classification"]:
-                case "search_orders":
-                    hits = await self._knowledge_retrieval_gateway.search_similar(
-                        "guyana_defence_force",
-                        "orders",
-                        f'{instruct["subject"]} {instruct["event_type"]}',
+            if instruct["classification"] == "search_orders":
+                hits = await self._knowledge_retrieval_gateway.search_similar(
+                    "guyana_defence_force",
+                    "orders",
+                    f'{instruct["subject"]} {instruct["event_type"]}',
+                )
+                if len(hits) > 0:
+                    self._logging_gateway.debug(
+                        "default_messaging_gateway: similarity search hits -"
+                        f" {len(hits)}"
                     )
-                    if len(hits) > 0:
-                        self._logging_gateway.debug(
-                            "default_messaging_gateway: similarity search hits -"
-                            f" {len(hits)}"
+                    hit_str = (
+                        "In {0} Orders Serial {1} dated {2}, paragraph {3} states: {4}"
+                    )
+                    knowledge_docs = [
+                        hit_str.format(
+                            x.payload["type"],
+                            x.payload["serial"],
+                            x.payload["date"],
+                            x.payload["paragraph"],
+                            x.payload["data"],
                         )
-                        hit_str = (
-                            "In {0} Orders Serial {1} dated {2}, paragraph {3}"
-                            " states: {4}"
-                        )
-                        knowledge_docs = [
-                            hit_str.format(
-                                x.payload["type"],
-                                x.payload["serial"],
-                                x.payload["date"],
-                                x.payload["paragraph"],
-                                x.payload["data"],
-                            )
-                            for x in hits
-                        ]
-
-                case _:
-                    pass
+                        for x in hits
+                    ]
 
         # self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
 
