@@ -262,13 +262,11 @@ class DefaultMessagingService(IMessagingService):
         knowledge_docs: list[str] = []
         if gdfk_classification is not None:
             instruct = json.loads(gdfk_classification)
-            self._logging_gateway.debug(f"instruct: {instruct}")
+            # self._logging_gateway.debug(f"instruct: {instruct}")
             if instruct["classification"] == "gdf_knowledge":
                 hits: list[ScoredPoint] = (
                     await self._knowledge_retrieval_gateway.search_similar(
-                        "guyana_defence_force",
-                        "gdf_knowledge",
-                        f'{instruct["subject"]}',
+                        "guyana_defence_force", "gdf_knowledge", message, "should"
                     )
                 )
                 if len(hits) > 0:
