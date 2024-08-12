@@ -112,10 +112,33 @@ class DefaultMessagingService(IMessagingService):
             chat_completion = types.SimpleNamespace()
             chat_completion.content = "Error"
 
+        assistant_response = chat_completion.content
+
+        # Manage metadata returned by the LLM.
+        # Save current thread first.
+        self._save_chat_thread(attention_thread_key, attention_thread)
+
+        # Check for start task indicator.
+        if "[task]" in assistant_response:
+            self._logging_gateway.debug("[task] detected.")
+            await self._get_attention_thread_key(room_id, "", True, True)
+            assistant_response = assistant_response.replace("[task]", "").strip()
+            attention_thread["messages"].append(
+                {"role": "system", "content": "[task] detected. New task started."}
+            )
+
+        # Check for end task indicator.
+        if "[end-task]" in assistant_response:
+            self._logging_gateway.debug("[end-task] detected.")
+            await self._get_attention_thread_key(room_id, "", True)
+            assistant_response = assistant_response.replace("[end-task]", "").strip()
+            if assistant_response == "":
+                assistant_response = "Task completed. Awaiting further tasking."
+
         # Persist chat history.
         self._logging_gateway.debug("Persist attention thread.")
         attention_thread["messages"].append(
-            {"role": "assistant", "content": chat_completion.content}
+            {"role": "assistant", "content": assistant_response}
         )
         self._save_chat_thread(attention_thread_key, attention_thread)
 
@@ -126,20 +149,14 @@ class DefaultMessagingService(IMessagingService):
             message_type="m.room.message",
             content={
                 "msgtype": "m.text",
-                "body": chat_completion.content,
+                "body": assistant_response,
             },
         )
 
         self._logging_gateway.debug("Pass response to meeting service for processing.")
         await self._meeting_service.handle_assistant_response(
-            chat_completion.content, sender, room_id, attention_thread_key
+            assistant_response, sender, room_id, attention_thread_key
         )
-
-        if "[task]" in chat_completion.content:
-            await self._get_attention_thread_key(room_id, "", True, True)
-
-        if "[end-task]" in chat_completion.content:
-            await self._get_attention_thread_key(room_id, "", True)
 
         return
 
@@ -175,14 +192,14 @@ class DefaultMessagingService(IMessagingService):
             )
             if start_task:
                 self._logging_gateway.debug("Refreshing attention thread (Start task).")
-                attention_thread["messages"] = attention_thread["messages"][-2:]
+                attention_thread["messages"] = attention_thread["messages"][-1:]
             else:
                 self._logging_gateway.debug("Refreshing attention thread (other).")
                 attention_thread["messages"] = []
             self._save_chat_thread(
                 chat_threads_list["attention_thread"], attention_thread
             )
-            # self._logging_gateway.debug(attention_thread["messages"])
+            self._logging_gateway.debug(attention_thread["messages"])
             return chat_threads_list["attention_thread"]
 
         if "attention_thread" in chat_threads_list.keys():
@@ -494,15 +511,17 @@ class DefaultMessagingService(IMessagingService):
                     " messages as being related to a specific task. When the initiates"
                     " a task (line of conversation) with you, including one shot"
                     " questions you can answer in a single response such as searching"
-                    " orders, or when asking to create a meeting, prefix your message"
-                    " with [task], skip a line, then continue your response. The square"
-                    " backets are important. If [task] already appears in your chat"
-                    " history, it is important that you do not add it to any of your"
-                    " new responses. When you detect the end of a task, skip a line"
-                    " after the end of your response and add [end-task]. Again, the"
-                    " square brackets are important. A task may also come to an end due"
-                    " to a user request for cancellation. While a task is in progress"
-                    " do not add anything to your responses."
+                    " orders, or when asking to create a meeting, DO prefix your"
+                    " message with [task], skip a line, then continue your response."
+                    " The square backets are important. Never use anything other than"
+                    " square brackets!. If [task] already appears in your chat history,"
+                    " it is important that you DO NOT add it to any of your new"
+                    " responses. When you detect the end of a task, skip a line after"
+                    " the end of your response and DO add [end-task]. Again, the square"
+                    " brackets are important. A task may also come to an end due to a"
+                    " user request for cancellation, or the user thanking you for"
+                    " completing the task. While a task is in progress do not add"
+                    " anything to your responses."
                 ),
             }
         )
