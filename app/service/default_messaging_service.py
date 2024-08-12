@@ -5,9 +5,11 @@ __all__ = ["DefaultMessagingService"]
 from datetime import datetime
 import json
 import pickle
+import types
 from typing import Mapping
 import uuid
 
+from groq.types.chat import ChatCompletionMessage
 from nio import AsyncClient
 from qdrant_client.models import ScoredPoint
 
@@ -20,6 +22,8 @@ from app.contract.messaging_service import IMessagingService
 from app.contract.platform_gateway import IPlatformGateway
 
 CHAT_THREAD_VERSION: int = 1
+
+CHAT_THREADS_LIST_VERSION = 1
 
 SCHEDULED_MEETING_KEY = "scheduled_meeting:{0}"
 
@@ -57,6 +61,10 @@ class DefaultMessagingService(IMessagingService):
         # message.
         await self._client.room_read_markers(room_id, message_id, message_id)
 
+        if content == "//clear.":
+            await self._get_attention_thread_key(room_id, "", True)
+            return
+
         # Get the attention thread key.
         attention_thread_key = await self._get_attention_thread_key(room_id, content)
 
@@ -76,7 +84,7 @@ class DefaultMessagingService(IMessagingService):
             attention_thread["version"] = CHAT_THREAD_VERSION
             attention_thread["created"] = datetime.now().strftime("%s")
 
-        self._logging_gateway.debug(f"attention_thread: {attention_thread}")
+        # self._logging_gateway.debug(f"attention_thread: {attention_thread}")
 
         # Send user message to assistant with history.
         attention_thread["messages"].append({"role": "user", "content": content})
@@ -84,31 +92,32 @@ class DefaultMessagingService(IMessagingService):
         # Add chat history and system context to completion context.
         completion_context = []
         completion_context += attention_thread["messages"]
-        completion_context += self._get_system_context(known_users_list_key, sender)
         completion_context += await self._get_rag_context_gdf_knowledge(content)
         completion_context += await self._get_rag_context_orders(content)
+        completion_context += self._get_system_context(known_users_list_key, sender)
 
         # Get assistant response based on chat history, system context, and RAG data.
         self._logging_gateway.debug("Get completion.")
-        chat_completion = await self._completion_gateway.get_completion(
-            context=completion_context,
-            model=self._keyval_storage_gateway.get("groq_api_completion_model"),
+        chat_completion: ChatCompletionMessage = (
+            await self._completion_gateway.get_completion(
+                context=completion_context,
+                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
+            )
         )
 
         # If the chat completion attempt failed, set it to "Error" so that the user
         # will be aware of the failure.
         if chat_completion is None:
-            chat_completion = "Error"
+            self._logging_gateway.debug("chat_completion: None.")
+            chat_completion = types.SimpleNamespace()
+            chat_completion.content = "Error"
 
         # Persist chat history.
         self._logging_gateway.debug("Persist attention thread.")
         attention_thread["messages"].append(
-            {"role": "assistant", "content": chat_completion}
+            {"role": "assistant", "content": chat_completion.content}
         )
-        attention_thread["last_saved"] = datetime.now().strftime("%s")
-        self._keyval_storage_gateway.put(
-            attention_thread_key, pickle.dumps(attention_thread)
-        )
+        self._save_chat_thread(attention_thread_key, attention_thread)
 
         # Send assistant response to the user.
         self._logging_gateway.debug("Send response to user.")
@@ -117,18 +126,30 @@ class DefaultMessagingService(IMessagingService):
             message_type="m.room.message",
             content={
                 "msgtype": "m.text",
-                "body": chat_completion,
+                "body": chat_completion.content,
             },
         )
 
         self._logging_gateway.debug("Pass response to meeting service for processing.")
         await self._meeting_service.handle_assistant_response(
-            chat_completion, sender, room_id, attention_thread_key
+            chat_completion.content, sender, room_id, attention_thread_key
         )
+
+        if "[task]" in chat_completion.content:
+            await self._get_attention_thread_key(room_id, "", True, True)
+
+        if "[end-task]" in chat_completion.content:
+            await self._get_attention_thread_key(room_id, "", True)
 
         return
 
-    async def _get_attention_thread_key(self, room_id: str, message: str) -> str:
+    async def _get_attention_thread_key(
+        self,
+        room_id: str,
+        message: str,
+        refresh: bool = False,
+        start_task: bool = False,
+    ) -> str:
         """Get the chat thread that the message is related to."""
         # Get the key to retrieve the list of chat threads for this room.
         chat_threads_list_key = f"chat_threads_list:{room_id}"
@@ -145,6 +166,30 @@ class DefaultMessagingService(IMessagingService):
         chat_threads_list = pickle.loads(
             self._keyval_storage_gateway.get(chat_threads_list_key, False)
         )
+
+        if refresh:
+            attention_thread = pickle.loads(
+                self._keyval_storage_gateway.get(
+                    chat_threads_list["attention_thread"], False
+                )
+            )
+            if start_task:
+                self._logging_gateway.debug("Refreshing attention thread (Start task).")
+                attention_thread["messages"] = attention_thread["messages"][-2:]
+            else:
+                self._logging_gateway.debug("Refreshing attention thread (other).")
+                attention_thread["messages"] = []
+            self._save_chat_thread(
+                chat_threads_list["attention_thread"], attention_thread
+            )
+            # self._logging_gateway.debug(attention_thread["messages"])
+            return chat_threads_list["attention_thread"]
+
+        if "attention_thread" in chat_threads_list.keys():
+            self._logging_gateway.debug(
+                "Returning current attention thread for testing."
+            )
+            return chat_threads_list["attention_thread"]
 
         # Migrate old lists.
         if isinstance(chat_threads_list, list):
@@ -226,6 +271,7 @@ class DefaultMessagingService(IMessagingService):
         if new_list:
             # Create a new thread list, and make the new thread the attention thread.
             self._logging_gateway.debug("Creating new thread list.")
+            chat_threads_list["version"] = CHAT_THREADS_LIST_VERSION
             chat_threads_list["attention_thread"] = key
             chat_threads_list["threads"] = [key]
         else:
@@ -240,6 +286,9 @@ class DefaultMessagingService(IMessagingService):
                 self._logging_gateway.debug("Migrate old thread list to new format.")
                 chat_threads_list = {"threads": chat_threads_list}
 
+            if "version" not in chat_threads_list.keys():
+                chat_threads_list["version"] = CHAT_THREADS_LIST_VERSION
+
             # Set new key as attention thread and append it to the threads list.
             chat_threads_list["attention_thread"] = key
             chat_threads_list["threads"].append(key)
@@ -252,6 +301,7 @@ class DefaultMessagingService(IMessagingService):
 
     async def _get_rag_context_gdf_knowledge(self, message: str) -> list[dict]:
         """Get a list of strings representing knowledge pulled from an RAG source."""
+        self._logging_gateway.debug("Processing GDF Knowledge RAG pipeline.")
         gdfk_classification = (
             await self._completion_gateway.get_rag_classification_gdf_knowledge(
                 message=message,
@@ -262,13 +312,11 @@ class DefaultMessagingService(IMessagingService):
         knowledge_docs: list[str] = []
         if gdfk_classification is not None:
             instruct = json.loads(gdfk_classification)
-            self._logging_gateway.debug(f"instruct: {instruct}")
+            # self._logging_gateway.debug(f"instruct: {instruct}")
             if instruct["classification"] == "gdf_knowledge":
                 hits: list[ScoredPoint] = (
                     await self._knowledge_retrieval_gateway.search_similar(
-                        "guyana_defence_force",
-                        "gdf_knowledge",
-                        f'{instruct["subject"]}',
+                        "guyana_defence_force", "gdf_knowledge", message, "should"
                     )
                 )
                 if len(hits) > 0:
@@ -289,29 +337,34 @@ class DefaultMessagingService(IMessagingService):
 
         # self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
 
+        if len(knowledge_docs) == 0:
+            knowledge_docs.append(
+                "No relevant information found in your GDF knowledge base."
+            )
+
         context = []
-        if len(knowledge_docs) > 0:
-            context.append(
-                {
-                    "role": "system",
-                    "content": " || ".join(knowledge_docs),
-                }
-            )
-            context.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "Only use the information provided to answers user queries"
-                        " about the Guyana Defence Force (GDF). If you do not know the"
-                        " answer, say so. It is absolutely vital that you do not make"
-                        " up information."
-                    ),
-                }
-            )
+        context.append(
+            {
+                "role": "system",
+                "content": " || ".join(knowledge_docs),
+            }
+        )
+        context.append(
+            {
+                "role": "system",
+                "content": (
+                    "Only use the information provided to answers user queries"
+                    " about the Guyana Defence Force (GDF). If you do not know the"
+                    " answer, say so. It is absolutely vital that you do not make"
+                    " up information."
+                ),
+            }
+        )
         return context
 
     async def _get_rag_context_orders(self, message: str) -> list[dict]:
         """Get a list of strings representing knowledge pulled from an RAG source."""
+        self._logging_gateway.debug("Processing Orders RAG pipeline.")
         orders_classification = (
             await self._completion_gateway.get_rag_classification_orders(
                 message=message,
@@ -350,24 +403,28 @@ class DefaultMessagingService(IMessagingService):
 
         # self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
 
+        if len(knowledge_docs) == 0:
+            knowledge_docs.append(
+                "No relevant information found in your orders search."
+            )
+
         context = []
-        if len(knowledge_docs) > 0:
-            context.append(
-                {
-                    "role": "system",
-                    "content": " || ".join(knowledge_docs),
-                }
-            )
-            context.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "When giving information from orders, always cite the serial,"
-                        " paragraph number, and date of publication. Do not make up any"
-                        " information. If you do not have any information, say so."
-                    ),
-                }
-            )
+        context.append(
+            {
+                "role": "system",
+                "content": " || ".join(knowledge_docs),
+            }
+        )
+        context.append(
+            {
+                "role": "system",
+                "content": (
+                    "When giving information from orders, always cite the serial,"
+                    " paragraph number, and date of publication. Do not make up any"
+                    " information. If you do not have any information, say so."
+                ),
+            }
+        )
         return context
 
     def _get_system_context(self, known_users_list_key: str, sender: str) -> list[dict]:
@@ -428,7 +485,34 @@ class DefaultMessagingService(IMessagingService):
             }
         )
 
+        # Append instructions to detect end of conversation
+        context.append(
+            {
+                "role": "system",
+                "content": (
+                    "You will have task based interactions with a user. Treat all user"
+                    " messages as being related to a specific task. When the initiates"
+                    " a task (line of conversation) with you, including one shot"
+                    " questions you can answer in a single response such as searching"
+                    " orders, or when asking to create a meeting, prefix your message"
+                    " with [task], skip a line, then continue your response. The square"
+                    " backets are important. If [task] already appears in your chat"
+                    " history, it is important that you do not add it to any of your"
+                    " new responses. When you detect the end of a task, skip a line"
+                    " after the end of your response and add [end-task]. Again, the"
+                    " square brackets are important. A task may also come to an end due"
+                    " to a user request for cancellation. While a task is in progress"
+                    " do not add anything to your responses."
+                ),
+            }
+        )
+
         return context
+
+    def _save_chat_thread(self, key: str, thread: dict) -> None:
+        """Save an attention thread."""
+        thread["last_saved"] = datetime.now().strftime("%s")
+        self._keyval_storage_gateway.put(key, pickle.dumps(thread))
 
     def _set_attention_thread(
         self, chat_threads_list_key: str, attention_thread: str

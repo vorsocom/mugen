@@ -96,7 +96,7 @@ class DefaultMeetingService(IMeetingService):
             ],
             model=self._keyval_storage_gateway.get("groq_api_completion_model"),
         )
-        cancel_id = "" if action_parameters is None else action_parameters
+        cancel_id = "" if action_parameters is None else action_parameters.content
 
         try:
             scheduled_meeting: Meeting = pickle.loads(
@@ -156,7 +156,7 @@ class DefaultMeetingService(IMeetingService):
                     "content": (
                         "Error"
                         if action_response_completion is None
-                        else action_response_completion
+                        else action_response_completion.content
                     ),
                 }
             )
@@ -189,7 +189,7 @@ class DefaultMeetingService(IMeetingService):
                     "content": (
                         "Error"
                         if action_response_completion is None
-                        else action_response_completion
+                        else action_response_completion.content
                     ),
                 }
             )
@@ -293,7 +293,7 @@ class DefaultMeetingService(IMeetingService):
             response_format="json_object",
         )
         meeting_params = dict(
-            json.loads("{}" if action_parameters is None else action_parameters)
+            json.loads("{}" if action_parameters is None else action_parameters.content)
         )
 
         # Schedule meeting using the ScheduleMeetingInteractor
@@ -341,7 +341,7 @@ class DefaultMeetingService(IMeetingService):
                     "content": (
                         "Error"
                         if action_response_completion is None
-                        else action_response_completion
+                        else action_response_completion.content
                     ),
                 }
             )
@@ -373,7 +373,7 @@ class DefaultMeetingService(IMeetingService):
                     "content": (
                         "Error"
                         if action_response_completion is None
-                        else action_response_completion
+                        else action_response_completion.content
                     ),
                 }
             )
@@ -427,7 +427,7 @@ class DefaultMeetingService(IMeetingService):
             response_format="json_object",
         )
         meeting_params = dict(
-            json.loads("{}" if action_parameters is None else action_parameters)
+            json.loads("{}" if action_parameters is None else action_parameters.content)
         )
 
         try:
@@ -497,7 +497,7 @@ class DefaultMeetingService(IMeetingService):
                     "content": (
                         "Error"
                         if action_response_completion is None
-                        else action_response_completion
+                        else action_response_completion.content
                     ),
                 }
             )
@@ -530,7 +530,7 @@ class DefaultMeetingService(IMeetingService):
                     "content": (
                         "Error"
                         if action_response_completion is None
-                        else action_response_completion
+                        else action_response_completion.content
                     ),
                 }
             )

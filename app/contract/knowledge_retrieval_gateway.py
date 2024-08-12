@@ -54,6 +54,10 @@ class IKnowledgeRetrievalGateway(ABC):
 
     @abstractmethod
     async def search_similar(
-        self, collection_name: str, dataset: str, search_term: str
+        self,
+        collection_name: str,
+        dataset: str,
+        search_term: str,
+        strategy: str,
     ) -> list:
         """Search for documents in the knowledge base containing similar strings."""

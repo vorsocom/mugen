@@ -1,6 +1,6 @@
 """Provides an abstract base class for creating chat completion gateways."""
 
-from typing import Optional
+from typing import Any, Optional
 from importlib import import_module
 from abc import ABC, abstractmethod
 
@@ -61,7 +61,7 @@ class ICompletionGateway(ABC):
     @abstractmethod
     async def get_completion(
         self, context: list[dict], model: str, response_format: str
-    ) -> Optional[str]:
+    ) -> Optional[Any]:
         """Get LLM response based on context (conversation history + relevant data)."""
 
     @abstractmethod
