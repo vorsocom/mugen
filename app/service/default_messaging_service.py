@@ -23,9 +23,13 @@ from app.contract.platform_gateway import IPlatformGateway
 
 CHAT_THREAD_VERSION: int = 1
 
-CHAT_THREADS_LIST_VERSION = 1
+CHAT_THREADS_LIST_VERSION: int = 1
 
-SCHEDULED_MEETING_KEY = "scheduled_meeting:{0}"
+RAG_CACHE_GDF_KNOWLEDGE_KEY: str = "rag_cache_gdf_knowledge"
+
+RAG_CACHE_ORDERS_KEY: str = "rag_cache_orders"
+
+SCHEDULED_MEETING_KEY: str = "scheduled_meeting:{0}"
 
 
 class DefaultMessagingService(IMessagingService):
@@ -89,11 +93,29 @@ class DefaultMessagingService(IMessagingService):
         # Send user message to assistant with history.
         attention_thread["messages"].append({"role": "user", "content": content})
 
-        # Add chat history and system context to completion context.
         completion_context = []
+        # Add chat history to completion context.
         completion_context += attention_thread["messages"]
-        completion_context += await self._get_rag_context_gdf_knowledge(content)
-        completion_context += await self._get_rag_context_orders(content)
+
+        # Execute RAG pipelines and get data if any was found.
+        # If the user message did not trigger an RAG query, the information from the
+        # last successful query will still be cached.
+        await self._get_rag_context_gdf_knowledge(content)
+        if self._keyval_storage_gateway.has_key(RAG_CACHE_GDF_KNOWLEDGE_KEY):
+            gdfk_cache = pickle.loads(
+                self._keyval_storage_gateway.get(RAG_CACHE_GDF_KNOWLEDGE_KEY, False)
+            )
+            # self._logging_gateway.debug(f"gdfk_cache: {gdfk_cache}")
+            completion_context += gdfk_cache
+        await self._get_rag_context_orders(content)
+        if self._keyval_storage_gateway.has_key(RAG_CACHE_ORDERS_KEY):
+            orders_cache = pickle.loads(
+                self._keyval_storage_gateway.get(RAG_CACHE_ORDERS_KEY, False)
+            )
+            # self._logging_gateway.debug(f"orders_cache: {orders_cache}")
+            completion_context += orders_cache
+
+        # Add system context to completion context.
         completion_context += self._get_system_context(known_users_list_key, sender)
 
         # Get assistant response based on chat history, system context, and RAG data.
@@ -316,7 +338,7 @@ class DefaultMessagingService(IMessagingService):
         )
         return key
 
-    async def _get_rag_context_gdf_knowledge(self, message: str) -> list[dict]:
+    async def _get_rag_context_gdf_knowledge(self, message: str) -> None:
         """Get a list of strings representing knowledge pulled from an RAG source."""
         self._logging_gateway.debug("Processing GDF Knowledge RAG pipeline.")
         gdfk_classification = (
@@ -352,34 +374,26 @@ class DefaultMessagingService(IMessagingService):
                         else:
                             knowledge_docs.append(hit.payload["data"])
 
-        # self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
+                # self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
 
-        if len(knowledge_docs) == 0:
-            knowledge_docs.append(
-                "No relevant information found in your GDF knowledge base."
-            )
+                if len(knowledge_docs) == 0:
+                    knowledge_docs.append(
+                        "No relevant information found in your GDF knowledge base. Do"
+                        " not make up any information."
+                    )
 
-        context = []
-        context.append(
-            {
-                "role": "system",
-                "content": " || ".join(knowledge_docs),
-            }
-        )
-        context.append(
-            {
-                "role": "system",
-                "content": (
-                    "Only use the information provided to answers user queries"
-                    " about the Guyana Defence Force (GDF). If you do not know the"
-                    " answer, say so. It is absolutely vital that you do not make"
-                    " up information."
-                ),
-            }
-        )
-        return context
+                context = []
+                context.append(
+                    {
+                        "role": "system",
+                        "content": " || ".join(knowledge_docs),
+                    }
+                )
+                self._keyval_storage_gateway.put(
+                    RAG_CACHE_GDF_KNOWLEDGE_KEY, pickle.dumps(context)
+                )
 
-    async def _get_rag_context_orders(self, message: str) -> list[dict]:
+    async def _get_rag_context_orders(self, message: str) -> None:
         """Get a list of strings representing knowledge pulled from an RAG source."""
         self._logging_gateway.debug("Processing Orders RAG pipeline.")
         orders_classification = (
@@ -418,31 +432,33 @@ class DefaultMessagingService(IMessagingService):
                         for x in hits
                     ]
 
-        # self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
+                # self._logging_gateway.debug(f"default_messaging_service: RAG {knowledge_docs}")
 
-        if len(knowledge_docs) == 0:
-            knowledge_docs.append(
-                "No relevant information found in your orders search."
-            )
+                if len(knowledge_docs) == 0:
+                    knowledge_docs.append(
+                        "No relevant information found in your orders search. Do not"
+                        " make up any information."
+                    )
 
-        context = []
-        context.append(
-            {
-                "role": "system",
-                "content": " || ".join(knowledge_docs),
-            }
-        )
-        context.append(
-            {
-                "role": "system",
-                "content": (
-                    "When giving information from orders, always cite the serial,"
-                    " paragraph number, and date of publication. Do not make up any"
-                    " information. If you do not have any information, say so."
-                ),
-            }
-        )
-        return context
+                context = []
+                context.append(
+                    {
+                        "role": "system",
+                        "content": " || ".join(knowledge_docs),
+                    }
+                )
+                context.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "When giving information from orders, always cite the"
+                            " serial, paragraph number, and date of publication."
+                        ),
+                    }
+                )
+                self._keyval_storage_gateway.put(
+                    RAG_CACHE_ORDERS_KEY, pickle.dumps(context)
+                )
 
     def _get_system_context(self, known_users_list_key: str, sender: str) -> list[dict]:
         """Return a list of system messages to add context to user message."""
