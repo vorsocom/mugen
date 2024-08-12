@@ -35,7 +35,7 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
         strategy: str = "must",
     ) -> list:
         self._logging_gateway.debug(
-            f"qdrant_knowledge_retrieval_gateway: {search_term}"
+            f"QdrantKnowledgeRetrievalGateway.search_similar: {search_term}"
         )
         conditions = []
         for keyword in keyword_extractor.extract_keywords(search_term):
