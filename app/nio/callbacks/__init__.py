@@ -2,7 +2,6 @@
 Provides class to pass client to callback methods.
 """
 
-import pickle
 from typing import Mapping
 
 from nio import (
@@ -25,12 +24,11 @@ from app.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
 from app.contract.logging_gateway import ILoggingGateway
 from app.contract.meeting_service import IMeetingService
 from app.contract.messaging_service import IMessagingService
+from app.contract.user_service import IUserService
 
-FLAGS_KEY = "m.agent_flags"
+FLAGS_KEY: str = "m.agent_flags"
 
-KNOWN_USERS_LIST_KEY = "known_users_list"
-
-SYNC_KEY = "matrix_client_sync_next_batch"
+SYNC_KEY: str = "matrix_client_sync_next_batch"
 
 
 class Callbacks:
@@ -45,6 +43,7 @@ class Callbacks:
         logging_gateway: ILoggingGateway,
         meeting_service: IMeetingService,
         messaging_service: IMessagingService,
+        user_service: IUserService,
     ) -> None:
         """Store AsyncClient"""
         self._client = client
@@ -54,6 +53,7 @@ class Callbacks:
         self._logging_gateway = logging_gateway
         self._meeting_service = meeting_service
         self._messaging_service = messaging_service
+        self._user_service = user_service
 
     # Events
     async def invite_alias_event(self, event: InviteAliasEvent) -> None:
@@ -123,29 +123,8 @@ class Callbacks:
         # Get profile and add user to list of known users if required.
         resp = await self._client.get_profile(event.sender)
         if isinstance(resp, ProfileGetResponse):
-            known_users = {}
-            if not self._keyval_storage_gateway.has_key(KNOWN_USERS_LIST_KEY):
-                # Create a new known user list.
-                known_users[event.sender] = {
-                    "displayname": resp.displayname,
-                    "dm_id": room.room_id,
-                }
-            else:
-                # Load existing known user list.
-                known_users = dict(
-                    pickle.loads(
-                        self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
-                    )
-                )
-                # Add user to existing known user list.
-                # Overwrite existing data just in case we are not working with
-                # a clean data store.
-                known_users[event.sender] = {
-                    "displayname": resp.displayname,
-                    "dm_id": room.room_id,
-                }
-            self._keyval_storage_gateway.put(
-                KNOWN_USERS_LIST_KEY, pickle.dumps(known_users)
+            self._user_service.add_known_user(
+                event.sender, resp.displayname, room.room_id
             )
 
     async def invite_name_event(
@@ -174,7 +153,6 @@ class Callbacks:
             message.event_id,
             message.sender,
             message.body,
-            KNOWN_USERS_LIST_KEY,
         )
 
     async def tag_event(self, event: TagEvent) -> None:

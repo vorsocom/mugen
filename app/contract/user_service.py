@@ -1,27 +1,20 @@
-"""Provides an abstract base class for messaging services."""
+"""Provides an abstract base class for user services."""
 
-__all__ = ["IMessagingService"]
+__all__ = ["IUserService"]
 
 from abc import ABC, abstractmethod
 from importlib import import_module
 
-from nio import AsyncClient
-
-from app.contract.completion_gateway import ICompletionGateway
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
-from app.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
 from app.contract.logging_gateway import ILoggingGateway
-from app.contract.meeting_service import IMeetingService
-from app.contract.platform_gateway import IPlatformGateway
-from app.contract.user_service import IUserService
 
 
-class InvalidMessagingServiceException(Exception):
+class InvalidUserServiceException(Exception):
     """Custom exception."""
 
 
-class IMessagingService(ABC):
-    """An abstract base class for messaging services."""
+class IUserService(ABC):
+    """An ABC for user services."""
 
     _instance = None
 
@@ -29,14 +22,8 @@ class IMessagingService(ABC):
     def instance(
         cls,
         service_module: str,
-        client: AsyncClient,
-        completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
-        knowledge_retrieval_gateway: IKnowledgeRetrievalGateway,
         logging_gateway: ILoggingGateway,
-        platform_gateway: IPlatformGateway,
-        meeting_service: IMeetingService,
-        user_service: IUserService,
     ):
         """Get an instance of IMessagingService."""
         # Create a new instance.
@@ -49,35 +36,31 @@ class IMessagingService(ABC):
 
             # Raise an exception if multiple subclasses are found.
             if len(subclasses) > 1:
-                raise InvalidMessagingServiceException(
+                raise InvalidUserServiceException(
                     f"More than one module exists for {service_module}: {subclasses}"
                 )
 
             # Raise an exception if no subclasses are found.
             if not subclasses or service_module not in str(subclasses[0]):
-                raise InvalidMessagingServiceException(
+                raise InvalidUserServiceException(
                     f"{service_module} does not exist or does not subclass "
                     + "IMessagingService."
                 )
 
             cls._instance = subclasses[0](
-                client,
-                completion_gateway,
                 keyval_storage_gateway,
-                knowledge_retrieval_gateway,
                 logging_gateway,
-                platform_gateway,
-                meeting_service,
-                user_service,
             )
         return cls._instance
 
     @abstractmethod
-    async def handle_text_message(
-        self,
-        room_id: str,
-        message_id: str,
-        sender: str,
-        content: str,
-    ) -> None:
-        """Handle a text message from a chat."""
+    def add_known_user(self, user_id: str, displayname: str, room_id: str) -> None:
+        """Add a user to the list of known users."""
+
+    @abstractmethod
+    def get_known_users_list(self) -> dict:
+        """Get the list of known users."""
+
+    @abstractmethod
+    def save_known_users_list(self, known_users: dict) -> None:
+        """Save a list of known users."""

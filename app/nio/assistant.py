@@ -28,6 +28,7 @@ from app.contract.logging_gateway import ILoggingGateway
 from app.contract.meeting_service import IMeetingService
 from app.contract.messaging_service import IMessagingService
 from app.contract.platform_gateway import IPlatformGateway
+from app.contract.user_service import IUserService
 
 
 def handle_error(logging_gateway: ILoggingGateway) -> None:
@@ -104,6 +105,7 @@ async def assistant(
     logging_gateway: ILoggingGateway,
     meeting_service: IMeetingService,
     messaging_service: IMessagingService,
+    user_service: IUserService,
 ) -> None:
     """Application entrypoint."""
     # Load config values into dbm
@@ -131,6 +133,7 @@ async def assistant(
         logging_gateway,
         meeting_service,
         messaging_service,
+        user_service,
     )
     client.add_event_callback(callbacks.invite_alias_event, InviteAliasEvent)
     client.add_event_callback(callbacks.invite_member_event, InviteMemberEvent)
@@ -206,6 +209,13 @@ def run_assistant(basedir: str, log_level: int, _ipc_queue: Queue) -> None:
         platform_gateway=platform_gateway,
     )
 
+    # Initialise user service.
+    user_service = IUserService.instance(
+        service_module="app.service.default_user_service",
+        keyval_storage_gateway=keyval_storage_gateway,
+        logging_gateway=logging_gateway,
+    )
+
     # Initialise messaging service
     messaging_service = IMessagingService.instance(
         service_module="app.service.default_messaging_service",
@@ -216,6 +226,7 @@ def run_assistant(basedir: str, log_level: int, _ipc_queue: Queue) -> None:
         logging_gateway=logging_gateway,
         platform_gateway=platform_gateway,
         meeting_service=meeting_service,
+        user_service=user_service,
     )
 
     try:
@@ -229,6 +240,7 @@ def run_assistant(basedir: str, log_level: int, _ipc_queue: Queue) -> None:
                 logging_gateway,
                 meeting_service,
                 messaging_service,
+                user_service,
             )
         )
     except ValueError:

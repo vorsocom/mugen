@@ -20,6 +20,7 @@ from app.contract.logging_gateway import ILoggingGateway
 from app.contract.meeting_service import IMeetingService
 from app.contract.messaging_service import IMessagingService
 from app.contract.platform_gateway import IPlatformGateway
+from app.contract.user_service import IUserService
 
 CHAT_THREAD_VERSION: int = 1
 
@@ -44,6 +45,7 @@ class DefaultMessagingService(IMessagingService):
         logging_gateway: ILoggingGateway,
         platform_gateway: IPlatformGateway,
         meeting_service: IMeetingService,
+        user_service: IUserService,
     ) -> None:
         self._client = client
         self._completion_gateway = completion_gateway
@@ -52,6 +54,7 @@ class DefaultMessagingService(IMessagingService):
         self._logging_gateway = logging_gateway
         self._platform_gateway = platform_gateway
         self._meeting_service = meeting_service
+        self._user_service = user_service
 
     async def handle_text_message(
         self,
@@ -59,7 +62,6 @@ class DefaultMessagingService(IMessagingService):
         message_id: str,
         sender: str,
         content: str,
-        known_users_list_key: str,
     ) -> None:
         # Set the room read marker to indicate that the assistant has read the
         # message.
@@ -116,7 +118,7 @@ class DefaultMessagingService(IMessagingService):
             completion_context += orders_cache
 
         # Add system context to completion context.
-        completion_context += self._get_system_context(known_users_list_key, sender)
+        completion_context += self._get_system_context(sender)
 
         # Get assistant response based on chat history, system context, and RAG data.
         self._logging_gateway.debug("Get completion.")
@@ -460,12 +462,10 @@ class DefaultMessagingService(IMessagingService):
                     RAG_CACHE_ORDERS_KEY, pickle.dumps(context)
                 )
 
-    def _get_system_context(self, known_users_list_key: str, sender: str) -> list[dict]:
+    def _get_system_context(self, sender: str) -> list[dict]:
         """Return a list of system messages to add context to user message."""
         # Load known users list.
-        known_users_list = pickle.loads(
-            self._keyval_storage_gateway.get(known_users_list_key, False)
-        )
+        known_users_list = self._user_service.get_known_users_list()
 
         context = []
         # Append date and time to context.
