@@ -38,6 +38,12 @@ class DefaultUserService(IUserService):
 
         return {}
 
+    def get_user_display_name(self, user_id: str):
+        known_users = self.get_known_users_list()
+        if user_id in known_users.keys():
+            return known_users[user_id]["displayname"]
+        return ""
+
     def save_known_users_list(self, known_users: dict) -> None:
         self._keyval_storage_gateway.put(
             KNOWN_USERS_LIST_KEY, pickle.dumps(known_users)

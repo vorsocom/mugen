@@ -72,6 +72,6 @@ class ICompletionGateway(ABC):
 
     @abstractmethod
     async def get_rag_classification_orders(
-        self, message: str, model: str, response_format: str
+        self, user: str, message: str, model: str, response_format: str
     ) -> Optional[str]:
         """Classify user messages for orders RAG pipeline."""

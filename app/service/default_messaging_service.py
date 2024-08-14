@@ -109,7 +109,7 @@ class DefaultMessagingService(IMessagingService):
             )
             # self._logging_gateway.debug(f"gdfk_cache: {gdfk_cache}")
             completion_context += gdfk_cache
-        await self._get_rag_context_orders(content)
+        await self._get_rag_context_orders(sender, content)
         if self._keyval_storage_gateway.has_key(RAG_CACHE_ORDERS_KEY):
             orders_cache = pickle.loads(
                 self._keyval_storage_gateway.get(RAG_CACHE_ORDERS_KEY, False)
@@ -395,11 +395,13 @@ class DefaultMessagingService(IMessagingService):
                     RAG_CACHE_GDF_KNOWLEDGE_KEY, pickle.dumps(context)
                 )
 
-    async def _get_rag_context_orders(self, message: str) -> None:
+    async def _get_rag_context_orders(self, sender: str, message: str) -> None:
         """Get a list of strings representing knowledge pulled from an RAG source."""
         self._logging_gateway.debug("Processing Orders RAG pipeline.")
+        user_dn = self._user_service.get_user_display_name(sender)
         orders_classification = (
             await self._completion_gateway.get_rag_classification_orders(
+                user=user_dn,
                 message=message,
                 model=self._keyval_storage_gateway.get("groq_api_classification_model"),
             )
