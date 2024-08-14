@@ -122,26 +122,32 @@ class GroqCompletionGateway(ICompletionGateway):
         return response
 
     async def get_rag_classification_orders(
-        self, message: str, model: str, response_format: str = "json_object"
+        self, user: str, message: str, model: str, response_format: str = "json_object"
     ) -> Optional[str]:
         response = None
         context = [
+            {
+                "role": "system",
+                "content": f"You are chatting with {user}",
+            },
             {
                 "role": "system",
                 "content": (
                     "Classify the message based on if the user wants to search orders."
                     " If the user wants to search orders, you need to extract the"
                     " subject of the search which would be the name of a person, and"
-                    " the orders event type which could include TOS, SOS, embodied,"
-                    " disembodied, posted, appointed, allowances, leave, short pass,"
-                    " exemption, marriage, AWOL, punishment, and forfeiture. You have"
-                    " to return the extracted information as properly formatted JSON."
-                    ' For example, if the user instructs "Search orders for the last'
-                    ' time John Smith was posted." your response would be'
-                    ' {"classification": "search_orders", "subject": "John Smith",'
-                    ' "event_type": "posted"}. If you are unable to classify the'
-                    ' message just return {"classification": null}. If you cannot'
-                    " determine the event_type, use an empty string."
+                    " the orders event type which could include TOS, SOS, training,"
+                    " embodied, disembodied, posted, appointed, allowances, leave,"
+                    " short pass, exemption, marriage, AWOL, punishment, and"
+                    " forfeiture. You have to return the extracted information as"
+                    " properly formatted JSON. For example, if the user instructs"
+                    ' "Search orders for the last time John Smith was posted." your'
+                    ' response would be {"classification": "search_orders", "subject":'
+                    ' "John Smith", "event_type": "posted"}. If the user you are'
+                    " chatting with references themself, use their name for the"
+                    " subject. If you are unable to classify the message just return"
+                    ' {"classification": null}. If you cannot determine the event_type,'
+                    " use an empty string."
                 ),
             },
             {"role": "user", "content": message},
