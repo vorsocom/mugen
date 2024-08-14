@@ -67,8 +67,16 @@ class DefaultMessagingService(IMessagingService):
         # message.
         await self._client.room_read_markers(room_id, message_id, message_id)
 
-        if content == "//clear.":
+        if content.strip() == "//clear.":
+            # Empty attention thread.
             await self._get_attention_thread_key(room_id, "", True)
+
+            # Clear RAG caches.
+            if self._keyval_storage_gateway.has_key(RAG_CACHE_GDF_KNOWLEDGE_KEY):
+                self._keyval_storage_gateway.remove(RAG_CACHE_GDF_KNOWLEDGE_KEY)
+
+            if self._keyval_storage_gateway.has_key(RAG_CACHE_ORDERS_KEY):
+                self._keyval_storage_gateway.remove(RAG_CACHE_ORDERS_KEY)
             return
 
         # Get the attention thread key.
@@ -92,11 +100,13 @@ class DefaultMessagingService(IMessagingService):
 
         # self._logging_gateway.debug(f"attention_thread: {attention_thread}")
 
-        # Send user message to assistant with history.
-        attention_thread["messages"].append({"role": "user", "content": content})
-
         completion_context = []
+
+        # Add system context to completion context.
+        completion_context += self._get_system_context(sender)
+
         # Add chat history to completion context.
+        attention_thread["messages"].append({"role": "user", "content": content})
         completion_context += attention_thread["messages"]
 
         # Execute RAG pipelines and get data if any was found.
@@ -117,9 +127,10 @@ class DefaultMessagingService(IMessagingService):
             # self._logging_gateway.debug(f"orders_cache: {orders_cache}")
             completion_context += orders_cache
 
-        # Add system context to completion context.
-        completion_context += self._get_system_context(sender)
+        # Add system suffix context to completion context.
+        # completion_context += self._get_system_context_suffix(sender)
 
+        # self._logging_gateway.debug(json.dumps(completion_context, indent=4))
         # Get assistant response based on chat history, system context, and RAG data.
         self._logging_gateway.debug("Get completion.")
         chat_completion: ChatCompletionMessage = (
@@ -147,41 +158,44 @@ class DefaultMessagingService(IMessagingService):
             self._logging_gateway.debug("[task] detected.")
             await self._get_attention_thread_key(room_id, "", True, True)
             assistant_response = assistant_response.replace("[task]", "").strip()
-            attention_thread["messages"].append(
-                {"role": "system", "content": "[task] detected. New task started."}
-            )
+            attention_thread["messages"].append({"role": "system", "content": "[task]"})
 
         # Check for end task indicator.
         if "[end-task]" in assistant_response:
             self._logging_gateway.debug("[end-task] detected.")
             await self._get_attention_thread_key(room_id, "", True)
+            # self._logging_gateway.debug(assistant_response)
             assistant_response = assistant_response.replace("[end-task]", "").strip()
-            if assistant_response == "":
-                assistant_response = "Task completed. Awaiting further tasking."
 
-        # Persist chat history.
-        self._logging_gateway.debug("Persist attention thread.")
-        attention_thread["messages"].append(
-            {"role": "assistant", "content": assistant_response}
-        )
+        if assistant_response != "":
+            # Persist chat history.
+            self._logging_gateway.debug("Persist attention thread.")
+            attention_thread["messages"].append(
+                {
+                    "role": "assistant",
+                    "content": assistant_response,
+                }
+            )
+
+            # Send assistant response to the user.
+            self._logging_gateway.debug("Send response to user.")
+            await self._client.room_send(
+                room_id=room_id,
+                message_type="m.room.message",
+                content={
+                    "msgtype": "m.text",
+                    "body": assistant_response,
+                },
+            )
+
+            self._logging_gateway.debug(
+                "Pass response to meeting service for processing."
+            )
+            await self._meeting_service.handle_assistant_response(
+                assistant_response, sender, room_id, attention_thread_key
+            )
+
         self._save_chat_thread(attention_thread_key, attention_thread)
-
-        # Send assistant response to the user.
-        self._logging_gateway.debug("Send response to user.")
-        await self._client.room_send(
-            room_id=room_id,
-            message_type="m.room.message",
-            content={
-                "msgtype": "m.text",
-                "body": assistant_response,
-            },
-        )
-
-        self._logging_gateway.debug("Pass response to meeting service for processing.")
-        await self._meeting_service.handle_assistant_response(
-            assistant_response, sender, room_id, attention_thread_key
-        )
-
         return
 
     async def _get_attention_thread_key(
@@ -223,7 +237,7 @@ class DefaultMessagingService(IMessagingService):
             self._save_chat_thread(
                 chat_threads_list["attention_thread"], attention_thread
             )
-            self._logging_gateway.debug(attention_thread["messages"])
+            # self._logging_gateway.debug(attention_thread["messages"])
             return chat_threads_list["attention_thread"]
 
         if "attention_thread" in chat_threads_list.keys():
@@ -466,10 +480,9 @@ class DefaultMessagingService(IMessagingService):
 
     def _get_system_context(self, sender: str) -> list[dict]:
         """Return a list of system messages to add context to user message."""
-        # Load known users list.
+        context = []
         known_users_list = self._user_service.get_known_users_list()
 
-        context = []
         # Append date and time to context.
         context.append(
             {
@@ -489,11 +502,15 @@ class DefaultMessagingService(IMessagingService):
         )
 
         # Append user information to context.
-        sender_name = known_users_list[sender]["displayname"] + " (" + sender + ")"
         context.append(
             {
                 "role": "system",
-                "content": "You are chatting with " + sender_name,
+                "content": (
+                    "You are chatting with"
+                    f" {self._user_service.get_user_display_name(sender)} ({sender})."
+                    " Refer to this user by their first name unless otherwise"
+                    " instructed."
+                ),
             }
         )
 
@@ -512,6 +529,67 @@ class DefaultMessagingService(IMessagingService):
             }
         )
 
+        # Append meeting handling instructions.
+        context.append(
+            {
+                "role": "system",
+                "content": (
+                    "One of your tasks, among many, is scheduling meetings. Your rules"
+                    " for setting up meetings are:- Do not schedule meetings in the"
+                    " past.- Do not update meetings in the past unless the update is to"
+                    " move the date and time of the meeting to the future.- Find out if"
+                    " the user wants to schedule a virtual or in-person meeting.- If"
+                    " the user wants a virtual meeting on Element, you need to find out"
+                    " the topic, date, time, and attendees. If the user wants an"
+                    " in-person meeting, you need to find out the topic, date, time,"
+                    " location, and attendees. Prompt the user for any parameters that"
+                    " are missing. If you are given a day of the week as the date,"
+                    " convert it to a date in the format 2024-01-01 and confirm that"
+                    " date with the user.- When you have collected all the required"
+                    " parameters, confirm them with the user.- When the user confirms,"
+                    ' say "I\'m arranging the requested meeting."- If you do not have'
+                    " any of the attendees in your contact list, ask the user to"
+                    " confirm that you can go ahead and schedule the meeting without"
+                    " that attendee, or advise them to have the missing attendee"
+                    " register with you using your element username (state your"
+                    " username).- Always use the full names from your contact list"
+                    " (with the username) when confirming the attendees with the user.-"
+                    " Always include the user you are chatting with in the list of"
+                    " attendees.- Do not give the asssociated room link for the meeting"
+                    " when confirming that a meeting has been sheduled. The user should"
+                    " request it if they need it.- Output room links on a new line by"
+                    " themselves, without any characters before or after the link. This"
+                    " is important to avoid breaking the links.- Do not make up"
+                    " (hallucinate) room links. Only use those from your list of"
+                    " tracked meetings.- When listing scheduled meetings for a user,"
+                    " ensure that you only list meetings they are scheduled to attend,"
+                    " and do not duplicate meeting information.- If the user wants to"
+                    " update a scheduled meeting, you need to find out which of the"
+                    " tracked meetings it is, show them the current details, and then"
+                    " find out the parameters they wish to change.- Confirm the changes"
+                    " with the user.- When you have the required changes, say \"I'm"
+                    ' updating the specified meeting."- If changing a virtual meeting'
+                    " to an in-person meeting, the room link remains the same for the"
+                    " in-person meeting.- If the user wants to cancel (delete) a"
+                    " scheduled meeting, you need to find out which of the tracked"
+                    " meetings it is, show them the current details, and confirm that"
+                    " they want to cancel the meeting.- When the user confirms"
+                    " cancelling the meeting, say \"I'm cancelling the specified"
+                    " meeting.These are your instructions for your contact list:"
+                ),
+            }
+        )
+
+        context.append(
+            {
+                "role": "system",
+                "content": (
+                    "Always output room links on a separate line from the rest of the"
+                    " text."
+                ),
+            }
+        )
+
         # Append information on tracked meetings to context.
         context.append(
             {
@@ -525,21 +603,35 @@ class DefaultMessagingService(IMessagingService):
             {
                 "role": "system",
                 "content": (
-                    "You will have task based interactions with a user. Treat all user"
-                    " messages as being related to a specific task. When the initiates"
-                    " a task (line of conversation) with you, including one shot"
-                    " questions you can answer in a single response such as searching"
-                    " orders, or when asking to create a meeting, DO prefix your"
-                    " message with [task], skip a line, then continue your response."
-                    " The square backets are important. Never use anything other than"
-                    " square brackets!. If [task] already appears in your chat history,"
-                    " it is important that you DO NOT add it to any of your new"
-                    " responses. When you detect the end of a task, skip a line after"
-                    " the end of your response and DO add [end-task]. Again, the square"
-                    " brackets are important. A task may also come to an end due to a"
-                    " user request for cancellation, or the user thanking you for"
-                    " completing the task. While a task is in progress do not add"
-                    " anything to your responses."
+                    "Your primary role is to help  the user complete tasks. If the user"
+                    " sends you a new message that is not a follow-up to the previous"
+                    " task, the user's message asks a new question, requests a new"
+                    " action, or changes the topic, consider it an indicator of a new"
+                    " task. Do not consider messages containing only a simple greeting,"
+                    ' like "hello" or only a stop-word, such as "ok", an indicator of a'
+                    " new task. When you detect a new task, prefix your message with"
+                    " [task], skip a line, then add your response. The square backets"
+                    " are important. Never use anything other than square brackets!. If"
+                    " [task] already appears in your chat history with the user, do not"
+                    " add it to any new messages."
+                ),
+            }
+        )
+        context.append(
+            {
+                "role": "system",
+                "content": (
+                    "A task has ended if you've completed a requested action, answered"
+                    " a question not likely to have a follow-up message, or reached a"
+                    " natural conclusion to the task. Also consider a task complete if"
+                    " the user thanks you, indicates that they no longer need"
+                    " assistance, or explicitly cancels the task. Do not consider"
+                    ' messages containing only a stop-word such as "ok" an indicator'
+                    " of the end of a task. When you detect the end of a task, write"
+                    " your response, skip a line, and add [end-task]. Again, the square"
+                    " brackets are important! Don't append [end-task] if you cannot"
+                    " find a corresponding [task]. Your message to end a task should"
+                    " never contain just [end-task] only, say something!"
                 ),
             }
         )

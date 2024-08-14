@@ -71,14 +71,15 @@ class GroqCompletionGateway(ICompletionGateway):
         self, context: list[dict], model: str, response_format: str = "text"
     ) -> Optional[ChatCompletionMessage]:
         response = None
+        # self._logging_gateway.debug(context)
         try:
             chat_completion = await self._api.chat.completions.create(
-                messages=context, model=model, response_format={"type": response_format}
+                messages=context,
+                model=model,
+                response_format={"type": response_format},
+                temperature=0.2,
             )
             response = chat_completion.choices[0].message
-            # self._logging_gateway.debug(
-            #     f"tool calls: {chat_completion.choices[0].message}"
-            # )
         except GroqError:
             self._logging_gateway.warning(
                 "GroqCompletionGateway.get_completion: An error was encountered while"
@@ -147,7 +148,8 @@ class GroqCompletionGateway(ICompletionGateway):
                     " chatting with references themself, use their name for the"
                     " subject. If you are unable to classify the message just return"
                     ' {"classification": null}. If you cannot determine the event_type,'
-                    " use an empty string."
+                    " use an empty string. If you cannot identify a subject, also"
+                    ' return {"classification": null}.'
                 ),
             },
             {"role": "user", "content": message},
