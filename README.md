@@ -1,3 +1,3 @@
-# Gloria v0.6.0
+# Gloria v0.7.0
 
 Gloria is an AI assistant developed for the Matrix/Synapse/Element stack.
