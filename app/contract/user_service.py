@@ -62,5 +62,9 @@ class IUserService(ABC):
         """Get the list of known users."""
 
     @abstractmethod
+    def get_user_display_name(self, user_id: str) -> str:
+        """Get a user's display name from the list of known users."""
+
+    @abstractmethod
     def save_known_users_list(self, known_users: dict) -> None:
         """Save a list of known users."""
