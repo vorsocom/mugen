@@ -25,11 +25,11 @@ class IUserService(ABC):
         keyval_storage_gateway: IKeyValStorageGateway,
         logging_gateway: ILoggingGateway,
     ):
-        """Get an instance of IMessagingService."""
+        """Get an instance of IUserService."""
         # Create a new instance.
         if not cls._instance:
             logging_gateway.info(
-                f"Creating new IMessagingService instance: {service_module}."
+                f"Creating new IUserService instance: {service_module}."
             )
             import_module(name=service_module)
             subclasses = cls.__subclasses__()
@@ -44,7 +44,7 @@ class IUserService(ABC):
             if not subclasses or service_module not in str(subclasses[0]):
                 raise InvalidUserServiceException(
                     f"{service_module} does not exist or does not subclass "
-                    + "IMessagingService."
+                    + "IUserService."
                 )
 
             cls._instance = subclasses[0](
