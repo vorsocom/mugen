@@ -18,6 +18,5 @@
     "files.exclude": {
         "**/__pycache__": true
     },
-    "python.analysis.typeCheckingMode": "off",
-    "terminal.integrated.fontFamily": "MesloLGM Nerd Font"
+    "python.analysis.typeCheckingMode": "off"
 }
