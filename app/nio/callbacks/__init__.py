@@ -19,6 +19,7 @@ from nio import (
 )
 
 from app.contract.completion_gateway import ICompletionGateway
+from app.contract.ipc_service import IIPCService
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
 from app.contract.logging_gateway import ILoggingGateway
@@ -38,6 +39,7 @@ class Callbacks:
         self,
         client: AsyncClient,
         completion_gateway: ICompletionGateway,
+        ipc_service: IIPCService,
         keyval_storage_gateway: IKeyValStorageGateway,
         knowledge_retrieval_gateway: IKnowledgeRetrievalGateway,
         logging_gateway: ILoggingGateway,
@@ -48,12 +50,18 @@ class Callbacks:
         """Store AsyncClient"""
         self._client = client
         self._completion_gateway = completion_gateway
+        self._ipc_service = ipc_service
         self._keyval_storage_gateway = keyval_storage_gateway
         self._knoweldge_retrieval_gateway = knowledge_retrieval_gateway
         self._logging_gateway = logging_gateway
         self._meeting_service = meeting_service
         self._messaging_service = messaging_service
         self._user_service = user_service
+
+    # IPC
+    async def ipc_handler(self, ipc_payload: dict) -> None:
+        """Handle IPC events."""
+        await self._ipc_service.handle_ipc_request(ipc_payload)
 
     # Events
     async def invite_alias_event(self, event: InviteAliasEvent) -> None:

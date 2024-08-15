@@ -6,7 +6,6 @@ import asyncio
 import os
 import sys
 import traceback
-from queue import Queue
 
 from nio import (
     AsyncClient,
@@ -20,8 +19,10 @@ from nio import (
 
 from app.nio.auth import login
 from app.nio.callbacks import Callbacks, SYNC_KEY
+from app.nio.client import CustomAsyncClient
 
 from app.contract.completion_gateway import ICompletionGateway
+from app.contract.ipc_service import IIPCService
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
 from app.contract.logging_gateway import ILoggingGateway
@@ -100,6 +101,7 @@ async def assistant(
     basedir: str,
     client: AsyncClient,
     completion_gateway: ICompletionGateway,
+    ipc_service: IIPCService,
     keyval_storage_gateway: IKeyValStorageGateway,
     knowledge_retrieval_gateway: IKnowledgeRetrievalGateway,
     logging_gateway: ILoggingGateway,
@@ -128,6 +130,7 @@ async def assistant(
     callbacks = Callbacks(
         client,
         completion_gateway,
+        ipc_service,
         keyval_storage_gateway,
         knowledge_retrieval_gateway,
         logging_gateway,
@@ -135,6 +138,9 @@ async def assistant(
         messaging_service,
         user_service,
     )
+
+    client.set_ipc_callback(callbacks.ipc_handler)
+
     client.add_event_callback(callbacks.invite_alias_event, InviteAliasEvent)
     client.add_event_callback(callbacks.invite_member_event, InviteMemberEvent)
     client.add_event_callback(callbacks.invite_name_event, InviteNameEvent)
@@ -146,14 +152,14 @@ async def assistant(
     client.add_response_callback(callbacks.sync_response, SyncResponse)
 
     await client.sync_forever(
-        30000,
+        1000,
         since=keyval_storage_gateway.get(SYNC_KEY),
         full_state=True,
         set_presence="online",
     )
 
 
-def run_assistant(basedir: str, log_level: int, _ipc_queue: Queue) -> None:
+def run_assistant(basedir: str, log_level: int, ipc_queue: asyncio.Queue) -> None:
     """Run the AI assistant application."""
     # Create new event loop to run shutdown tasks.
     loop = asyncio.new_event_loop()
@@ -164,8 +170,11 @@ def run_assistant(basedir: str, log_level: int, _ipc_queue: Queue) -> None:
     )
 
     # Initialise matrix-nio async client.
-    client = AsyncClient(
-        os.getenv("MATRIX_HOMESERVER"), os.getenv("MATRIX_CLIENT_USER")
+    client = CustomAsyncClient(
+        os.getenv("MATRIX_HOMESERVER"),
+        os.getenv("MATRIX_CLIENT_USER"),
+        ipc_queue=ipc_queue,
+        logging_gateway=logging_gateway,
     )
 
     # Initialise storage
@@ -229,12 +238,21 @@ def run_assistant(basedir: str, log_level: int, _ipc_queue: Queue) -> None:
         user_service=user_service,
     )
 
+    # Initialise IPC service.
+    ipc_service = IIPCService.instance(
+        service_module="app.service.default_ipc_service",
+        keyval_storage_gateway=keyval_storage_gateway,
+        logging_gateway=logging_gateway,
+        user_service=user_service,
+    )
+
     try:
         asyncio.run(
             assistant(
                 basedir,
                 client,
                 completion_gateway,
+                ipc_service,
                 keyval_storage_gateway,
                 knowledge_retrieval_gateway,
                 logging_gateway,
