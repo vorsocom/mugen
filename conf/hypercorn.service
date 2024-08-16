@@ -1,0 +1,10 @@
+[Unit]
+Description=Gloria AI Assistant Service
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=simple
+EnvironmentFile=/opt/com.vorsocomputing/gloria/.env
+ExecStart={path/to/venv}/bin/hypercorn --config /opt/com.vorsocomputing/gloria/hypercorn.toml /opt/com.vorsocomputing/gloria/quartman.py
+[Install]
+WantedBy=multi-user.target

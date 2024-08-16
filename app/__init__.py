@@ -1,17 +1,17 @@
-"""Flask application package."""
+"""Quart application package."""
 
 __all__ = ["create_app"]
 
 import asyncio
 import sys
 
-from flask import Flask, g
+from quart import Quart, g
 
 from config import AppConfig
 
 from .api import api_bp
 
-app = Flask(__name__)
+app = Quart(__name__)
 
 
 def create_app(config_name, ipc_queue: asyncio.Queue):

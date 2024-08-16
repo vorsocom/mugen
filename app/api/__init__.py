@@ -2,7 +2,7 @@
 
 __all__ = ["api_bp"]
 
-from flask import Blueprint
+from quart import Blueprint
 
 api_bp = Blueprint("api", __name__)
 
