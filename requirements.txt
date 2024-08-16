@@ -32,6 +32,7 @@ httpcore==1.0.5
 httpx==0.27.0
 huggingface-hub==0.24.5
 humanfriendly==10.0
+Hypercorn==0.17.3
 hyperframe==6.0.1
 idna==3.7
 itsdangerous==2.2.0
@@ -69,6 +70,7 @@ peewee==3.17.5
 pillow==10.4.0
 platformdirs==4.2.2
 portalocker==2.10.1
+priority==2.0.0
 protobuf==5.27.3
 pycparser==2.22
 pycryptodome==3.20.0
@@ -79,6 +81,7 @@ python-olm==3.2.16
 python-socks==2.5.0
 PyYAML==6.0.1
 qdrant-client==1.10.1
+Quart==0.19.6
 referencing==0.35.1
 regex==2024.7.24
 requests==2.32.3
@@ -102,5 +105,6 @@ typing_extensions==4.12.2
 unpaddedbase64==2.1.0
 urllib3==2.2.2
 Werkzeug==3.0.3
+wsproto==1.2.0
 yake==0.4.8
 yarl==1.9.4
