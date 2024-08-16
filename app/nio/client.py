@@ -35,6 +35,15 @@ class CustomAsyncClient(AsyncClient):
         self._ipc_queue = ipc_queue
         self._logging_gateway = logging_gateway
 
+    async def __aenter__(self):
+        """Initialisation."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Finalisation."""
+        await self.client_session.close()
+
+    # pylint: disable=too-many-arguments,too-many-locals
     @logged_in
     async def sync_forever(
         self,

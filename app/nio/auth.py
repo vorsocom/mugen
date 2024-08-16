@@ -26,9 +26,9 @@ def persist_login_details(
 
 
 async def login(
-    logging_gateway: ILoggingGateway,
     client: AsyncClient,
     keyval_storage_gateway: IKeyValStorageGateway,
+    logging_gateway: ILoggingGateway,
 ) -> bool:
     """Login to matrix server."""
     if keyval_storage_gateway.get("client_access_token") is None:

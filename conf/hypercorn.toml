@@ -1,0 +1,7 @@
+accesslog = "/var/log/com.vorsocomputing.gloria.hypercorn.access.log"
+bind = "0.0.0.0:443"
+certfile = "/etc/letsencrypt/live/{domain}/fullchain.pem"
+errorlog = "/var/log/com.vorsocomputing.gloria.hypercorn.error.log"
+insecure-bind = "0.0.0.0:80"
+keyfile =  "/etc/letsencrypt/live/{domain}/privkey.pem"
+server_names = "{domain}"
