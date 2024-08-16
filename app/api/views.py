@@ -1,7 +1,7 @@
 """Implements API endpoints."""
 
 import asyncio
-from flask import current_app
+from quart import current_app
 
 from app.api import api_bp
 
