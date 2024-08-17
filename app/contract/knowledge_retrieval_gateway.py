@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from importlib import import_module
 
 from app.contract.logging_gateway import ILoggingGateway
+from app.contract.nlp_service import INLPService
 
 
 class InvalidKnowledgeRetrievalGatewayException(Exception):
@@ -24,6 +25,7 @@ class IKnowledgeRetrievalGateway(ABC):
         api_key: str,
         endpoint_url: str,
         logging_gateway: ILoggingGateway,
+        nlp_service: INLPService,
     ):
         """Get an instance of IKnowledgeRetrievalGateway."""
         # Create a new instance.
@@ -49,7 +51,12 @@ class IKnowledgeRetrievalGateway(ABC):
                     + "IKnowledgeRetrievalGateway."
                 )
 
-            cls._instance = subclasses[0](api_key, endpoint_url, logging_gateway)
+            cls._instance = subclasses[0](
+                api_key,
+                endpoint_url,
+                logging_gateway,
+                nlp_service,
+            )
         return cls._instance
 
     @abstractmethod
