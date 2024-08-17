@@ -1,5 +1,13 @@
 """Application entry point."""
 
+__author__ = "Vorso Computing, Inc."
+
+__copyright__ = "Copyright © 2024, Vorso Computing, Inc."
+
+__email__ = "brightideas@vorsocomputing.com"
+
+__version__ = "0.11.0"
+
 import asyncio
 import os
 
