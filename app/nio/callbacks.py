@@ -2,7 +2,7 @@
 Provides class to pass client to callback methods.
 """
 
-__all_ = ["Callbacks", "SYNC_KEY"]
+__all__ = ["Callbacks", "SYNC_KEY"]
 
 from typing import Mapping
 
