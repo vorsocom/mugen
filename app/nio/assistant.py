@@ -189,12 +189,9 @@ async def run_assistant(basedir: str, log_level: int, ipc_queue: asyncio.Queue) 
         # Register callbacks.
         callbacks = Callbacks(
             client,
-            completion_gateway,
             ipc_service,
             keyval_storage_gateway,
-            knowledge_retrieval_gateway,
             logging_gateway,
-            meeting_service,
             messaging_service,
             user_service,
         )
