@@ -26,6 +26,7 @@ from app.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
 from app.contract.logging_gateway import ILoggingGateway
 from app.contract.meeting_service import IMeetingService
 from app.contract.messaging_service import IMessagingService
+from app.contract.nlp_service import INLPService
 from app.contract.platform_gateway import IPlatformGateway
 from app.contract.user_service import IUserService
 
@@ -109,12 +110,19 @@ async def run_assistant(basedir: str, log_level: int, ipc_queue: asyncio.Queue) 
             logging_gateway=logging_gateway,
         )
 
+        # Initialise NLP service.
+        nlp_service = INLPService.instance(
+            service_module="app.service.default_nlp_service",
+            logging_gateway=logging_gateway,
+        )
+
         # Initialise Qdrant knowledge retrieval gateway
         knowledge_retrieval_gateway = IKnowledgeRetrievalGateway.instance(
             knowledge_retrieval_module="app.gateway.qdrant_knowledge_retrieval_gateway",
             api_key=os.getenv("QDRANT_API_KEY"),
             endpoint_url=os.getenv("QDRANT_ENDPOINT_URL"),
             logging_gateway=logging_gateway,
+            nlp_service=nlp_service,
         )
 
         # Initialise platform gateway.
