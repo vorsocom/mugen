@@ -33,7 +33,7 @@ INPERSON_MEETING_INVITE = (
 INPERSON_MEETING_ROOM_NOTE = (
     "This meeting room was created by {0} to track an in-person meeting scheduled for"
     " the {1} to discuss {2} on {3} at {4}. You may use this room to share relevant"
-    " meeting documents. Note that this room will be auto-deleted some hours after the"
+    " meeting documents. Note that this room will be deleted {5} hours after the"
     " scheduled meeting time."
 )
 
@@ -53,7 +53,7 @@ VIRTUAL_MEETING_INVITE = (
 VIRTUAL_MEETING_ROOM_NOTE = (
     "This meeting room was created by {0} to host a virtual meeting to discuss {1} on"
     " {2} at {3}. You may use this room to share relevant meeting documents. Note that"
-    " this room will be auto-removed some hours after the scheduled meeting time."
+    " this room will be deleted {4} hours after the scheduled meeting time."
 )
 
 VIRTUAL_MEETING_ROOM_NOTE_UPDATE = (
@@ -64,7 +64,8 @@ VIRTUAL_MEETING_ROOM_NOTE_UPDATE = (
 )
 
 MEETING_CANCEL = (
-    'The meeting "{0}", scheduled for room {1} on {2} at {3} has been cancelled.'
+    'The meeting "{0}", scheduled for room {1} on {2} at {3} has been cancelled, and'
+    " the room removed."
 )
 
 MEETING_UPDATE = (
@@ -125,6 +126,14 @@ class MatrixPlatformGateway(IPlatformGateway):
                             meeting.init.topic,
                             meeting.init.date,
                             meeting.init.time,
+                            int(
+                                int(
+                                    self._keyval_storage_gateway.get(
+                                        "gloria_meeting_expiry_time"
+                                    )
+                                )
+                                / 3600
+                            ),
                         )
                         if meeting.is_virtual()
                         else INPERSON_MEETING_ROOM_NOTE.format(
@@ -133,6 +142,14 @@ class MatrixPlatformGateway(IPlatformGateway):
                             meeting.init.topic,
                             meeting.init.date,
                             meeting.init.time,
+                            int(
+                                int(
+                                    self._keyval_storage_gateway.get(
+                                        "gloria_meeting_expiry_time"
+                                    )
+                                )
+                                / 3600
+                            ),
                         )
                     ),
                 },
@@ -190,16 +207,21 @@ class MatrixPlatformGateway(IPlatformGateway):
 
         return True
 
-    async def meeting_notify_cancel(self, meeting: Meeting) -> bool:
+    async def meeting_notify_cancel(
+        self,
+        meeting: Meeting,
+        assistant: bool = False,
+    ) -> bool:
         # Inform attendees of meeting cancellation.
         known_users_list = pickle.loads(
             self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
         )
-        for attendee in [
-            x
-            for x in meeting.init.attendees
-            if x not in [self._client.user_id, meeting.init.scheduler]
-        ]:
+
+        exclude = [self._client.user_id]
+        if not assistant:
+            exclude.append(meeting.init.scheduler)
+
+        for attendee in [x for x in meeting.init.attendees if x not in exclude]:
             user_data = known_users_list[attendee]
             try:
                 await self._client.room_send(

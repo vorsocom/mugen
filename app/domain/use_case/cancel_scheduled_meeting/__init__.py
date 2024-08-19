@@ -49,7 +49,10 @@ class CancelScheduledMeetingInteractor(
 
         # else:
         # Notify attendees of cancellation.
-        notified = await self._platform_gateway.meeting_notify_cancel(request.meeting)
+        notified = await self._platform_gateway.meeting_notify_cancel(
+            request.meeting,
+            request.assistant,
+        )
 
         # If the attempt to notify the attendees of the cancellation has failed.
         if notified is False:

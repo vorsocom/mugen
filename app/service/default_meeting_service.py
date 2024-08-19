@@ -32,12 +32,18 @@ from app.domain.use_case.update_scheduled_meeting import (
     UpdateScheduledMeetingResponse,
 )
 
-SCHEDULED_MEETING_KEY = "scheduled_meeting:{0}"
-
 INPERSON_MEETING_DATA = (
     "{0} meeting secheduled for the {1} on {2} at {3}. The room link associated with"
     " this meeting is {4}. The topic is {5} and the attendees are {6}"
 )
+
+MEETING_TRIGGERS = [
+    "I'm arranging the requested meeting.",
+    "I'm updating the specified meeting.",
+    "I'm cancelling the specified meeting.",
+]
+
+SCHEDULED_MEETING_KEY = "scheduled_meeting:{0}"
 
 VIRTUAL_MEETING_DATA = (
     "{0} meeting using room {1}, secheduled for {2} at {3}. The topic is {4} and the"
@@ -67,6 +73,43 @@ class DefaultMeetingService(IMeetingService):
         self._meeting_scheduler = ScheduleMeetingInteractor(self._platform_gateway)
         self._meeting_updater = UpdateScheduledMeetingInteractor(self._platform_gateway)
 
+    async def cancel_expired_meetings(self) -> None:
+        meetings = [
+            pickle.loads(self._keyval_storage_gateway.get(x, False))
+            for x in self._keyval_storage_gateway.keys()
+            if "scheduled_meeting:" in x
+        ]
+        for item in meetings:
+            meeting = Meeting(
+                init=CreateMeetingDTO(
+                    item["type"],
+                    item["topic"],
+                    item["date"],
+                    item["time"],
+                    item["attendees"],
+                    item["scheduler"],
+                ),
+                expires_after=item["expires_after"],
+                room_id=item["room_id"],
+            )
+
+            meeting_time = datetime.strptime(
+                f"{meeting.init.date} {meeting.init.time}", "%Y-%m-%d %H:%M:%S"
+            )
+            if datetime.now() > meeting_time:
+                elapsed_time = (datetime.now() - meeting_time).total_seconds()
+                self._logging_gateway.debug(f"Elapsed: {elapsed_time}")
+                expiry_time = meeting.expires_after
+                self._logging_gateway.debug(f"Expiry time: {expiry_time}")
+                if elapsed_time > expiry_time:
+                    self._logging_gateway.debug("Meeting to be deleted.")
+                    cancel_request = CancelScheduledMeetingRequest(
+                        meeting,
+                        meeting.init.scheduler,
+                        True,
+                    )
+                    await self._meeting_canceller.handle(cancel_request)
+
     async def cancel_scheduled_meeting(
         self,
         user_id: str,
@@ -94,9 +137,11 @@ class DefaultMeetingService(IMeetingService):
                     ),
                 },
             ],
-            model=self._keyval_storage_gateway.get("groq_api_completion_model"),
+            model=self._keyval_storage_gateway.get("groq_api_classification_model"),
         )
-        cancel_id = "" if action_parameters is None else action_parameters.content
+        cancel_id = (
+            "" if action_parameters is None else action_parameters.content.strip()
+        )
 
         try:
             scheduled_meeting: Meeting = pickle.loads(
@@ -204,6 +249,9 @@ class DefaultMeetingService(IMeetingService):
         chat_thread["last_saved"] = datetime.now().strftime("%s")
         self._keyval_storage_gateway.put(chat_thread_key, pickle.dumps(chat_thread))
 
+    def get_meeting_triggers(self) -> list[str]:
+        return MEETING_TRIGGERS
+
     def get_scheduled_meetings_data(self, user_id: str) -> str:
         """Get data on scheduled meetings to send to assistant."""
         meetings = [
@@ -217,6 +265,10 @@ class DefaultMeetingService(IMeetingService):
                 "attendees"
             ]
         ]
+
+        if len(filtered_meetings) == 0:
+            return "The current user has no tracked meetings."
+
         resp = "The following meetings are being tracked for the current user:\n\n"
 
         for idx, meeting in enumerate(filtered_meetings, start=1):
@@ -255,15 +307,15 @@ class DefaultMeetingService(IMeetingService):
         chat_thread_key: str,
     ) -> None:
         # If trigger detected to schedule meeting.
-        if "I'm arranging the requested meeting." in response:
+        if MEETING_TRIGGERS[0] in response:
             await self.schedule_meeting(user_id, room_id, chat_thread_key)
 
         # If trigger detected to update scheduled meeting.
-        elif "I'm updating the specified meeting." in response:
+        elif MEETING_TRIGGERS[1] in response:
             await self.update_scheduled_meeting(user_id, room_id, chat_thread_key)
 
         # If trigger detected to cancel meeting.
-        elif "I'm cancelling the specified meeting." in response:
+        elif MEETING_TRIGGERS[2] in response:
             await self.cancel_scheduled_meeting(user_id, room_id, chat_thread_key)
 
     async def schedule_meeting(
@@ -289,7 +341,7 @@ class DefaultMeetingService(IMeetingService):
                     ),
                 }
             ],
-            model=self._keyval_storage_gateway.get("groq_api_completion_model"),
+            model=self._keyval_storage_gateway.get("groq_api_classification_model"),
             response_format="json_object",
         )
         meeting_params = dict(
@@ -305,7 +357,12 @@ class DefaultMeetingService(IMeetingService):
             meeting_params["attendees"],
             user_id,
         )
-        meeting_request = ScheduleMeetingRequest(meeting_dto, expires_after=60 * 60 * 3)
+        meeting_request = ScheduleMeetingRequest(
+            meeting_dto,
+            expires_after=int(
+                self._keyval_storage_gateway.get("gloria_meeting_expiry_time")
+            ),
+        )
 
         # If the meeting is in-person, we need to set the location.
         if meeting_params["type"] == "in-person":
@@ -423,7 +480,7 @@ class DefaultMeetingService(IMeetingService):
                     ),
                 },
             ],
-            model=self._keyval_storage_gateway.get("groq_api_completion_model"),
+            model=self._keyval_storage_gateway.get("groq_api_classification_model"),
             response_format="json_object",
         )
         meeting_params = dict(
