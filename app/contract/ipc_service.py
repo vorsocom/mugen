@@ -7,6 +7,7 @@ from importlib import import_module
 
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.logging_gateway import ILoggingGateway
+from app.contract.meeting_service import IMeetingService
 from app.contract.user_service import IUserService
 
 
@@ -19,12 +20,14 @@ class IIPCService(ABC):
 
     _instance = None
 
+    # pylint: disable=too-many-arguments
     @classmethod
     def instance(
         cls,
         service_module: str,
         keyval_storage_gateway: IKeyValStorageGateway,
         logging_gateway: ILoggingGateway,
+        meeting_service: IMeetingService,
         user_service: IUserService,
     ):
         """Get an instance of IIPCService."""
@@ -52,6 +55,7 @@ class IIPCService(ABC):
             cls._instance = subclasses[0](
                 keyval_storage_gateway,
                 logging_gateway,
+                meeting_service,
                 user_service,
             )
         return cls._instance

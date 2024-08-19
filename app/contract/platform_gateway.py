@@ -63,7 +63,11 @@ class IPlatformGateway(ABC):
         """Create a room to host a meeting."""
 
     @abstractmethod
-    async def meeting_notify_cancel(self, meeting: Meeting) -> bool:
+    async def meeting_notify_cancel(
+        self,
+        meeting: Meeting,
+        assistant: bool = False,
+    ) -> bool:
         """Notify attendees of cancelled meeting."""
 
     @abstractmethod

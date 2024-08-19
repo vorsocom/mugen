@@ -163,7 +163,19 @@ class DefaultMessagingService(IMessagingService):
         # Check for end task indicator.
         if "[end-task]" in assistant_response:
             self._logging_gateway.debug("[end-task] detected.")
-            await self._get_attention_thread_key(room_id, "", True)
+            # Only refresh thread if the response doesn't contain
+            # a conversational trigger.
+            if (
+                len(
+                    [
+                        x
+                        for x in self._meeting_service.get_meeting_triggers()
+                        if x in assistant_response
+                    ]
+                )
+                == 0
+            ):
+                await self._get_attention_thread_key(room_id, "", True)
             # self._logging_gateway.debug(assistant_response)
             assistant_response = assistant_response.replace("[end-task]", "").strip()
 
@@ -573,7 +585,8 @@ class DefaultMessagingService(IMessagingService):
                     " in-person meeting.- If the user wants to cancel (delete) a"
                     " scheduled meeting, you need to find out which of the tracked"
                     " meetings it is, show them the current details, and confirm that"
-                    " they want to cancel the meeting.- When the user confirms"
+                    " they want to cancel the meeting. Ensure that you list the room"
+                    " link when confirming cancellation.- When the user confirms"
                     " cancelling the meeting, say \"I'm cancelling the specified"
                     " meeting.These are your instructions for your contact list:"
                 ),
@@ -629,8 +642,7 @@ class DefaultMessagingService(IMessagingService):
                     ' messages containing only a stop-word such as "ok" an indicator'
                     " of the end of a task. When you detect the end of a task, write"
                     " your response, skip a line, and add [end-task]. Again, the square"
-                    " brackets are important! Don't append [end-task] if you cannot"
-                    " find a corresponding [task]. Your message to end a task should"
+                    " brackets are important!. Your message to end a task should"
                     " never contain just [end-task] only, say something!"
                 ),
             }
