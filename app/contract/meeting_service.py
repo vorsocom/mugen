@@ -66,6 +66,10 @@ class IMeetingService(ABC):
         return cls._instance
 
     @abstractmethod
+    async def cancel_expired_meetings(self) -> None:
+        """Cancel all expired meetings."""
+
+    @abstractmethod
     async def cancel_scheduled_meeting(
         self,
         user_id: str,
@@ -73,6 +77,10 @@ class IMeetingService(ABC):
         chat_thread_key: str,
     ) -> None:
         """Cancel a scheduled meeting."""
+
+    @abstractmethod
+    def get_meeting_triggers(self) -> list[str]:
+        """Get the list of meeting conversational triggers."""
 
     @abstractmethod
     def get_scheduled_meetings_data(self, user_id: str) -> str:

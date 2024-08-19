@@ -34,12 +34,21 @@ from app.contract.user_service import IUserService
 def load_config(basedir: str, keyval_storage_gateway: IKeyValStorageGateway) -> None:
     """Load configuration value from environment file to dbm storage."""
 
-    keyval_storage_gateway.put("gloria_limited_beta", os.getenv("GLORIA_LIMITED_BETA"))
     keyval_storage_gateway.put(
-        "gloria_limited_beta_users", os.getenv("GLORIA_LIMITED_BETA_USERS")
+        "gloria_limited_beta",
+        os.getenv("GLORIA_LIMITED_BETA"),
     )
     keyval_storage_gateway.put(
-        "gloria_allowed_domains", os.getenv("GLORIA_ALLOWED_DOMAINS")
+        "gloria_limited_beta_users",
+        os.getenv("GLORIA_LIMITED_BETA_USERS"),
+    )
+    keyval_storage_gateway.put(
+        "gloria_allowed_domains",
+        os.getenv("GLORIA_ALLOWED_DOMAINS"),
+    )
+    keyval_storage_gateway.put(
+        "gloria_meeting_expiry_time",
+        os.getenv("GLORIA_MEETING_EXPIRY_TIME"),
     )
 
     with open(f"{basedir}/conf/persona.txt", encoding="utf8") as f:
@@ -168,6 +177,7 @@ async def run_assistant(basedir: str, log_level: int, ipc_queue: asyncio.Queue) 
             service_module="app.service.default_ipc_service",
             keyval_storage_gateway=keyval_storage_gateway,
             logging_gateway=logging_gateway,
+            meeting_service=meeting_service,
             user_service=user_service,
         )
 

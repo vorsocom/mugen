@@ -1,8 +1,10 @@
 """Application configuration file."""
 
+__all__ = ["AppConfig"]
+
 import os
 
-__all__ = ["AppConfig"]
+from quart import Quart
 
 APP_PREFIX = "GLORIA"
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
@@ -16,8 +18,9 @@ class Config(object):
     BASEDIR = BASEDIR
 
     @staticmethod
-    def init_app(app):
-        """Perform configuration specific initialization."""
+    def init_app(app: Quart):
+        """Configuration specific application initialisation."""
+        app.logger.setLevel(app.config["LOG_LEVEL"])
 
 
 class DevelopmentConfig(Config):
