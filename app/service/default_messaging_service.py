@@ -191,9 +191,8 @@ class DefaultMessagingService(IMessagingService):
 
             # Send assistant response to the user.
             self._logging_gateway.debug("Send response to user.")
-            await self._client.room_send(
+            await self._platform_gateway.send_text_message(
                 room_id=room_id,
-                message_type="m.room.message",
                 content={
                     "msgtype": "m.text",
                     "body": assistant_response,

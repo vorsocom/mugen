@@ -97,3 +97,7 @@ class IPlatformGateway(ABC):
     @abstractmethod
     async def meeting_update_room_note(self, meeting: Meeting) -> bool:
         """Leave a note in the meeting room on the updated meeting information."""
+
+    @abstractmethod
+    async def send_text_message(self, room_id: str, content: str) -> bool:
+        """Send a text message."""
