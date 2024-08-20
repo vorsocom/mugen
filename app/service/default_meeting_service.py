@@ -238,9 +238,8 @@ class DefaultMeetingService(IMeetingService):
                     ),
                 }
             )
-        await self._client.room_send(
+        await self._platform_gateway.send_text_message(
             room_id=chat_id,
-            message_type="m.room.message",
             content={
                 "msgtype": "m.text",
                 "body": chat_thread["messages"][-1]["content"],
@@ -434,9 +433,8 @@ class DefaultMeetingService(IMeetingService):
                     ),
                 }
             )
-        await self._client.room_send(
+        await self._platform_gateway.send_text_message(
             room_id=chat_id,
-            message_type="m.room.message",
             content={
                 "msgtype": "m.text",
                 "body": chat_thread["messages"][-1]["content"],
@@ -591,9 +589,8 @@ class DefaultMeetingService(IMeetingService):
                     ),
                 }
             )
-        await self._client.room_send(
+        await self._platform_gateway.send_text_message(
             room_id=chat_id,
-            message_type="m.room.message",
             content={
                 "msgtype": "m.text",
                 "body": chat_thread["messages"][-1]["content"],
