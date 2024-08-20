@@ -9,15 +9,19 @@ from typing import Mapping
 from nio import (
     AsyncClient,
     InviteAliasEvent,
-    MatrixInvitedRoom,
     InviteMemberEvent,
     InviteNameEvent,
+    MatrixInvitedRoom,
     MatrixRoom,
+    MegolmEvent,
+    ProfileGetResponse,
+    RoomCreateEvent,
+    RoomKeyEvent,
+    RoomKeyRequest,
     RoomMessageText,
+    RoomMemberEvent,
     SyncResponse,
     TagEvent,
-    RoomCreateEvent,
-    ProfileGetResponse,
 )
 
 from app.contract.ipc_service import IIPCService
@@ -57,9 +61,12 @@ class Callbacks:
         await self._ipc_service.handle_ipc_request(ipc_payload)
 
     # Events
-    async def invite_alias_event(self, event: InviteAliasEvent) -> None:
+    async def megolm_event(self, _room: MatrixRoom, _event: MegolmEvent) -> None:
+        """Handle MegolmEvents."""
+        self._logging_gateway.debug("MegolmEvent")
+
+    async def invite_alias_event(self, _event: InviteAliasEvent) -> None:
         """Handle InviteAliasEvents."""
-        self._logging_gateway.info(f"InviteAliasEvent: {event.sender}")
 
     async def invite_member_event(
         self, room: MatrixInvitedRoom, event: InviteMemberEvent
@@ -111,6 +118,10 @@ class Callbacks:
             )
             return
 
+        # Verify user devices.
+        self._user_service.verify_user_devices(event.sender)
+        self._user_service.verify_user_devices(self._client.user_id)
+
         # Join room.
         await self._client.join(room.room_id)
 
@@ -129,24 +140,35 @@ class Callbacks:
             )
 
     async def invite_name_event(
-        self, _room: MatrixInvitedRoom, event: InviteNameEvent
+        self, _room: MatrixInvitedRoom, _event: InviteNameEvent
     ) -> None:
         """Handle InviteNameEvents."""
-        self._logging_gateway.info(f"InviteNameEvent: {event.sender}")
 
     async def room_create_event(
-        self, _room: MatrixRoom, event: RoomCreateEvent
+        self, _room: MatrixRoom, _event: RoomCreateEvent
     ) -> None:
         """Handle RoomCreateEvents."""
+
+    async def room_key_event(self, _event: RoomKeyEvent) -> None:
+        """Handle RoomKeyEvents."""
+
+    async def room_key_request(self, _room: MatrixRoom, _event: RoomKeyRequest) -> None:
+        """Handle RoomKeyRequests."""
 
     async def room_message_text(
         self, room: MatrixRoom, message: RoomMessageText
     ) -> None:
-        """Handle RoomMessageText."""
+        """Handle RoomMessageTexts."""
         # Only process messages from direct chats for now.
+        # And ignore the assistant's messages, otherwise it
+        # will create a message loop.
         is_direct = await self.is_direct_message(room.room_id)
         if message.sender == self._client.user_id or not is_direct:
             return
+
+        # Verify user devices.
+        self._user_service.verify_user_devices(message.sender)
+        self._user_service.verify_user_devices(self._client.user_id)
 
         # Allow the messaging service to process the message.
         await self._messaging_service.handle_text_message(
@@ -156,9 +178,13 @@ class Callbacks:
             message.body,
         )
 
-    async def tag_event(self, event: TagEvent) -> None:
+    async def room_member_event(
+        self, _room: MatrixRoom, _event: RoomMemberEvent
+    ) -> None:
+        """Handle RoomMemberEvents."""
+
+    async def tag_event(self, _event: TagEvent) -> None:
         """Handle TagEvents."""
-        self._logging_gateway.info(f"TagEvent: {event.sender}")
 
     # Responses
     async def sync_response(self, resp: SyncResponse):

@@ -3,14 +3,16 @@
 __all__ = ["CustomAsyncClient"]
 
 import asyncio
+import sys
 from typing import Coroutine, Optional
 
-from nio import AsyncClient
+from nio import AsyncClient, LoginResponse
 
 from nio.api import _FilterT
 from nio.client.async_client import AsyncClientConfig
 from nio.client.base_client import logged_in
 
+from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.logging_gateway import ILoggingGateway
 
 
@@ -29,14 +31,47 @@ class CustomAsyncClient(AsyncClient):
         ssl: bool | None = None,
         proxy: str | None = None,
         ipc_queue: asyncio.Queue = None,
+        keyval_storage_gateway: IKeyValStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
     ):
         super().__init__(homeserver, user, device_id, store_path, config, ssl, proxy)
         self._ipc_queue = ipc_queue
+        self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway
 
     async def __aenter__(self):
         """Initialisation."""
+        if self._keyval_storage_gateway.get("client_access_token") is None:
+            # Load password and device name from storage.
+            pw = self._keyval_storage_gateway.get("matrix_client_password")
+            dn = self._keyval_storage_gateway.get("matrix_client_device_name")
+
+            # Attempt  password login.
+            resp = await self.login(pw, dn)
+
+            # check login successful
+            if isinstance(resp, LoginResponse):
+                self._logging_gateway.debug("Password login successful.")
+                self._logging_gateway.debug("Saving credentials.")
+
+                # Save credentials.
+                self._keyval_storage_gateway.put(
+                    "client_access_token", resp.access_token
+                )
+                self._keyval_storage_gateway.put("client_device_id", resp.device_id)
+                self._keyval_storage_gateway.put("client_user_id", resp.user_id)
+            else:
+                self._logging_gateway.debug("Password login failed.")
+                sys.exit(1)
+            sys.exit(0)
+
+        # Otherwise the config file exists, so we'll use the stored credentials.
+        self._logging_gateway.info("Logging in using saved credentials.")
+        # open the file in read-only mode.
+        self.access_token = self._keyval_storage_gateway.get("client_access_token")
+        self.device_id = self._keyval_storage_gateway.get("client_device_id")
+        self.user_id = self._keyval_storage_gateway.get("client_user_id")
+        self.load_store()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

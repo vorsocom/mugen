@@ -187,4 +187,8 @@ conf/*
 
 data/*
 !data/.gitkeep
+!data/.olmstore
+
+data/.olmstore/*
+!data/.olmstore/.gitkeep
 test_*
