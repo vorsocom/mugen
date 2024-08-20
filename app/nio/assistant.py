@@ -10,12 +10,15 @@ from nio import (
     InviteAliasEvent,
     InviteMemberEvent,
     InviteNameEvent,
+    MegolmEvent,
+    RoomCreateEvent,
+    RoomKeyEvent,
+    RoomKeyRequest,
+    RoomMemberEvent,
     RoomMessageText,
     SyncResponse,
-    RoomCreateEvent,
 )
 
-from app.nio.auth import login
 from app.nio.callbacks import Callbacks, SYNC_KEY
 from app.nio.client import CustomAsyncClient
 
@@ -97,19 +100,26 @@ async def run_assistant(basedir: str, log_level: int, ipc_queue: asyncio.Queue) 
         logging_module="app.gateway.default_logging_gateway", log_level=log_level
     )
 
+    # Initialise storage
+    keyval_storage_gateway = IKeyValStorageGateway.instance(
+        storage_module="app.gateway.dbm_keyval_storage_gateway",
+        storage_path=f"{basedir}/data/storage.db",
+        logging_gateway=logging_gateway,
+    )
+
+    # Load config values into dbm
+    load_config(basedir, keyval_storage_gateway)
+
     # Initialise matrix-nio async client.
     async with CustomAsyncClient(
-        os.getenv("MATRIX_HOMESERVER"),
-        os.getenv("MATRIX_CLIENT_USER"),
+        homeserver=os.getenv("MATRIX_HOMESERVER"),
+        user=os.getenv("MATRIX_CLIENT_USER"),
+        store_path=os.path.join(basedir, "data", ".olmstore"),
         ipc_queue=ipc_queue,
+        keyval_storage_gateway=keyval_storage_gateway,
         logging_gateway=logging_gateway,
     ) as client:
-        # Initialise storage
-        keyval_storage_gateway = IKeyValStorageGateway.instance(
-            storage_module="app.gateway.dbm_keyval_storage_gateway",
-            storage_path=f"{basedir}/data/storage.db",
-            logging_gateway=logging_gateway,
-        )
+        # await leave_test_rooms(client)
 
         # Initialise Groq completion gateway.
         completion_gateway = ICompletionGateway.instance(
@@ -155,6 +165,7 @@ async def run_assistant(basedir: str, log_level: int, ipc_queue: asyncio.Queue) 
         # Initialise user service.
         user_service = IUserService.instance(
             service_module="app.service.default_user_service",
+            client=client,
             keyval_storage_gateway=keyval_storage_gateway,
             logging_gateway=logging_gateway,
         )
@@ -181,15 +192,6 @@ async def run_assistant(basedir: str, log_level: int, ipc_queue: asyncio.Queue) 
             user_service=user_service,
         )
 
-        # Load config values into dbm
-        load_config(basedir, keyval_storage_gateway)
-
-        # Check login successful.
-        if not await login(client, keyval_storage_gateway, logging_gateway):
-            os._exit(0)
-
-        # await leave_test_rooms(client)
-
         # Set profile name if it's not already set.
         profile = await client.get_profile()
         agent_display_name = keyval_storage_gateway.get("matrix_agent_display_name")
@@ -206,21 +208,45 @@ async def run_assistant(basedir: str, log_level: int, ipc_queue: asyncio.Queue) 
             user_service,
         )
 
+        # IPC.
         client.set_ipc_callback(callbacks.ipc_handler)
 
+        # Invite Room Events.
         client.add_event_callback(callbacks.invite_alias_event, InviteAliasEvent)
         client.add_event_callback(callbacks.invite_member_event, InviteMemberEvent)
         client.add_event_callback(callbacks.invite_name_event, InviteNameEvent)
 
+        # Room Events.
+        client.add_event_callback(callbacks.megolm_event, MegolmEvent)
+        client.add_event_callback(callbacks.room_create_event, RoomCreateEvent)
+        client.add_event_callback(callbacks.room_member_event, RoomMemberEvent)
         client.add_event_callback(callbacks.room_message_text, RoomMessageText)
 
-        client.add_event_callback(callbacks.room_create_event, RoomCreateEvent)
+        # To-device Events.
+        client.add_to_device_callback(callbacks.room_key_event, RoomKeyEvent)
+        client.add_to_device_callback(callbacks.room_key_request, RoomKeyRequest)
 
+        # Responses.
         client.add_response_callback(callbacks.sync_response, SyncResponse)
 
-        await client.sync_forever(
-            1000,
-            since=keyval_storage_gateway.get(SYNC_KEY),
-            full_state=True,
-            set_presence="online",
+        async def wait_on_first_sync():
+            # Wait for first sync to complete.
+            await client.synced.wait()
+
+            # Cleanup device list.
+            user_service.cleanup_known_user_devices_list()
+
+            # Trust known devices.
+            user_service.trust_known_user_devices()
+
+        await asyncio.gather(
+            asyncio.create_task(wait_on_first_sync()),
+            asyncio.create_task(
+                client.sync_forever(
+                    1000,
+                    since=keyval_storage_gateway.get(SYNC_KEY),
+                    full_state=True,
+                    set_presence="online",
+                )
+            ),
         )

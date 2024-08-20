@@ -5,6 +5,8 @@ __all__ = ["IUserService"]
 from abc import ABC, abstractmethod
 from importlib import import_module
 
+from nio import AsyncClient
+
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.logging_gateway import ILoggingGateway
 
@@ -22,6 +24,7 @@ class IUserService(ABC):
     def instance(
         cls,
         service_module: str,
+        client: AsyncClient,
         keyval_storage_gateway: IKeyValStorageGateway,
         logging_gateway: ILoggingGateway,
     ):
@@ -48,6 +51,7 @@ class IUserService(ABC):
                 )
 
             cls._instance = subclasses[0](
+                client,
                 keyval_storage_gateway,
                 logging_gateway,
             )
@@ -56,6 +60,10 @@ class IUserService(ABC):
     @abstractmethod
     def add_known_user(self, user_id: str, displayname: str, room_id: str) -> None:
         """Add a user to the list of known users."""
+
+    @abstractmethod
+    def cleanup_known_user_devices_list(self) -> None:
+        """Clean up known user devices list."""
 
     @abstractmethod
     def get_known_users_list(self) -> dict:
@@ -68,3 +76,11 @@ class IUserService(ABC):
     @abstractmethod
     def save_known_users_list(self, known_users: dict) -> None:
         """Save a list of known users."""
+
+    @abstractmethod
+    def trust_known_user_devices(self) -> None:
+        """Trust all known user devices."""
+
+    @abstractmethod
+    def verify_user_devices(self, user_id: str) -> None:
+        """Verify all of a user's devices."""
