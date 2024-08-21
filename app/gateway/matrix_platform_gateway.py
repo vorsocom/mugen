@@ -2,6 +2,7 @@
 
 __all__ = ["MatrixPlatformGateway"]
 
+import asyncio
 import pickle
 import traceback
 from typing import Optional
@@ -13,6 +14,7 @@ from nio import (
     RoomPutStateResponse,
     SendRetryError,
 )
+from nio.exceptions import OlmUnverifiedDeviceError
 
 from app.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.contract.logging_gateway import ILoggingGateway
@@ -112,12 +114,26 @@ class MatrixPlatformGateway(IPlatformGateway):
             event_type="m.room.power_levels",
             content=state_content["content"],
         )
+        await self._client.room_put_state(
+            room_id=create_room_resp.room_id,
+            event_type="m.room.encryption",
+            content={
+                "algorithm": "m.megolm.v1.aes-sha2",
+            },
+        )
 
         # Leave note in meeting room explaining it's purpose.
-        try:
-            await self._client.room_send(
+        sync_signal = asyncio.Event()
+
+        async def wait_for_sync():
+            while create_room_resp.room_id not in self._client.rooms:
+                await self._client.synced.wait()
+            sync_signal.set()
+
+        async def after_sync():
+            await sync_signal.wait()
+            await self.send_text_message(
                 room_id=create_room_resp.room_id,
-                message_type="m.room.message",
                 content={
                     "msgtype": "m.text",
                     "body": (
@@ -154,94 +170,79 @@ class MatrixPlatformGateway(IPlatformGateway):
                     ),
                 },
             )
-        except (SendRetryError, LocalProtocolError):
-            self._logging_gateway.warning(
-                "matrix_platform_gateway: Error sending message."
-            )
-            traceback.print_exc()
+
+        # We have to wait until sync happends to send the message
+        # in the newly create room.
+        asyncio.gather(
+            asyncio.create_task(wait_for_sync()),
+            asyncio.create_task(after_sync()),
+        )
 
         # Return the room_id as the location for the meeting.
         return create_room_resp.room_id
 
-    async def meeting_notify_invitees(self, meeting: Meeting) -> bool:
-        # Inform invitees of meeting.
-        known_users_list = pickle.loads(
-            self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
-        )
-        for attendee in [
-            x
-            for x in meeting.init.attendees
-            if x not in [self._client.user_id, meeting.init.scheduler]
-        ]:
-            user_data = known_users_list[attendee]
-            try:
-                await self._client.room_send(
-                    room_id=user_data["dm_id"],
-                    message_type="m.room.message",
-                    content={
-                        "msgtype": "m.text",
-                        "body": (
-                            VIRTUAL_MEETING_INVITE.format(
-                                meeting.init.topic,
-                                meeting.room_id,
-                                meeting.init.date,
-                                meeting.init.time,
-                            )
-                            if meeting.is_virtual()
-                            else INPERSON_MEETING_INVITE.format(
-                                meeting.init.topic,
-                                meeting.location,
-                                meeting.init.date,
-                                meeting.init.time,
-                                meeting.room_id,
-                            )
-                        ),
-                    },
-                )
-            except (SendRetryError, LocalProtocolError):
-                self._logging_gateway.warning(
-                    "matrix_platform_gateway: Error sending message."
-                )
-                traceback.print_exc()
-                return False
-
-        return True
-
-    async def meeting_notify_cancel(
-        self,
-        meeting: Meeting,
-        assistant: bool = False,
-    ) -> bool:
+    async def meeting_notify_cancel(self, meeting: Meeting) -> bool:
         # Inform attendees of meeting cancellation.
         known_users_list = pickle.loads(
             self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
         )
 
         exclude = [self._client.user_id]
-        if not assistant:
-            exclude.append(meeting.init.scheduler)
 
         for attendee in [x for x in meeting.init.attendees if x not in exclude]:
             user_data = known_users_list[attendee]
-            try:
-                await self._client.room_send(
-                    room_id=user_data["dm_id"],
-                    message_type="m.room.message",
-                    content={
-                        "msgtype": "m.text",
-                        "body": MEETING_CANCEL.format(
+            sent = await self.send_text_message(
+                room_id=user_data["dm_id"],
+                content={
+                    "msgtype": "m.text",
+                    "body": MEETING_CANCEL.format(
+                        meeting.init.topic,
+                        meeting.room_id,
+                        meeting.init.date,
+                        meeting.init.time,
+                    ),
+                },
+            )
+
+            if not sent:
+                return False
+
+        return True
+
+    async def meeting_notify_invitees(self, meeting: Meeting) -> bool:
+        # Inform invitees of meeting.
+        known_users_list = pickle.loads(
+            self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
+        )
+
+        exclude = [self._client.user_id]
+
+        for attendee in [x for x in meeting.init.attendees if x not in exclude]:
+            user_data = known_users_list[attendee]
+            sent = await self.send_text_message(
+                room_id=user_data["dm_id"],
+                content={
+                    "msgtype": "m.text",
+                    "body": (
+                        VIRTUAL_MEETING_INVITE.format(
                             meeting.init.topic,
                             meeting.room_id,
                             meeting.init.date,
                             meeting.init.time,
-                        ),
-                    },
-                )
-            except (SendRetryError, LocalProtocolError):
-                self._logging_gateway.warning(
-                    "matrix_platform_gateway: Error sending message."
-                )
-                traceback.print_exc()
+                        )
+                        if meeting.is_virtual()
+                        else INPERSON_MEETING_INVITE.format(
+                            meeting.init.topic,
+                            meeting.location,
+                            meeting.init.date,
+                            meeting.init.time,
+                            meeting.room_id,
+                        )
+                    ),
+                },
+            )
+
+            if not sent:
                 return False
 
         return True
@@ -251,28 +252,20 @@ class MatrixPlatformGateway(IPlatformGateway):
         known_users_list = pickle.loads(
             self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
         )
-        for attendee in [
-            x
-            for x in meeting.init.attendees
-            if x not in [self._client.user_id, meeting.init.scheduler]
-        ]:
+
+        exclude = [self._client.user_id]
+
+        for attendee in [x for x in meeting.init.attendees if x not in exclude]:
             user_data = known_users_list[attendee]
-            try:
-                await self._client.room_send(
-                    room_id=user_data["dm_id"],
-                    message_type="m.room.message",
-                    content={
-                        "msgtype": "m.text",
-                        "body": MEETING_UPDATE.format(
-                            meeting.init.topic, meeting.room_id
-                        ),
-                    },
-                )
-            except (SendRetryError, LocalProtocolError):
-                self._logging_gateway.warning(
-                    "matrix_platform_gateway: Error sending message."
-                )
-                traceback.print_exc()
+            sent = await self.send_text_message(
+                room_id=user_data["dm_id"],
+                content={
+                    "msgtype": "m.text",
+                    "body": MEETING_UPDATE.format(meeting.init.topic, meeting.room_id),
+                },
+            )
+
+            if not sent:
                 return False
 
         return True
@@ -339,34 +332,39 @@ class MatrixPlatformGateway(IPlatformGateway):
 
     async def meeting_update_room_note(self, meeting: Meeting) -> bool:
         # Leave note in meeting room with updated information.
+        return await self.send_text_message(
+            room_id=meeting.room_id,
+            content={
+                "msgtype": "m.text",
+                "body": (
+                    VIRTUAL_MEETING_ROOM_NOTE_UPDATE.format(
+                        meeting.init.topic,
+                        meeting.init.time,
+                        meeting.init.date,
+                    )
+                    if meeting.init.type == "virtual"
+                    else INPERSON_MEETING_ROOM_NOTE_UPDATE.format(
+                        meeting.location,
+                        meeting.init.topic,
+                        meeting.init.time,
+                        meeting.init.date,
+                    )
+                ),
+            },
+        )
+
+    async def send_text_message(self, room_id: str, content: str) -> bool:
         try:
             await self._client.room_send(
-                room_id=meeting.room_id,
+                room_id=room_id,
                 message_type="m.room.message",
-                content={
-                    "msgtype": "m.text",
-                    "body": (
-                        VIRTUAL_MEETING_ROOM_NOTE_UPDATE.format(
-                            meeting.init.topic,
-                            meeting.init.time,
-                            meeting.init.date,
-                        )
-                        if meeting.init.type == "virtual"
-                        else INPERSON_MEETING_ROOM_NOTE_UPDATE.format(
-                            meeting.location,
-                            meeting.init.topic,
-                            meeting.init.time,
-                            meeting.init.date,
-                        )
-                    ),
-                },
+                content=content,
             )
-        except (SendRetryError, LocalProtocolError):
+            return True
+        except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
             self._logging_gateway.warning(
-                "matrix_platform_gateway: Error sending message."
+                "matrix_platform_gateway: Error sending text message."
             )
             traceback.print_exc()
-            return False
 
-        # Return success.
-        return True
+        return False

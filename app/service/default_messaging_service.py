@@ -191,9 +191,8 @@ class DefaultMessagingService(IMessagingService):
 
             # Send assistant response to the user.
             self._logging_gateway.debug("Send response to user.")
-            await self._client.room_send(
+            await self._platform_gateway.send_text_message(
                 room_id=room_id,
-                message_type="m.room.message",
                 content={
                     "msgtype": "m.text",
                     "body": assistant_response,
@@ -556,8 +555,8 @@ class DefaultMessagingService(IMessagingService):
                     " in-person meeting, you need to find out the topic, date, time,"
                     " location, and attendees. Prompt the user for any parameters that"
                     " are missing. If you are given a day of the week as the date,"
-                    " convert it to a date in the format 2024-01-01 and confirm that"
-                    " date with the user.- When you have collected all the required"
+                    " convert it to a date in the format %Y-%m-%d and confirm that date"
+                    " with the user.- When you have collected all the required"
                     " parameters, confirm them with the user.- When the user confirms,"
                     ' say "I\'m arranging the requested meeting."- If you do not have'
                     " any of the attendees in your contact list, ask the user to"
@@ -567,38 +566,20 @@ class DefaultMessagingService(IMessagingService):
                     " username).- Always use the full names from your contact list"
                     " (with the username) when confirming the attendees with the user.-"
                     " Always include the user you are chatting with in the list of"
-                    " attendees.- Do not give the asssociated room link for the meeting"
-                    " when confirming that a meeting has been sheduled. The user should"
-                    " request it if they need it.- Output room links on a new line by"
-                    " themselves, without any characters before or after the link. This"
-                    " is important to avoid breaking the links.- Do not make up"
-                    " (hallucinate) room links. Only use those from your list of"
-                    " tracked meetings.- When listing scheduled meetings for a user,"
-                    " ensure that you only list meetings they are scheduled to attend,"
-                    " and do not duplicate meeting information.- If the user wants to"
-                    " update a scheduled meeting, you need to find out which of the"
-                    " tracked meetings it is, show them the current details, and then"
-                    " find out the parameters they wish to change.- Confirm the changes"
-                    " with the user.- When you have the required changes, say \"I'm"
-                    ' updating the specified meeting."- If changing a virtual meeting'
-                    " to an in-person meeting, the room link remains the same for the"
-                    " in-person meeting.- If the user wants to cancel (delete) a"
+                    " attendees.- When listing scheduled meetings for a user, ensure"
+                    " that you only list meetings they are scheduled to attend, and do"
+                    " not duplicate meeting information.- If the user wants to update a"
+                    " scheduled meeting, you need to find out which of the tracked"
+                    " meetings it is, show them the current details, and then find out"
+                    " the parameters they wish to change.- Confirm the changes with the"
+                    " user.- When you have the required changes, say \"I'm updating the"
+                    ' specified meeting."- If the user wants to cancel (delete) a'
                     " scheduled meeting, you need to find out which of the tracked"
                     " meetings it is, show them the current details, and confirm that"
                     " they want to cancel the meeting. Ensure that you list the room"
                     " link when confirming cancellation.- When the user confirms"
                     " cancelling the meeting, say \"I'm cancelling the specified"
                     " meeting.These are your instructions for your contact list:"
-                ),
-            }
-        )
-
-        context.append(
-            {
-                "role": "system",
-                "content": (
-                    "Always output room links on a separate line from the rest of the"
-                    " text."
                 ),
             }
         )
@@ -638,12 +619,11 @@ class DefaultMessagingService(IMessagingService):
                     " a question not likely to have a follow-up message, or reached a"
                     " natural conclusion to the task. Also consider a task complete if"
                     " the user thanks you, indicates that they no longer need"
-                    " assistance, or explicitly cancels the task. Do not consider"
-                    ' messages containing only a stop-word such as "ok" an indicator'
-                    " of the end of a task. When you detect the end of a task, write"
-                    " your response, skip a line, and add [end-task]. Again, the square"
-                    " brackets are important!. Your message to end a task should"
-                    " never contain just [end-task] only, say something!"
+                    " assistance, or explicitly cancels the task. When you detect the"
+                    " end of a task, write your response, skip a line, and add"
+                    " [end-task]. Again, the square brackets are important!. Your"
+                    " message to end a task should never contain just [end-task] only,"
+                    " say something!"
                 ),
             }
         )

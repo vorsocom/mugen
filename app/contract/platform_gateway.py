@@ -63,11 +63,7 @@ class IPlatformGateway(ABC):
         """Create a room to host a meeting."""
 
     @abstractmethod
-    async def meeting_notify_cancel(
-        self,
-        meeting: Meeting,
-        assistant: bool = False,
-    ) -> bool:
+    async def meeting_notify_cancel(self, meeting: Meeting) -> bool:
         """Notify attendees of cancelled meeting."""
 
     @abstractmethod
@@ -97,3 +93,7 @@ class IPlatformGateway(ABC):
     @abstractmethod
     async def meeting_update_room_note(self, meeting: Meeting) -> bool:
         """Leave a note in the meeting room on the updated meeting information."""
+
+    @abstractmethod
+    async def send_text_message(self, room_id: str, content: str) -> bool:
+        """Send a text message to a room."""

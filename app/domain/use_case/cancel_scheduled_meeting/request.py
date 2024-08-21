@@ -15,11 +15,6 @@ class CancelScheduledMeetingRequest(IRequest["CancelScheduledMeetingRequest"]):
 
     initiator: str
 
-    assistant: bool
-
-    def __init__(
-        self, meeting: Meeting, initiator: str, assistant: bool = False
-    ) -> None:
+    def __init__(self, meeting: Meeting, initiator: str) -> None:
         self.meeting = meeting
         self.initiator = initiator
-        self.assistant = assistant

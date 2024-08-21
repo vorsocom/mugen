@@ -106,7 +106,6 @@ class DefaultMeetingService(IMeetingService):
                     cancel_request = CancelScheduledMeetingRequest(
                         meeting,
                         meeting.init.scheduler,
-                        True,
                     )
                     await self._meeting_canceller.handle(cancel_request)
 
@@ -171,83 +170,20 @@ class DefaultMeetingService(IMeetingService):
             await self._meeting_canceller.handle(cancel_request)
         )
 
-        if cancel_meeting_response.success:
+        if not cancel_meeting_response.success:
             # Meeting cancellation was successful.
             # Inform the user that the meeting was cancelled and the room removed.
-            action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_thread["messages"]
-                + [
-                    {
-                        "role": "system",
-                        "content": (
-                            f"The meeting scheduled for room {meeting.room_id} on"
-                            f" {meeting.init.date} at {meeting.init.time} has been"
-                            " canceled and the room deleted."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            "Confirm the meeting has been cancelled and the room"
-                            " deleted."
-                        ),
-                    },
-                ],
-                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
-            )
-            chat_thread["messages"].append(
-                {
-                    "role": "assistant",
-                    "content": (
-                        "Error"
-                        if action_response_completion is None
-                        else action_response_completion.content
-                    ),
-                }
-            )
-        else:
-            # Meeting cancellation was unsuccessful.
-            chat_thread["messages"].append(
-                {
-                    "role": "system",
-                    "content": (
+            await self._platform_gateway.send_text_message(
+                room_id=chat_id,
+                content={
+                    "msgtype": "m.text",
+                    "body": (
                         "The meeting cancellation failed due to technical difficulties."
-                        " The user should check with the system administrator. You"
-                        " cannot know if the issue has been resolved until you try"
-                        " again."
+                        " I recommend you try again. If the problem persists, you"
+                        " should report the issue to the system administrator."
                     ),
-                }
+                },
             )
-            action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_thread["messages"]
-                + [
-                    {
-                        "role": "user",
-                        "content": "What is the reason for the cancellation failure?",
-                    }
-                ],
-                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
-            )
-            chat_thread["messages"].append(
-                {
-                    "role": "assistant",
-                    "content": (
-                        "Error"
-                        if action_response_completion is None
-                        else action_response_completion.content
-                    ),
-                }
-            )
-        await self._client.room_send(
-            room_id=chat_id,
-            message_type="m.room.message",
-            content={
-                "msgtype": "m.text",
-                "body": chat_thread["messages"][-1]["content"],
-            },
-        )
-        chat_thread["last_saved"] = datetime.now().strftime("%s")
-        self._keyval_storage_gateway.put(chat_thread_key, pickle.dumps(chat_thread))
 
     def get_meeting_triggers(self) -> list[str]:
         return MEETING_TRIGGERS
@@ -372,78 +308,20 @@ class DefaultMeetingService(IMeetingService):
             await self._meeting_scheduler.handle(meeting_request)
         )
 
-        # If scheduling the meeting was a success.
-        if schedule_meeting_response.success:
-            action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_thread["messages"]
-                + [
-                    # Append info on tracked meetings
-                    {
-                        "role": "system",
-                        "content": self.get_scheduled_meetings_data(user_id),
-                    },
-                    {
-                        "role": "system",
-                        "content": "The meeting has been scheduled."
-                        + " The room link for the meeting is "
-                        + schedule_meeting_response.meeting.room_id,
-                    },
-                    {"role": "user", "content": "Has the meeting been scheduled?"},
-                ],
-                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
-            )
-            chat_thread["messages"].append(
-                {
-                    "role": "assistant",
-                    "content": (
-                        "Error"
-                        if action_response_completion is None
-                        else action_response_completion.content
-                    ),
-                }
-            )
-        else:
-            chat_thread["messages"].append(
-                {
-                    "role": "system",
-                    "content": (
+        # If scheduling the meeting failed.
+        if not schedule_meeting_response.success:
+            await self._platform_gateway.send_text_message(
+                room_id=chat_id,
+                content={
+                    "msgtype": "m.text",
+                    "body": (
                         "The meeting could not be scheduled due to technical"
-                        " difficulties. The user should check with the system"
-                        " administrator. You cannot know if the issue has been resolved"
-                        " until you try again."
+                        " difficulties. I recommend you try again. If the problem"
+                        " persists, you should report the issue to the system"
+                        " administrator."
                     ),
-                }
+                },
             )
-            action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_thread["messages"]
-                + [
-                    {
-                        "role": "user",
-                        "content": "What is the reason for the scheduling failure?",
-                    }
-                ],
-                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
-            )
-            chat_thread["messages"].append(
-                {
-                    "role": "assistant",
-                    "content": (
-                        "Error"
-                        if action_response_completion is None
-                        else action_response_completion.content
-                    ),
-                }
-            )
-        await self._client.room_send(
-            room_id=chat_id,
-            message_type="m.room.message",
-            content={
-                "msgtype": "m.text",
-                "body": chat_thread["messages"][-1]["content"],
-            },
-        )
-        chat_thread["last_saved"] = datetime.now().strftime("%s")
-        self._keyval_storage_gateway.put(chat_thread_key, pickle.dumps(chat_thread))
 
     async def update_scheduled_meeting(
         self,
@@ -528,76 +406,17 @@ class DefaultMeetingService(IMeetingService):
             await self._meeting_updater.handle(meeting_request)
         )
 
-        if update_meeting_response.success:
+        if not update_meeting_response.success:
             # Meeting parameters update was successful.
-            action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_thread["messages"]
-                + [
-                    {
-                        "role": "system",
-                        "content": (
-                            f'The meeting tracked by room {meeting_params["room_id"]}'
-                            f' at {meeting_params["time"]} on {meeting_params["date"]}'
-                            " has been updated."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": "Confirm the meeting details have been updated.",
-                    },
-                ],
-                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
-            )
-            chat_thread["messages"].append(
-                {
-                    "role": "assistant",
-                    "content": (
-                        "Error"
-                        if action_response_completion is None
-                        else action_response_completion.content
-                    ),
-                }
-            )
-        else:
-            # Meeting parameters update was unsuccessful.
-            chat_thread["messages"].append(
-                {
-                    "role": "system",
-                    "content": (
+            await self._platform_gateway.send_text_message(
+                room_id=chat_id,
+                content={
+                    "msgtype": "m.text",
+                    "body": (
                         "The meeting details could not be updated due to technical"
-                        " difficulties. The user should check with the system"
-                        " administrator. You cannot know if the issue has been resolved"
-                        " until you try again."
+                        " difficulties. I recommend you try again. If the problem"
+                        " persists, you should report the issue to the system"
+                        " administrator."
                     ),
-                }
+                },
             )
-            action_response_completion = await self._completion_gateway.get_completion(
-                context=chat_thread["messages"]
-                + [
-                    {
-                        "role": "user",
-                        "content": "What is the reason for the update failure?",
-                    }
-                ],
-                model=self._keyval_storage_gateway.get("groq_api_completion_model"),
-            )
-            chat_thread["messages"].append(
-                {
-                    "role": "assistant",
-                    "content": (
-                        "Error"
-                        if action_response_completion is None
-                        else action_response_completion.content
-                    ),
-                }
-            )
-        await self._client.room_send(
-            room_id=chat_id,
-            message_type="m.room.message",
-            content={
-                "msgtype": "m.text",
-                "body": chat_thread["messages"][-1]["content"],
-            },
-        )
-        chat_thread["last_saved"] = datetime.now().strftime("%s")
-        self._keyval_storage_gateway.put(chat_thread_key, pickle.dumps(chat_thread))
