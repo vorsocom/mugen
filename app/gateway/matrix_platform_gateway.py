@@ -114,6 +114,13 @@ class MatrixPlatformGateway(IPlatformGateway):
             event_type="m.room.power_levels",
             content=state_content["content"],
         )
+        await self._client.room_put_state(
+            room_id=create_room_resp.room_id,
+            event_type="m.room.encryption",
+            content={
+                "algorithm": "m.megolm.v1.aes-sha2",
+            },
+        )
 
         # Leave note in meeting room explaining it's purpose.
         sync_signal = asyncio.Event()
@@ -174,16 +181,43 @@ class MatrixPlatformGateway(IPlatformGateway):
         # Return the room_id as the location for the meeting.
         return create_room_resp.room_id
 
+    async def meeting_notify_cancel(self, meeting: Meeting) -> bool:
+        # Inform attendees of meeting cancellation.
+        known_users_list = pickle.loads(
+            self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
+        )
+
+        exclude = [self._client.user_id]
+
+        for attendee in [x for x in meeting.init.attendees if x not in exclude]:
+            user_data = known_users_list[attendee]
+            sent = await self.send_text_message(
+                room_id=user_data["dm_id"],
+                content={
+                    "msgtype": "m.text",
+                    "body": MEETING_CANCEL.format(
+                        meeting.init.topic,
+                        meeting.room_id,
+                        meeting.init.date,
+                        meeting.init.time,
+                    ),
+                },
+            )
+
+            if not sent:
+                return False
+
+        return True
+
     async def meeting_notify_invitees(self, meeting: Meeting) -> bool:
         # Inform invitees of meeting.
         known_users_list = pickle.loads(
             self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
         )
-        for attendee in [
-            x
-            for x in meeting.init.attendees
-            if x not in [self._client.user_id, meeting.init.scheduler]
-        ]:
+
+        exclude = [self._client.user_id]
+
+        for attendee in [x for x in meeting.init.attendees if x not in exclude]:
             user_data = known_users_list[attendee]
             sent = await self.send_text_message(
                 room_id=user_data["dm_id"],
@@ -213,50 +247,15 @@ class MatrixPlatformGateway(IPlatformGateway):
 
         return True
 
-    async def meeting_notify_cancel(
-        self,
-        meeting: Meeting,
-        assistant: bool = False,
-    ) -> bool:
-        # Inform attendees of meeting cancellation.
-        known_users_list = pickle.loads(
-            self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
-        )
-
-        exclude = [self._client.user_id]
-        if not assistant:
-            exclude.append(meeting.init.scheduler)
-
-        for attendee in [x for x in meeting.init.attendees if x not in exclude]:
-            user_data = known_users_list[attendee]
-            sent = await self.send_text_message(
-                room_id=user_data["dm_id"],
-                content={
-                    "msgtype": "m.text",
-                    "body": MEETING_CANCEL.format(
-                        meeting.init.topic,
-                        meeting.room_id,
-                        meeting.init.date,
-                        meeting.init.time,
-                    ),
-                },
-            )
-
-            if not sent:
-                return False
-
-        return True
-
     async def meeting_notify_update(self, meeting: Meeting) -> bool:
         # Inform attendees of meeting updates.
         known_users_list = pickle.loads(
             self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
         )
-        for attendee in [
-            x
-            for x in meeting.init.attendees
-            if x not in [self._client.user_id, meeting.init.scheduler]
-        ]:
+
+        exclude = [self._client.user_id]
+
+        for attendee in [x for x in meeting.init.attendees if x not in exclude]:
             user_data = known_users_list[attendee]
             sent = await self.send_text_message(
                 room_id=user_data["dm_id"],
