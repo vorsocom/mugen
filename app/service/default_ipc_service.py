@@ -52,6 +52,9 @@ class DefaultIPCService(IIPCService):
         if self._is_valid_cron_job(request_data):
             match request_data["command"]:
                 case "meeting_delete_expired":
+                    self._logging_gateway.warning(
+                        "Executing cron task: meeting_delete_expired."
+                    )
                     await self._meeting_service.cancel_expired_meetings()
                     await payload["response_queue"].put({"response": "OK"})
                     return
