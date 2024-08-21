@@ -103,6 +103,9 @@ class DefaultMeetingService(IMeetingService):
                 self._logging_gateway.debug(f"Expiry time: {expiry_time}")
                 if elapsed_time > expiry_time:
                     self._logging_gateway.debug("Meeting to be deleted.")
+                    self._logging_gateway.warning(
+                        f"Deleting meeting: {meeting.init.topic} ({meeting.room_id})."
+                    )
                     cancel_request = CancelScheduledMeetingRequest(
                         meeting,
                         meeting.init.scheduler,
