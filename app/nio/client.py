@@ -70,6 +70,7 @@ class CustomAsyncClient(AsyncClient):
         # open the file in read-only mode.
         self.access_token = self._keyval_storage_gateway.get("client_access_token")
         self.device_id = self._keyval_storage_gateway.get("client_device_id")
+        self._logging_gateway.info(f"Device ID: {self.device_id}")
         self.user_id = self._keyval_storage_gateway.get("client_user_id")
         self.load_store()
         return self
