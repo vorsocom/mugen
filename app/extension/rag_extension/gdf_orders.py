@@ -147,7 +147,8 @@ class GDFOrdersRAGExtension(IRAGExtension):
                     "You are a message classifier. You classify user messages and"
                     " return valid JSON based on your classification. In this instance"
                     " you are classifying messages based on whether they are related to"
-                    " searching orders or not."
+                    " searching orders or not. Your response should not contain any"
+                    " text other than the JSON string."
                 ),
             },
             {

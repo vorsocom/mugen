@@ -136,7 +136,8 @@ class GDFGeneralKnowldgeRAGExtension(IRAGExtension):
                     " to the GDF. For a positive classification, the user needs to"
                     ' mention "Guyana Defence Force", "GDF", or "Force". For a positive'
                     ' classification, return {"classification": true}. For a negative'
-                    ' classification, return {"classification": false}.'
+                    ' classification, return {"classification": false}. Your response'
+                    " should not contain any text other than the JSON string."
                 ),
             },
             {"role": "user", "content": message},
