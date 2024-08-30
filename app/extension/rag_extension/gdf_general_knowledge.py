@@ -73,7 +73,6 @@ class GDFGeneralKnowldgeRAGExtension(IRAGExtension):
 
         knowledge_docs: list[str] = []
         if gdfk_classification is not None:
-            self._logging_gateway.debug(gdfk_classification)
             instruct = json.loads(gdfk_classification.content)
             if instruct["classification"]:
                 hits: list[ScoredPoint] = (
@@ -128,16 +127,13 @@ class GDFGeneralKnowldgeRAGExtension(IRAGExtension):
                 "content": (
                     "You are a message classifier. You classify user messages and"
                     " return valid JSON based on your classification. Do not return"
-                    " anything but JSON. In this instance you are classifying messages"
-                    " based on whether the user wants information related to the Guyana"
-                    " Defence Force (GDF) or not. A positive classification is when the"
-                    " user wants information related to the GDF. A negative"
-                    " classification is when the user does not want information related"
-                    " to the GDF. For a positive classification, the user needs to"
+                    " anything but JSON. A positive classification is when the user"
+                    " wants information related to the GDF. A negative classification"
+                    " is when the user does not want information related to the GDF."
+                    " For you to give a positive classification, the user must"
                     ' mention "Guyana Defence Force", "GDF", or "Force". For a positive'
-                    ' classification, return {"classification": true}. For a negative'
-                    ' classification, return {"classification": false}. Your response'
-                    " should not contain any text other than the JSON string."
+                    ' classification, return "classification": true}. For a negative'
+                    ' classification, return {"classification": false}.'
                 ),
             },
             {"role": "user", "content": message},
