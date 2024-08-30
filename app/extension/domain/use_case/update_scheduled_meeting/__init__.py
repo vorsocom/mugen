@@ -171,15 +171,15 @@ class UpdateScheduledMeetingInteractor(
                 "body": (
                     VIRTUAL_MEETING_ROOM_NOTE_UPDATE.format(
                         meeting.init.topic,
-                        meeting.init.time,
                         meeting.init.date,
+                        meeting.init.time,
                     )
                     if meeting.init.type == "virtual"
                     else INPERSON_MEETING_ROOM_NOTE_UPDATE.format(
                         meeting.location,
                         meeting.init.topic,
-                        meeting.init.time,
                         meeting.init.date,
+                        meeting.init.time,
                     )
                 ),
             },

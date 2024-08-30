@@ -114,54 +114,6 @@ class MeetingCTExtension(ICTExtension):
     def triggers(self) -> list[str]:
         return self._triggers
 
-    def get_system_context_data(self, user_id: str) -> list[dict]:
-        return [
-            {
-                "role": "system",
-                "content": (
-                    "One of your tasks is scheduling meetings. Your rules for setting"
-                    " up meetings are:- Do not schedule meetings in the past.- Do not"
-                    " update meetings in the past unless the update is to move the date"
-                    " and time of the meeting to the future.- Find out if the user"
-                    " wants to schedule a virtual or in-person meeting.- If the user"
-                    " wants a virtual meeting on Element, you need to find out the"
-                    " topic, date, time, and attendees. If the user wants an in-person"
-                    " meeting, you need to find out the topic, date, time, location,"
-                    " and attendees. Prompt the user for any parameters that are"
-                    " missing. If you are given a day of the week as the date, convert"
-                    " it to a date in the format %Y-%m-%d and confirm that date with"
-                    " the user.- When you have collected all the required parameters,"
-                    " confirm them with the user.- When the user confirms, say \"I'm"
-                    ' arranging the requested meeting."- If you do not have any of the'
-                    " attendees in your contact list, ask the user to confirm that you"
-                    " can go ahead and schedule the meeting without that attendee, or"
-                    " advise them to have the missing attendee register with you using"
-                    " your element username (state your username).- Always use the full"
-                    " names from your contact list (with the username) when confirming"
-                    " the attendees with the user.- Always include the user you are"
-                    " chatting with in the list of attendees.- When listing scheduled"
-                    " meetings for a user, ensure that you only list meetings they are"
-                    " scheduled to attend, and do not duplicate meeting information.-"
-                    " If the user wants to update a scheduled meeting, you need to find"
-                    " out which of the tracked meetings it is, show them the current"
-                    " details, and then find out the parameters they wish to change.-"
-                    " Confirm the changes with the user.- When you have the required"
-                    ' changes, say "I\'m updating the specified meeting."- If the user'
-                    " wants to cancel (delete) a scheduled meeting, you need to find"
-                    " out which of the tracked meetings it is, show them the current"
-                    " details, and confirm that they want to cancel the meeting. Ensure"
-                    " that you list the room link when confirming cancellation.- When"
-                    " the user confirms cancelling the meeting, say \"I'm cancelling"
-                    " the specified meeting.These are your instructions for your"
-                    " contact list:"
-                ),
-            },
-            {
-                "role": "system",
-                "content": self.get_scheduled_meetings_data(user_id),
-            },
-        ]
-
     async def process_message(
         self,
         message: str,
@@ -182,6 +134,92 @@ class MeetingCTExtension(ICTExtension):
         # If trigger detected to cancel meeting.
         elif self._triggers[2] in message:
             await self.cancel_scheduled_meeting(user_id, room_id, chat_thread_key)
+
+    def get_system_context_data(self, user_id: str) -> list[dict]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You will assist users in scheduling meetings. There are two types"
+                    " of meetings you will assist with, virtual meetings and in-person"
+                    " meetings. You must confirm which meeting type the user wants"
+                    " before collecting any other data."
+                ),
+            },
+            {
+                "role": "system",
+                "content": (
+                    "For virtual meetings, you need to collect the date, time, topic,"
+                    " and attendees."
+                ),
+            },
+            {
+                "role": "system",
+                "content": (
+                    "For in-person meetings, you need to collect the date, time, topic,"
+                    " attendees, and location."
+                ),
+            },
+            {
+                "role": "system",
+                "content": (
+                    "Prompt the user for any information that is missing. If you are"
+                    " given a day of the week or days such as today or tomorrow,"
+                    " convert the to a date in the format %Y-%m-%d. When you have"
+                    " collected all the required information, confirm it with the user."
+                    " ensure you include the type of meeting in the confirmation. When"
+                    " the user confirms the information, only say \"I'm arranging the"
+                    ' requested meeting.", nothing else.'
+                ),
+            },
+            {
+                "role": "system",
+                "content": (
+                    "If you do not have any of the attendees in your contact list, ask"
+                    " the user to confirm that you can go ahead and schedule the"
+                    " meeting without that attendee, or advise them to have the missing"
+                    " attendee register with you using your element username (state"
+                    " your username). Always use the full names from your contact list"
+                    " (with the username in parentheses) when confirming the attendees"
+                    " with the user. Always include the user you are chatting with in"
+                    " the list of attendees."
+                ),
+            },
+            {
+                "role": "system",
+                "content": (
+                    " When listing scheduled meetings for a user, ensure that you only"
+                    " list meetings they are scheduled to attend, and do not duplicate"
+                    " meeting information."
+                ),
+            },
+            {
+                "role": "system",
+                "content": (
+                    "If the user wants to update a scheduled meeting, you need to find"
+                    " out which of the tracked meetings it is, show them the current"
+                    " details, and then find out the parameters they wish to change."
+                    " Confirm the changes with the user. When you have the required"
+                    ' changes, only say "I\'m updating the specified meeting.", nothing'
+                    " else."
+                ),
+            },
+            {
+                "role": "system",
+                "content": (
+                    "If the user wants to cancel (delete) a scheduled meeting, you need"
+                    " to find out which of the tracked meetings it is, show them the"
+                    " current details, and confirm that they want to cancel the"
+                    " meeting. Ensure that you list the room link when confirming"
+                    " cancellation.- When the user confirms cancelling the meeting,"
+                    ' only say "I\'m cancelling the specified meeting", nothing else.'
+                ),
+            },
+            {
+                "role": "system",
+                "content": self.get_scheduled_meetings_data(user_id),
+            },
+        ]
 
     async def cancel_scheduled_meeting(
         self,
@@ -323,14 +361,12 @@ class MeetingCTExtension(ICTExtension):
                 {
                     "role": "user",
                     "content": (
-                        "Give the meeting parameters as a JSON string. Example:"
-                        ' {"type": "virtual", "topic": "example", "date": "2024-01-01",'
-                        ' "time": "15:00:00", "attendees": ["@u1:example.com",'
-                        ' "@u2:example.com"], "location": "loc"} Nothing else should be'
-                        " in your response. The keys should be type, topic, date, time,"
-                        " attendees, and location. Omit location if it's a virtual"
-                        " meeting. The attendees list should just include the full"
-                        " platform formatted usernames."
+                        "Give the meeting parameters as a JSON string. Your response"
+                        " should not contain any text other than the JSON string. The"
+                        " keys should be type, topic, date, time, attendees, and"
+                        " location. Omit location if it's a virtual meeting. The"
+                        " attendees list should just include the full platform"
+                        " formatted usernames. Date should be in the format %Y-%m-%d."
                     ),
                 }
             ],
@@ -340,7 +376,6 @@ class MeetingCTExtension(ICTExtension):
         meeting_params = dict(
             json.loads("{}" if action_parameters is None else action_parameters.content)
         )
-
         # Schedule meeting using the ScheduleMeetingInteractor
         meeting_dto = CreateMeetingDTO(
             meeting_params["type"],
@@ -352,9 +387,7 @@ class MeetingCTExtension(ICTExtension):
         )
         meeting_request = ScheduleMeetingRequest(
             meeting_dto,
-            expires_after=int(
-                self._keyval_storage_gateway.get("gloria_meeting_expiry_time")
-            ),
+            expires_after=int(self._config.gloria_meeting_expiry_time),
         )
 
         # If the meeting is in-person, we need to set the location.
@@ -403,17 +436,14 @@ class MeetingCTExtension(ICTExtension):
                 {
                     "role": "user",
                     "content": (
-                        "Give me the meeting update parameters as a JSON string."
-                        ' Example: {"type": "virtual", "topic": "example", "date":'
-                        ' "2024-01-01", "time": "15:00:00", "attendees":'
-                        ' ["@u1:example.com", "@u2:example.com"], "location":'
-                        ' "loc", "room_id": "room link"} Nothing else should be in'
-                        " your response. The keys should be type, topic, date,"
-                        " time, attendees, location, and room_id. Omit location if"
-                        " it's a virtual meeting. room_id is the room link"
-                        " associated with the meeting. The update will not work"
-                        " without room_id. The attendees list should just include"
-                        " the full platform formatted usernames."
+                        "Give me the meeting update parameters as a JSON string. Your"
+                        " response should not contain any text other than the JSON"
+                        " string. The keys should be type, topic, date, time,"
+                        " attendees, location, and room_id. Omit location if it's a"
+                        " virtual meeting. room_id is the room link associated with the"
+                        " meeting. The update will not work without room_id. The"
+                        " attendees list should just include the full platform"
+                        " formatted usernames."
                     ),
                 },
             ],
