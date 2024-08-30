@@ -14,6 +14,7 @@ from nio import (
     InviteAliasEvent,
     InviteMemberEvent,
     InviteNameEvent,
+    KeyVerificationEvent,
     LocalProtocolError,
     LoginResponse,
     MatrixInvitedRoom,
@@ -90,6 +91,9 @@ class DefaultAsyncClient(AsyncClient):
         self.add_event_callback(self._cb_room_message_text, RoomMessageText)
 
         # To-device Events.
+        self.add_to_device_callback(
+            self._cb_key_verification_event, KeyVerificationEvent
+        )
         self.add_to_device_callback(self._cb_room_key_event, RoomKeyEvent)
         self.add_to_device_callback(self._cb_room_key_request, RoomKeyRequest)
 
@@ -123,11 +127,10 @@ class DefaultAsyncClient(AsyncClient):
             sys.exit(0)
 
         # Otherwise the config file exists, so we'll use the stored credentials.
-        self._logging_gateway.info("Logging in using saved credentials.")
+        self._logging_gateway.info("Login using saved credentials.")
         # open the file in read-only mode.
         self.access_token = self._keyval_storage_gateway.get("client_access_token")
         self.device_id = self._keyval_storage_gateway.get("client_device_id")
-        self._logging_gateway.info(f"Device ID: {self.device_id}")
         self.user_id = self._keyval_storage_gateway.get("client_user_id")
         self.load_store()
         return self
@@ -303,6 +306,7 @@ class DefaultAsyncClient(AsyncClient):
                 self._keyval_storage_gateway.get(KNOWN_DEVICES_LIST_KEY, False)
             )
             for user_id in known_devices.keys():
+                self._logging_gateway.debug(f"User: {user_id}")
                 for device_id, olm_device in self.device_store[user_id].items():
                     if device_id in known_devices[user_id]:
                         # Verify the device.
@@ -311,11 +315,12 @@ class DefaultAsyncClient(AsyncClient):
 
     def verify_user_devices(self, user_id: str) -> None:
         """Verify all of a user's devices."""
-        self._logging_gateway.debug("Verifying all user devices.")
+        self._logging_gateway.debug(f"Verifying all user devices ({user_id}).")
         # This has to be revised when we figure out a trust mechanism.
         # A solution might be to require users to visit sys admin to perform SAS
         # verification whenever using a new device.
         for device_id, olm_device in self.device_store[user_id].items():
+            self._logging_gateway.debug(f"Found {device_id}.")
             known_devices = {}
             # Load the known devices list if it already exists.
             if self._keyval_storage_gateway.has_key(KNOWN_DEVICES_LIST_KEY):
@@ -399,7 +404,6 @@ class DefaultAsyncClient(AsyncClient):
 
         # Verify user devices.
         self.verify_user_devices(event.sender)
-        self.verify_user_devices(self.user_id)
 
         # Join room.
         await self.join(room.room_id)
@@ -428,6 +432,9 @@ class DefaultAsyncClient(AsyncClient):
     ) -> None:
         """Handle RoomCreateEvents."""
 
+    async def _cb_key_verification_event(self, event: KeyVerificationEvent) -> None:
+        """Handle key verification events."""
+
     async def _cb_room_key_event(self, _event: RoomKeyEvent) -> None:
         """Handle RoomKeyEvents."""
 
@@ -449,7 +456,6 @@ class DefaultAsyncClient(AsyncClient):
 
         # Verify user devices.
         self.verify_user_devices(message.sender)
-        self.verify_user_devices(self.user_id)
 
         # Set the room read marker to indicate that the assistant has read the
         # message.
