@@ -2,6 +2,7 @@
 
 __all__ = ["DefaultMessagingService"]
 
+import asyncio
 from datetime import datetime
 import pickle
 from types import SimpleNamespace
@@ -135,7 +136,6 @@ class DefaultMessagingService(IMessagingService):
 
         assistant_response = chat_completion.content
 
-        # Manage metadata returned by the LLM.
         # Save current thread first.
         self._save_chat_thread(attention_thread_key, attention_thread)
 
@@ -162,31 +162,38 @@ class DefaultMessagingService(IMessagingService):
             # self._logging_gateway.debug(assistant_response)
             assistant_response = assistant_response.replace("[end-task]", "").strip()
 
-        if assistant_response != "":
-            # Persist chat history.
-            self._logging_gateway.debug("Persist attention thread.")
-            attention_thread["messages"].append(
-                {
-                    "role": "assistant",
-                    "content": assistant_response,
-                }
-            )
-
-            self._logging_gateway.debug(
-                "Pass response to triggered services for processing."
-            )
-            for ct_ext in self._ct_extensions:
-                await ct_ext.process_message(
-                    assistant_response,
-                    "assistant",
-                    room_id,
-                    sender,
-                    attention_thread_key,
-                )
-        else:
+        if assistant_response == "":
             self._logging_gateway.debug("Empty response.")
+            return assistant_response
 
+        # Persist chat history.
+        self._logging_gateway.debug("Persist attention thread.")
+        attention_thread["messages"].append(
+            {
+                "role": "assistant",
+                "content": assistant_response,
+            }
+        )
         self._save_chat_thread(attention_thread_key, attention_thread)
+
+        self._logging_gateway.debug(
+            "Pass response to triggered services for processing."
+        )
+        tasks = []
+        for ct_ext in self._ct_extensions:
+            tasks.append(
+                asyncio.create_task(
+                    ct_ext.process_message(
+                        assistant_response,
+                        "assistant",
+                        room_id,
+                        sender,
+                        attention_thread_key,
+                    )
+                )
+            )
+        asyncio.gather(*tasks)
+
         return assistant_response
 
     def register_ct_extension(self, ext: ICTExtension) -> None:
@@ -335,10 +342,6 @@ class DefaultMessagingService(IMessagingService):
             }
         )
 
-        # Append information from triggered service providers to context.
-        for ct_ext in self._ct_extensions:
-            context += ct_ext.get_system_context_data(sender)
-
         # Append instructions to detect start and end of conversations.
         context.append(
             {
@@ -374,6 +377,10 @@ class DefaultMessagingService(IMessagingService):
                 ),
             }
         )
+
+        # Append information from triggered service providers to context.
+        for ct_ext in self._ct_extensions:
+            context += ct_ext.get_system_context_data(sender)
 
         return context
 
