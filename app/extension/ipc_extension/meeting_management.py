@@ -50,21 +50,24 @@ class MeetingManagementIPCExtension(IIPCExtension):
 
     @property
     def ipc_commands(self) -> list[str]:
-        return ["meeting_delete_expired"]
+        return [
+            "delete_expired_meetings",
+        ]
 
     async def process_ipc_command(self, payload: dict) -> None:
-        self._logging_gateway.warning(
-            f"MeetingManagementIPCExtension: Executing command: {payload['command']}"
+        self._logging_gateway.debug(
+            "MeetingManagementIPCExtension: Executing command:"
+            f" {payload['data']['command']}"
         )
-        match payload["command"]:
-            case "meeting_delete_expired":
-                await self._cancel_expired_meetings()
+        match payload["data"]["command"]:
+            case "delete_expired_meetings":
+                await self._delete_expired_meetings(payload)
                 return
             case _:
                 ...
 
-    async def _cancel_expired_meetings(self) -> None:
-        """Cancel all expired meetings."""
+    async def _delete_expired_meetings(self, payload: dict) -> None:
+        """Delete all expired meetings."""
         meetings = [
             pickle.loads(self._keyval_storage_gateway.get(x, False))
             for x in self._keyval_storage_gateway.keys()
@@ -102,3 +105,7 @@ class MeetingManagementIPCExtension(IIPCExtension):
                         meeting.init.scheduler,
                     )
                     await self._meeting_canceller.handle(cancel_request)
+
+        await payload["response_queue"].put(
+            {"response": "OK"},
+        )

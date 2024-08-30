@@ -29,11 +29,11 @@ class DefaultIPCService(IIPCService):
             return
 
         match ipc_payload["command"]:
-            case "get_status":
-                await self._handle_get_status(ipc_payload)
-                return
             case "cron":
                 await self._handle_cron(ipc_payload)
+                return
+            case "get_status":
+                await self._handle_get_status(ipc_payload)
                 return
             case _:
                 ...
@@ -41,10 +41,6 @@ class DefaultIPCService(IIPCService):
 
     def register_ipc_extension(self, ext: IIPCExtension) -> None:
         self._ipc_extensions.append(ext)
-
-    async def _handle_get_status(self, payload: dict) -> None:
-        """Get assistant status."""
-        await payload["response_queue"].put({"response": "OK"})
 
     async def _handle_cron(self, payload: dict) -> None:
         """Process cron jobs."""
@@ -58,11 +54,15 @@ class DefaultIPCService(IIPCService):
             if hits == 0:
                 self._logging_gateway.debug(
                     "DefaultIPCService: No handlers found for command"
-                    f" {payload["data"]['command']}."
+                    f" {payload['data']['command']}."
                 )
                 await payload["response_queue"].put({"response": "Not Found"})
         else:
             await payload["response_queue"].put({"response": "Invalid Request"})
+
+    async def _handle_get_status(self, payload: dict) -> None:
+        """Get assistant status."""
+        await payload["response_queue"].put({"response": "OK"})
 
     def _is_valid_cron_job(self, request_data: dict) -> bool:
         """Valid cron request."""

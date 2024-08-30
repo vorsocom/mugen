@@ -10,7 +10,6 @@ from nio import AsyncClient
 from app.core.contract.ipc_extension import IIPCExtension
 from app.core.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.core.contract.logging_gateway import ILoggingGateway
-from app.core.contract.user_service import IUserService
 from app.core.di import DIContainer
 
 
@@ -25,19 +24,20 @@ class RoomManagementIPCExtension(IIPCExtension):
             DIContainer.keyval_storage_gateway
         ],
         logging_gateway: ILoggingGateway = Provide[DIContainer.logging_gateway],
-        user_service: IUserService = Provide[DIContainer.user_service],
     ) -> None:
         self._client = client
         self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway
-        self._user_service = user_service
 
     @property
     def ipc_commands(self) -> list[str]:
-        return ["leave_all_rooms", "list_rooms"]
+        return [
+            "leave_all_rooms",
+            "list_rooms",
+        ]
 
     async def process_ipc_command(self, payload: dict) -> None:
-        self._logging_gateway.warning(
+        self._logging_gateway.debug(
             "RoomManagementIPCExtension: Executing command:"
             f" {payload['data']['command']}"
         )
@@ -150,7 +150,8 @@ class RoomManagementIPCExtension(IIPCExtension):
 
         await payload["response_queue"].put(
             {
-                "response": "OK",
-                "rooms": response,
+                "response": {
+                    "rooms": response,
+                },
             }
         )
