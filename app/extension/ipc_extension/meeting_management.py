@@ -5,6 +5,7 @@ __all__ = ["MeetingManagementIPCExtension"]
 from datetime import datetime
 import pickle
 
+import dateutil
 from dependency_injector.wiring import inject, Provide
 from nio import AsyncClient
 
@@ -87,9 +88,10 @@ class MeetingManagementIPCExtension(IIPCExtension):
                 room_id=item["room_id"],
             )
 
-            meeting_time = datetime.strptime(
-                f"{meeting.init.date} {meeting.init.time}", "%Y-%m-%d %H:%M:%S"
+            meeting_time = dateutil.parser.parse(
+                f"{meeting.init.date} {meeting.init.time}"
             )
+
             if datetime.now() > meeting_time:
                 elapsed_time = (datetime.now() - meeting_time).total_seconds()
                 self._logging_gateway.debug(f"Elapsed: {elapsed_time}")

@@ -124,7 +124,7 @@ class CancelScheduledMeetingInteractor(
             await self._client.room_kick(meeting.room_id, attendee)
 
         # The assistant can now leave the room.
-        await self._client.room_leave(self._client.user_id)
+        await self._client.room_leave(meeting.room_id)
 
         # Return success.
         return True
