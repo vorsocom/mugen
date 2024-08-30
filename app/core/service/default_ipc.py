@@ -28,17 +28,16 @@ class DefaultIPCService(IIPCService):
         if not self._is_valid_ipc_payload(ipc_payload):
             return
 
-        if "command" in ipc_payload.keys():
-            match ipc_payload["command"]:
-                case "get_status":
-                    await self._handle_get_status(ipc_payload)
-                    return
-                case "cron":
-                    await self._handle_cron(ipc_payload)
-                    return
-                case _:
-                    ...
-            await ipc_payload["response_queue"].put({"response": "Invalid Command"})
+        match ipc_payload["command"]:
+            case "get_status":
+                await self._handle_get_status(ipc_payload)
+                return
+            case "cron":
+                await self._handle_cron(ipc_payload)
+                return
+            case _:
+                ...
+        await ipc_payload["response_queue"].put({"response": "Invalid Command"})
 
     def register_ipc_extension(self, ext: IIPCExtension) -> None:
         self._ipc_extensions.append(ext)
@@ -49,22 +48,21 @@ class DefaultIPCService(IIPCService):
 
     async def _handle_cron(self, payload: dict) -> None:
         """Process cron jobs."""
-        request_data = payload["data"]
-        if self._is_valid_cron_job(request_data):
+        if self._is_valid_cron_job(payload["data"]):
             hits = 0
             # Process by IPC extensions.
             for ipc_ext in self._ipc_extensions:
-                if request_data["command"] in ipc_ext.ipc_commands:
-                    await ipc_ext.process_ipc_command(request_data)
+                if payload["data"]["command"] in ipc_ext.ipc_commands:
+                    await ipc_ext.process_ipc_command(payload)
                     hits += 1
             if hits == 0:
                 self._logging_gateway.debug(
                     "DefaultIPCService: No handlers found for command"
-                    f" {request_data['command']}."
+                    f" {payload["data"]['command']}."
                 )
-            await payload["response_queue"].put({"response": "OK"})
-
-        await payload["response_queue"].put({"response": "Invalid Request"})
+                await payload["response_queue"].put({"response": "Not Found"})
+        else:
+            await payload["response_queue"].put({"response": "Invalid Request"})
 
     def _is_valid_cron_job(self, request_data: dict) -> bool:
         """Valid cron request."""
