@@ -139,7 +139,7 @@ async def run_matrix_assistant(basedir: str, log_level: int) -> None:
                 await client.set_displayname(agent_display_name)
 
             # Cleanup device list and trust known devices.
-            client.cleanup_known_user_devices_list()
+            # client.cleanup_known_user_devices_list()
             client.trust_known_user_devices()
 
         # Start process loop.
