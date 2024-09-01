@@ -143,46 +143,18 @@ class GDFOrdersRAGExtension(IRAGExtension):
             },
             {
                 "role": "system",
-                "content": (
-                    "You are a message classifier. You classify user messages and"
-                    " return valid JSON based on your classification. In this instance"
-                    " you are classifying messages based on whether they are related to"
-                    " searching orders or not. Your response should not contain any"
-                    " text other than the JSON string."
-                ),
-            },
-            {
-                "role": "system",
-                "content": (
-                    "The keys for the JSON object, when a user wants to search"
-                    " published orders, are classification, subject, and event_type."
-                ),
-            },
-            {
-                "role": "system",
-                "content": (
-                    "There are two possible values for the classification key,"
-                    " search_orders or null. search_orders is used when the user wants"
-                    " to search the published orders, otherwise null is used."
-                ),
-            },
-            {
-                "role": "system",
-                "content": (
-                    "The value for the subject key is the name of the person for which"
-                    " the user is searching for information. If the user references"
-                    " themself, the subject would be their first and last name."
-                ),
-            },
-            {
-                "role": "system",
-                "content": (
-                    "The value for event_type is the type of data that the user is"
-                    " interested in. Possible values are tos, sos, training,"
-                    " course, embodied, disembodied, posted, appointed, allowance,"
-                    " leave, short pass, exemption, marriage, awol, punishment, and"
-                    " forfeiture."
-                ),
+                "content": """You are a classifier. Your task is to analyze the following user message and determine if the user wants information from the published orders. The published orders contain information on soldiers being approved for actions like TOS, SOS, training, being embodied, disembodied, posted, appointed, given an allowance, going on leave, taking a short pass, being exempted, getting married, going AWOL, receiving punishment, and forfeiture.
+
+If the user wants information from the published orders, return only a valid JSON string in the following format:
+{"classification": true, "subject": "<soldier_name>", "event_type": "<event_type>"}
+
+If the user references themselves, the subject should be their first and last name.
+
+If the user does not want information from the published orders, return only the following valid JSON string:
+{"classification": false}
+
+Do not include any additional text or explanation in your response. Your response must only be the required JSON.
+""",
             },
             {"role": "user", "content": message},
         ]
