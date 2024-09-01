@@ -19,6 +19,7 @@ from app.core.contract.user_service import IUserService
 from app.core.di import DIContainer
 
 
+# pylint: disable=too-many-instance-attributes
 class GDFGeneralKnowldgeRAGExtension(IRAGExtension):
     """An implementation of IRAGExtension."""
 
@@ -123,6 +124,7 @@ class GDFGeneralKnowldgeRAGExtension(IRAGExtension):
     ) -> str | None:
         """Classify user messages for GDF Knowledge RAG pipeline."""
         context = [
+            # pylint: disable=line-too-long
             {
                 "role": "system",
                 "content": """Classify the following user message based on whether the user wants information on the Guyana Defence Force. The terms "Guyana Defence Force," "GDF" and "Force" should be used as indicators that the user wants this type of information.

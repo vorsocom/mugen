@@ -18,6 +18,7 @@ from app.core.di import DIContainer
 
 
 # pylint: disable=too-few-public-methods
+# pylint: disable=too-many-instance-attributes
 class GDFOrdersRAGExtension(IRAGExtension):
     """An implementation of IRAGExtension."""
 
@@ -141,6 +142,7 @@ class GDFOrdersRAGExtension(IRAGExtension):
                 "role": "system",
                 "content": f"You are chatting with {user}",
             },
+            # pylint: disable=line-too-long
             {
                 "role": "system",
                 "content": """You are a classifier. Your task is to analyze the following user message and determine if the user wants information from the published orders. The published orders contain information on soldiers being approved for actions like TOS, SOS, training, being embodied, disembodied, posted, appointed, given an allowance, going on leave, taking a short pass, being exempted, getting married, going AWOL, receiving punishment, and forfeiture.
