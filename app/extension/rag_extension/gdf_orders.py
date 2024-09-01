@@ -48,17 +48,6 @@ class GDFOrdersRAGExtension(IRAGExtension):
         self._logging_gateway = logging_gateway
         self._user_service = user_service
 
-        # Configure completion API.
-        completion_api_prefix = self._config.gloria_completion_api_prefix
-        classification_model = f"{completion_api_prefix}_api_classification_model"
-        self._classification_model = config[classification_model]
-        classification_temp = f"{completion_api_prefix}_api_classification_temp"
-        self._classification_temp = config[classification_temp]
-        completion_model = f"{completion_api_prefix}_api_completion_model"
-        self._completion_model = config[completion_model]
-        completion_temp = f"{completion_api_prefix}_api_completion_temp"
-        self._completion_temp = config[completion_temp]
-
     @property
     def cache_key(self) -> str:
         return self._cache_key
@@ -67,10 +56,9 @@ class GDFOrdersRAGExtension(IRAGExtension):
         self._logging_gateway.debug("Processing Orders RAG pipeline.")
         user_dn = self._user_service.get_user_display_name(sender)
         orders_classification = await self._get_rag_classification(
-            user=user_dn,
             message=message,
-            model=self._classification_model,
-            temperature=float(self._classification_temp),
+            operation="classification",
+            user_dn=user_dn,
         )
 
         knowledge_docs: list[str] = []
@@ -130,17 +118,15 @@ class GDFOrdersRAGExtension(IRAGExtension):
 
     async def _get_rag_classification(
         self,
-        user: str,
         message: str,
-        model: str,
-        temperature: float,
-        response_format: str = "json_object",
+        operation: str,
+        user_dn: str,
     ) -> str | None:
         """Classify user messages for orders RAG pipeline."""
         context = [
             {
                 "role": "system",
-                "content": f"You are chatting with {user}",
+                "content": f"The name of the user you are chatting with is {user_dn}",
             },
             # pylint: disable=line-too-long
             {
@@ -150,7 +136,7 @@ class GDFOrdersRAGExtension(IRAGExtension):
 If the user wants information from the published orders, return only a valid JSON string in the following format:
 {"classification": true, "subject": "<soldier_name>", "event_type": "<event_type>"}
 
-If the user references themselves, the subject should be their first and last name.
+If the user references themselves, the subject should be their name.
 
 If the user does not want information from the published orders, return only the following valid JSON string:
 {"classification": false}
@@ -162,7 +148,5 @@ Do not include any additional text or explanation in your response. Your respons
         ]
         return await self._completion_gateway.get_completion(
             context=context,
-            model=model,
-            response_format=response_format,
-            temperature=temperature,
+            operation=operation,
         )

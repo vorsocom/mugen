@@ -99,17 +99,6 @@ class MeetingCTExtension(ICTExtension):
             self._user_service,
         )
 
-        # Configure completion API.
-        completion_api_prefix = self._config.gloria_completion_api_prefix
-        classification_model = f"{completion_api_prefix}_api_classification_model"
-        self._classification_model = config[classification_model]
-        classification_temp = f"{completion_api_prefix}_api_classification_temp"
-        self._classification_temp = config[classification_temp]
-        completion_model = f"{completion_api_prefix}_api_completion_model"
-        self._completion_model = config[completion_model]
-        completion_temp = f"{completion_api_prefix}_api_completion_temp"
-        self._completion_temp = config[completion_temp]
-
     @property
     def triggers(self) -> list[str]:
         return self._triggers
@@ -248,8 +237,7 @@ class MeetingCTExtension(ICTExtension):
                         " provide the room link."
                     ),
                 },
-            ],
-            model=self._completion_model,
+            ]
         )
         cancel_id = (
             "" if action_parameters is None else action_parameters.content.strip()
@@ -369,9 +357,7 @@ class MeetingCTExtension(ICTExtension):
                         " formatted usernames. Date should be in the format %Y-%m-%d."
                     ),
                 }
-            ],
-            model=self._completion_model,
-            response_format="json_object",
+            ]
         )
         meeting_params = dict(
             json.loads("{}" if action_parameters is None else action_parameters.content)
@@ -446,9 +432,7 @@ class MeetingCTExtension(ICTExtension):
                         " formatted usernames."
                     ),
                 },
-            ],
-            model=self._completion_model,
-            response_format="json_object",
+            ]
         )
         meeting_params = dict(
             json.loads("{}" if action_parameters is None else action_parameters.content)

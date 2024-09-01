@@ -48,17 +48,6 @@ class DefaultMessagingService(IMessagingService):
         self._logging_gateway = logging_gateway
         self._user_service = user_service
 
-        # Configure completion API.
-        completion_api_prefix = self._config.gloria_completion_api_prefix
-        classification_model = f"{completion_api_prefix}_api_classification_model"
-        self._classification_model = config[classification_model]
-        classification_temp = f"{completion_api_prefix}_api_classification_temp"
-        self._classification_temp = config[classification_temp]
-        completion_model = f"{completion_api_prefix}_api_completion_model"
-        self._completion_model = config[completion_model]
-        completion_temp = f"{completion_api_prefix}_api_completion_temp"
-        self._completion_temp = config[completion_temp]
-
     # pylint: disable=too-many-branches
     # pylint: disable=too-many-statements
     async def handle_text_message(
@@ -126,8 +115,6 @@ class DefaultMessagingService(IMessagingService):
         self._logging_gateway.debug("Get completion.")
         chat_completion = await self._completion_gateway.get_completion(
             context=completion_context,
-            model=self._completion_model,
-            temperature=float(self._completion_temp),
         )
 
         # If the chat completion attempt failed, set it to "Error" so that the user

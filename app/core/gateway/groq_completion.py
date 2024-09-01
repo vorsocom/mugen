@@ -16,6 +16,8 @@ from app.core.contract.logging_gateway import ILoggingGateway
 class GroqCompletionGateway(ICompletionGateway):
     """A Groq chat compeltion gateway."""
 
+    _env_prefix = "groq"
+
     def __init__(
         self,
         config: dict,
@@ -29,17 +31,19 @@ class GroqCompletionGateway(ICompletionGateway):
     async def get_completion(
         self,
         context: list[dict],
-        model: str,
-        response_format: str = "text",
-        temperature: float = 1,
+        operation: str = "completion",
     ) -> ChatCompletionMessage | None:
+        model = self._config.__dict__[f"{self._env_prefix}_api_{operation}_model"]
+        temperature = float(
+            self._config.__dict__[f"{self._env_prefix}_api_{operation}_temp"]
+        )
+
         response = None
         # self._logging_gateway.debug(context)
         try:
             chat_completion = await self._api.chat.completions.create(
                 messages=context,
                 model=model,
-                response_format={"type": response_format},
                 temperature=temperature,
                 top_p=1,
                 stream=False,
