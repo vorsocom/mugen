@@ -24,7 +24,7 @@ class DefaultCTXExtension(ICTXExtension):
         self._config = SimpleNamespace(**config)
         self._user_service = user_service
 
-    def get_context(self, user: str) -> list[dict]:
+    def get_context(self, user_id: str) -> list[dict]:
         known_users_list = self._user_service.get_known_users_list()
         return [
             # Date and time.
@@ -39,7 +39,7 @@ class DefaultCTXExtension(ICTXExtension):
                 "role": "system",
                 "content": (
                     "You are chatting with"
-                    f" {self._user_service.get_user_display_name(user)} ({user})."
+                    f" {self._user_service.get_user_display_name(user_id)} ({user_id})."
                     " Refer to this user by their first name unless otherwise"
                     " instructed."
                 ),
