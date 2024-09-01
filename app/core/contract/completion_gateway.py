@@ -12,8 +12,6 @@ class ICompletionGateway(ABC):
     async def get_completion(
         self,
         context: list[dict],
-        model: str,
-        response_format: str,
-        temperature: float,
+        operation: str,
     ) -> Any | None:
         """Get LLM response based on context (conversation history + relevant data)."""

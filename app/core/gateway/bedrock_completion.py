@@ -16,6 +16,8 @@ from app.core.contract.logging_gateway import ILoggingGateway
 class BedrockCompletionGateway(ICompletionGateway):
     """An AWS Bedrock chat compeltion gateway."""
 
+    _env_prefix = "bedrock"
+
     def __init__(
         self,
         config: dict,
@@ -35,10 +37,13 @@ class BedrockCompletionGateway(ICompletionGateway):
     async def get_completion(
         self,
         context: list[dict],
-        model: str,
-        response_format: str = "text",
-        temperature: float = 1,
+        operation: str = "completion",
     ) -> SimpleNamespace | None:
+        model = self._config.__dict__[f"{self._env_prefix}_api_{operation}_model"]
+        temperature = float(
+            self._config.__dict__[f"{self._env_prefix}_api_{operation}_temp"]
+        )
+
         response = None
         conversation = []
         system_prompts = []

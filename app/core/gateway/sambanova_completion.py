@@ -18,6 +18,8 @@ from app.core.contract.logging_gateway import ILoggingGateway
 class SambaNovaCompletionGateway(ICompletionGateway):
     """A SambaNova chat compeltion gateway."""
 
+    _env_prefix = "sambanova"
+
     def __init__(
         self,
         config: dict,
@@ -30,10 +32,13 @@ class SambaNovaCompletionGateway(ICompletionGateway):
     async def get_completion(
         self,
         context: list[dict],
-        model: str,
-        response_format: str = "text",
-        temperature: float = 1,
+        operation: str = "completion",
     ) -> SimpleNamespace | None:
+        model = self._config.__dict__[f"{self._env_prefix}_{operation}_model"]
+        _temperature = float(
+            self._config.__dict__[f"{self._env_prefix}_api_{operation}_temp"]
+        )
+
         response = None
         try:
             headers: list[str] = [

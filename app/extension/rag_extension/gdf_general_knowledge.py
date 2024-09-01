@@ -49,17 +49,6 @@ class GDFGeneralKnowldgeRAGExtension(IRAGExtension):
         self._logging_gateway = logging_gateway
         self._user_service = user_service
 
-        # Configure completion API.
-        completion_api_prefix = self._config.gloria_completion_api_prefix
-        classification_model = f"{completion_api_prefix}_api_classification_model"
-        self._classification_model = config[classification_model]
-        classification_temp = f"{completion_api_prefix}_api_classification_temp"
-        self._classification_temp = config[classification_temp]
-        completion_model = f"{completion_api_prefix}_api_completion_model"
-        self._completion_model = config[completion_model]
-        completion_temp = f"{completion_api_prefix}_api_completion_temp"
-        self._completion_temp = config[completion_temp]
-
     @property
     def cache_key(self) -> str:
         return self._cache_key
@@ -68,8 +57,7 @@ class GDFGeneralKnowldgeRAGExtension(IRAGExtension):
         self._logging_gateway.debug("Processing GDF Knowledge RAG pipeline.")
         gdfk_classification = await self._get_rag_classification(
             message=message,
-            model=self._classification_model,
-            temperature=float(self._classification_temp),
+            operation="classification",
         )
 
         knowledge_docs: list[str] = []
@@ -118,9 +106,7 @@ class GDFGeneralKnowldgeRAGExtension(IRAGExtension):
     async def _get_rag_classification(
         self,
         message: str,
-        model: str,
-        temperature: float,
-        response_format: str = "json_object",
+        operation: str,
     ) -> str | None:
         """Classify user messages for GDF Knowledge RAG pipeline."""
         context = [
@@ -140,7 +126,5 @@ If the user does not want information on the Guyana Defence Force, return only a
         ]
         return await self._completion_gateway.get_completion(
             context=context,
-            model=model,
-            response_format=response_format,
-            temperature=temperature,
+            operation=operation,
         )
