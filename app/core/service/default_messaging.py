@@ -288,13 +288,14 @@ class DefaultMessagingService(IMessagingService):
         """Return a list of system messages to add context to user message."""
         context = []
 
-        # Append assistant persona to context.
-        context.append(
-            {
-                "role": "system",
-                "content": self._config.gloria_assistant_persona,
-            }
-        )
+        if "gloria_assistant_persona" in self._config.__dict__.keys():
+            # Append assistant persona to context.
+            context.append(
+                {
+                    "role": "system",
+                    "content": self._config.gloria_assistant_persona,
+                }
+            )
 
         # Append information from CTX extensions to context.
         for ctx_ext in self._ctx_extensions:
