@@ -12,6 +12,7 @@ from dotenv import dotenv_values
 from quart import Quart, g
 
 from app.core.contract.ct_extension import ICTExtension
+from app.core.contract.ctx_extension import ICTXExtension
 from app.core.contract.ipc_extension import IIPCExtension
 from app.core.contract.rag_extension import IRAGExtension
 from app.core.di import DIContainer
@@ -61,7 +62,7 @@ def create_quart_app(config_name):
 # pylint: disable=too-many-locals
 async def run_matrix_assistant(basedir: str, log_level: int) -> None:
     """Application entrypoint."""
-    # Dependency injection.
+    # Dependency Injection.
     di.config.from_dict(dict((k.lower(), v) for k, v in dotenv_values().items()))
     di.config.log_level.from_value(log_level)
     di.config.basedir.from_value(basedir)
@@ -73,9 +74,6 @@ async def run_matrix_assistant(basedir: str, log_level: int) -> None:
             ".olmstore",
         )
     )
-
-    with open(f"{basedir}/conf/persona.txt", encoding="utf8") as f:
-        di.config.assistant_persona.from_value(f.read())
 
     # Get logging gateway.
     logging_gateway = di.logging_gateway()
@@ -107,6 +105,14 @@ async def run_matrix_assistant(basedir: str, log_level: int) -> None:
                 ct_ext = ct_ext_class()
                 messaging_service.register_ct_extension(ct_ext)
                 logging_gateway.debug(f"Registered CT extension: {ext}")
+
+            if "ctx_extension" in ext:
+                ctx_ext_class = [
+                    x for x in ICTXExtension.__subclasses__() if x.__module__ == ext
+                ][0]
+                ctx_ext = ctx_ext_class()
+                messaging_service.register_ctx_extension(ctx_ext)
+                logging_gateway.debug(f"Registered CTX extension: {ext}")
 
             if "ipc_extension" in ext:
                 ipc_ext_class = [

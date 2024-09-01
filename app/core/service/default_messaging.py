@@ -10,11 +10,12 @@ from typing import Mapping
 import uuid
 
 from app.core.contract.completion_gateway import ICompletionGateway
+from app.core.contract.ct_extension import ICTExtension
+from app.core.contract.ctx_extension import ICTXExtension
 from app.core.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.core.contract.logging_gateway import ILoggingGateway
 from app.core.contract.messaging_service import IMessagingService
 from app.core.contract.rag_extension import IRAGExtension
-from app.core.contract.ct_extension import ICTExtension
 from app.core.contract.user_service import IUserService
 
 CHAT_THREAD_VERSION: int = 1
@@ -27,6 +28,8 @@ class DefaultMessagingService(IMessagingService):
     """The default implementation of IMessagingService."""
 
     _ct_extensions: list[ICTExtension] = []
+
+    _ctx_extensions: list[ICTXExtension] = []
 
     _rag_extensions: list[IRAGExtension] = []
 
@@ -199,6 +202,9 @@ class DefaultMessagingService(IMessagingService):
     def register_ct_extension(self, ext: ICTExtension) -> None:
         self._ct_extensions.append(ext)
 
+    def register_ctx_extension(self, ext: ICTXExtension) -> None:
+        self._ctx_extensions.append(ext)
+
     def register_rag_extension(self, ext: IRAGExtension) -> None:
         self._rag_extensions.append(ext)
 
@@ -294,91 +300,20 @@ class DefaultMessagingService(IMessagingService):
     def _get_system_context(self, sender: str) -> list[dict]:
         """Return a list of system messages to add context to user message."""
         context = []
-        known_users_list = self._user_service.get_known_users_list()
-
-        # Append date and time to context.
-        context.append(
-            {
-                "role": "system",
-                "content": "The day of the week, date, and time are "
-                + datetime.now().strftime("%A, %Y-%m-%d, %H:%M:%S")
-                + ", respectively",
-            }
-        )
 
         # Append assistant persona to context.
         context.append(
             {
                 "role": "system",
-                "content": self._config.assistant_persona,
+                "content": self._config.gloria_assistant_persona,
             }
         )
 
-        # Append user information to context.
-        context.append(
-            {
-                "role": "system",
-                "content": (
-                    "You are chatting with"
-                    f" {self._user_service.get_user_display_name(sender)} ({sender})."
-                    " Refer to this user by their first name unless otherwise"
-                    " instructed."
-                ),
-            }
-        )
+        # Append information from CTX extensions to context.
+        for ctx_ext in self._ctx_extensions:
+            context += ctx_ext.get_context(sender)
 
-        # Append known users information to context.
-        context.append(
-            {
-                "role": "system",
-                "content": "The list of known users on the platform are: "
-                + ",".join(
-                    [
-                        known_users_list[k]["displayname"] + " (" + k + ")"
-                        for (k, _) in known_users_list.items()
-                    ]
-                )
-                + ".",
-            }
-        )
-
-        # Append instructions to detect start and end of conversations.
-        context.append(
-            {
-                "role": "system",
-                "content": (
-                    "Your primary role is to help  the user complete tasks. If the user"
-                    " sends you a new message that is not a follow-up to the previous"
-                    " task, the user's message asks a new question, requests a new"
-                    " action, or changes the topic, consider it an indicator of a new"
-                    " task. Do not consider messages containing only a simple greeting,"
-                    ' like "hello" or only a stop-word, such as "ok", an indicator of a'
-                    " new task. When you detect a new task, prefix your message with"
-                    " [task], skip a line, then add your response. The square backets"
-                    " are important. Never use anything other than square brackets!. If"
-                    " [task] already appears in your chat history with the user, do not"
-                    " add it to any new messages."
-                ),
-            }
-        )
-        context.append(
-            {
-                "role": "system",
-                "content": (
-                    "A task has ended if you've completed a requested action, answered"
-                    " a question not likely to have a follow-up message, or reached a"
-                    " natural conclusion to the task. Also consider a task complete if"
-                    " the user thanks you, indicates that they no longer need"
-                    " assistance, or explicitly cancels the task. When you detect the"
-                    " end of a task, write your response, skip a line, and add"
-                    " [end-task]. Again, the square brackets are important!. Your"
-                    " message to end a task should never contain just [end-task] only,"
-                    " say something!"
-                ),
-            }
-        )
-
-        # Append information from triggered service providers to context.
+        # Append information from CT extensions to context.
         for ct_ext in self._ct_extensions:
             context += ct_ext.get_system_context_data(sender)
 
