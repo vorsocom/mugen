@@ -73,6 +73,7 @@ class GDFGeneralKnowldgeRAGExtension(IRAGExtension):
 
         knowledge_docs: list[str] = []
         if gdfk_classification is not None:
+            self._logging_gateway.debug(gdfk_classification)
             instruct = json.loads(gdfk_classification.content)
             if instruct["classification"]:
                 hits: list[ScoredPoint] = (
@@ -124,17 +125,14 @@ class GDFGeneralKnowldgeRAGExtension(IRAGExtension):
         context = [
             {
                 "role": "system",
-                "content": (
-                    "You are a message classifier. You classify user messages and"
-                    " return valid JSON based on your classification. Do not return"
-                    " anything but JSON. A positive classification is when the user"
-                    " wants information related to the GDF. A negative classification"
-                    " is when the user does not want information related to the GDF."
-                    " For you to give a positive classification, the user must"
-                    ' mention "Guyana Defence Force", "GDF", or "Force". For a positive'
-                    ' classification, return "classification": true}. For a negative'
-                    ' classification, return {"classification": false}.'
-                ),
+                "content": """Classify the following user message based on whether the user wants information on the Guyana Defence Force. The terms "Guyana Defence Force," "GDF" and "Force" should be used as indicators that the user wants this type of information.
+
+If the user wants information on the Guyana Defence Force, return only a valid JSON string in the following format:
+{"classification": true}
+
+If the user does not want information on the Guyana Defence Force, return only a valid JSON string in the following format:
+{"classification": false}
+""",
             },
             {"role": "user", "content": message},
         ]
