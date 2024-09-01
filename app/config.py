@@ -6,16 +6,15 @@ import os
 
 from quart import Quart
 
-APP_PREFIX = "GLORIA"
-BASEDIR = os.path.abspath(os.path.dirname(__file__))
 
-
-class Config(object):
+# pylint: disable=too-few-public-methods
+class Config:
     """Base configuration class."""
 
-    # Maintain reference to the base directory of the code base to be used application
-    # wide.
-    BASEDIR = BASEDIR
+    BASEDIR: str = os.path.abspath(os.path.dirname(__file__) + "/../")
+
+    # Set log level.
+    LOG_LEVEL: int = 10
 
     @staticmethod
     def init_app(app: Quart):
@@ -26,28 +25,25 @@ class Config(object):
 class DevelopmentConfig(Config):
     """Development environment-specific configuration class"""
 
-    # Set log level.
-    LOG_LEVEL = 10
-
     # Set debug flag.
-    DEBUG = True
+    DEBUG: bool = True
 
 
 class TestingConfig(Config):
     """Testing environment-specific configuration class"""
 
     # Set log level.
-    LOG_LEVEL = 20
+    LOG_LEVEL: int = 20
 
     # Set testing flag.
-    TESTING = True
+    TESTING: bool = True
 
 
 class ProductionConfig(Config):
     """Production environment-specific configuration class"""
 
     # Set log level.
-    LOG_LEVEL = 30
+    LOG_LEVEL: int = 30
 
 
 AppConfig = {
