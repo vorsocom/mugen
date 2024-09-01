@@ -3,8 +3,10 @@
 __all__ = ["IMessagingService"]
 
 from abc import ABC, abstractmethod
-from app.core.contract.rag_extension import IRAGExtension
+
 from app.core.contract.ct_extension import ICTExtension
+from app.core.contract.ctx_extension import ICTXExtension
+from app.core.contract.rag_extension import IRAGExtension
 
 
 class IMessagingService(ABC):
@@ -21,8 +23,12 @@ class IMessagingService(ABC):
 
     @abstractmethod
     def register_ct_extension(self, ext: ICTExtension) -> None:
-        """Register a CT extension with the messaging service."""
+        """Register a Coversational Trigger (CT) extension."""
+
+    @abstractmethod
+    def register_ctx_extension(self, ext: ICTXExtension) -> None:
+        """Register a Context (CTX) extension."""
 
     @abstractmethod
     def register_rag_extension(self, ext: IRAGExtension) -> None:
-        """Register an RAG extension with the messaging service."""
+        """Register a Retrieval Augmented Generation (RAG) extension."""
