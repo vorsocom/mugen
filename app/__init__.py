@@ -17,7 +17,7 @@ from app.core.contract.ipc_extension import IIPCExtension
 from app.core.contract.rag_extension import IRAGExtension
 from app.core.di import DIContainer
 
-from config import AppConfig
+from app.config import AppConfig
 
 from .core.api import api_bp
 
@@ -26,9 +26,13 @@ app = Quart(__name__)
 di = DIContainer()
 
 
-def create_quart_app(config_name):
+def create_quart_app():
     """Application factory."""
+    di.config.from_dict(dict((k.lower(), v) for k, v in dotenv_values().items()))
+    env_config = di.config()
+
     # Check for valid configuration name.
+    config_name = env_config["gloria_config"]
     if config_name not in ("default", "development", "testing", "production"):
         print("Invalid configuration name.")
         sys.exit(1)
@@ -37,6 +41,10 @@ def create_quart_app(config_name):
 
     # Create application configuration object.
     app.config.from_object(AppConfig[config_name])
+
+    # Get log level and base directory from environment.
+    di.config.log_level.from_value(app.config["LOG_LEVEL"])
+    di.config.basedir.from_value(app.config["BASEDIR"])
 
     # Initialize application.
     AppConfig[config_name].init_app(app)
@@ -60,12 +68,10 @@ def create_quart_app(config_name):
 
 
 # pylint: disable=too-many-locals
-async def run_matrix_assistant(basedir: str, log_level: int) -> None:
+async def run_matrix_assistant() -> None:
     """Application entrypoint."""
     # Dependency Injection.
-    di.config.from_dict(dict((k.lower(), v) for k, v in dotenv_values().items()))
-    di.config.log_level.from_value(log_level)
-    di.config.basedir.from_value(basedir)
+    basedir = di.config.basedir()
     di.config.keyval_storage_path.from_value(f"{basedir}/data/storage.db")
     di.config.matrix_olm_store_path.from_value(
         os.path.join(
@@ -81,9 +87,10 @@ async def run_matrix_assistant(basedir: str, log_level: int) -> None:
     # Initialise matrix-nio async client.
     async with di.client() as client:
         # Load extensions. These include:
-        # 1. Retrieval Augmented Generation (RAG) extensions.
-        # 2. Inter-Process Communication (IPC) extensions.
-        # 3. Conversational Trigger (CT) extensions.
+        # 1. Conversational Trigger (CT) extensions.
+        # 2. Context (CTX) extensions.
+        # 3. Inter-Process Communication (IPC) extensions.
+        # 4. Retrieval Augmented Generation (RAG) extensions.
         extensions = json.loads(di.config.gloria_extension_modules())
 
         # Wire the extensions for dependency injection.
