@@ -14,8 +14,8 @@ class ICTExtension(ABC):
         """Get the list of triggers that activat the service provider."""
 
     @abstractmethod
-    def get_system_context_data(self, user_id: str) -> list[dict]:
-        """Return a list of messages to add to the system context for completion."""
+    def get_context(self, user_id: str) -> list[dict]:
+        """Provides conversation context through system messages."""
 
     # pylint: disable=too-many-arguments
     @abstractmethod

@@ -315,7 +315,7 @@ class DefaultMessagingService(IMessagingService):
 
         # Append information from CT extensions to context.
         for ct_ext in self._ct_extensions:
-            context += ct_ext.get_system_context_data(sender)
+            context += ct_ext.get_context(sender)
 
         return context
 

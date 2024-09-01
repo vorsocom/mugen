@@ -135,7 +135,7 @@ class MeetingCTExtension(ICTExtension):
         elif self._triggers[2] in message:
             await self.cancel_scheduled_meeting(user_id, room_id, chat_thread_key)
 
-    def get_system_context_data(self, user_id: str) -> list[dict]:
+    def get_context(self, user_id: str) -> list[dict]:
         return [
             {
                 "role": "system",

@@ -10,5 +10,5 @@ class ICTXExtension(ABC):
     """An ABC for context extensions."""
 
     @abstractmethod
-    def get_context(self, user: str) -> list[dict]:
+    def get_context(self, user_id: str) -> list[dict]:
         """Provides conversation context through system messages."""
