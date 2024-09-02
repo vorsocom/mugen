@@ -179,16 +179,8 @@ cython_debug/
 ### APPPLICATION
 hypercorn.toml
 
-conf/*
-!conf/nginx
-!conf/uwsgi
-!conf/hypercorn.toml
-!conf/hypercorn.service
+data/storage.*
+data/.olmstore/@*
 
-data/*
-!data/.gitkeep
-!data/.olmstore
-
-data/.olmstore/*
-!data/.olmstore/.gitkeep
 test_*
+dev_*

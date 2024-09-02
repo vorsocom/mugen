@@ -1,0 +1,5 @@
+[Unit]
+Description=Curl task to {description}.
+
+[Service]
+ExecStart=curl -X PUT --json '{"command": "<name_of_command>"}' https://<url>/api/cron

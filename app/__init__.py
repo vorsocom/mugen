@@ -86,56 +86,57 @@ async def run_matrix_assistant() -> None:
 
     # Initialise matrix-nio async client.
     async with di.client() as client:
-        # Load extensions. These include:
+        # Load extensions if specified. These include:
         # 1. Conversational Trigger (CT) extensions.
         # 2. Context (CTX) extensions.
         # 3. Inter-Process Communication (IPC) extensions.
         # 4. Retrieval Augmented Generation (RAG) extensions.
-        extensions = json.loads(di.config.gloria_extension_modules())
+        if "gloria_extension_modules" in di.config().keys():
+            extensions = json.loads(di.config.gloria_extension_modules())
 
-        # Wire the extensions for dependency injection.
-        di.wire(extensions)
+            # Wire the extensions for dependency injection.
+            di.wire(extensions)
 
-        # CT, IPC, and RAG extensions need to be registered
-        # with the IPC and Messaging services.
-        ipc_service = di.ipc_service()
-        messaging_service = di.messaging_service()
+            # CT, IPC, and RAG extensions need to be registered
+            # with the IPC and Messaging services.
+            ipc_service = di.ipc_service()
+            messaging_service = di.messaging_service()
 
-        # Register the extensions.
-        for ext in extensions:
-            import_module(name=ext)
+            # Register the extensions.
+            for ext in extensions:
+                import_module(name=ext)
 
-            if "ct_extension" in ext:
-                ct_ext_class = [
-                    x for x in ICTExtension.__subclasses__() if x.__module__ == ext
-                ][0]
-                ct_ext = ct_ext_class()
-                messaging_service.register_ct_extension(ct_ext)
-                logging_gateway.debug(f"Registered CT extension: {ext}")
+                if "ct_extension" in ext:
+                    ct_ext_class = [
+                        x for x in ICTExtension.__subclasses__() if x.__module__ == ext
+                    ][0]
+                    ct_ext = ct_ext_class()
+                    messaging_service.register_ct_extension(ct_ext)
+                    logging_gateway.debug(f"Registered CT extension: {ext}")
 
-            if "ctx_extension" in ext:
-                ctx_ext_class = [
-                    x for x in ICTXExtension.__subclasses__() if x.__module__ == ext
-                ][0]
-                ctx_ext = ctx_ext_class()
-                messaging_service.register_ctx_extension(ctx_ext)
-                logging_gateway.debug(f"Registered CTX extension: {ext}")
+                if "ctx_extension" in ext:
+                    ctx_ext_class = [
+                        x for x in ICTXExtension.__subclasses__() if x.__module__ == ext
+                    ][0]
+                    ctx_ext = ctx_ext_class()
+                    messaging_service.register_ctx_extension(ctx_ext)
+                    logging_gateway.debug(f"Registered CTX extension: {ext}")
 
-            if "ipc_extension" in ext:
-                ipc_ext_class = [
-                    x for x in IIPCExtension.__subclasses__() if x.__module__ == ext
-                ][0]
-                ipc_ext = ipc_ext_class()
-                ipc_service.register_ipc_extension(ipc_ext)
-                logging_gateway.debug(f"Registered IPC extension: {ext}")
+                if "ipc_extension" in ext:
+                    ipc_ext_class = [
+                        x for x in IIPCExtension.__subclasses__() if x.__module__ == ext
+                    ][0]
+                    ipc_ext = ipc_ext_class()
+                    ipc_service.register_ipc_extension(ipc_ext)
+                    logging_gateway.debug(f"Registered IPC extension: {ext}")
 
-            if "rag_extension" in ext:
-                rag_ext_class = [
-                    x for x in IRAGExtension.__subclasses__() if x.__module__ == ext
-                ][0]
-                rag_ext = rag_ext_class()
-                messaging_service.register_rag_extension(rag_ext)
-                logging_gateway.debug(f"Registered RAG extension: {ext}")
+                if "rag_extension" in ext:
+                    rag_ext_class = [
+                        x for x in IRAGExtension.__subclasses__() if x.__module__ == ext
+                    ][0]
+                    rag_ext = rag_ext_class()
+                    messaging_service.register_rag_extension(rag_ext)
+                    logging_gateway.debug(f"Registered RAG extension: {ext}")
 
         # We have to wait on the first sync event to perform some setup tasks.
         async def wait_on_first_sync():
