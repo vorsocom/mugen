@@ -1,0 +1,9 @@
+[Unit]
+Description=Timer for Gloria cron job.
+
+[Timer]
+OnBootSec=60                ## Run 60 seconds after (re)boot.
+OnCalendar=*-*-* *:00:00    ## Run every hour, on the hour.
+
+[Install]
+WantedBy=multi-user.target
