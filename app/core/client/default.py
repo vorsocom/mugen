@@ -369,7 +369,7 @@ class DefaultAsyncClient(AsyncClient):
         # Only process invites from allowed domains.
         # Federated servers need to be in the allowed domains list for their users
         # to initiate conversations with the assistant.
-        allowed_domains = self._config.gloria_allowed_domains.split("|")
+        allowed_domains: list = json.loads(self._config.gloria_allowed_domains)
         if event.sender.split(":")[1] not in allowed_domains:
             await self.room_leave(room.room_id)
             self._logging_gateway.warning(
