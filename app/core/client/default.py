@@ -3,6 +3,7 @@
 __all__ = ["DefaultAsyncClient"]
 
 import asyncio
+import json
 import pickle
 import sys
 import traceback
@@ -368,11 +369,11 @@ class DefaultAsyncClient(AsyncClient):
         # Only process invites from allowed domains.
         # Federated servers need to be in the allowed domains list for their users
         # to initiate conversations with the assistant.
-        allowed_domains = self._config.gloria_allowed_domains.split("|")
+        allowed_domains: list = json.loads(self._config.gloria_allowed_domains)
         if event.sender.split(":")[1] not in allowed_domains:
             await self.room_leave(room.room_id)
             self._logging_gateway.warning(
-                "callbacks:invite_member_event: Rejected invitation. Reason: Domain"
+                "InviteMemberEvent: Rejected invitation. Reason: Domain"
                 f" not allowed. ({event.sender})"
             )
             return
@@ -383,11 +384,11 @@ class DefaultAsyncClient(AsyncClient):
             "true",
             "1",
         ):
-            beta_users = self._config.gloria_limited_beta_users.split("|")
+            beta_users: list = json.loads(self._config.gloria_limited_beta_users)
             if event.sender not in beta_users:
                 await self.room_leave(room.room_id)
                 self._logging_gateway.warning(
-                    "callbacks:invite_member_event: Rejected invitation. Reason:"
+                    "InviteMemberEvent: Rejected invitation. Reason:"
                     f" Non-beta user. ({event.sender})"
                 )
                 return
@@ -397,7 +398,7 @@ class DefaultAsyncClient(AsyncClient):
         if is_direct is None:
             await self.room_leave(room.room_id)
             self._logging_gateway.warning(
-                "callbacks:invite_member_event: Rejected invitation. Reason: Not direct"
+                "InviteMemberEvent: Rejected invitation. Reason: Not direct"
                 f" message. ({event.sender})"
             )
             return

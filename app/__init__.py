@@ -145,12 +145,12 @@ async def run_matrix_assistant() -> None:
 
             # Set profile name if it's not already set.
             profile = await client.get_profile()
-            agent_display_name = di.config.matrix_agent_display_name()
+            assistant_display_name = di.config.matrix_assistant_display_name()
             if (
-                agent_display_name is not None
-                and profile.displayname != agent_display_name
+                assistant_display_name is not None
+                and profile.displayname != assistant_display_name
             ):
-                await client.set_displayname(agent_display_name)
+                await client.set_displayname(assistant_display_name)
 
             # Cleanup device list and trust known devices.
             # client.cleanup_known_user_devices_list()
