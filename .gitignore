@@ -179,6 +179,9 @@ cython_debug/
 ### APPPLICATION
 hypercorn.toml
 
+app/extension/ipc_extension/*
+!app/extension/ipc_extension/.gitkeep
+
 data/storage.*
 data/.olmstore/@*
 
