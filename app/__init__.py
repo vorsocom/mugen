@@ -15,6 +15,7 @@ from app.core.contract.ct_extension import ICTExtension
 from app.core.contract.ctx_extension import ICTXExtension
 from app.core.contract.ipc_extension import IIPCExtension
 from app.core.contract.rag_extension import IRAGExtension
+from app.core.contract.rpp_extension import IRPPExtension
 from app.core.di import DIContainer
 
 from app.config import AppConfig
@@ -91,6 +92,7 @@ async def run_matrix_assistant() -> None:
         # 2. Context (CTX) extensions.
         # 3. Inter-Process Communication (IPC) extensions.
         # 4. Retrieval Augmented Generation (RAG) extensions.
+        # 5. Response Pre-Processor extensions.
         if "gloria_extension_modules" in di.config().keys():
             extensions = json.loads(di.config.gloria_extension_modules())
 
@@ -137,6 +139,14 @@ async def run_matrix_assistant() -> None:
                     rag_ext = rag_ext_class()
                     messaging_service.register_rag_extension(rag_ext)
                     logging_gateway.debug(f"Registered RAG extension: {ext}")
+
+                if "rpp_extension" in ext:
+                    rpp_ext_class = [
+                        x for x in IRPPExtension.__subclasses__() if x.__module__ == ext
+                    ][0]
+                    rpp_ext = rpp_ext_class()
+                    messaging_service.register_rpp_extension(rpp_ext)
+                    logging_gateway.debug(f"Registered RPP extension: {ext}")
 
         # We have to wait on the first sync event to perform some setup tasks.
         async def wait_on_first_sync():

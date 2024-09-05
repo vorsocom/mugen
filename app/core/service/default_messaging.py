@@ -16,6 +16,7 @@ from app.core.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.core.contract.logging_gateway import ILoggingGateway
 from app.core.contract.messaging_service import IMessagingService
 from app.core.contract.rag_extension import IRAGExtension
+from app.core.contract.rpp_extension import IRPPExtension
 from app.core.contract.user_service import IUserService
 
 CHAT_THREAD_VERSION: int = 1
@@ -32,6 +33,8 @@ class DefaultMessagingService(IMessagingService):
     _ctx_extensions: list[ICTXExtension] = []
 
     _rag_extensions: list[IRAGExtension] = []
+
+    _rpp_extensions: list[IRPPExtension] = []
 
     # pylint: disable=too-many-arguments
     def __init__(
@@ -129,28 +132,9 @@ class DefaultMessagingService(IMessagingService):
         # Save current thread first.
         self._save_chat_thread(attention_thread_key, attention_thread)
 
-        # Check for start task indicator.
-        if "[task]" in assistant_response:
-            self._logging_gateway.debug("[task] detected.")
-            await self._get_attention_thread_key(room_id, "", True, True)
-            assistant_response = assistant_response.replace("[task]", "").strip()
-            attention_thread["messages"].append({"role": "system", "content": "[task]"})
-
-        # Check for end task indicator.
-        if "[end-task]" in assistant_response:
-            self._logging_gateway.debug("[end-task] detected.")
-            # Only refresh thread if the response doesn't contain
-            # a conversational trigger.
-            trigger_hits = 0
-            for ct_ext in self._ct_extensions:
-                for trigger in ct_ext.triggers:
-                    if trigger in assistant_response:
-                        trigger_hits += 1
-
-            if trigger_hits == 0:
-                await self._get_attention_thread_key(room_id, "", True)
-            # self._logging_gateway.debug(assistant_response)
-            assistant_response = assistant_response.replace("[end-task]", "").strip()
+        # Pass the response to pre-processor extensions.
+        for rpp_ext in self._rpp_extensions:
+            assistant_response = await rpp_ext.preprocess_response(assistant_response)
 
         if assistant_response == "":
             self._logging_gateway.debug("Empty response.")
@@ -169,6 +153,8 @@ class DefaultMessagingService(IMessagingService):
         self._logging_gateway.debug(
             "Pass response to triggered services for processing."
         )
+
+        # Pass the response to conversational trigger extensions for post processing.
         tasks = []
         for ct_ext in self._ct_extensions:
             tasks.append(
@@ -194,6 +180,9 @@ class DefaultMessagingService(IMessagingService):
 
     def register_rag_extension(self, ext: IRAGExtension) -> None:
         self._rag_extensions.append(ext)
+
+    def register_rpp_extension(self, ext: IRPPExtension) -> None:
+        self._rpp_extensions.append(ext)
 
     async def _get_attention_thread_key(
         self,
