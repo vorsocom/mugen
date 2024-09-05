@@ -134,7 +134,29 @@ class DefaultMessagingService(IMessagingService):
 
         # Pass the response to pre-processor extensions.
         for rpp_ext in self._rpp_extensions:
-            assistant_response = await rpp_ext.preprocess_response(assistant_response)
+            assistant_response, task, end_task = await rpp_ext.preprocess_response(
+                assistant_response
+            )
+
+            # If no task or end task is detected,
+            # we have nothing else to do.
+            if not (task or end_task):
+                continue
+
+            # We must determine if the response contains
+            # a conversational trigger before we attempt
+            # to refresh the chat thread.
+            trigger_hits = 0
+            if end_task:
+                for ct_ext in self._ct_extensions:
+                    for trigger in ct_ext.triggers:
+                        if trigger in assistant_response:
+                            trigger_hits += 1
+
+            # Only attempt the refresh if a conversational trigger was not
+            # detected.
+            if not trigger_hits > 0:
+                await self._get_attention_thread_key(room_id, "", True, task)
 
         if assistant_response == "":
             self._logging_gateway.debug("Empty response.")
