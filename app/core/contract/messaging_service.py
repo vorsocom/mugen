@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from app.core.contract.ct_extension import ICTExtension
 from app.core.contract.ctx_extension import ICTXExtension
 from app.core.contract.rag_extension import IRAGExtension
+from app.core.contract.rpp_extension import IRPPExtension
 
 
 class IMessagingService(ABC):
@@ -32,3 +33,7 @@ class IMessagingService(ABC):
     @abstractmethod
     def register_rag_extension(self, ext: IRAGExtension) -> None:
         """Register a Retrieval Augmented Generation (RAG) extension."""
+
+    @abstractmethod
+    def register_rpp_extension(self, ext: IRPPExtension) -> None:
+        """Register a Response Pre-Processor (RPP) extension."""
