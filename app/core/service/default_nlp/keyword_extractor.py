@@ -25,5 +25,5 @@ class CustomKeywordExtractor(KeywordExtractor):
         )
 
         # Override stopword set to allow specified words.
-        allowed_stopwords = ["value"]
+        allowed_stopwords = ["courses", "value"]
         self.stopword_set = [x for x in self.stopword_set if x not in allowed_stopwords]
