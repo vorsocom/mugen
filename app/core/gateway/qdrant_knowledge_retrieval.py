@@ -38,12 +38,46 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
         collection_name: str,
         dataset: str,
         search_term: str,
+        date_from: str = None,
+        date_to: str = None,
         strategy: str = "must",
     ) -> list:
         self._logging_gateway.debug(
             f"QdrantKnowledgeRetrievalGateway.search_similar: search term {search_term}"
         )
         conditions = []
+
+        # Add date constraints.
+        if date_from and date_to:
+            conditions.append(
+                models.FieldCondition(
+                    key="date",
+                    range=models.DatetimeRange(
+                        gte=date_from,
+                        lte=date_to,
+                    ),
+                )
+            )
+        elif date_from and not date_to:
+            conditions.append(
+                models.FieldCondition(
+                    key="date",
+                    range=models.DatetimeRange(
+                        gte=date_from,
+                    ),
+                )
+            )
+        elif date_to and not date_from:
+            conditions.append(
+                models.FieldCondition(
+                    key="date",
+                    range=models.DatetimeRange(
+                        lte=date_to,
+                    ),
+                )
+            )
+
+        # Add keyword conditions.
         keywords = self._nlp_service.get_keywords(search_term)
         self._logging_gateway.debug(
             f"QdrantKnowledgeRetrievalGateway.search_similar: keywords {keywords}"
