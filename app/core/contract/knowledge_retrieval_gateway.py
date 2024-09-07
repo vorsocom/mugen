@@ -14,10 +14,11 @@ class IKnowledgeRetrievalGateway(ABC):
     async def search_similar(
         self,
         collection_name: str,
-        dataset: str,
         search_term: str,
+        dataset: str,
         date_from: str,
         date_to: str,
+        limit: int,
         strategy: str,
     ) -> list:
         """Search for documents in the knowledge base containing similar strings."""

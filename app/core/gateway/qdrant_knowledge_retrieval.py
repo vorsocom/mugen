@@ -33,19 +33,32 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
         self._logging_gateway = logging_gateway
         self._nlp_service = nlp_service
 
+    # pylint: disable=too-many-arguments
     async def search_similar(
         self,
         collection_name: str,
-        dataset: str,
         search_term: str,
+        dataset: str = None,
         date_from: str = None,
         date_to: str = None,
+        limit: int = 10,
         strategy: str = "must",
     ) -> list:
         self._logging_gateway.debug(
             f"QdrantKnowledgeRetrievalGateway.search_similar: search term {search_term}"
         )
         conditions = []
+        dataset_filter = None
+        # Restrict to dataset if specified.
+        if dataset:
+            dataset_filter = [
+                models.FieldCondition(
+                    key="dataset",
+                    match=models.MatchValue(value=dataset),
+                )
+            ]
+            if strategy == "must":
+                conditions += dataset_filter
 
         # Add date constraints.
         if date_from and date_to:
@@ -93,28 +106,17 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
                     collection_name=collection_name,
                     query_vector=encoder.encode(search_term).tolist(),
                     query_filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="dataset", match=models.MatchValue(value=dataset)
-                            )
-                        ],
+                        must=dataset_filter,
                         should=conditions,
                     ),
-                    limit=10,
+                    limit=limit,
                 )
 
             return await self._client.search(
                 collection_name=collection_name,
                 query_vector=encoder.encode(search_term).tolist(),
-                query_filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="dataset", match=models.MatchValue(value=dataset)
-                        )
-                    ]
-                    + conditions,
-                ),
-                limit=10,
+                query_filter=models.Filter(must=conditions),
+                limit=limit,
             )
         except ResponseHandlingException:
             self._logging_gateway.warning(
