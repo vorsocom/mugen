@@ -1,13 +1,13 @@
 {
-    "python.args": [
-        "--init-hook",
-        "import sys; sys.path.insert(0, './')"
-    ],
     "[python]": {
         "editor.defaultFormatter": "ms-python.black-formatter",
         "editor.formatOnSave": true,
-        "editor.rulers": [88]
+        "editor.rulers": [88],
     },
+    "pylint.args": [
+        "--init-hook",
+        "import sys; sys.path.insert(0, './')",
+    ],
     "black-formatter.args": [
         "--preview",
         "--enable-unstable-feature",
@@ -16,7 +16,7 @@
         "88",
     ],
     "files.exclude": {
-        "**/__pycache__": true
+        "**/__pycache__": true,
     },
-    "python.analysis.typeCheckingMode": "off"
+    "python.analysis.typeCheckingMode": "off",
 }
