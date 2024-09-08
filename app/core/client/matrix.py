@@ -1,6 +1,6 @@
 """Provides an implementation of the nio.AsyncClient."""
 
-__all__ = ["DefaultAsyncClient"]
+__all__ = ["DefaultMatrixClient"]
 
 import asyncio
 import json
@@ -48,7 +48,7 @@ KNOWN_DEVICES_LIST_KEY: str = "known_devices_list"
 
 
 # pylint: disable=too-many-instance-attributes
-class DefaultAsyncClient(AsyncClient):
+class DefaultMatrixClient(AsyncClient):
     """A custom implementation of nio.AsyncClient."""
 
     _ipc_callback: Coroutine
@@ -103,6 +103,7 @@ class DefaultAsyncClient(AsyncClient):
 
     async def __aenter__(self) -> None:
         """Initialisation."""
+        self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
         if self._keyval_storage_gateway.get("client_access_token") is None:
             # Load password and device name from storage.
             pw = self._config.matrix_client_password
@@ -138,6 +139,7 @@ class DefaultAsyncClient(AsyncClient):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Finalisation."""
+        self._logging_gateway.debug("DefaultMatrixClient.__aexit__")
         try:
             await self.client_session.close()
         except AttributeError:
@@ -278,6 +280,7 @@ class DefaultAsyncClient(AsyncClient):
                 for task in tasks:
                     task.cancel()
 
+                self._logging_gateway.debug("Matrix sync_forever loop exited.")
                 break
 
     def cleanup_known_user_devices_list(self) -> None:

@@ -19,6 +19,7 @@ from app.core.contract.logging_gateway import ILoggingGateway
 from app.core.contract.messaging_service import IMessagingService
 from app.core.contract.nlp_service import INLPService
 from app.core.contract.user_service import IUserService
+from app.core.contract.whatsapp_client import IWhatsAppClient
 
 default_modules = SimpleNamespace(**json.loads(os.getenv("GLORIA_DEFAULT_MODULES")))
 
@@ -46,10 +47,15 @@ user_service_class = IUserService.__subclasses__()[0]
 import_module(name=default_modules.messaging_service)
 messaging_service_class = IMessagingService.__subclasses__()[0]
 
-import_module(name=default_modules.client)
-client_class = AsyncClient.__subclasses__()[0]
+import_module(name=default_modules.matrix_client)
+matrix_client_class = AsyncClient.__subclasses__()[0]
 
-ipc_queue = asyncio.Queue()
+import_module(name=default_modules.whatsapp_client)
+whatsapp_client_class = IWhatsAppClient.__subclasses__()[0]
+
+matrix_ipc_queue = asyncio.Queue()
+
+whatsapp_ipc_queue = asyncio.Queue()
 
 
 # pylint: disable=c-extension-no-member
@@ -59,7 +65,9 @@ class DIContainer(containers.DeclarativeContainer):
 
     config = providers.Configuration()
 
-    ipc_queue = providers.Object(ipc_queue)
+    matrix_ipc_queue = providers.Object(matrix_ipc_queue)
+
+    whatsapp_ipc_queue = providers.Object(whatsapp_ipc_queue)
 
     logging_gateway = providers.Singleton(
         logging_gateway_class,
@@ -111,10 +119,21 @@ class DIContainer(containers.DeclarativeContainer):
         user_service=user_service,
     )
 
-    client = providers.Singleton(
-        client_class,
+    matrix_client = providers.Singleton(
+        matrix_client_class,
         di_config=config,
-        ipc_queue=ipc_queue,
+        ipc_queue=matrix_ipc_queue,
+        ipc_service=ipc_service,
+        keyval_storage_gateway=keyval_storage_gateway,
+        logging_gateway=logging_gateway,
+        messaging_service=messaging_service,
+        user_service=user_service,
+    )
+
+    whatsapp_client = providers.Singleton(
+        whatsapp_client_class,
+        config=config,
+        ipc_queue=whatsapp_ipc_queue,
         ipc_service=ipc_service,
         keyval_storage_gateway=keyval_storage_gateway,
         logging_gateway=logging_gateway,
