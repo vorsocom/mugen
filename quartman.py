@@ -10,7 +10,7 @@ __version__ = "0.20.0"
 
 import asyncio
 
-from app import create_quart_app, run_matrix_assistant
+from app import create_quart_app, run_assistants
 
 # Create Quart app.
 app = create_quart_app()
@@ -20,4 +20,4 @@ app = create_quart_app()
 async def startup():
     """Initialise matrix-nio using the Quart event loop."""
     loop = asyncio.get_event_loop()
-    loop.create_task(run_matrix_assistant())
+    loop.create_task(run_assistants())

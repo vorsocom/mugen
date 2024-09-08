@@ -12,7 +12,12 @@ from app.core.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGat
 from app.core.contract.logging_gateway import ILoggingGateway
 from app.core.contract.nlp_service import INLPService
 
-encoder = SentenceTransformer("all-mpnet-base-v2")
+encoder = SentenceTransformer(
+    model_name_or_path="all-mpnet-base-v2",
+    tokenizer_kwargs={
+        "clean_up_tokenization_spaces": False,
+    },
+)
 
 
 class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
