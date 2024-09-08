@@ -1,3 +1,3 @@
-# Gloria v0.20.0
+# Gloria v0.21.0
 
-Gloria is an AI Assistant framework developed for the Matrix/Synapse/Element stack.
+Gloria is a microframework that enables rapid deployment of AI assistants to popular instant messaging platforms.
