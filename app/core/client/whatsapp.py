@@ -73,7 +73,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         await self._client_session.close()
         await asyncio.sleep(0.250)
 
-    async def listen_forever(self) -> None:
+    async def listen_forever(self, loop_sleep_time: float = 0.01) -> None:
         # Loop until exit.
         while not self._stop_listening:
             try:
@@ -82,7 +82,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                     asyncio.create_task(self._ipc_service.handle_ipc_request(payload))
                     self._ipc_queue.task_done()
 
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(loop_sleep_time)
             except asyncio.exceptions.CancelledError:
                 self._logging_gateway.debug("WhatsApp listen_forever loop exited.")
                 break
