@@ -9,7 +9,7 @@ class IWhatsAppClient(ABC):
     """An ABC for WhatsApp clients."""
 
     @abstractmethod
-    async def listen_forever(self) -> None:
+    async def listen_forever(self, loop_sleep_time: float) -> None:
         """Listen for events from the WhatsApp Cloud API."""
 
     @abstractmethod
