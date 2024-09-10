@@ -1,0 +1,122 @@
+"""Provides an implementation of IIPCExtension for WhatsApp Cloud API support."""
+
+__all__ = ["WhatsAppWACAPIIPCExtension"]
+
+import json
+from types import SimpleNamespace
+
+from dependency_injector.wiring import inject, Provide
+
+from app.core.contract.ipc_extension import IIPCExtension
+from app.core.contract.logging_gateway import ILoggingGateway
+from app.core.contract.messaging_service import IMessagingService
+from app.core.contract.user_service import IUserService
+from app.core.contract.whatsapp_client import IWhatsAppClient
+from app.core.di import DIContainer
+
+
+class WhatsAppWACAPIIPCExtension(IIPCExtension):
+    """An implementation of IIPCExtension for WhatsApp Cloud API support."""
+
+    # pylint: disable=too-many-arguments
+    @inject
+    def __init__(
+        self,
+        config: dict = Provide[DIContainer.config],
+        logging_gateway: ILoggingGateway = Provide[DIContainer.logging_gateway],
+        messaging_service: IMessagingService = Provide[DIContainer.messaging_service],
+        user_service: IUserService = Provide[DIContainer.user_service],
+        whatsapp_client: IWhatsAppClient = Provide[DIContainer.whatsapp_client],
+    ) -> None:
+        self._client = whatsapp_client
+        self._config = SimpleNamespace(**config)
+        self._logging_gateway = logging_gateway
+        self._messaging_service = messaging_service
+        self._user_service = user_service
+
+    @property
+    def ipc_commands(self) -> list[str]:
+        return [
+            "whatsapp_wacapi_event",
+        ]
+
+    async def process_ipc_command(self, payload: dict) -> None:
+        self._logging_gateway.debug(
+            f"WhatsAppWACAPIIPCExtension: Executing command: {payload['command']}"
+        )
+        match payload["command"]:
+            case "whatsapp_wacapi_event":
+                await self._wacapi_event(payload)
+                return
+            case _:
+                ...
+
+    async def _wacapi_event(self, payload: dict) -> None:
+        """Process WhatsApp Cloud API event."""
+        # Get message data.
+        event = payload["data"]
+        if "messages" in event["entry"][0]["changes"][0]["value"].keys():
+            contact = event["entry"][0]["changes"][0]["value"]["contacts"][0]
+            message = event["entry"][0]["changes"][0]["value"]["messages"][0]
+            sender = contact["wa_id"]
+
+            if self._config.gloria_limited_beta.lower() in (
+                "true",
+                "1",
+            ):
+                beta_users: list = json.loads(self._config.whatsapp_limited_beta_users)
+                if sender not in beta_users:
+                    await self._client.send_text_message(
+                        message=(
+                            "This application is in limted beta and you are not on the"
+                            " beta list."
+                        ),
+                        recipient=sender,
+                    )
+                    await payload["response_queue"].put({"response": "OK"})
+                    return
+
+            # Add user to list of known users if required.
+            known_users = self._user_service.get_known_users_list()
+            if sender not in known_users.keys():
+                self._logging_gateway.debug(f"New WhatsApp contact: {sender}")
+                self._user_service.add_known_user(
+                    sender,
+                    contact["profile"]["name"],
+                    sender,
+                )
+
+            ##!! Only process text messages for now.
+            match message["type"]:
+                case "text":
+                    # Allow messaging service to process the message.
+                    response = await self._messaging_service.handle_text_message(
+                        room_id=sender,
+                        sender=sender,
+                        content=message["text"]["body"],
+                    )
+
+                    # Send assistant response to user.
+                    if response not in ("", None):
+                        self._logging_gateway.debug("Send response to user.")
+                        await self._client.send_text_message(
+                            message=response,
+                            recipient=sender,
+                        )
+                case _:
+                    self._logging_gateway.debug(
+                        f"Unsupported message type: {message['type']}."
+                    )
+                    await self._client.send_text_message(
+                        message=(
+                            "This platform only supports text-based communication at"
+                            " the moment."
+                        ),
+                        recipient=sender,
+                        reply_to=message["id"],
+                    )
+        elif "statuses" in event["entry"][0]["changes"][0]["value"].keys():
+            # Process message sent, delivered, and read statuses.
+            pass
+
+        await payload["response_queue"].put({"response": "OK"})
