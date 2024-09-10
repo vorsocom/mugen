@@ -387,7 +387,7 @@ class DefaultMatrixClient(AsyncClient):
             "true",
             "1",
         ):
-            beta_users: list = json.loads(self._config.gloria_limited_beta_users)
+            beta_users: list = json.loads(self._config.matrix_limited_beta_users)
             if event.sender not in beta_users:
                 await self.room_leave(room.room_id)
                 self._logging_gateway.warning(
