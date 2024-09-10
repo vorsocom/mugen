@@ -31,7 +31,7 @@ async def matrix_index():
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
     while response_queue.empty():
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     # Get the response from the response queue.
     response = await response_queue.get()
@@ -66,7 +66,7 @@ async def matrix_cron():
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
     while response_queue.empty():
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     # Get the response from the response queue.
     response = await response_queue.get()
@@ -94,14 +94,14 @@ async def whatsapp_index():
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
     while response_queue.empty():
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     # Get the response from the response queue.
     response = await response_queue.get()
     return {"status": response["response"]}
 
 
-@api_bp.get("/whatsapp/wcapi/webhook")
+@api_bp.get("/whatsapp/wacapi/webhook")
 @whatsapp_platform_required
 async def whatsapp_wcapi_verification():
     """Whatsapp Cloud API verification."""
@@ -114,7 +114,7 @@ async def whatsapp_wcapi_verification():
     abort(400)
 
 
-@api_bp.post("/whatsapp/wcapi/webhook")
+@api_bp.post("/whatsapp/wacapi/webhook")
 @whatsapp_platform_required
 async def whatsapp_wcapi_webhook():
     """Respond to Whatsapp Cloud API events."""
@@ -131,7 +131,7 @@ async def whatsapp_wcapi_webhook():
     await ipc_queue.put(
         {
             "response_queue": response_queue,
-            "command": "whatsapp_wcapi_event",
+            "command": "whatsapp_wacapi_event",
             "data": data,
         }
     )
@@ -139,7 +139,7 @@ async def whatsapp_wcapi_webhook():
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
     while response_queue.empty():
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     # Get the response from the response queue.
     response = await response_queue.get()
@@ -174,7 +174,7 @@ async def whatsapp_webhook():
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
     while response_queue.empty():
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     # Get the response from the response queue.
     response = await response_queue.get()
