@@ -22,10 +22,13 @@ class DefaultIPCService(IIPCService):
         self._config = SimpleNamespace(**config)
         self._logging_gateway = logging_gateway
 
-    async def handle_ipc_request(self, ipc_payload: dict) -> None:
+    async def handle_ipc_request(self, platform: str, ipc_payload: dict) -> None:
         # Process by IPC extensions.
         hits: int = 0
         for ipc_ext in self._ipc_extensions:
+            if ipc_ext.platforms != [] and platform not in ipc_ext.platforms:
+                continue
+
             if ipc_payload["command"] in ipc_ext.ipc_commands:
                 await ipc_ext.process_ipc_command(ipc_payload)
                 hits += 1

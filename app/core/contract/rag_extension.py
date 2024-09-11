@@ -13,6 +13,11 @@ class IRAGExtension(ABC):
     def cache_key(self) -> str:
         """Get key used to access the provider cache."""
 
+    @property
+    @abstractmethod
+    def platforms(self) -> list[str]:
+        """Get the platform that the extension is targeting."""
+
     @abstractmethod
     async def retrieve(self, sender: str, message: str) -> None:
         """Perform knowledge retrieval."""

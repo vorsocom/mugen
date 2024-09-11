@@ -16,7 +16,7 @@ class IMHExtension(ABC):
 
     @property
     @abstractmethod
-    def platform(self) -> str:
+    def platforms(self) -> list[str]:
         """Get the platform that the extension is targeting."""
 
     @abstractmethod

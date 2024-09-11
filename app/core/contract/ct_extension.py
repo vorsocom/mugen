@@ -10,8 +10,13 @@ class ICTExtension(ABC):
 
     @property
     @abstractmethod
+    def platforms(self) -> list[str]:
+        """Get the platform that the extension is targeting."""
+
+    @property
+    @abstractmethod
     def triggers(self) -> list[str]:
-        """Get the list of triggers that activat the service provider."""
+        """Get the list of triggers that activate the service provider."""
 
     @abstractmethod
     def get_context(self, user_id: str) -> list[dict]:

@@ -13,6 +13,11 @@ class IIPCExtension(ABC):
     def ipc_commands(self) -> list[str]:
         """Get the list of ipc commands processed by this provider.."""
 
+    @property
+    @abstractmethod
+    def platforms(self) -> list[str]:
+        """Get the platform that the extension is targeting."""
+
     @abstractmethod
     async def process_ipc_command(self, payload: dict) -> None:
         """Process an IPC command."""
