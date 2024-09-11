@@ -2,6 +2,7 @@
 
 __all__ = ["WhatsAppWACAPIIPCExtension"]
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ from dependency_injector.wiring import inject, Provide
 from app.core.contract.ipc_extension import IIPCExtension
 from app.core.contract.logging_gateway import ILoggingGateway
 from app.core.contract.messaging_service import IMessagingService
+from app.core.contract.mh_extension import IMHExtension
 from app.core.contract.user_service import IUserService
 from app.core.contract.whatsapp_client import IWhatsAppClient
 from app.core.di import DIContainer
@@ -113,17 +115,38 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                 "Send response to user successful."
                             )
                 case _:
-                    self._logging_gateway.debug(
-                        f"Unsupported message type: {message['type']}."
+                    hits: int = 0
+                    message_handlers: list[IMHExtension] = (
+                        self._messaging_service.mh_extensions
                     )
-                    await self._client.send_text_message(
-                        message=(
-                            "This platform only supports text-based communication at"
-                            " the moment."
-                        ),
-                        recipient=sender,
-                        reply_to=message["id"],
-                    )
+                    for handler in message_handlers:
+                        if (
+                            handler.platform == "whatsapp"
+                            and message["type"] in handler.message_types
+                        ):
+                            await asyncio.gather(
+                                asyncio.create_task(
+                                    handler.handle_message(
+                                        room_id=sender,
+                                        sender=sender,
+                                        message=message,
+                                    )
+                                )
+                            )
+                            hits += 1
+
+                    if hits == 0:
+                        self._logging_gateway.debug(
+                            f"Unsupported message type: {message['type']}."
+                        )
+                        await self._client.send_text_message(
+                            message=(
+                                "This platform only supports text-based communication"
+                                " at the moment."
+                            ),
+                            recipient=sender,
+                            reply_to=message["id"],
+                        )
         elif "statuses" in event["entry"][0]["changes"][0]["value"].keys():
             # Process message sent, delivered, and read statuses.
             pass

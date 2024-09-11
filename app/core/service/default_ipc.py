@@ -4,8 +4,6 @@ __all__ = ["DefaultIPCService"]
 
 from types import SimpleNamespace
 
-import asyncio
-
 from app.core.contract.ipc_extension import IIPCExtension
 from app.core.contract.ipc_service import IIPCService
 from app.core.contract.logging_gateway import ILoggingGateway

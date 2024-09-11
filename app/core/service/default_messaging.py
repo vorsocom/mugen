@@ -15,6 +15,7 @@ from app.core.contract.ctx_extension import ICTXExtension
 from app.core.contract.keyval_storage_gateway import IKeyValStorageGateway
 from app.core.contract.logging_gateway import ILoggingGateway
 from app.core.contract.messaging_service import IMessagingService
+from app.core.contract.mh_extension import IMHExtension
 from app.core.contract.rag_extension import IRAGExtension
 from app.core.contract.rpp_extension import IRPPExtension
 from app.core.contract.user_service import IUserService
@@ -31,6 +32,8 @@ class DefaultMessagingService(IMessagingService):
     _ct_extensions: list[ICTExtension] = []
 
     _ctx_extensions: list[ICTXExtension] = []
+
+    _mh_extensions: list[IMHExtension] = []
 
     _rag_extensions: list[IRAGExtension] = []
 
@@ -53,6 +56,7 @@ class DefaultMessagingService(IMessagingService):
 
     # pylint: disable=too-many-branches
     # pylint: disable=too-many-statements
+    # pylint: disable=too-many-locals
     async def handle_text_message(
         self,
         room_id: str,
@@ -194,11 +198,18 @@ class DefaultMessagingService(IMessagingService):
 
         return assistant_response
 
+    @property
+    def mh_extensions(self) -> list[IMHExtension]:
+        return self._mh_extensions
+
     def register_ct_extension(self, ext: ICTExtension) -> None:
         self._ct_extensions.append(ext)
 
     def register_ctx_extension(self, ext: ICTXExtension) -> None:
         self._ctx_extensions.append(ext)
+
+    def register_mh_extension(self, ext: IMHExtension) -> None:
+        self._mh_extensions.append(ext)
 
     def register_rag_extension(self, ext: IRAGExtension) -> None:
         self._rag_extensions.append(ext)

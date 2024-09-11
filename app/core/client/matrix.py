@@ -25,6 +25,11 @@ from nio import (
     RoomCreateEvent,
     RoomKeyEvent,
     RoomKeyRequest,
+    RoomMessage,
+    RoomEncryptedAudio,
+    RoomEncryptedFile,
+    RoomEncryptedImage,
+    RoomEncryptedVideo,
     RoomMessageText,
     RoomMemberEvent,
     SendRetryError,
@@ -89,6 +94,7 @@ class DefaultMatrixClient(AsyncClient):
         self.add_event_callback(self._cb_megolm_event, MegolmEvent)
         self.add_event_callback(self._cb_room_create_event, RoomCreateEvent)
         self.add_event_callback(self._cb_room_member_event, RoomMemberEvent)
+        self.add_event_callback(self._cb_room_message, RoomMessage)
         self.add_event_callback(self._cb_room_message_text, RoomMessageText)
 
         # To-device Events.
@@ -447,16 +453,14 @@ class DefaultMatrixClient(AsyncClient):
     ) -> None:
         """Handle RoomKeyRequests."""
 
-    async def _cb_room_message_text(
-        self, room: MatrixRoom, message: RoomMessageText
-    ) -> None:
-        """Handle RoomMessageTexts."""
+    async def _validate_message(self, room: MatrixRoom, message) -> bool:
+        """Validate an incoming message"""
         # Only process messages from direct chats for now.
         # And ignore the assistant's messages, otherwise it
         # will create a message loop.
         is_direct = await self._is_direct_message(room.room_id)
         if message.sender == self.user_id or not is_direct:
-            return
+            return False
 
         # Verify user devices.
         self.verify_user_devices(message.sender)
@@ -464,6 +468,102 @@ class DefaultMatrixClient(AsyncClient):
         # Set the room read marker to indicate that the assistant has read the
         # message.
         await self.room_read_markers(room.room_id, message.event_id, message.event_id)
+
+        return True
+
+    async def _cb_room_message(self, room: MatrixRoom, message: RoomMessage) -> None:
+        """Handle RoomMessage."""
+        # This callback is not for text messages.
+        if isinstance(message, RoomMessageText):
+            return
+
+        # Validate message before proceeding.
+        if not await self._validate_message(room, message):
+            return
+
+        self._logging_gateway.debug(type(message))
+
+        hits: int = 0
+        message_handlers = self._messaging_service.mh_extensions
+        for handler in message_handlers:
+            if handler.platform == "matrix":
+                # Handle audio messages.
+                if (
+                    isinstance(message, RoomEncryptedAudio)
+                    and "audio" in handler.message_types
+                ):
+                    await asyncio.gather(
+                        asyncio.create_task(
+                            handler.handle_message(
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message=message,
+                            )
+                        )
+                    )
+                    hits += 1
+
+                # Handle file messages.
+                if (
+                    isinstance(message, RoomEncryptedFile)
+                    and "file" in handler.message_types
+                ):
+                    await asyncio.gather(
+                        asyncio.create_task(
+                            handler.handle_message(
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message=message,
+                            )
+                        )
+                    )
+                    hits += 1
+
+                # Handle image messages.
+                if (
+                    isinstance(message, RoomEncryptedImage)
+                    and "image" in handler.message_types
+                ):
+                    await asyncio.gather(
+                        asyncio.create_task(
+                            handler.handle_message(
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message=message,
+                            )
+                        )
+                    )
+                    hits += 1
+
+                # Handle video messages.
+                if (
+                    isinstance(message, RoomEncryptedVideo)
+                    and "video" in handler.message_types
+                ):
+                    await asyncio.gather(
+                        asyncio.create_task(
+                            handler.handle_message(
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message=message,
+                            )
+                        )
+                    )
+                    hits += 1
+
+        if hits == 0:
+            await self._send_text_message(
+                room_id=room.room_id,
+                body="Unsupported message type.",
+            )
+
+    async def _cb_room_message_text(
+        self, room: MatrixRoom, message: RoomMessageText
+    ) -> None:
+        """Handle RoomMessageText."""
+        # Validate message before proceeding.
+        if not await self._validate_message(room, message):
+            return
 
         # Allow the messaging service to process the message.
         response = await self._messaging_service.handle_text_message(
@@ -475,20 +575,7 @@ class DefaultMatrixClient(AsyncClient):
         if response != "":
             # Send assistant response to the user.
             self._logging_gateway.debug("Send response to user.")
-            try:
-                await self.room_send(
-                    room_id=room.room_id,
-                    message_type="m.room.message",
-                    content={
-                        "msgtype": "m.text",
-                        "body": response,
-                    },
-                )
-            except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-                self._logging_gateway.warning(
-                    "matrix_platform_gateway: Error sending text message."
-                )
-                traceback.print_exc()
+            await self._send_text_message(room_id=room.room_id, body=response)
 
     async def _cb_room_member_event(
         self, _room: MatrixRoom, _event: RoomMemberEvent
@@ -518,3 +605,19 @@ class DefaultMatrixClient(AsyncClient):
             payload = await self._ipc_queue.get()
             asyncio.create_task(self._ipc_service.handle_ipc_request(payload))
             self._ipc_queue.task_done()
+
+    async def _send_text_message(self, room_id: str, body: str) -> None:
+        try:
+            await self.room_send(
+                room_id=room_id,
+                message_type="m.room.message",
+                content={
+                    "msgtype": "m.text",
+                    "body": body,
+                },
+            )
+        except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
+            self._logging_gateway.warning(
+                "DefaultMatrixClient: Error sending text message."
+            )
+            traceback.print_exc()
