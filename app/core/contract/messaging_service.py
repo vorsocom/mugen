@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 
 from app.core.contract.ct_extension import ICTExtension
 from app.core.contract.ctx_extension import ICTXExtension
+from app.core.contract.mh_extension import IMHExtension
 from app.core.contract.rag_extension import IRAGExtension
 from app.core.contract.rpp_extension import IRPPExtension
 
@@ -22,6 +23,11 @@ class IMessagingService(ABC):
     ) -> str | None:
         """Handle a text message from a chat."""
 
+    @property
+    @abstractmethod
+    def mh_extensions(self) -> list[IMHExtension]:
+        """Get the list of Message Handler extensions registered with the service."""
+
     @abstractmethod
     def register_ct_extension(self, ext: ICTExtension) -> None:
         """Register a Coversational Trigger (CT) extension."""
@@ -29,6 +35,10 @@ class IMessagingService(ABC):
     @abstractmethod
     def register_ctx_extension(self, ext: ICTXExtension) -> None:
         """Register a Context (CTX) extension."""
+
+    @abstractmethod
+    def register_mh_extension(self, ext: IMHExtension) -> None:
+        """Register a Message Handler (MH) extension."""
 
     @abstractmethod
     def register_rag_extension(self, ext: IRAGExtension) -> None:

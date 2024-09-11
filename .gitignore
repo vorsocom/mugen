@@ -188,6 +188,9 @@ app/extension/ctx_extension/*
 app/extension/ipc_extension/*
 !app/extension/ipc_extension/.gitkeep
 
+app/extension/mh_extension/*
+!app/extension/mh_extension/.gitkeep
+
 app/extension/rag_extension/*
 !app/extension/rag_extension/.gitkeep
 
