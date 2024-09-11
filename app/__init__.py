@@ -203,9 +203,8 @@ async def run_matrix_assistant() -> None:
                 asyncio.create_task(wait_on_first_sync()),
                 asyncio.create_task(
                     matrix_client.sync_forever(
-                        loop_sleep_time=10,
                         since=matrix_client.sync_token,
-                        timeout=0,
+                        timeout=100,
                         full_state=True,
                         set_presence="online",
                     )
