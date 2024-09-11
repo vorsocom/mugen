@@ -99,10 +99,19 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                     # Send assistant response to user.
                     if response not in ("", None):
                         self._logging_gateway.debug("Send response to user.")
-                        await self._client.send_text_message(
+                        send = await self._client.send_text_message(
                             message=response,
                             recipient=sender,
                         )
+                        data: dict = json.loads(send)
+
+                        if "error" in data.keys():
+                            self._logging_gateway.error("Send response to user failed.")
+                            self._logging_gateway.error(data["error"])
+                        else:
+                            self._logging_gateway.debug(
+                                "Send response to user successful."
+                            )
                 case _:
                     self._logging_gateway.debug(
                         f"Unsupported message type: {message['type']}."
