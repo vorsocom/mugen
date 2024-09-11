@@ -59,6 +59,7 @@ class DefaultMessagingService(IMessagingService):
     # pylint: disable=too-many-locals
     async def handle_text_message(
         self,
+        platform: str,
         room_id: str,
         sender: str,
         content: str,
@@ -69,6 +70,11 @@ class DefaultMessagingService(IMessagingService):
 
             # Clear RAG caches.
             for rag_ext in self._rag_extensions:
+                # Filter extensions that don't support the
+                # calling platform.
+                if not self._platform_supported(platform, rag_ext):
+                    continue
+
                 if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
                     self._keyval_storage_gateway.remove(rag_ext.cache_key)
             return "PUC executed."
@@ -97,7 +103,7 @@ class DefaultMessagingService(IMessagingService):
         completion_context = []
 
         # Add system context to completion context.
-        completion_context += self._get_system_context(sender)
+        completion_context += self._get_system_context(platform, sender)
 
         # Add chat history to completion context.
         attention_thread["messages"].append({"role": "user", "content": content})
@@ -107,6 +113,11 @@ class DefaultMessagingService(IMessagingService):
         # If the user message did not trigger an RAG queries, the information from
         # previous successful queries will still be cached.
         for rag_ext in self._rag_extensions:
+            # Filter extensions that don't support the
+            # calling platform.
+            if not self._platform_supported(platform, rag_ext):
+                continue
+
             await rag_ext.retrieve(sender, content)
             if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
                 rp_cache = pickle.loads(
@@ -138,6 +149,11 @@ class DefaultMessagingService(IMessagingService):
 
         # Pass the response to pre-processor extensions.
         for rpp_ext in self._rpp_extensions:
+            # Filter extensions that don't support the
+            # calling platform.
+            if not self._platform_supported(platform, rpp_ext):
+                continue
+
             assistant_response, task, end_task = await rpp_ext.preprocess_response(
                 assistant_response
             )
@@ -153,6 +169,11 @@ class DefaultMessagingService(IMessagingService):
             trigger_hits = 0
             if end_task:
                 for ct_ext in self._ct_extensions:
+                    # Filter extensions that don't support the
+                    # calling platform.
+                    if not self._platform_supported(platform, ct_ext):
+                        continue
+
                     for trigger in ct_ext.triggers:
                         if trigger in assistant_response:
                             trigger_hits += 1
@@ -183,6 +204,11 @@ class DefaultMessagingService(IMessagingService):
         # Pass the response to conversational trigger extensions for post processing.
         tasks = []
         for ct_ext in self._ct_extensions:
+            # Filter extensions that don't support the
+            # calling platform.
+            if not self._platform_supported(platform, ct_ext):
+                continue
+
             tasks.append(
                 asyncio.create_task(
                     ct_ext.process_message(
@@ -306,7 +332,7 @@ class DefaultMessagingService(IMessagingService):
         )
         return key
 
-    def _get_system_context(self, sender: str) -> list[dict]:
+    def _get_system_context(self, platform: str, sender: str) -> list[dict]:
         """Return a list of system messages to add context to user message."""
         context = []
 
@@ -321,13 +347,30 @@ class DefaultMessagingService(IMessagingService):
 
         # Append information from CTX extensions to context.
         for ctx_ext in self._ctx_extensions:
+            # Filter extensions that don't support the
+            # calling platform.
+            if not self._platform_supported(platform, ctx_ext):
+                continue
+
             context += ctx_ext.get_context(sender)
 
         # Append information from CT extensions to context.
         for ct_ext in self._ct_extensions:
+            # Filter extensions that don't support the
+            # calling platform.
+            if not self._platform_supported(platform, ct_ext):
+                continue
+
             context += ct_ext.get_context(sender)
 
         return context
+
+    def _platform_supported(self, platform: str, ext) -> bool:
+        """Filter extensions that don't support the calling platform."""
+        if ext.platforms == []:
+            return True
+
+        return platform in ext.platforms
 
     def _save_chat_thread(self, key: str, thread: dict) -> None:
         """Save an attention thread."""

@@ -11,7 +11,7 @@ class IIPCService(ABC):
     """An ABC for IPC services."""
 
     @abstractmethod
-    async def handle_ipc_request(self, ipc_payload: dict) -> None:
+    async def handle_ipc_request(self, platform: str, ipc_payload: dict) -> None:
         """Handle an IPC request from another application."""
 
     @abstractmethod

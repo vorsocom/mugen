@@ -481,12 +481,10 @@ class DefaultMatrixClient(AsyncClient):
         if not await self._validate_message(room, message):
             return
 
-        self._logging_gateway.debug(type(message))
-
         hits: int = 0
         message_handlers = self._messaging_service.mh_extensions
         for handler in message_handlers:
-            if handler.platform == "matrix":
+            if handler.platforms == [] or "matrix" in handler.platforms:
                 # Handle audio messages.
                 if (
                     isinstance(message, RoomEncryptedAudio)
@@ -567,6 +565,7 @@ class DefaultMatrixClient(AsyncClient):
 
         # Allow the messaging service to process the message.
         response = await self._messaging_service.handle_text_message(
+            "matrix",
             room.room_id,
             message.sender,
             message.body,
@@ -603,7 +602,7 @@ class DefaultMatrixClient(AsyncClient):
         """Run the configured IPC callback."""
         while not self._ipc_queue.empty():
             payload = await self._ipc_queue.get()
-            asyncio.create_task(self._ipc_service.handle_ipc_request(payload))
+            asyncio.create_task(self._ipc_service.handle_ipc_request("matrix", payload))
             self._ipc_queue.task_done()
 
     async def _send_text_message(self, room_id: str, body: str) -> None:

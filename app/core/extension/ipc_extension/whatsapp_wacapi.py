@@ -42,6 +42,10 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             "whatsapp_wacapi_event",
         ]
 
+    @property
+    def platforms(self) -> list[str]:
+        return ["whatsapp"]
+
     async def process_ipc_command(self, payload: dict) -> None:
         self._logging_gateway.debug(
             f"WhatsAppWACAPIIPCExtension: Executing command: {payload['command']}"
@@ -93,6 +97,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 case "text":
                     # Allow messaging service to process the message.
                     response = await self._messaging_service.handle_text_message(
+                        "whatsapp",
                         room_id=sender,
                         sender=sender,
                         content=message["text"]["body"],
@@ -121,9 +126,8 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                     )
                     for handler in message_handlers:
                         if (
-                            handler.platform == "whatsapp"
-                            and message["type"] in handler.message_types
-                        ):
+                            handler.platforms == [] or "whatsapp" in handler.platforms
+                        ) and message["type"] in handler.message_types:
                             await asyncio.gather(
                                 asyncio.create_task(
                                     handler.handle_message(

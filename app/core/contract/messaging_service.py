@@ -17,6 +17,7 @@ class IMessagingService(ABC):
     @abstractmethod
     async def handle_text_message(
         self,
+        platform: str,
         room_id: str,
         sender: str,
         content: str,
