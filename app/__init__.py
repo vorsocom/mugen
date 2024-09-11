@@ -72,6 +72,7 @@ def create_quart_app():
 
 
 # pylint: disable=too-many-locals
+# pylint: disable=too-many-statements
 async def run_assistants() -> None:
     """Entrypoint for assistants."""
     # Dependency Injection.
@@ -111,6 +112,21 @@ async def run_assistants() -> None:
         ipc_service = di.ipc_service()
         messaging_service = di.messaging_service()
 
+        def platforms_supported(ext) -> bool:
+            """Filter extensions that are not needed."""
+            if ext.platforms == []:
+                return True
+
+            return (
+                len(
+                    list(
+                        set(ext.platforms)
+                        & set(json.loads(di.config.gloria_platforms()))
+                    )
+                )
+                != 0
+            )
+
         # Register the extensions.
         try:
             for ext in extensions:
@@ -121,48 +137,54 @@ async def run_assistants() -> None:
                         x for x in ICTExtension.__subclasses__() if x.__module__ == ext
                     ][0]
                     ct_ext = ct_ext_class()
-                    messaging_service.register_ct_extension(ct_ext)
-                    logging_gateway.debug(f"Registered CT extension: {ext}")
+                    if platforms_supported(ct_ext):
+                        messaging_service.register_ct_extension(ct_ext)
+                        logging_gateway.debug(f"Registered CT extension: {ext}")
 
                 if "ctx_extension" in ext:
                     ctx_ext_class = [
                         x for x in ICTXExtension.__subclasses__() if x.__module__ == ext
                     ][0]
                     ctx_ext = ctx_ext_class()
-                    messaging_service.register_ctx_extension(ctx_ext)
-                    logging_gateway.debug(f"Registered CTX extension: {ext}")
+                    if platforms_supported(ctx_ext):
+                        messaging_service.register_ctx_extension(ctx_ext)
+                        logging_gateway.debug(f"Registered CTX extension: {ext}")
 
                 if "ipc_extension" in ext:
                     ipc_ext_class = [
                         x for x in IIPCExtension.__subclasses__() if x.__module__ == ext
                     ][0]
                     ipc_ext = ipc_ext_class()
-                    ipc_service.register_ipc_extension(ipc_ext)
-                    logging_gateway.debug(f"Registered IPC extension: {ext}")
+                    if platforms_supported(ipc_ext):
+                        ipc_service.register_ipc_extension(ipc_ext)
+                        logging_gateway.debug(f"Registered IPC extension: {ext}")
 
                 if "mh_extension" in ext:
                     mh_ext_class = [
                         x for x in IMHExtension.__subclasses__() if x.__module__ == ext
                     ][0]
                     mh_ext = mh_ext_class()
-                    messaging_service.register_mh_extension(mh_ext)
-                    logging_gateway.debug(f"Registered MH extension: {ext}")
+                    if platforms_supported(mh_ext):
+                        messaging_service.register_mh_extension(mh_ext)
+                        logging_gateway.debug(f"Registered MH extension: {ext}")
 
                 if "rag_extension" in ext:
                     rag_ext_class = [
                         x for x in IRAGExtension.__subclasses__() if x.__module__ == ext
                     ][0]
                     rag_ext = rag_ext_class()
-                    messaging_service.register_rag_extension(rag_ext)
-                    logging_gateway.debug(f"Registered RAG extension: {ext}")
+                    if platforms_supported(rag_ext):
+                        messaging_service.register_rag_extension(rag_ext)
+                        logging_gateway.debug(f"Registered RAG extension: {ext}")
 
                 if "rpp_extension" in ext:
                     rpp_ext_class = [
                         x for x in IRPPExtension.__subclasses__() if x.__module__ == ext
                     ][0]
                     rpp_ext = rpp_ext_class()
-                    messaging_service.register_rpp_extension(rpp_ext)
-                    logging_gateway.debug(f"Registered RPP extension: {ext}")
+                    if platforms_supported(rpp_ext):
+                        messaging_service.register_rpp_extension(rpp_ext)
+                        logging_gateway.debug(f"Registered RPP extension: {ext}")
         except TypeError as e:
             logging_gateway.error(e.__traceback__)
             sys.exit(1)

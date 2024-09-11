@@ -79,7 +79,9 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             try:
                 while not self._ipc_queue.empty():
                     payload = await self._ipc_queue.get()
-                    asyncio.create_task(self._ipc_service.handle_ipc_request(payload))
+                    asyncio.create_task(
+                        self._ipc_service.handle_ipc_request("whatsapp", payload)
+                    )
                     self._ipc_queue.task_done()
 
                 await asyncio.sleep(loop_sleep_time)
