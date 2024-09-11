@@ -14,6 +14,7 @@ from quart import Quart, g
 from app.core.contract.ct_extension import ICTExtension
 from app.core.contract.ctx_extension import ICTXExtension
 from app.core.contract.ipc_extension import IIPCExtension
+from app.core.contract.mh_extension import IMHExtension
 from app.core.contract.rag_extension import IRAGExtension
 from app.core.contract.rpp_extension import IRPPExtension
 from app.core.di import DIContainer
@@ -91,8 +92,9 @@ async def run_assistants() -> None:
     # 1. Conversational Trigger (CT) extensions.
     # 2. Context (CTX) extensions.
     # 3. Inter-Process Communication (IPC) extensions.
-    # 4. Retrieval Augmented Generation (RAG) extensions.
-    # 5. Response Pre-Processor extensions.
+    # 4. Message Handler (MH) extensions.
+    # 5. Retrieval Augmented Generation (RAG) extensions.
+    # 6. Response Pre-Processor (RPP) extensions.
     if "gloria_core_extension_modules" in di.config().keys():
         # Load core extensions.
         extensions = json.loads(di.config.gloria_core_extension_modules())
@@ -137,6 +139,14 @@ async def run_assistants() -> None:
                     ipc_ext = ipc_ext_class()
                     ipc_service.register_ipc_extension(ipc_ext)
                     logging_gateway.debug(f"Registered IPC extension: {ext}")
+
+                if "mh_extension" in ext:
+                    mh_ext_class = [
+                        x for x in IMHExtension.__subclasses__() if x.__module__ == ext
+                    ][0]
+                    mh_ext = mh_ext_class()
+                    messaging_service.register_mh_extension(mh_ext)
+                    logging_gateway.debug(f"Registered MH extension: {ext}")
 
                 if "rag_extension" in ext:
                     rag_ext_class = [
