@@ -324,14 +324,15 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
     async def upload_media(
         self,
-        file_name: str,
         file_path: str,
         file_type: str,
     ) -> str | None:
-        data = {"messaging_product": "whatsapp", "type": file_type}
+        files = aiohttp.FormData()
+        files.add_field("messaging_product", "whatsapp")
+        files.add_field("type", file_type)
         with open(file_path, "rb") as file:
-            files = {"file": (file_name, file, file_type, {"Expires": 0})}
-            return await self._call_api(self._api_media_path, data=data, files=files)
+            files.add_field("file", file)
+            return await self._call_api(self._api_media_path, files=files)
 
     async def _call_api(
         self,
@@ -359,7 +360,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             kwargs["data"] = json.dumps(data)
 
         if files:
-            kwargs["files"] = files
+            kwargs["data"] = files
 
         try:
             match method:
