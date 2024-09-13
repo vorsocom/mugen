@@ -365,9 +365,9 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         try:
             match method:
                 case HTTPMethod.DELETE:
-                    response = await self._client_session.delete(url)
+                    response = await self._client_session.delete(url, **kwargs)
                 case HTTPMethod.GET:
-                    response = await self._client_session.get(url)
+                    response = await self._client_session.get(url, **kwargs)
                 case HTTPMethod.POST:
                     response = await self._client_session.post(url, **kwargs)
                 case HTTPMethod.PUT:
