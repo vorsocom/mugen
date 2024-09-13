@@ -139,7 +139,6 @@ class IWhatsAppClient(ABC):
     @abstractmethod
     async def upload_media(
         self,
-        file_name: str,
         file_path: str,
         file_type: str,
     ) -> str | None:
