@@ -4,6 +4,7 @@ __all__ = ["DefaultWhatsAppClient"]
 
 import asyncio
 from http import HTTPMethod
+from io import BytesIO
 import json
 from types import SimpleNamespace
 
@@ -324,12 +325,17 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
     async def upload_media(
         self,
-        file_path: str,
+        file_path: str | BytesIO,
         file_type: str,
     ) -> str | None:
         files = aiohttp.FormData()
         files.add_field("messaging_product", "whatsapp")
         files.add_field("type", file_type)
+
+        if isinstance(file_path, BytesIO):
+            files.add_field("file", file_path.getvalue(), content_type=file_type)
+            return await self._call_api(self._api_media_path, files=files)
+
         with open(file_path, "rb") as file:
             files.add_field("file", file)
             return await self._call_api(self._api_media_path, files=files)
