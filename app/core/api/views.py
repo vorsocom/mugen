@@ -1,12 +1,15 @@
 """Implements API endpoints."""
 
 import asyncio
+
 from quart import abort, current_app, request
 
 from app.core.api import api_bp
 from app.core.api.decorators import (
     matrix_platform_required,
     whatsapp_platform_required,
+    whatsapp_request_signature_verification_required,
+    whatsapp_server_ip_allow_list_required,
 )
 
 
@@ -103,6 +106,7 @@ async def whatsapp_index():
 
 @api_bp.get("/whatsapp/wacapi/webhook")
 @whatsapp_platform_required
+@whatsapp_server_ip_allow_list_required
 async def whatsapp_wcapi_verification():
     """Whatsapp Cloud API verification."""
     if (
@@ -116,6 +120,8 @@ async def whatsapp_wcapi_verification():
 
 @api_bp.post("/whatsapp/wacapi/webhook")
 @whatsapp_platform_required
+@whatsapp_server_ip_allow_list_required
+@whatsapp_request_signature_verification_required
 async def whatsapp_wcapi_webhook():
     """Respond to Whatsapp Cloud API events."""
     # Get request data.

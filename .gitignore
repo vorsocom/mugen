@@ -197,6 +197,7 @@ app/extension/rag_extension/*
 app/extension/rpp_extension/*
 !app/extension/rpp_extension/.gitkeep
 
+data/fb.allow.list.txt
 data/storage.*
 data/.olmstore/@*
 
