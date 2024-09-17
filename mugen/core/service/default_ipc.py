@@ -4,9 +4,9 @@ __all__ = ["DefaultIPCService"]
 
 from types import SimpleNamespace
 
-from app.core.contract.ipc_extension import IIPCExtension
-from app.core.contract.ipc_service import IIPCService
-from app.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.ipc_extension import IIPCExtension
+from mugen.core.contract.ipc_service import IIPCService
+from mugen.core.contract.logging_gateway import ILoggingGateway
 
 
 class DefaultIPCService(IIPCService):

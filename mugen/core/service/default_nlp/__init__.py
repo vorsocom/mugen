@@ -2,9 +2,9 @@
 
 __all__ = ["DefaultNLPService"]
 
-from app.core.contract.logging_gateway import ILoggingGateway
-from app.core.contract.nlp_service import INLPService
-from app.core.service.default_nlp.keyword_extractor import (
+from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.nlp_service import INLPService
+from mugen.core.service.default_nlp.keyword_extractor import (
     CustomKeywordExtractor,
 )
 

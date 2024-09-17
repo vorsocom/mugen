@@ -4,8 +4,8 @@ import asyncio
 
 from quart import abort, current_app, request
 
-from app.core.api import api_bp
-from app.core.api.decorators import (
+from mugen.core.api import api_bp
+from mugen.core.api.decorators import (
     matrix_platform_required,
     whatsapp_platform_required,
     whatsapp_request_signature_verification_required,

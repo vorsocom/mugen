@@ -11,18 +11,18 @@ from types import SimpleNamespace
 from dependency_injector import containers, providers
 from nio import AsyncClient
 
-from app.core.contract.completion_gateway import ICompletionGateway
-from app.core.contract.ipc_service import IIPCService
-from app.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from app.core.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
-from app.core.contract.logging_gateway import ILoggingGateway
-from app.core.contract.messaging_service import IMessagingService
-from app.core.contract.nlp_service import INLPService
-from app.core.contract.user_service import IUserService
-from app.core.contract.whatsapp_client import IWhatsAppClient
+from mugen.core.contract.completion_gateway import ICompletionGateway
+from mugen.core.contract.ipc_service import IIPCService
+from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
+from mugen.core.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
+from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.messaging_service import IMessagingService
+from mugen.core.contract.nlp_service import INLPService
+from mugen.core.contract.user_service import IUserService
+from mugen.core.contract.whatsapp_client import IWhatsAppClient
 
-default_modules = SimpleNamespace(**json.loads(os.getenv("GLORIA_DEFAULT_MODULES")))
-platforms = json.loads(os.getenv("GLORIA_PLATFORMS"))
+default_modules = SimpleNamespace(**json.loads(os.getenv("MUGEN_DEFAULT_MODULES")))
+platforms = json.loads(os.getenv("MUGEN_PLATFORMS"))
 
 import_module(name=default_modules.logging_gateway)
 logging_gateway_class = ILoggingGateway.__subclasses__()[0]

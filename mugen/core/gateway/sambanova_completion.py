@@ -10,8 +10,8 @@ from typing import Any
 
 import pycurl
 
-from app.core.contract.completion_gateway import ICompletionGateway
-from app.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.completion_gateway import ICompletionGateway
+from mugen.core.contract.logging_gateway import ILoggingGateway
 
 
 # pylint: disable=too-few-public-methods

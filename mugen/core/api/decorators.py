@@ -17,9 +17,7 @@ def matrix_platform_required(arg=None):
     def decorator(func):
         @wraps(func)
         async def decorated(*args, **kwargs):
-            if "matrix" not in json.loads(
-                current_app.config["ENV"]["gloria_platforms"]
-            ):
+            if "matrix" not in json.loads(current_app.config["ENV"]["mugen_platforms"]):
                 abort(501)
             return await func(*args, **kwargs)
 
@@ -37,7 +35,7 @@ def whatsapp_platform_required(arg=None):
         @wraps(func)
         async def decorated(*args, **kwargs):
             if "whatsapp" not in json.loads(
-                current_app.config["ENV"]["gloria_platforms"]
+                current_app.config["ENV"]["mugen_platforms"]
             ):
                 abort(501)
             return await func(*args, **kwargs)
