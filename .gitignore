@@ -181,6 +181,9 @@ hypercorn.toml
 
 data/fb.allow.list.txt
 data/storage.*
+data/*.db
+data/*.sqlite
+data/*.sqlite3
 data/.olmstore/@*
 
 test_*
