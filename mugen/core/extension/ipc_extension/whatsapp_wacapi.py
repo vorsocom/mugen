@@ -140,8 +140,6 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         message_type: str,
         sender: str = None,
     ) -> None:
-        if message_type == "status":
-            print(message)
         hits: int = 0
         message_handlers: list[IMHExtension] = self._messaging_service.mh_extensions
         for handler in message_handlers:
