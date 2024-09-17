@@ -92,7 +92,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                     sender,
                 )
 
-            ##!! Only process text messages for now.
+            ##!! Only process text messages here.
             match message["type"]:
                 case "text":
                     # Allow messaging service to process the message.
@@ -120,39 +120,49 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                 "Send response to user successful."
                             )
                 case _:
-                    hits: int = 0
-                    message_handlers: list[IMHExtension] = (
-                        self._messaging_service.mh_extensions
+                    await self._call_message_handlers(
+                        message=message,
+                        message_type=message["type"],
+                        sender=sender,
                     )
-                    for handler in message_handlers:
-                        if (
-                            handler.platforms == [] or "whatsapp" in handler.platforms
-                        ) and message["type"] in handler.message_types:
-                            await asyncio.gather(
-                                asyncio.create_task(
-                                    handler.handle_message(
-                                        room_id=sender,
-                                        sender=sender,
-                                        message=message,
-                                    )
-                                )
-                            )
-                            hits += 1
-
-                    if hits == 0:
-                        self._logging_gateway.debug(
-                            f"Unsupported message type: {message['type']}."
-                        )
-                        await self._client.send_text_message(
-                            message=(
-                                "This platform only supports text-based communication"
-                                " at the moment."
-                            ),
-                            recipient=sender,
-                            reply_to=message["id"],
-                        )
         elif "statuses" in event["entry"][0]["changes"][0]["value"].keys():
             # Process message sent, delivered, and read statuses.
-            pass
+            await self._call_message_handlers(
+                message=event["entry"][0]["changes"][0]["value"]["statuses"][0],
+                message_type="status",
+            )
 
         await payload["response_queue"].put({"response": "OK"})
+
+    async def _call_message_handlers(
+        self,
+        message: dict,
+        message_type: str,
+        sender: str = None,
+    ) -> None:
+        if message_type == "status":
+            print(message)
+        hits: int = 0
+        message_handlers: list[IMHExtension] = self._messaging_service.mh_extensions
+        for handler in message_handlers:
+            if (
+                handler.platforms == [] or "whatsapp" in handler.platforms
+            ) and message_type in handler.message_types:
+                await asyncio.gather(
+                    asyncio.create_task(
+                        handler.handle_message(
+                            room_id=sender,
+                            sender=sender,
+                            message=message,
+                        )
+                    )
+                )
+                hits += 1
+        if hits == 0:
+            self._logging_gateway.debug(f"Unsupported message type: {message_type}.")
+            if sender:
+                await self._client.send_text_message(
+                    message="Unsupported message type..",
+                    recipient=sender,
+                    reply_to=message["id"],
+                )
