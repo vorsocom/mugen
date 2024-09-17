@@ -179,24 +179,7 @@ cython_debug/
 ### APPPLICATION
 hypercorn.toml
 
-app/extension/ct_extension/*
-!app/extension/ct_extension/.gitkeep
-
-app/extension/ctx_extension/*
-!app/extension/ctx_extension/.gitkeep
-
-app/extension/ipc_extension/*
-!app/extension/ipc_extension/.gitkeep
-
-app/extension/mh_extension/*
-!app/extension/mh_extension/.gitkeep
-
-app/extension/rag_extension/*
-!app/extension/rag_extension/.gitkeep
-
-app/extension/rpp_extension/*
-!app/extension/rpp_extension/.gitkeep
-
+data/fb.allow.list.txt
 data/storage.*
 data/.olmstore/@*
 

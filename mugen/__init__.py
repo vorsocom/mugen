@@ -11,19 +11,19 @@ import sys
 from dotenv import dotenv_values
 from quart import Quart, g
 
-from app.core.contract.ct_extension import ICTExtension
-from app.core.contract.ctx_extension import ICTXExtension
-from app.core.contract.ipc_extension import IIPCExtension
-from app.core.contract.mh_extension import IMHExtension
-from app.core.contract.rag_extension import IRAGExtension
-from app.core.contract.rpp_extension import IRPPExtension
-from app.core.di import DIContainer
+from mugen.core.contract.ct_extension import ICTExtension
+from mugen.core.contract.ctx_extension import ICTXExtension
+from mugen.core.contract.ipc_extension import IIPCExtension
+from mugen.core.contract.mh_extension import IMHExtension
+from mugen.core.contract.rag_extension import IRAGExtension
+from mugen.core.contract.rpp_extension import IRPPExtension
+from mugen.core.di import DIContainer
 
-from app.config import AppConfig
+from mugen.config import AppConfig
 
 from .core.api import api_bp
 
-app = Quart(__name__)
+mugen = Quart(__name__)
 
 di = DIContainer()
 
@@ -34,28 +34,28 @@ def create_quart_app():
     env_config = di.config()
 
     # Check for valid configuration name.
-    config_name = env_config["gloria_config"]
+    config_name = env_config["mugen_config"]
     if config_name not in ("default", "development", "testing", "production"):
         print("Invalid configuration name.")
         sys.exit(1)
 
-    app.logger.warning("Creating app with %s configuration.", config_name)
+    mugen.logger.warning("Creating app with %s configuration.", config_name)
 
     # Create application configuration object.
-    app.config.from_object(AppConfig[config_name])
-    app.config["ENV"] = di.config()
+    mugen.config.from_object(AppConfig[config_name])
+    mugen.config["ENV"] = di.config()
 
     # Get log level and base directory from environment.
-    di.config.log_level.from_value(app.config["LOG_LEVEL"])
-    di.config.basedir.from_value(app.config["BASEDIR"])
+    di.config.log_level.from_value(mugen.config["LOG_LEVEL"])
+    di.config.basedir.from_value(mugen.config["BASEDIR"])
 
     # Initialize application.
-    AppConfig[config_name].init_app(app)
+    AppConfig[config_name].init_app(mugen)
 
     # Register blueprints.
-    app.register_blueprint(api_bp, url_prefix="/api")
+    mugen.register_blueprint(api_bp, url_prefix="/api")
 
-    @app.after_request
+    @mugen.after_request
     def call_after_request_callbacks(response):
         """Ensure all registered after-request-callbacks are called."""
         for callback in getattr(g, "after_request_callbacks", ()):
@@ -64,11 +64,11 @@ def create_quart_app():
 
     # Ensure that API endpoints can access the ipc_queue
     # through current_app.ipc_queue
-    app.matrix_ipc_queue = di.matrix_ipc_queue()
-    app.whatsapp_ipc_queue = di.whatsapp_ipc_queue()
+    mugen.matrix_ipc_queue = di.matrix_ipc_queue()
+    mugen.whatsapp_ipc_queue = di.whatsapp_ipc_queue()
 
     # Return the built application object.
-    return app
+    return mugen
 
 
 # pylint: disable=too-many-locals
@@ -96,13 +96,13 @@ async def run_assistants() -> None:
     # 4. Message Handler (MH) extensions.
     # 5. Retrieval Augmented Generation (RAG) extensions.
     # 6. Response Pre-Processor (RPP) extensions.
-    if "gloria_core_extension_modules" in di.config().keys():
+    if "mugen_core_extension_modules" in di.config().keys():
         # Load core extensions.
-        extensions = json.loads(di.config.gloria_core_extension_modules())
+        extensions = json.loads(di.config.mugen_core_extension_modules())
 
         # Load third party extensions.
-        if "gloria_third_party_extension_modules" in di.config().keys():
-            extensions += json.loads(di.config.gloria_third_party_extension_modules())
+        if "mugen_third_party_extension_modules" in di.config().keys():
+            extensions += json.loads(di.config.mugen_third_party_extension_modules())
 
         # Wire the extensions for dependency injection.
         di.wire(extensions)
@@ -121,7 +121,7 @@ async def run_assistants() -> None:
                 len(
                     list(
                         set(ext.platforms)
-                        & set(json.loads(di.config.gloria_platforms()))
+                        & set(json.loads(di.config.mugen_platforms()))
                     )
                 )
                 != 0
@@ -189,7 +189,7 @@ async def run_assistants() -> None:
             logging_gateway.error(e.__traceback__)
             sys.exit(1)
 
-    platforms = json.loads(di.config.gloria_platforms())
+    platforms = json.loads(di.config.mugen_platforms())
 
     tasks = []
 

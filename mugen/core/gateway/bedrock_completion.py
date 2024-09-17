@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import boto3
 from botocore.exceptions import ClientError
 
-from app.core.contract.completion_gateway import ICompletionGateway
-from app.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.completion_gateway import ICompletionGateway
+from mugen.core.contract.logging_gateway import ILoggingGateway
 
 
 # pylint: disable=too-few-public-methods

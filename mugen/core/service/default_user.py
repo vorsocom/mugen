@@ -4,9 +4,9 @@ __all__ = ["DefaultUserService"]
 
 import pickle
 
-from app.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from app.core.contract.logging_gateway import ILoggingGateway
-from app.core.contract.user_service import IUserService
+from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
+from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.user_service import IUserService
 
 KNOWN_USERS_LIST_KEY: str = "known_users_list"
 

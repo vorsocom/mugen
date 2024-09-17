@@ -7,8 +7,8 @@ import traceback
 from types import SimpleNamespace
 import _gdbm
 
-from app.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from app.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
+from mugen.core.contract.logging_gateway import ILoggingGateway
 
 
 class DBMKeyValStorageGateway(IKeyValStorageGateway):

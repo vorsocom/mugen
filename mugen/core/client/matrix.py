@@ -41,11 +41,11 @@ from nio.api import _FilterT
 from nio.client.base_client import logged_in
 from nio.exceptions import OlmUnverifiedDeviceError
 
-from app.core.contract.ipc_service import IIPCService
-from app.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from app.core.contract.logging_gateway import ILoggingGateway
-from app.core.contract.messaging_service import IMessagingService
-from app.core.contract.user_service import IUserService
+from mugen.core.contract.ipc_service import IIPCService
+from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
+from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.messaging_service import IMessagingService
+from mugen.core.contract.user_service import IUserService
 
 FLAGS_KEY: str = "m.agent_flags"
 
@@ -378,7 +378,7 @@ class DefaultMatrixClient(AsyncClient):
         # Only process invites from allowed domains.
         # Federated servers need to be in the allowed domains list for their users
         # to initiate conversations with the assistant.
-        allowed_domains: list = json.loads(self._config.gloria_allowed_domains)
+        allowed_domains: list = json.loads(self._config.matrix_allowed_domains)
         if event.sender.split(":")[1] not in allowed_domains:
             await self.room_leave(room.room_id)
             self._logging_gateway.warning(
@@ -389,7 +389,7 @@ class DefaultMatrixClient(AsyncClient):
 
         # If the assistant is in limited-beta mode, only process invites from the
         # list of selected beta users.
-        if self._config.gloria_limited_beta.lower() in (
+        if self._config.mugen_limited_beta.lower() in (
             "true",
             "1",
         ):

@@ -5,7 +5,7 @@ __all__ = ["StandardLoggingGateway"]
 import logging
 from types import SimpleNamespace
 
-from app.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.logging_gateway import ILoggingGateway
 
 
 class StandardLoggingGateway(ILoggingGateway):
@@ -13,7 +13,7 @@ class StandardLoggingGateway(ILoggingGateway):
 
     def __init__(self, config: dict) -> None:
         self._config = SimpleNamespace(**config)
-        self._logger = logging.getLogger(self._config.gloria_log_name)
+        self._logger = logging.getLogger(self._config.mugen_log_name)
         self._logger.setLevel(self._config.log_level)
 
         console_handler = logging.StreamHandler()

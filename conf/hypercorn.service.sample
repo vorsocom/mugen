@@ -4,7 +4,7 @@ Wants=network-online.target
 After=network-online.target
 [Service]
 Type=simple
-EnvironmentFile=/opt/com.vorsocomputing/gloria/.env
-ExecStart={path/to/venv}/bin/hypercorn --config /opt/com.vorsocomputing/gloria/hypercorn.toml /opt/com.vorsocomputing/gloria/quartman.py
+EnvironmentFile=/opt/com.vorsocomputing/mugen/.env
+ExecStart={path/to/venv}/bin/hypercorn --config /opt/com.vorsocomputing/mugen/hypercorn.toml /opt/com.vorsocomputing/mugen/quartman.py
 [Install]
 WantedBy=multi-user.target

@@ -9,16 +9,16 @@ from types import SimpleNamespace
 from typing import Mapping
 import uuid
 
-from app.core.contract.completion_gateway import ICompletionGateway
-from app.core.contract.ct_extension import ICTExtension
-from app.core.contract.ctx_extension import ICTXExtension
-from app.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from app.core.contract.logging_gateway import ILoggingGateway
-from app.core.contract.messaging_service import IMessagingService
-from app.core.contract.mh_extension import IMHExtension
-from app.core.contract.rag_extension import IRAGExtension
-from app.core.contract.rpp_extension import IRPPExtension
-from app.core.contract.user_service import IUserService
+from mugen.core.contract.completion_gateway import ICompletionGateway
+from mugen.core.contract.ct_extension import ICTExtension
+from mugen.core.contract.ctx_extension import ICTXExtension
+from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
+from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.messaging_service import IMessagingService
+from mugen.core.contract.mh_extension import IMHExtension
+from mugen.core.contract.rag_extension import IRAGExtension
+from mugen.core.contract.rpp_extension import IRPPExtension
+from mugen.core.contract.user_service import IUserService
 
 CHAT_THREAD_VERSION: int = 1
 
@@ -336,12 +336,12 @@ class DefaultMessagingService(IMessagingService):
         """Return a list of system messages to add context to user message."""
         context = []
 
-        if "gloria_assistant_persona" in self._config.__dict__.keys():
+        if "mugen_assistant_persona" in self._config.__dict__.keys():
             # Append assistant persona to context.
             context.append(
                 {
                     "role": "system",
-                    "content": self._config.gloria_assistant_persona,
+                    "content": self._config.mugen_assistant_persona,
                 }
             )
 

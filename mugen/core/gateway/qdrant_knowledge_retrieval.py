@@ -8,9 +8,9 @@ from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import ResponseHandlingException
 from sentence_transformers import SentenceTransformer
 
-from app.core.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
-from app.core.contract.logging_gateway import ILoggingGateway
-from app.core.contract.nlp_service import INLPService
+from mugen.core.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
+from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.nlp_service import INLPService
 
 encoder = SentenceTransformer(
     model_name_or_path="all-mpnet-base-v2",

@@ -10,12 +10,12 @@ from types import SimpleNamespace
 
 import aiohttp
 
-from app.core.contract.ipc_service import IIPCService
-from app.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from app.core.contract.logging_gateway import ILoggingGateway
-from app.core.contract.messaging_service import IMessagingService
-from app.core.contract.user_service import IUserService
-from app.core.contract.whatsapp_client import IWhatsAppClient
+from mugen.core.contract.ipc_service import IIPCService
+from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
+from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.messaging_service import IMessagingService
+from mugen.core.contract.user_service import IUserService
+from mugen.core.contract.whatsapp_client import IWhatsAppClient
 
 
 # pylint: disable=too-many-instance-attributes
