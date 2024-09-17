@@ -8,13 +8,13 @@ from types import SimpleNamespace
 
 from dependency_injector.wiring import inject, Provide
 
-from app.core.contract.ipc_extension import IIPCExtension
-from app.core.contract.logging_gateway import ILoggingGateway
-from app.core.contract.messaging_service import IMessagingService
-from app.core.contract.mh_extension import IMHExtension
-from app.core.contract.user_service import IUserService
-from app.core.contract.whatsapp_client import IWhatsAppClient
-from app.core.di import DIContainer
+from mugen.core.contract.ipc_extension import IIPCExtension
+from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.messaging_service import IMessagingService
+from mugen.core.contract.mh_extension import IMHExtension
+from mugen.core.contract.user_service import IUserService
+from mugen.core.contract.whatsapp_client import IWhatsAppClient
+from mugen.core.di import DIContainer
 
 
 class WhatsAppWACAPIIPCExtension(IIPCExtension):
@@ -66,7 +66,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             message = event["entry"][0]["changes"][0]["value"]["messages"][0]
             sender = contact["wa_id"]
 
-            if self._config.gloria_limited_beta.lower() in (
+            if self._config.mugen_limited_beta.lower() in (
                 "true",
                 "1",
             ):

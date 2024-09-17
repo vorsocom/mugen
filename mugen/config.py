@@ -17,9 +17,9 @@ class Config:
     LOG_LEVEL: int = 10
 
     @staticmethod
-    def init_app(app: Quart):
+    def init_app(mugen: Quart):
         """Configuration specific application initialisation."""
-        app.logger.setLevel(app.config["LOG_LEVEL"])
+        mugen.logger.setLevel(mugen.config["LOG_LEVEL"])
 
 
 class DevelopmentConfig(Config):
