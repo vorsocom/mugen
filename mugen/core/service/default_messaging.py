@@ -155,7 +155,8 @@ class DefaultMessagingService(IMessagingService):
                 continue
 
             assistant_response, task, end_task = await rpp_ext.preprocess_response(
-                assistant_response
+                assistant_response,
+                sender,
             )
 
             # If no task or end task is detected,
