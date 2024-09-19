@@ -24,6 +24,15 @@ class IMessagingService(ABC):
     ) -> str | None:
         """Handle a text message from a chat."""
 
+    @abstractmethod
+    def get_attention_thread_key(
+        self,
+        room_id: str,
+        refresh: bool = False,
+        start_task: bool = False,
+    ) -> str:
+        """Get the keyval storage key of the chat thread for a room."""
+
     @property
     @abstractmethod
     def mh_extensions(self) -> list[IMHExtension]:
