@@ -65,8 +65,8 @@ class DefaultMessagingService(IMessagingService):
         content: str,
     ) -> str | None:
         if content.strip() == "//clear.":
-            # Empty attention thread.
-            await self._get_attention_thread_key(room_id, "", True)
+            # Clear attention thread.
+            self.get_attention_thread_key(room_id, True)
 
             # Clear RAG caches.
             for rag_ext in self._rag_extensions:
@@ -80,7 +80,7 @@ class DefaultMessagingService(IMessagingService):
             return "PUC executed."
 
         # Get the attention thread key.
-        attention_thread_key = await self._get_attention_thread_key(room_id, content)
+        attention_thread_key = self.get_attention_thread_key(room_id)
 
         # Initialise lists to store chat history.
         attention_thread: Mapping[str, str | list[Mapping[str, str]]] = {"messages": []}
@@ -182,7 +182,7 @@ class DefaultMessagingService(IMessagingService):
             # Only attempt the refresh if a conversational trigger was not
             # detected.
             if not trigger_hits > 0:
-                await self._get_attention_thread_key(room_id, "", True, task)
+                self.get_attention_thread_key(room_id, True, task)
 
         if assistant_response == "":
             self._logging_gateway.debug("Empty response.")
@@ -225,29 +225,9 @@ class DefaultMessagingService(IMessagingService):
 
         return assistant_response
 
-    @property
-    def mh_extensions(self) -> list[IMHExtension]:
-        return self._mh_extensions
-
-    def register_ct_extension(self, ext: ICTExtension) -> None:
-        self._ct_extensions.append(ext)
-
-    def register_ctx_extension(self, ext: ICTXExtension) -> None:
-        self._ctx_extensions.append(ext)
-
-    def register_mh_extension(self, ext: IMHExtension) -> None:
-        self._mh_extensions.append(ext)
-
-    def register_rag_extension(self, ext: IRAGExtension) -> None:
-        self._rag_extensions.append(ext)
-
-    def register_rpp_extension(self, ext: IRPPExtension) -> None:
-        self._rpp_extensions.append(ext)
-
-    async def _get_attention_thread_key(
+    def get_attention_thread_key(
         self,
         room_id: str,
-        _message: str,
         refresh: bool = False,
         start_task: bool = False,
     ) -> str:
@@ -283,14 +263,27 @@ class DefaultMessagingService(IMessagingService):
             self._save_chat_thread(
                 chat_threads_list["attention_thread"], attention_thread
             )
-            # self._logging_gateway.debug(attention_thread["messages"])
-            return chat_threads_list["attention_thread"]
 
-        if "attention_thread" in chat_threads_list.keys():
-            self._logging_gateway.debug(
-                "Returning current attention thread for testing."
-            )
-            return chat_threads_list["attention_thread"]
+        return chat_threads_list["attention_thread"]
+
+    @property
+    def mh_extensions(self) -> list[IMHExtension]:
+        return self._mh_extensions
+
+    def register_ct_extension(self, ext: ICTExtension) -> None:
+        self._ct_extensions.append(ext)
+
+    def register_ctx_extension(self, ext: ICTXExtension) -> None:
+        self._ctx_extensions.append(ext)
+
+    def register_mh_extension(self, ext: IMHExtension) -> None:
+        self._mh_extensions.append(ext)
+
+    def register_rag_extension(self, ext: IRAGExtension) -> None:
+        self._rag_extensions.append(ext)
+
+    def register_rpp_extension(self, ext: IRPPExtension) -> None:
+        self._rpp_extensions.append(ext)
 
     def _get_new_chat_thread_key(
         self, chat_threads_list_key: str, new_list: bool
