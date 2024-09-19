@@ -15,5 +15,9 @@ class IRPPExtension(ABC):
         """Get the platform that the extension is targeting."""
 
     @abstractmethod
-    async def preprocess_response(self, response: str) -> tuple[str, bool, bool]:
+    async def preprocess_response(
+        self,
+        response: str,
+        user_id: str,
+    ) -> tuple[str, bool, bool]:
         """Preprocess the assistant response."""
