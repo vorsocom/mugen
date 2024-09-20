@@ -132,7 +132,7 @@ async def run_assistants() -> None:
             for ext in extensions:
                 import_module(name=ext)
 
-                if "ct_extension" in ext:
+                if "ct_ext_" in ext:
                     ct_ext_class = [
                         x for x in ICTExtension.__subclasses__() if x.__module__ == ext
                     ][0]
@@ -141,7 +141,7 @@ async def run_assistants() -> None:
                         messaging_service.register_ct_extension(ct_ext)
                         logging_gateway.debug(f"Registered CT extension: {ext}")
 
-                if "ctx_extension" in ext:
+                if "ctx_ext_" in ext:
                     ctx_ext_class = [
                         x for x in ICTXExtension.__subclasses__() if x.__module__ == ext
                     ][0]
@@ -150,7 +150,7 @@ async def run_assistants() -> None:
                         messaging_service.register_ctx_extension(ctx_ext)
                         logging_gateway.debug(f"Registered CTX extension: {ext}")
 
-                if "ipc_extension" in ext:
+                if "ipc_ext_" in ext:
                     ipc_ext_class = [
                         x for x in IIPCExtension.__subclasses__() if x.__module__ == ext
                     ][0]
@@ -159,7 +159,7 @@ async def run_assistants() -> None:
                         ipc_service.register_ipc_extension(ipc_ext)
                         logging_gateway.debug(f"Registered IPC extension: {ext}")
 
-                if "mh_extension" in ext:
+                if "mh_ext_" in ext:
                     mh_ext_class = [
                         x for x in IMHExtension.__subclasses__() if x.__module__ == ext
                     ][0]
@@ -168,7 +168,7 @@ async def run_assistants() -> None:
                         messaging_service.register_mh_extension(mh_ext)
                         logging_gateway.debug(f"Registered MH extension: {ext}")
 
-                if "rag_extension" in ext:
+                if "rag_ext_" in ext:
                     rag_ext_class = [
                         x for x in IRAGExtension.__subclasses__() if x.__module__ == ext
                     ][0]
@@ -177,7 +177,7 @@ async def run_assistants() -> None:
                         messaging_service.register_rag_extension(rag_ext)
                         logging_gateway.debug(f"Registered RAG extension: {ext}")
 
-                if "rpp_extension" in ext:
+                if "rpp_ext_" in ext:
                     rpp_ext_class = [
                         x for x in IRPPExtension.__subclasses__() if x.__module__ == ext
                     ][0]
