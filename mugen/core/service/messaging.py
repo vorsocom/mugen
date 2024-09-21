@@ -9,25 +9,27 @@ from types import SimpleNamespace
 from typing import Mapping
 import uuid
 
-from mugen.core.contract.completion_gateway import ICompletionGateway
-from mugen.core.contract.ct_extension import ICTExtension
-from mugen.core.contract.ctx_extension import ICTXExtension
-from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from mugen.core.contract.logging_gateway import ILoggingGateway
-from mugen.core.contract.messaging_service import IMessagingService
-from mugen.core.contract.mh_extension import IMHExtension
-from mugen.core.contract.rag_extension import IRAGExtension
-from mugen.core.contract.rpp_extension import IRPPExtension
-from mugen.core.contract.user_service import IUserService
+from dependency_injector import providers
 
-CHAT_THREAD_VERSION: int = 1
-
-CHAT_THREADS_LIST_VERSION: int = 1
+from mugen.core.contract.extension.ct import ICTExtension
+from mugen.core.contract.extension.ctx import ICTXExtension
+from mugen.core.contract.extension.mh import IMHExtension
+from mugen.core.contract.extension.rag import IRAGExtension
+from mugen.core.contract.extension.rpp import IRPPExtension
+from mugen.core.contract.gateway.completion import ICompletionGateway
+from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.service.messaging import IMessagingService
+from mugen.core.contract.service.user import IUserService
 
 
 # pylint: disable=too-many-instance-attributes
 class DefaultMessagingService(IMessagingService):
     """The default implementation of IMessagingService."""
+
+    _chat_thread_version: int = 1
+
+    _chat_threads_list_version: int = 1
 
     _ct_extensions: list[ICTExtension] = []
 
@@ -42,13 +44,13 @@ class DefaultMessagingService(IMessagingService):
     # pylint: disable=too-many-arguments
     def __init__(
         self,
-        config: dict,
+        config: providers.Configuration,  # pylint: disable=c-extension-no-member
         completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
         logging_gateway: ILoggingGateway,
         user_service: IUserService,
     ) -> None:
-        self._config = SimpleNamespace(**config)
+        self._config = config
         self._completion_gateway = completion_gateway
         self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway
@@ -93,9 +95,9 @@ class DefaultMessagingService(IMessagingService):
             # Ensure that older threads are versioned.
             # This can be removed after the application stabalises.
             if "version" not in attention_thread.keys():
-                attention_thread["version"] = CHAT_THREAD_VERSION
+                attention_thread["version"] = self._chat_thread_version
         else:
-            attention_thread["version"] = CHAT_THREAD_VERSION
+            attention_thread["version"] = self._chat_thread_version
             attention_thread["created"] = datetime.now().strftime("%s")
 
         # self._logging_gateway.debug(f"attention_thread: {attention_thread}")
@@ -298,7 +300,7 @@ class DefaultMessagingService(IMessagingService):
         if new_list:
             # Create a new thread list, and make the new thread the attention thread.
             self._logging_gateway.debug("Creating new thread list.")
-            chat_threads_list["version"] = CHAT_THREADS_LIST_VERSION
+            chat_threads_list["version"] = self._chat_threads_list_version
             chat_threads_list["attention_thread"] = key
             chat_threads_list["threads"] = [key]
         else:
@@ -314,7 +316,7 @@ class DefaultMessagingService(IMessagingService):
                 chat_threads_list = {"threads": chat_threads_list}
 
             if "version" not in chat_threads_list.keys():
-                chat_threads_list["version"] = CHAT_THREADS_LIST_VERSION
+                chat_threads_list["version"] = self._chat_threads_list_version
 
             # Set new key as attention thread and append it to the threads list.
             chat_threads_list["attention_thread"] = key
@@ -330,14 +332,13 @@ class DefaultMessagingService(IMessagingService):
         """Return a list of system messages to add context to user message."""
         context = []
 
-        if "mugen_assistant_persona" in self._config.__dict__.keys():
-            # Append assistant persona to context.
-            context.append(
-                {
-                    "role": "system",
-                    "content": self._config.mugen_assistant_persona,
-                }
-            )
+        # Append assistant persona to context.
+        context.append(
+            {
+                "role": "system",
+                "content": self._config.mugen.assistant.persona(),
+            }
+        )
 
         # Append information from CTX extensions to context.
         for ctx_ext in self._ctx_extensions:

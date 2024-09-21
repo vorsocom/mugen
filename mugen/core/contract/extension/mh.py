@@ -5,7 +5,6 @@ __all__ = ["IMHExtension"]
 from abc import ABC, abstractmethod
 
 
-# pylint: disable=too-few-public-methods
 class IMHExtension(ABC):
     """An ABC for message handler extensions."""
 

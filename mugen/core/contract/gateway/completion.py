@@ -4,8 +4,7 @@ from typing import Any
 from abc import ABC, abstractmethod
 
 
-# pylint: disable=too-few-public-methods
-class ICompletionGateway(ABC):
+class ICompletionGateway(ABC):  # pylint: disable=too-few-public-methods
     """A chat completion gateway base class."""
 
     @abstractmethod

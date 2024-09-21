@@ -2,13 +2,13 @@
 
 __all__ = ["DBMKeyValStorageGateway"]
 
-import dbm.gnu as dbm
 import traceback
-from types import SimpleNamespace
 import _gdbm
 
-from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from mugen.core.contract.logging_gateway import ILoggingGateway
+from dependency_injector import providers
+
+from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.logging import ILoggingGateway
 
 
 class DBMKeyValStorageGateway(IKeyValStorageGateway):
@@ -18,12 +18,12 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
 
     def __init__(
         self,
-        config: dict,
+        config: providers.Configuration,  # pylint: disable=c-extension-no-member
         logging_gateway: ILoggingGateway,
     ) -> None:
-        self._config = SimpleNamespace(**config)
+        self._config = config
         self._logging_gateway = logging_gateway
-        self._storage = dbm.open(self._config.keyval_storage_path, "c")
+        self._storage = _gdbm.open(self._config.dbm_keyval_storage_path(), "c")
 
     def put(self, key: str, value: str) -> None:
         self._storage[key] = value
@@ -33,9 +33,7 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
             value = self._storage.get(key)
             return value.decode() if decode is True and value is not None else value
         except AttributeError:
-            self._logging_gateway.warning(
-                "dbm_keyval_storage_gateway-get: AttributeError:"
-            )
+            self._logging_gateway.warning("AttributeError:")
             traceback.print_exc()
         return None
 
@@ -48,12 +46,10 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
             del self._storage[key]
             return value
         except AttributeError:
-            self._logging_gateway.warning(
-                "dbm_keyval_storage_gateway-remove: AttributeError:"
-            )
+            self._logging_gateway.warning("AttributeError:")
             traceback.print_exc()
         except KeyError:
-            self._logging_gateway.warning("dbm_keyval_storage_gateway-remove: KeyError")
+            self._logging_gateway.warning("KeyError")
             traceback.print_exc()
         return None
 

@@ -4,7 +4,6 @@ from functools import wraps
 import hashlib
 import hmac
 import ipaddress
-import json
 import os
 
 
@@ -17,7 +16,7 @@ def matrix_platform_required(arg=None):
     def decorator(func):
         @wraps(func)
         async def decorated(*args, **kwargs):
-            if "matrix" not in json.loads(current_app.config["ENV"]["mugen_platforms"]):
+            if "matrix" not in current_app.config["ENV"].mugen.platforms():
                 abort(501)
             return await func(*args, **kwargs)
 
@@ -34,9 +33,7 @@ def whatsapp_platform_required(arg=None):
     def decorator(func):
         @wraps(func)
         async def decorated(*args, **kwargs):
-            if "whatsapp" not in json.loads(
-                current_app.config["ENV"]["mugen_platforms"]
-            ):
+            if "whatsapp" not in current_app.config["ENV"].mugen.platforms():
                 abort(501)
             return await func(*args, **kwargs)
 
@@ -54,9 +51,7 @@ def whatsapp_server_ip_allow_list_required(arg=None):
         @wraps(func)
         async def decorated(*args, **kwargs):
             try:
-                allow_list_path = current_app.config["ENV"][
-                    "whatsapp_servers_allow_list_path"
-                ]
+                allow_list_path = current_app.config["ENV"].whatsapp.servers.allowed()
                 basedir = current_app.config["BASEDIR"]
                 networks: list
                 with open(
@@ -69,9 +64,9 @@ def whatsapp_server_ip_allow_list_required(arg=None):
 
             verification_required: str
             try:
-                verification_required = current_app.config["ENV"][
-                    "whatsapp_servers_verify_in_allow_list"
-                ]
+                verification_required = current_app.config[
+                    "ENV"
+                ].whatsapp.servers.verify_ip()
             except KeyError:
                 current_app.logger.error(
                     "WhatsApp ip verification requirement unknown."
@@ -106,7 +101,7 @@ def whatsapp_request_signature_verification_required(arg=None):
         @wraps(func)
         async def decorated(*args, **kwargs):
             try:
-                app_secret = current_app.config["ENV"]["whatsapp_app_secret"]
+                app_secret = current_app.config["ENV"].whatsapp.app.secret()
             except KeyError:
                 current_app.logger.error("WhatsApp app secret not found.")
                 abort(500)

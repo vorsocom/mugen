@@ -2,22 +2,14 @@
 
 __all__ = ["QdrantKnowledgeRetrievalGateway"]
 
-from types import SimpleNamespace
-
+from dependency_injector import providers
 from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import ResponseHandlingException
 from sentence_transformers import SentenceTransformer
 
-from mugen.core.contract.knowledge_retrieval_gateway import IKnowledgeRetrievalGateway
-from mugen.core.contract.logging_gateway import ILoggingGateway
-from mugen.core.contract.nlp_service import INLPService
-
-encoder = SentenceTransformer(
-    model_name_or_path="all-mpnet-base-v2",
-    tokenizer_kwargs={
-        "clean_up_tokenization_spaces": False,
-    },
-)
+from mugen.core.contract.gateway.knowledge import IKnowledgeRetrievalGateway
+from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.service.nlp import INLPService
 
 
 class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
@@ -25,18 +17,26 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
 
     def __init__(
         self,
-        config: dict,
+        config: providers.Configuration,  # pylint: disable=c-extension-no-member
         logging_gateway: ILoggingGateway,
         nlp_service: INLPService,
     ) -> None:
-        self._config = SimpleNamespace(**config)
+        self._config = config
         self._client = AsyncQdrantClient(
-            api_key=self._config.qdrant_api_key,
-            url=self._config.qdrant_endpoint_url,
+            api_key=self._config.qdrant.api.key(),
+            url=self._config.qdrant.api.url(),
             port=None,
         )
         self._logging_gateway = logging_gateway
         self._nlp_service = nlp_service
+
+        self._encoder = SentenceTransformer(
+            model_name_or_path="all-mpnet-base-v2",
+            tokenizer_kwargs={
+                "clean_up_tokenization_spaces": False,
+            },
+            cache_folder=self._config.hf.home(),
+        )
 
     # pylint: disable=too-many-arguments
     async def search_similar(
@@ -109,7 +109,7 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
             if strategy == "should":
                 return await self._client.search(
                     collection_name=collection_name,
-                    query_vector=encoder.encode(search_term).tolist(),
+                    query_vector=self._encoder.encode(search_term).tolist(),
                     query_filter=models.Filter(
                         must=dataset_filter,
                         should=conditions,
@@ -119,7 +119,7 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
 
             return await self._client.search(
                 collection_name=collection_name,
-                query_vector=encoder.encode(search_term).tolist(),
+                query_vector=self._encoder.encode(search_term).tolist(),
                 query_filter=models.Filter(must=conditions),
                 limit=limit,
             )

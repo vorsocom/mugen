@@ -5,8 +5,7 @@ __all__ = ["IRPPExtension"]
 from abc import ABC, abstractmethod
 
 
-# pylint: disable=too-few-public-methods
-class IRPPExtension(ABC):
+class IRPPExtension(ABC):  # pylint: disable=too-few-public-methods
     """An ABC for RPP extensions."""
 
     @property

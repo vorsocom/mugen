@@ -4,11 +4,11 @@ __all__ = ["IMessagingService"]
 
 from abc import ABC, abstractmethod
 
-from mugen.core.contract.ct_extension import ICTExtension
-from mugen.core.contract.ctx_extension import ICTXExtension
-from mugen.core.contract.mh_extension import IMHExtension
-from mugen.core.contract.rag_extension import IRAGExtension
-from mugen.core.contract.rpp_extension import IRPPExtension
+from mugen.core.contract.extension.ct import ICTExtension
+from mugen.core.contract.extension.ctx import ICTXExtension
+from mugen.core.contract.extension.mh import IMHExtension
+from mugen.core.contract.extension.rag import IRAGExtension
+from mugen.core.contract.extension.rpp import IRPPExtension
 
 
 class IMessagingService(ABC):

@@ -2,11 +2,9 @@
 
 __all__ = ["DefaultIPCService"]
 
-from types import SimpleNamespace
-
-from mugen.core.contract.ipc_extension import IIPCExtension
-from mugen.core.contract.ipc_service import IIPCService
-from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.extension.ipc import IIPCExtension
+from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.service.ipc import IIPCService
 
 
 class DefaultIPCService(IIPCService):
@@ -16,10 +14,8 @@ class DefaultIPCService(IIPCService):
 
     def __init__(
         self,
-        config: dict,
         logging_gateway: ILoggingGateway,
     ) -> None:
-        self._config = SimpleNamespace(**config)
         self._logging_gateway = logging_gateway
 
     async def handle_ipc_request(self, platform: str, ipc_payload: dict) -> None:

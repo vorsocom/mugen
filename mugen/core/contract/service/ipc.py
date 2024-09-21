@@ -4,7 +4,7 @@ __all__ = ["IIPCService"]
 
 from abc import ABC, abstractmethod
 
-from mugen.core.contract.ipc_extension import IIPCExtension
+from mugen.core.contract.extension.ipc import IIPCExtension
 
 
 class IIPCService(ABC):

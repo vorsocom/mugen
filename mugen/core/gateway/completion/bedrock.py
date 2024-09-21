@@ -7,31 +7,30 @@ from types import SimpleNamespace
 
 import boto3
 from botocore.exceptions import ClientError
+from dependency_injector import providers
 
-from mugen.core.contract.completion_gateway import ICompletionGateway
-from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.gateway.completion import ICompletionGateway
+from mugen.core.contract.gateway.logging import ILoggingGateway
 
 
 # pylint: disable=too-few-public-methods
 class BedrockCompletionGateway(ICompletionGateway):
     """An AWS Bedrock chat compeltion gateway."""
 
-    _env_prefix = "bedrock"
-
     def __init__(
         self,
-        config: dict,
+        config: providers.Configuration,  # pylint: disable=c-extension-no-member
         logging_gateway: ILoggingGateway,
     ) -> None:
         super().__init__()
-        self._config = SimpleNamespace(**config)
+        self._config = config
         self._logging_gateway = logging_gateway
 
         self._client = boto3.client(
             service_name="bedrock-runtime",
-            region_name=self._config.bedrock_api_region,
-            aws_access_key_id=self._config.bedrock_api_access_key_id,
-            aws_secret_access_key=self._config.bedrock_api_secret_access_key,
+            region_name=self._config.aws.bedrock.api.region(),
+            aws_access_key_id=self._config.aws.bedrock.api.access_key_id(),
+            aws_secret_access_key=self._config.aws.bedrock.api.secret_access_key(),
         )
 
     async def get_completion(
@@ -39,10 +38,8 @@ class BedrockCompletionGateway(ICompletionGateway):
         context: list[dict],
         operation: str = "completion",
     ) -> SimpleNamespace | None:
-        model = self._config.__dict__[f"{self._env_prefix}_api_{operation}_model"]
-        temperature = float(
-            self._config.__dict__[f"{self._env_prefix}_api_{operation}_temp"]
-        )
+        model = self._config.aws.bedrock.api()[operation]["model"]
+        temperature = float(self._config.aws.bedrock.api()[operation]["temp"])
 
         response = None
         conversation = []

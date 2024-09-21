@@ -5,13 +5,11 @@ __all__ = ["IKnowledgeRetrievalGateway"]
 from abc import ABC, abstractmethod
 
 
-# pylint: disable=too-few-public-methods
-class IKnowledgeRetrievalGateway(ABC):
+class IKnowledgeRetrievalGateway(ABC):  # pylint: disable=too-few-public-methods
     """An ABC for knowledge retrival gateways."""
 
-    # pylint: disable=too-many-arguments
     @abstractmethod
-    async def search_similar(
+    async def search_similar(  # pylint: disable=too-many-arguments
         self,
         collection_name: str,
         search_term: str,

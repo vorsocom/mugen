@@ -3,13 +3,13 @@
 # https://console.groq.com/docs/api-reference#chat
 
 import traceback
-from types import SimpleNamespace
+from typing import Any
 
+from dependency_injector import providers
 from groq import AsyncGroq, GroqError
-from groq.types.chat import ChatCompletionMessage
 
-from mugen.core.contract.completion_gateway import ICompletionGateway
-from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.gateway.completion import ICompletionGateway
+from mugen.core.contract.gateway.logging import ILoggingGateway
 
 
 # pylint: disable=too-few-public-methods
@@ -20,23 +20,21 @@ class GroqCompletionGateway(ICompletionGateway):
 
     def __init__(
         self,
-        config: dict,
+        config: providers.Configuration,  # pylint: disable=c-extension-no-member
         logging_gateway: ILoggingGateway,
     ) -> None:
         super().__init__()
-        self._config = SimpleNamespace(**config)
-        self._api = AsyncGroq(api_key=self._config.groq_api_key)
+        self._config = config
+        self._api = AsyncGroq(api_key=self._config.groq.api.key())
         self._logging_gateway = logging_gateway
 
     async def get_completion(
         self,
         context: list[dict],
         operation: str = "completion",
-    ) -> ChatCompletionMessage | None:
-        model = self._config.__dict__[f"{self._env_prefix}_api_{operation}_model"]
-        temperature = float(
-            self._config.__dict__[f"{self._env_prefix}_api_{operation}_temp"]
-        )
+    ) -> Any | None:
+        model = self._config.aws.bedrock.api()[operation]["model"]
+        temperature = float(self._config.aws.bedrock.api()[operation]["temp"])
 
         response = None
         # self._logging_gateway.debug(context)

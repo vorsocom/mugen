@@ -6,16 +6,16 @@ import asyncio
 from http import HTTPMethod
 from io import BytesIO
 import json
-from types import SimpleNamespace
 
 import aiohttp
+from dependency_injector import providers
 
-from mugen.core.contract.ipc_service import IIPCService
-from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from mugen.core.contract.logging_gateway import ILoggingGateway
-from mugen.core.contract.messaging_service import IMessagingService
-from mugen.core.contract.user_service import IUserService
-from mugen.core.contract.whatsapp_client import IWhatsAppClient
+from mugen.core.contract.client.whatsapp import IWhatsAppClient
+from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.service.ipc import IIPCService
+from mugen.core.contract.service.messaging import IMessagingService
+from mugen.core.contract.service.user import IUserService
 
 
 # pylint: disable=too-many-instance-attributes
@@ -30,10 +30,9 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
     _stop_listening: bool = False
 
-    # pylint: disable=too-many-arguments
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments
         self,
-        config: dict = None,
+        config: providers.Configuration = None,  # pylint: disable=c-extension-no-member
         ipc_queue: asyncio.Queue = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
@@ -42,7 +41,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         user_service: IUserService = None,
     ) -> None:
         self._client_session: aiohttp.ClientSession = None
-        self._config = SimpleNamespace(**config)
+        self._config = config
         self._ipc_queue = ipc_queue
         self._ipc_service = ipc_service
         self._keyval_storage_gateway = keyval_storage_gateway
@@ -51,14 +50,16 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         self._user_service = user_service
 
         self._api_base_path = (
-            f"{self._config.whatsapp_graph_api_base_url}/"
-            f"{self._config.whatsapp_graph_api_version}"
+            f"{self._config.whatsapp.graphapi.base_url()}/"
+            f"{self._config.whatsapp.graphapi.version()}"
         )
 
-        self._api_media_path = f"{self._config.whatsapp_business_phone_number_id}/media"
+        self._api_media_path = (
+            f"{self._config.whatsapp.business.phone_number_id()}/media"
+        )
 
         self._api_messages_path = (
-            f"{self._config.whatsapp_business_phone_number_id}/messages"
+            f"{self._config.whatsapp.business.phone_number_id()}/messages"
         )
 
     async def __aenter__(self) -> None:
@@ -350,7 +351,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
     ) -> str | None:
         """Make a call to Graph API."""
         headers = {
-            "Authorization": f"Bearer {self._config.whatsapp_graph_api_access_token}",
+            "Authorization": f"Bearer {self._config.whatsapp.graphapi.access_token()}",
         }
 
         if content_type:

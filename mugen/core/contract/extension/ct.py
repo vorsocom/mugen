@@ -22,9 +22,8 @@ class ICTExtension(ABC):
     def get_context(self, user_id: str) -> list[dict]:
         """Provides conversation context through system messages."""
 
-    # pylint: disable=too-many-arguments
     @abstractmethod
-    async def process_message(
+    async def process_message(  # pylint: disable=too-many-arguments
         self,
         message: str,
         role: str,

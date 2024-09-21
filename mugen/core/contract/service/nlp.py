@@ -5,8 +5,7 @@ __all__ = ["INLPService"]
 from abc import ABC, abstractmethod
 
 
-# pylint: disable=too-few-public-methods
-class INLPService(ABC):
+class INLPService(ABC):  # pylint: disable=too-few-public-methods
     """An ABC for NLP services."""
 
     @abstractmethod

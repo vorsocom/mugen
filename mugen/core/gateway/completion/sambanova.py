@@ -8,25 +8,24 @@ import traceback
 from types import SimpleNamespace
 from typing import Any
 
+from dependency_injector import providers
 import pycurl
 
-from mugen.core.contract.completion_gateway import ICompletionGateway
-from mugen.core.contract.logging_gateway import ILoggingGateway
+from mugen.core.contract.gateway.completion import ICompletionGateway
+from mugen.core.contract.gateway.logging import ILoggingGateway
 
 
 # pylint: disable=too-few-public-methods
 class SambaNovaCompletionGateway(ICompletionGateway):
     """A SambaNova chat compeltion gateway."""
 
-    _env_prefix = "sambanova"
-
     def __init__(
         self,
-        config: dict,
+        config: providers.Configuration,  # pylint: disable=c-extension-no-member
         logging_gateway: ILoggingGateway,
     ) -> None:
         super().__init__()
-        self._config = SimpleNamespace(**config)
+        self._config = config
         self._logging_gateway = logging_gateway
 
     async def get_completion(
@@ -34,15 +33,13 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         context: list[dict],
         operation: str = "completion",
     ) -> SimpleNamespace | None:
-        model = self._config.__dict__[f"{self._env_prefix}_{operation}_model"]
-        _temperature = float(
-            self._config.__dict__[f"{self._env_prefix}_api_{operation}_temp"]
-        )
+        model = self._config.sambanova.api()[operation]["model"]
+        _temperature = float(self._config.sambanova.api()[operation]["temp"])
 
         response = None
         try:
             headers: list[str] = [
-                f"Authorization: Basic {self._config.sambanova_api_key}",
+                f"Authorization: Basic {self._config.sambanova.api.key()}",
                 "Content-Type: application/json",
             ]
             data: dict[str, Any] = {
@@ -59,7 +56,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
 
             # pylint: disable=c-extension-no-member
             c = pycurl.Curl()
-            c.setopt(c.URL, self._config.sambanova_api_endpoint)
+            c.setopt(c.URL, self._config.sambanova.api.endpoint())
             c.setopt(c.POSTFIELDS, json.dumps(data))
             c.setopt(c.HTTPHEADER, headers)
             c.setopt(c.WRITEFUNCTION, buffer.write)

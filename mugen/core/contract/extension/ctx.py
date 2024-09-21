@@ -5,8 +5,7 @@ __all__ = ["ICTXExtension"]
 from abc import ABC, abstractmethod
 
 
-# pylint: disable=too-few-public-methods
-class ICTXExtension(ABC):
+class ICTXExtension(ABC):  # pylint: disable=too-few-public-methods
     """An ABC for context extensions."""
 
     @property

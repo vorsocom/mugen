@@ -4,15 +4,15 @@ __all__ = ["DefaultUserService"]
 
 import pickle
 
-from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from mugen.core.contract.logging_gateway import ILoggingGateway
-from mugen.core.contract.user_service import IUserService
-
-KNOWN_USERS_LIST_KEY: str = "known_users_list"
+from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.service.user import IUserService
 
 
 class DefaultUserService(IUserService):
     """The default implementation of IUserService."""
+
+    _known_users_list_key: str = "known_users_list"
 
     def __init__(
         self,
@@ -31,9 +31,9 @@ class DefaultUserService(IUserService):
         self.save_known_users_list(known_users)
 
     def get_known_users_list(self) -> dict:
-        if self._keyval_storage_gateway.has_key(KNOWN_USERS_LIST_KEY):
+        if self._keyval_storage_gateway.has_key(self._known_users_list_key):
             return pickle.loads(
-                self._keyval_storage_gateway.get(KNOWN_USERS_LIST_KEY, False)
+                self._keyval_storage_gateway.get(self._known_users_list_key, False)
             )
 
         return {}
@@ -46,5 +46,5 @@ class DefaultUserService(IUserService):
 
     def save_known_users_list(self, known_users: dict) -> None:
         self._keyval_storage_gateway.put(
-            KNOWN_USERS_LIST_KEY, pickle.dumps(known_users)
+            self._known_users_list_key, pickle.dumps(known_users)
         )
