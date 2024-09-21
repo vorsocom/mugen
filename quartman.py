@@ -9,11 +9,12 @@ __email__ = "brightideas@vorsocomputing.com"
 __version__ = "0.26.3"
 
 import asyncio
+import os
 
 from mugen import create_quart_app, run_assistants
 
 # Create Quart mugen.
-mugen = create_quart_app()
+mugen = create_quart_app(basedir=os.path.dirname(os.path.realpath(__file__)))
 
 
 @mugen.before_serving

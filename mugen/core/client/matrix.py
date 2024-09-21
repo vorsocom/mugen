@@ -3,13 +3,12 @@
 __all__ = ["DefaultMatrixClient"]
 
 import asyncio
-import json
 import pickle
 import sys
 import traceback
-from types import SimpleNamespace
 from typing import Coroutine
 
+from dependency_injector import providers
 from nio import (
     AsyncClient,
     InviteAliasEvent,
@@ -41,29 +40,29 @@ from nio.api import _FilterT
 from nio.client.base_client import logged_in
 from nio.exceptions import OlmUnverifiedDeviceError
 
-from mugen.core.contract.ipc_service import IIPCService
-from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from mugen.core.contract.logging_gateway import ILoggingGateway
-from mugen.core.contract.messaging_service import IMessagingService
-from mugen.core.contract.user_service import IUserService
-
-FLAGS_KEY: str = "m.agent_flags"
-
-KNOWN_DEVICES_LIST_KEY: str = "known_devices_list"
+from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.service.ipc import IIPCService
+from mugen.core.contract.service.messaging import IMessagingService
+from mugen.core.contract.service.user import IUserService
 
 
-# pylint: disable=too-many-instance-attributes
-class DefaultMatrixClient(AsyncClient):
+class DefaultMatrixClient(AsyncClient):  # pylint: disable=too-many-instance-attributes
     """A custom implementation of nio.AsyncClient."""
 
+    _flags_key: str = "m.agent_flags"
+
     _ipc_callback: Coroutine
+
+    _known_devices_list_key: str = "known_devices_list"
 
     _sync_key: str = "matrix_client_sync_next_batch"
 
     # pylint: disable=too-many-arguments
     def __init__(
         self,
-        di_config: dict = None,
+        # pylint: disable=c-extension-no-member
+        config: providers.Configuration = None,
         ipc_queue: asyncio.Queue = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
@@ -71,11 +70,11 @@ class DefaultMatrixClient(AsyncClient):
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
     ):
-        self._config = SimpleNamespace(**di_config)
+        self._config = config
         super().__init__(
-            homeserver=self._config.matrix_homeserver,
-            user=self._config.matrix_client_user,
-            store_path=self._config.matrix_olm_store_path,
+            homeserver=self._config.matrix.homeserver(),
+            user=self._config.matrix.client_user(),
+            store_path=self._config.matrix.olm_store_path(),
         )
         self._ipc_queue = ipc_queue
         self._ipc_service = ipc_service
@@ -112,8 +111,8 @@ class DefaultMatrixClient(AsyncClient):
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
         if self._keyval_storage_gateway.get("client_access_token") is None:
             # Load password and device name from storage.
-            pw = self._config.matrix_client_password
-            dn = self._config.matrix_client_device_name
+            pw = self._config.matrix.client.password()
+            dn = self._config.matrix.client.device()
 
             # Attempt  password login.
             resp = await self.login(pw, dn)
@@ -292,9 +291,9 @@ class DefaultMatrixClient(AsyncClient):
     def cleanup_known_user_devices_list(self) -> None:
         """Clean up known user devices list."""
         self._logging_gateway.debug("Cleaning up known user devices.")
-        if self._keyval_storage_gateway.has_key(KNOWN_DEVICES_LIST_KEY):
+        if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
             known_devices = pickle.loads(
-                self._keyval_storage_gateway.get(KNOWN_DEVICES_LIST_KEY, False)
+                self._keyval_storage_gateway.get(self._known_devices_list_key, False)
             )
             for user_id in known_devices.keys():
                 active_devices = [
@@ -305,15 +304,15 @@ class DefaultMatrixClient(AsyncClient):
 
             # Persist changes.
             self._keyval_storage_gateway.put(
-                KNOWN_DEVICES_LIST_KEY, pickle.dumps(known_devices)
+                self._known_devices_list_key, pickle.dumps(known_devices)
             )
 
     def trust_known_user_devices(self) -> None:
         """Trust all known user devices."""
         self._logging_gateway.debug("Trusting all known user devices.")
-        if self._keyval_storage_gateway.has_key(KNOWN_DEVICES_LIST_KEY):
+        if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
             known_devices = pickle.loads(
-                self._keyval_storage_gateway.get(KNOWN_DEVICES_LIST_KEY, False)
+                self._keyval_storage_gateway.get(self._known_devices_list_key, False)
             )
             for user_id in known_devices.keys():
                 self._logging_gateway.debug(f"User: {user_id}")
@@ -333,9 +332,11 @@ class DefaultMatrixClient(AsyncClient):
             self._logging_gateway.debug(f"Found {device_id}.")
             known_devices = {}
             # Load the known devices list if it already exists.
-            if self._keyval_storage_gateway.has_key(KNOWN_DEVICES_LIST_KEY):
+            if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
                 known_devices = pickle.loads(
-                    self._keyval_storage_gateway.get(KNOWN_DEVICES_LIST_KEY, False)
+                    self._keyval_storage_gateway.get(
+                        self._known_devices_list_key, False
+                    )
                 )
 
             # If the list (new or loaded) does not contain an entry for the user.
@@ -354,7 +355,7 @@ class DefaultMatrixClient(AsyncClient):
 
                 # Persist changes to the known devices list.
                 self._keyval_storage_gateway.put(
-                    KNOWN_DEVICES_LIST_KEY, pickle.dumps(known_devices)
+                    self._known_devices_list_key, pickle.dumps(known_devices)
                 )
 
     ## Callbacks.
@@ -378,8 +379,10 @@ class DefaultMatrixClient(AsyncClient):
         # Only process invites from allowed domains.
         # Federated servers need to be in the allowed domains list for their users
         # to initiate conversations with the assistant.
-        allowed_domains: list = json.loads(self._config.matrix_allowed_domains)
-        if event.sender.split(":")[1] not in allowed_domains:
+        allowed_domains: list = self._config.matrix.domains.allowed()
+        denied_domains: list = self._config.matrix.domains.denied()
+        sender_domain: str = event.sender.split(":")[1]
+        if sender_domain not in allowed_domains or sender_domain in denied_domains:
             await self.room_leave(room.room_id)
             self._logging_gateway.warning(
                 "InviteMemberEvent: Rejected invitation. Reason: Domain"
@@ -389,11 +392,8 @@ class DefaultMatrixClient(AsyncClient):
 
         # If the assistant is in limited-beta mode, only process invites from the
         # list of selected beta users.
-        if self._config.mugen_limited_beta.lower() in (
-            "true",
-            "1",
-        ):
-            beta_users: list = json.loads(self._config.matrix_limited_beta_users)
+        if self._config.mugen.beta():
+            beta_users: list = self._config.matrix.beta.users()
             if event.sender not in beta_users:
                 await self.room_leave(room.room_id)
                 self._logging_gateway.warning(
@@ -421,7 +421,7 @@ class DefaultMatrixClient(AsyncClient):
         # Flag room as direct chat.
         await self.room_put_state(
             room_id=room.room_id,
-            event_type=FLAGS_KEY,
+            event_type=self._flags_key,
             content={"m.direct": 1},
         )
 
@@ -594,7 +594,7 @@ class DefaultMatrixClient(AsyncClient):
         """Indicate if the given room was flagged as a 1:1 chat."""
         room_state = await self.room_get_state(room_id)
         flags: list[dict[str, dict[str, int]]] = [
-            x for x in room_state.events if x["type"] == FLAGS_KEY
+            x for x in room_state.events if x["type"] == self._flags_key
         ]
         return len(flags) > 0 and "m.direct" in flags[0].get("content").keys()
 

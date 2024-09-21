@@ -4,7 +4,7 @@ import asyncio
 
 from quart import abort, current_app, request
 
-from mugen.core.api import api_bp
+from mugen.core.api import api
 from mugen.core.api.decorators import (
     matrix_platform_required,
     whatsapp_platform_required,
@@ -13,7 +13,7 @@ from mugen.core.api.decorators import (
 )
 
 
-@api_bp.get("/matrix")
+@api.get("/matrix")
 @matrix_platform_required
 async def matrix_index():
     """Matrix index endpoint."""
@@ -41,7 +41,7 @@ async def matrix_index():
     return {"status": response["response"]}
 
 
-@api_bp.put("/matrix/webhook")
+@api.put("/matrix/webhook")
 @matrix_platform_required
 async def matrix_cron():
     """Handle IPC calls for the Matrix platform."""
@@ -76,7 +76,7 @@ async def matrix_cron():
     return response
 
 
-@api_bp.get("/whatsapp")
+@api.get("/whatsapp")
 @whatsapp_platform_required
 async def whatsapp_index():
     """Whatsapp index endpoint."""
@@ -104,7 +104,7 @@ async def whatsapp_index():
     return {"status": response["response"]}
 
 
-@api_bp.get("/whatsapp/wacapi/webhook")
+@api.get("/whatsapp/wacapi/webhook")
 @whatsapp_platform_required
 @whatsapp_server_ip_allow_list_required
 async def whatsapp_wcapi_verification():
@@ -112,13 +112,13 @@ async def whatsapp_wcapi_verification():
     if (
         request.args.get("hub.mode") == "subscribe"
         and request.args.get("hub.verify_token")
-        == current_app.config["ENV"]["whatsapp_webhook_verify_token"]
+        == current_app.config["ENV"].whatsapp.webhook.verification_token
     ):
         return request.args.get("hub.challenge")
     abort(400)
 
 
-@api_bp.post("/whatsapp/wacapi/webhook")
+@api.post("/whatsapp/wacapi/webhook")
 @whatsapp_platform_required
 @whatsapp_server_ip_allow_list_required
 @whatsapp_request_signature_verification_required
@@ -152,7 +152,7 @@ async def whatsapp_wcapi_webhook():
     return response
 
 
-@api_bp.put("/whatsapp/webhook")
+@api.put("/whatsapp/webhook")
 @whatsapp_platform_required
 async def whatsapp_webhook():
     """Handle IPC calls for the WhatsApp platform."""
