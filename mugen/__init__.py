@@ -34,30 +34,26 @@ def create_quart_app(basedir: str):
         config = tomlkit.loads(f.read()).value
         di.config.from_dict(config)
 
-    #
-    os.environ["MUGEN_BASEDIR"] = basedir
-
-    # di.config.from_dict(dict((k.lower(), v) for k, v in dotenv_values().items()))
-    env_config = di.config
-
     # Check for valid configuration name.
-    config_name = env_config.mugen.config()
-    if config_name not in ("default", "development", "testing", "production"):
+    environment = di.config.mugen.environment()
+    if environment not in ("default", "development", "testing", "production"):
         print("Invalid configuration name.")
         sys.exit(1)
 
-    mugen.logger.warning("Creating app with %s configuration.", config_name)
-
     # Create application configuration object.
-    mugen.config.from_object(AppConfig[config_name])
+    mugen.config.from_object(AppConfig[environment])
     mugen.config["ENV"] = di.config
 
     # Get log level and base directory from environment.
     di.config.mugen.logger.level.from_value(mugen.config["LOG_LEVEL"])
     di.config.basedir.from_value(mugen.config["BASEDIR"])
 
+    # Get logger.
+    logging_gateway = di.logging_gateway()
+    logging_gateway.warning(f"Creating app with {environment} configuration.")
+
     # Initialize application.
-    AppConfig[config_name].init_app(mugen)
+    AppConfig[environment].init_app(mugen)
 
     @mugen.after_request
     def call_after_request_callbacks(response):
@@ -68,8 +64,7 @@ def create_quart_app(basedir: str):
 
     # Ensure that API endpoints can access the ipc_queue
     # through current_app.ipc_queue
-    mugen.matrix_ipc_queue = di.matrix_ipc_queue()
-    mugen.whatsapp_ipc_queue = di.whatsapp_ipc_queue()
+    mugen.di = di
 
     # Return the built application object.
     return mugen
@@ -77,6 +72,7 @@ def create_quart_app(basedir: str):
 
 # pylint: disable=too-many-locals
 # pylint: disable=too-many-statements
+# pylint: disable=too-many-branches
 async def run_assistants() -> None:
     """Entrypoint for assistants."""
     # Dependency Injection.
@@ -193,21 +189,24 @@ async def run_assistants() -> None:
         sys.exit(1)
 
     # Register blueprints after extensions have been loaded.
-    # This allow extensions to hack the api.
+    # This allows extensions to hack the api.
     mugen.register_blueprint(api, url_prefix="/api")
 
     tasks = []
     platforms = di.config.mugen.platforms()
 
-    # Run Matrix assistant.
-    if "matrix" in platforms:
-        tasks.append(asyncio.create_task(run_matrix_assistant()))
+    try:
+        # Run Matrix assistant.
+        if "matrix" in platforms:
+            tasks.append(asyncio.create_task(run_matrix_assistant()))
 
-    # Run Whatsapp assistant.
-    if "whatsapp" in platforms:
-        tasks.append(asyncio.create_task(run_whatsapp_assistant()))
+        # Run Whatsapp assistant.
+        if "whatsapp" in platforms:
+            tasks.append(asyncio.create_task(run_whatsapp_assistant()))
 
-    await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks)
+    except asyncio.exceptions.CancelledError:
+        await di.whatsapp_client().close()
 
 
 async def run_matrix_assistant() -> None:
@@ -254,16 +253,4 @@ async def run_matrix_assistant() -> None:
 
 async def run_whatsapp_assistant() -> None:
     """Run assistant for the whatsapp platform."""
-    # Get logging gateway.
-    logging_gateway = di.logging_gateway()
-
-    # Initialise WhatsApp client.
-    async with di.whatsapp_client() as whatsapp_client:
-        try:
-            await asyncio.gather(
-                asyncio.create_task(
-                    whatsapp_client.listen_forever(),
-                ),
-            )
-        except asyncio.exceptions.CancelledError:
-            logging_gateway.debug("WhatsApp client shutting down.")
+    await asyncio.gather(asyncio.create_task(di.whatsapp_client().init()))

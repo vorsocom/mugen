@@ -11,30 +11,31 @@ from mugen.core.api.decorators import (
     whatsapp_request_signature_verification_required,
     whatsapp_server_ip_allow_list_required,
 )
+from mugen.core.contract.service.ipc import IIPCService
 
 
 @api.get("/matrix")
 @matrix_platform_required
 async def matrix_index():
     """Matrix index endpoint."""
-    # Get the IPC queue from the applicaiton object.
-    ipc_queue: asyncio.Queue = current_app.matrix_ipc_queue
+    # Get the IPC service from the dependency injector.
+    ipc_service: IIPCService = current_app.di.ipc_service()
 
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
 
-    # Put payload into IPC queue.
-    await ipc_queue.put(
+    await ipc_service.handle_ipc_request(
+        "matrix",
         {
             "response_queue": response_queue,
             "command": "matrix_get_status",
-        }
+        },
     )
 
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
     while response_queue.empty():
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
 
     # Get the response from the response queue.
     response = await response_queue.get()
@@ -51,25 +52,25 @@ async def matrix_cron():
     if "command" not in data.keys() or data["command"] == "":
         abort(400)
 
-    # Get the IPC queue from the applicaiton object.
-    ipc_queue: asyncio.Queue = current_app.matrix_ipc_queue
+    # Get the IPC service from the dependency injector.
+    ipc_service: IIPCService = current_app.di.ipc_service()
 
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
 
-    # Put payload into IPC queue.
-    await ipc_queue.put(
+    await ipc_service.handle_ipc_request(
+        "matrix",
         {
             "response_queue": response_queue,
             "command": data["command"],
             "data": data,
-        }
+        },
     )
 
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
     while response_queue.empty():
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
 
     # Get the response from the response queue.
     response = await response_queue.get()
@@ -80,24 +81,24 @@ async def matrix_cron():
 @whatsapp_platform_required
 async def whatsapp_index():
     """Whatsapp index endpoint."""
-    # Get the IPC queue from the applicaiton object.
-    ipc_queue: asyncio.Queue = current_app.whatsapp_ipc_queue
+    # Get the IPC service from the dependency injector.
+    ipc_service: IIPCService = current_app.di.ipc_service()
 
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
 
-    # Put payload into IPC queue.
-    await ipc_queue.put(
+    await ipc_service.handle_ipc_request(
+        "whatsapp",
         {
             "response_queue": response_queue,
             "command": "whatsapp_get_status",
-        }
+        },
     )
 
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
     while response_queue.empty():
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
 
     # Get the response from the response queue.
     response = await response_queue.get()
@@ -127,25 +128,25 @@ async def whatsapp_wcapi_webhook():
     # Get request data.
     data = await request.get_json()
 
-    # Get the IPC queue from the applicaiton object.
-    ipc_queue: asyncio.Queue = current_app.whatsapp_ipc_queue
+    # Get the IPC service from the dependency injector.
+    ipc_service: IIPCService = current_app.di.ipc_service()
 
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
 
-    # Put payload into IPC queue.
-    await ipc_queue.put(
+    await ipc_service.handle_ipc_request(
+        "whatsapp",
         {
             "response_queue": response_queue,
             "command": "whatsapp_wacapi_event",
             "data": data,
-        }
+        },
     )
 
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
     while response_queue.empty():
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
 
     # Get the response from the response queue.
     response = await response_queue.get()
@@ -162,25 +163,25 @@ async def whatsapp_webhook():
     if "command" not in data.keys() or data["command"] == "":
         abort(400)
 
-    # Get the IPC queue from the applicaiton object.
-    ipc_queue: asyncio.Queue = current_app.whatsapp_ipc_queue
+    # Get the IPC service from the dependency injector.
+    ipc_service: IIPCService = current_app.di.ipc_service()
 
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
 
-    # Put payload into IPC queue.
-    await ipc_queue.put(
+    await ipc_service.handle_ipc_request(
+        "whatsapp",
         {
             "response_queue": response_queue,
             "command": data["command"],
             "data": data,
-        }
+        },
     )
 
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
     while response_queue.empty():
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
 
     # Get the response from the response queue.
     response = await response_queue.get()

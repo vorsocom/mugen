@@ -4,7 +4,7 @@ assistant.persona = ""
 #
 beta = true
 #
-config = "development"
+environment = "development"
 #
 logger.name = "COM.VORSOCOMPUTING.MUGEN"
 #
@@ -32,13 +32,13 @@ service.nlp = "mugen.core.service.nlp"
 #
 service.user = "mugen.core.service.user"
 #
-plugins = [
-    "mugen.core.plugin.muapp_whatsapp.ipc_ext_wacapi",
-]
+[[mugen.modules.core.plugins]]
+type = "ipc"
+path = "mugen.core.plugin.muapp_whatsapp.ipc_ext_wacapi"
 #
-[mugen.modules]
-#
-extensions = []
+[[mugen.modules.extensions]]
+# type = ""
+# path = ""
 #===MATRIX===
 [matrix]
 #
