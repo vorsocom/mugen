@@ -28,8 +28,6 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
     _api_messages_path: str
 
-    _stop_listening: bool = False
-
     def __init__(  # pylint: disable=too-many-arguments
         self,
         config: providers.Configuration = None,  # pylint: disable=c-extension-no-member
@@ -62,34 +60,13 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             f"{self._config.whatsapp.business.phone_number_id()}/messages"
         )
 
-    async def __aenter__(self) -> None:
-        """Initialisation."""
-        self._logging_gateway.debug("DefaultWhatsAppClient.__aenter__")
+    async def init(self) -> None:
+        self._logging_gateway.debug("DefaultWhatsAppClient.init")
         self._client_session = aiohttp.ClientSession()
-        return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Finalisation."""
-        self._logging_gateway.debug("DefaultWhatsAppClient.__aexit__")
-        self._stop_listening = True
+    async def close(self) -> None:
+        self._logging_gateway.debug("DefaultWhatsAppClient.close")
         await self._client_session.close()
-        await asyncio.sleep(0.250)
-
-    async def listen_forever(self, loop_sleep_time: float = 0.01) -> None:
-        # Loop until exit.
-        while not self._stop_listening:
-            try:
-                while not self._ipc_queue.empty():
-                    payload = await self._ipc_queue.get()
-                    asyncio.create_task(
-                        self._ipc_service.handle_ipc_request("whatsapp", payload)
-                    )
-                    self._ipc_queue.task_done()
-
-                await asyncio.sleep(loop_sleep_time)
-            except asyncio.exceptions.CancelledError:
-                self._logging_gateway.debug("WhatsApp listen_forever loop exited.")
-                break
 
     async def delete_media(self, media_id: str) -> str | None:
         return await self._call_api(media_id, method=HTTPMethod.DELETE)
