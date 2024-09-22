@@ -59,9 +59,6 @@ def create_quart_app(basedir: str):
     # Initialize application.
     AppConfig[config_name].init_app(mugen)
 
-    # Register blueprints.
-    mugen.register_blueprint(api, url_prefix="/api")
-
     @mugen.after_request
     def call_after_request_callbacks(response):
         """Ensure all registered after-request-callbacks are called."""
@@ -194,6 +191,10 @@ async def run_assistants() -> None:
     except TypeError as e:
         logging_gateway.error(e.__traceback__)
         sys.exit(1)
+
+    # Register blueprints after extensions have been loaded.
+    # This allow extensions to hack the api.
+    mugen.register_blueprint(api, url_prefix="/api")
 
     tasks = []
     platforms = di.config.mugen.platforms()
