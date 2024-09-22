@@ -2248,6 +2248,37 @@ files = [
 six = ">=1.5"
 
 [[package]]
+name = "python-olm"
+version = "3.2.16"
+description = "python CFFI bindings for the olm cryptographic ratchet library"
+optional = false
+python-versions = "*"
+files = [
+    {file = "python-olm-3.2.16.tar.gz", hash = "sha256:a1c47fce2505b7a16841e17694cbed4ed484519646ede96ee9e89545a49643c9"},
+    {file = "python_olm-3.2.16-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c10e94f1369f6ffa3dae2cc8f74757a6c050cefeb4f59ba10f95da0195e88329"},
+    {file = "python_olm-3.2.16-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2fd199908833349551931686ebdd983fdd9cf01bd2f98fd1991ccf99ed2a7049"},
+    {file = "python_olm-3.2.16-cp310-cp310-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:989af27a123ac0cb5c56269097e8ce879185ecc46d0c18b849ded43c8944f423"},
+    {file = "python_olm-3.2.16-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7c528a71df69db23ede6651d149c691c569cf852ddd16a28d1d1bdf923ccbfa6"},
+    {file = "python_olm-3.2.16-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d41ce8cf04bfe0986c802986d04d2808fbb0f8ddd7a5a53c1f2eef7a9db76ae1"},
+    {file = "python_olm-3.2.16-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:6862318d4970de508db8b84ad432e2f6b29286f91bfc136020cbb2aa2cf726fc"},
+    {file = "python_olm-3.2.16-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:16bbb209d43d62135450696526ed0a811150e9de9df32ed91542bf9434e79030"},
+    {file = "python_olm-3.2.16-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:45e76b3f5060a5cf8451140d6c7e3b438f972ff432b6f39d0ca2c7f2296509bb"},
+    {file = "python_olm-3.2.16-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:10a5e68a2f4b5a2bfa5fdb5dbfa22396a551730df6c4a572235acaa96e997d3f"},
+    {file = "python_olm-3.2.16-cp37-cp37m-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f42c048b9fc420d638a11f2f08e67745307a576914a4e68ed0ca4554a10487bf"},
+    {file = "python_olm-3.2.16-cp37-cp37m-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:51b7f9f655c1812f7e3a859ca6048ed6870962c913d74ce956feffe49b0d04e2"},
+    {file = "python_olm-3.2.16-cp37-cp37m-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:a0a449c16c5f3756b8e1a89763c22391b43ed6da17046df08bb4be7dab609b35"},
+    {file = "python_olm-3.2.16-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:04a4da47b90c5b01fba89fffa1710d10fd3a33b6f47e4fe33402325858556b38"},
+    {file = "python_olm-3.2.16-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:39ddf368f30979a0bf8bc1a1b6a944d991b759b948c94e9d738e0181cbe22767"},
+    {file = "python_olm-3.2.16-cp38-cp38-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:0558b1cad408eb473a90c0f64f892a8f59797408f3ad256f2ca8ae440ff2002c"},
+    {file = "python_olm-3.2.16-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1488b9d7f08754a9da927f582dbe426542225c9796b3b71a3be241622226d6f4"},
+    {file = "python_olm-3.2.16-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d697b93b1aae4f425dd3b651f288d1209f2f88d991eed0432a96ba229a50e978"},
+    {file = "python_olm-3.2.16-cp39-cp39-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:6f2215ff1635b6b70dbd0bd8549424cf7bb0179aba72afd23205aae3707a686e"},
+]
+
+[package.dependencies]
+cffi = ">=1.0.0"
+
+[[package]]
 name = "python-socks"
 version = "2.5.1"
 description = "Core proxy (SOCKS4, SOCKS5, HTTP tunneling) functionality for Python"
@@ -3508,4 +3539,4 @@ multidict = ">=4.0"
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "cfac583efaf1d6066da9675c4338bece3a653891e393ba1a9c9d2b5559c542f9"
+content-hash = "5885bd6b909e5ad943350e9092e2743476b21ef0c87c811725081c1df91dfe3f"

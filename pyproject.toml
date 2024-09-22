@@ -24,6 +24,7 @@ sentence-transformers = "^3.1.1"
 yake = "^0.4.8"
 tomlkit = "^0.13.2"
 peewee = "^3.17.6"
+python-olm = "^3.2.16"
 
 
 [tool.poetry.group.dev.dependencies]
