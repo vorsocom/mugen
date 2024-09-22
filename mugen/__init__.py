@@ -12,6 +12,7 @@ import tomlkit
 
 from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
+from mugen.core.contract.extension.fw import IFWExtension
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rag import IRAGExtension
@@ -137,8 +138,7 @@ async def run_assistants() -> None:
                 ct_ext = ct_ext_class()
                 if platforms_supported(ct_ext):
                     messaging_service.register_ct_extension(ct_ext)
-
-            if ext_type == "ctx":
+            elif ext_type == "ctx":
                 ctx_ext_class = [
                     x
                     for x in ICTXExtension.__subclasses__()
@@ -147,8 +147,14 @@ async def run_assistants() -> None:
                 ctx_ext = ctx_ext_class()
                 if platforms_supported(ctx_ext):
                     messaging_service.register_ctx_extension(ctx_ext)
-
-            if ext_type == "ipc":
+            elif ext_type == "fw":
+                fw_ext_class = [
+                    x for x in IFWExtension.__subclasses__() if x.__module__ == ext_path
+                ][0]
+                fw_ext = fw_ext_class()
+                if platforms_supported(fw_ext):
+                    await fw_ext.setup()
+            elif ext_type == "ipc":
                 ipc_ext_class = [
                     x
                     for x in IIPCExtension.__subclasses__()
@@ -157,16 +163,14 @@ async def run_assistants() -> None:
                 ipc_ext = ipc_ext_class()
                 if platforms_supported(ipc_ext):
                     ipc_service.register_ipc_extension(ipc_ext)
-
-            if ext_type == "mh":
+            elif ext_type == "mh":
                 mh_ext_class = [
                     x for x in IMHExtension.__subclasses__() if x.__module__ == ext_path
                 ][0]
                 mh_ext = mh_ext_class()
                 if platforms_supported(mh_ext):
                     messaging_service.register_mh_extension(mh_ext)
-
-            if ext_type == "rag":
+            elif ext_type == "rag":
                 rag_ext_class = [
                     x
                     for x in IRAGExtension.__subclasses__()
@@ -175,8 +179,7 @@ async def run_assistants() -> None:
                 rag_ext = rag_ext_class()
                 if platforms_supported(rag_ext):
                     messaging_service.register_rag_extension(rag_ext)
-
-            if ext_type == "rpp":
+            elif ext_type == "rpp":
                 rpp_ext_class = [
                     x
                     for x in IRPPExtension.__subclasses__()
@@ -185,7 +188,6 @@ async def run_assistants() -> None:
                 rpp_ext = rpp_ext_class()
                 if platforms_supported(rpp_ext):
                     messaging_service.register_rpp_extension(rpp_ext)
-
             logging_gateway.debug(
                 f"Registered {ext_type.upper()} extension: {ext_path}"
             )
