@@ -9,8 +9,12 @@ class IWhatsAppClient(ABC):
     """An ABC for WhatsApp clients."""
 
     @abstractmethod
-    async def listen_forever(self, loop_sleep_time: float) -> None:
-        """Listen for events from the WhatsApp Cloud API."""
+    async def init(self) -> None:
+        """Perform startup routine."""
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Perform shutdown routine."""
 
     @abstractmethod
     async def delete_media(self, media_id: str) -> str | None:
