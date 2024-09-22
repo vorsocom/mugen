@@ -125,61 +125,70 @@ async def run_assistants() -> None:
     # Register the extensions.
     try:
         for ext in extensions:
-            import_module(name=ext)
+            ext_type = ext["type"]
+            ext_path = ext["path"]
 
-            if "ct_ext_" in ext:
+            import_module(name=ext_path)
+
+            if ext_type == "ct":
                 ct_ext_class = [
-                    x for x in ICTExtension.__subclasses__() if x.__module__ == ext
+                    x for x in ICTExtension.__subclasses__() if x.__module__ == ext_path
                 ][0]
                 ct_ext = ct_ext_class()
                 if platforms_supported(ct_ext):
                     messaging_service.register_ct_extension(ct_ext)
-                    logging_gateway.debug(f"Registered CT extension: {ext}")
 
-            if "ctx_ext_" in ext:
+            if ext_type == "ctx":
                 ctx_ext_class = [
-                    x for x in ICTXExtension.__subclasses__() if x.__module__ == ext
+                    x
+                    for x in ICTXExtension.__subclasses__()
+                    if x.__module__ == ext_path
                 ][0]
                 ctx_ext = ctx_ext_class()
                 if platforms_supported(ctx_ext):
                     messaging_service.register_ctx_extension(ctx_ext)
-                    logging_gateway.debug(f"Registered CTX extension: {ext}")
 
-            if "ipc_ext_" in ext:
+            if ext_type == "ipc":
                 ipc_ext_class = [
-                    x for x in IIPCExtension.__subclasses__() if x.__module__ == ext
+                    x
+                    for x in IIPCExtension.__subclasses__()
+                    if x.__module__ == ext_path
                 ][0]
                 ipc_ext = ipc_ext_class()
                 if platforms_supported(ipc_ext):
                     ipc_service.register_ipc_extension(ipc_ext)
-                    logging_gateway.debug(f"Registered IPC extension: {ext}")
 
-            if "mh_ext_" in ext:
+            if ext_type == "mh":
                 mh_ext_class = [
-                    x for x in IMHExtension.__subclasses__() if x.__module__ == ext
+                    x for x in IMHExtension.__subclasses__() if x.__module__ == ext_path
                 ][0]
                 mh_ext = mh_ext_class()
                 if platforms_supported(mh_ext):
                     messaging_service.register_mh_extension(mh_ext)
-                    logging_gateway.debug(f"Registered MH extension: {ext}")
 
-            if "rag_ext_" in ext:
+            if ext_type == "rag":
                 rag_ext_class = [
-                    x for x in IRAGExtension.__subclasses__() if x.__module__ == ext
+                    x
+                    for x in IRAGExtension.__subclasses__()
+                    if x.__module__ == ext_path
                 ][0]
                 rag_ext = rag_ext_class()
                 if platforms_supported(rag_ext):
                     messaging_service.register_rag_extension(rag_ext)
-                    logging_gateway.debug(f"Registered RAG extension: {ext}")
 
-            if "rpp_ext_" in ext:
+            if ext_type == "rpp":
                 rpp_ext_class = [
-                    x for x in IRPPExtension.__subclasses__() if x.__module__ == ext
+                    x
+                    for x in IRPPExtension.__subclasses__()
+                    if x.__module__ == ext_path
                 ][0]
                 rpp_ext = rpp_ext_class()
                 if platforms_supported(rpp_ext):
                     messaging_service.register_rpp_extension(rpp_ext)
-                    logging_gateway.debug(f"Registered RPP extension: {ext}")
+
+            logging_gateway.debug(
+                f"Registered {ext_type.upper()} extension: {ext_path}"
+            )
     except TypeError as e:
         logging_gateway.error(e.__traceback__)
         sys.exit(1)
