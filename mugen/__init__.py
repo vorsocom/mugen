@@ -108,7 +108,7 @@ async def run_assistants() -> None:
     extensions += di.config.mugen.modules.extensions()
 
     # Wire the extensions for dependency injection.
-    di.wire(extensions)
+    di.wire([x["path"] for x in extensions])
 
     # CT, IPC, and RAG extensions need to be registered
     # with the IPC and Messaging services.
