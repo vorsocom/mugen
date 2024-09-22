@@ -7,8 +7,7 @@ import os
 from quart import Quart
 
 
-# pylint: disable=too-few-public-methods
-class Config:
+class Config:  # pylint: disable=too-few-public-methods
     """Base configuration class."""
 
     BASEDIR: str = os.path.abspath(os.path.dirname(__file__) + "/../")
@@ -22,14 +21,14 @@ class Config:
         mugen.logger.setLevel(mugen.config["LOG_LEVEL"])
 
 
-class DevelopmentConfig(Config):
+class DevelopmentConfig(Config):  # pylint: disable=too-few-public-methods
     """Development environment-specific configuration class"""
 
     # Set debug flag.
     DEBUG: bool = True
 
 
-class TestingConfig(Config):
+class TestingConfig(Config):  # pylint: disable=too-few-public-methods
     """Testing environment-specific configuration class"""
 
     # Set log level.
@@ -39,7 +38,7 @@ class TestingConfig(Config):
     TESTING: bool = True
 
 
-class ProductionConfig(Config):
+class ProductionConfig(Config):  # pylint: disable=too-few-public-methods
     """Production environment-specific configuration class"""
 
     # Set log level.
