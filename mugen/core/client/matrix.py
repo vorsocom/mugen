@@ -3,13 +3,12 @@
 __all__ = ["DefaultMatrixClient"]
 
 import asyncio
-import json
 import pickle
 import sys
 import traceback
-from types import SimpleNamespace
 from typing import Coroutine
 
+from dependency_injector import providers
 from nio import (
     AsyncClient,
     InviteAliasEvent,
@@ -37,33 +36,31 @@ from nio import (
     TagEvent,
 )
 
-from nio.api import _FilterT
-from nio.client.base_client import logged_in
 from nio.exceptions import OlmUnverifiedDeviceError
 
-from mugen.core.contract.ipc_service import IIPCService
-from mugen.core.contract.keyval_storage_gateway import IKeyValStorageGateway
-from mugen.core.contract.logging_gateway import ILoggingGateway
-from mugen.core.contract.messaging_service import IMessagingService
-from mugen.core.contract.user_service import IUserService
-
-FLAGS_KEY: str = "m.agent_flags"
-
-KNOWN_DEVICES_LIST_KEY: str = "known_devices_list"
+from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.service.ipc import IIPCService
+from mugen.core.contract.service.messaging import IMessagingService
+from mugen.core.contract.service.user import IUserService
 
 
-# pylint: disable=too-many-instance-attributes
-class DefaultMatrixClient(AsyncClient):
+class DefaultMatrixClient(AsyncClient):  # pylint: disable=too-many-instance-attributes
     """A custom implementation of nio.AsyncClient."""
 
+    _flags_key: str = "m.agent_flags"
+
     _ipc_callback: Coroutine
+
+    _known_devices_list_key: str = "known_devices_list"
 
     _sync_key: str = "matrix_client_sync_next_batch"
 
     # pylint: disable=too-many-arguments
     def __init__(
         self,
-        di_config: dict = None,
+        # pylint: disable=c-extension-no-member
+        config: providers.Configuration = None,
         ipc_queue: asyncio.Queue = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
@@ -71,11 +68,11 @@ class DefaultMatrixClient(AsyncClient):
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
     ):
-        self._config = SimpleNamespace(**di_config)
+        self._config = config
         super().__init__(
-            homeserver=self._config.matrix_homeserver,
-            user=self._config.matrix_client_user,
-            store_path=self._config.matrix_olm_store_path,
+            homeserver=self._config.matrix.homeserver(),
+            user=self._config.matrix.client_user(),
+            store_path=self._config.matrix.olm_store_path(),
         )
         self._ipc_queue = ipc_queue
         self._ipc_service = ipc_service
@@ -112,8 +109,8 @@ class DefaultMatrixClient(AsyncClient):
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
         if self._keyval_storage_gateway.get("client_access_token") is None:
             # Load password and device name from storage.
-            pw = self._config.matrix_client_password
-            dn = self._config.matrix_client_device_name
+            pw = self._config.matrix.client.password()
+            dn = self._config.matrix.client.device()
 
             # Attempt  password login.
             resp = await self.login(pw, dn)
@@ -135,7 +132,7 @@ class DefaultMatrixClient(AsyncClient):
             sys.exit(0)
 
         # Otherwise the config file exists, so we'll use the stored credentials.
-        self._logging_gateway.info("Login using saved credentials.")
+        self._logging_gateway.debug("Login using saved credentials.")
         # open the file in read-only mode.
         self.access_token = self._keyval_storage_gateway.get("client_access_token")
         self.device_id = self._keyval_storage_gateway.get("client_device_id")
@@ -156,145 +153,12 @@ class DefaultMatrixClient(AsyncClient):
         """Get the key to access the sync key from persistent storage."""
         return self._keyval_storage_gateway.get(self._sync_key)
 
-    # pylint: disable=too-many-arguments,too-many-locals
-    @logged_in
-    async def sync_forever(
-        self,
-        timeout: int | None = None,
-        sync_filter: _FilterT = None,
-        since: str | None = None,
-        full_state: bool | None = None,
-        loop_sleep_time: int | None = None,
-        first_sync_filter: _FilterT = None,
-        set_presence: str | None = None,
-    ):
-        """Continuously sync with the configured homeserver.
-
-        This method calls the sync method in a loop. To react to events event
-        callbacks should be configured.
-
-        The loop also makes sure to handle other required requests between
-        syncs, including to_device messages and sending encryption keys if
-        required. To react to the responses a response callback should be
-        added.
-
-        Args:
-            timeout (int, optional): The maximum time that the server should
-                wait for new events before it should return the request
-                anyways, in milliseconds.
-                If ``0``, no timeout is applied.
-                If ``None``, ``AsyncClient.config.request_timeout`` is used.
-                In any case, ``0`` is always used for the first sync.
-                If a timeout is applied and the server fails to return after
-                15 seconds of expected timeout,
-                the client will timeout by itself.
-
-            sync_filter (Union[None, str, Dict[Any, Any]):
-                A filter ID that can be obtained from
-                ``AsyncClient.upload_filter()`` (preferred),
-                or filter dict that should be used for sync requests.
-
-            full_state (bool, optional): Controls whether to include the full
-                state for all rooms the user is a member of. If this is set to
-                true, then all state events will be returned, even if since is
-                non-empty. The timeline will still be limited by the since
-                parameter. This argument will be used only for the first sync
-                request.
-
-            since (str, optional): A token specifying a point in time where to
-                continue the sync from. Defaults to the last sync token we
-                received from the server using this API call. This argument
-                will be used only for the first sync request, the subsequent
-                sync requests will use the token from the last sync response.
-
-            loop_sleep_time (int, optional): The sleep time, if any, between
-                successful sync loop iterations in milliseconds.
-
-            first_sync_filter (Union[None, str, Dict[Any, Any]):
-                A filter ID that can be obtained from
-                ``AsyncClient.upload_filter()`` (preferred),
-                or filter dict to use for the first sync request only.
-                If `None` (default), the `sync_filter` parameter's value
-                is used.
-                To have no filtering for the first sync regardless of
-                `sync_filter`'s value, pass `{}`.
-
-            set_presence (str, optional): The presence state.
-                One of: ["online", "offline", "unavailable"]
-        """
-
-        first_sync = True
-
-        while True:
-            try:
-                use_filter = first_sync_filter if first_sync else sync_filter
-                use_timeout = 0 if first_sync else timeout
-
-                tasks = []
-
-                # Make sure that if this is our first sync that the sync happens
-                # before the other requests, this helps to ensure that after one
-                # fired synced event the state is indeed fully synced.
-                if first_sync:
-                    presence = set_presence or self._presence
-                    sync_response = await self.sync(
-                        use_timeout, use_filter, since, full_state, presence
-                    )
-                    await self.run_response_callbacks([sync_response])
-                else:
-                    presence = set_presence or self._presence
-                    tasks = [
-                        asyncio.ensure_future(coro)
-                        for coro in (
-                            self.sync(
-                                use_timeout, use_filter, since, full_state, presence
-                            ),
-                            self.send_to_device_messages(),
-                        )
-                    ]
-
-                if self.should_upload_keys:
-                    tasks.append(asyncio.ensure_future(self.keys_upload()))
-
-                if self.should_query_keys:
-                    tasks.append(asyncio.ensure_future(self.keys_query()))
-
-                if self.should_claim_keys:
-                    tasks.append(
-                        asyncio.ensure_future(
-                            self.keys_claim(self.get_users_for_key_claiming()),
-                        )
-                    )
-
-                for response in asyncio.as_completed(tasks):
-                    await self.run_response_callbacks([await response])
-
-                # CHANGE: Run IPC callback.
-                await self._run_ipc_callback()
-
-                first_sync = False
-                full_state = None
-                since = None
-
-                self.synced.set()
-                self.synced.clear()
-
-                if loop_sleep_time:
-                    await asyncio.sleep(loop_sleep_time / 1000)
-
-            except asyncio.CancelledError:
-                for task in tasks:
-                    task.cancel()
-
-                self._logging_gateway.debug("Matrix sync_forever loop exited.")
-                break
-
     def cleanup_known_user_devices_list(self) -> None:
         """Clean up known user devices list."""
         self._logging_gateway.debug("Cleaning up known user devices.")
-        if self._keyval_storage_gateway.has_key(KNOWN_DEVICES_LIST_KEY):
+        if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
             known_devices = pickle.loads(
-                self._keyval_storage_gateway.get(KNOWN_DEVICES_LIST_KEY, False)
+                self._keyval_storage_gateway.get(self._known_devices_list_key, False)
             )
             for user_id in known_devices.keys():
                 active_devices = [
@@ -305,15 +169,15 @@ class DefaultMatrixClient(AsyncClient):
 
             # Persist changes.
             self._keyval_storage_gateway.put(
-                KNOWN_DEVICES_LIST_KEY, pickle.dumps(known_devices)
+                self._known_devices_list_key, pickle.dumps(known_devices)
             )
 
     def trust_known_user_devices(self) -> None:
         """Trust all known user devices."""
         self._logging_gateway.debug("Trusting all known user devices.")
-        if self._keyval_storage_gateway.has_key(KNOWN_DEVICES_LIST_KEY):
+        if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
             known_devices = pickle.loads(
-                self._keyval_storage_gateway.get(KNOWN_DEVICES_LIST_KEY, False)
+                self._keyval_storage_gateway.get(self._known_devices_list_key, False)
             )
             for user_id in known_devices.keys():
                 self._logging_gateway.debug(f"User: {user_id}")
@@ -333,9 +197,11 @@ class DefaultMatrixClient(AsyncClient):
             self._logging_gateway.debug(f"Found {device_id}.")
             known_devices = {}
             # Load the known devices list if it already exists.
-            if self._keyval_storage_gateway.has_key(KNOWN_DEVICES_LIST_KEY):
+            if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
                 known_devices = pickle.loads(
-                    self._keyval_storage_gateway.get(KNOWN_DEVICES_LIST_KEY, False)
+                    self._keyval_storage_gateway.get(
+                        self._known_devices_list_key, False
+                    )
                 )
 
             # If the list (new or loaded) does not contain an entry for the user.
@@ -354,7 +220,7 @@ class DefaultMatrixClient(AsyncClient):
 
                 # Persist changes to the known devices list.
                 self._keyval_storage_gateway.put(
-                    KNOWN_DEVICES_LIST_KEY, pickle.dumps(known_devices)
+                    self._known_devices_list_key, pickle.dumps(known_devices)
                 )
 
     ## Callbacks.
@@ -378,8 +244,10 @@ class DefaultMatrixClient(AsyncClient):
         # Only process invites from allowed domains.
         # Federated servers need to be in the allowed domains list for their users
         # to initiate conversations with the assistant.
-        allowed_domains: list = json.loads(self._config.matrix_allowed_domains)
-        if event.sender.split(":")[1] not in allowed_domains:
+        allowed_domains: list = self._config.matrix.domains.allowed()
+        denied_domains: list = self._config.matrix.domains.denied()
+        sender_domain: str = event.sender.split(":")[1]
+        if sender_domain not in allowed_domains or sender_domain in denied_domains:
             await self.room_leave(room.room_id)
             self._logging_gateway.warning(
                 "InviteMemberEvent: Rejected invitation. Reason: Domain"
@@ -389,11 +257,8 @@ class DefaultMatrixClient(AsyncClient):
 
         # If the assistant is in limited-beta mode, only process invites from the
         # list of selected beta users.
-        if self._config.mugen_limited_beta.lower() in (
-            "true",
-            "1",
-        ):
-            beta_users: list = json.loads(self._config.matrix_limited_beta_users)
+        if self._config.mugen.beta():
+            beta_users: list = self._config.matrix.beta.users()
             if event.sender not in beta_users:
                 await self.room_leave(room.room_id)
                 self._logging_gateway.warning(
@@ -421,7 +286,7 @@ class DefaultMatrixClient(AsyncClient):
         # Flag room as direct chat.
         await self.room_put_state(
             room_id=room.room_id,
-            event_type=FLAGS_KEY,
+            event_type=self._flags_key,
             content={"m.direct": 1},
         )
 
@@ -594,16 +459,9 @@ class DefaultMatrixClient(AsyncClient):
         """Indicate if the given room was flagged as a 1:1 chat."""
         room_state = await self.room_get_state(room_id)
         flags: list[dict[str, dict[str, int]]] = [
-            x for x in room_state.events if x["type"] == FLAGS_KEY
+            x for x in room_state.events if x["type"] == self._flags_key
         ]
         return len(flags) > 0 and "m.direct" in flags[0].get("content").keys()
-
-    async def _run_ipc_callback(self) -> None:
-        """Run the configured IPC callback."""
-        while not self._ipc_queue.empty():
-            payload = await self._ipc_queue.get()
-            asyncio.create_task(self._ipc_service.handle_ipc_request("matrix", payload))
-            self._ipc_queue.task_done()
 
     async def _send_text_message(self, room_id: str, body: str) -> None:
         try:

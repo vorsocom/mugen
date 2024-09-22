@@ -1,0 +1,135 @@
+[mugen]
+#
+assistant.persona = ""
+#
+beta = true
+#
+environment = "development"
+#
+logger.name = "COM.VORSOCOMPUTING.MUGEN"
+#
+platforms = [] # choices: matrix, whatsapp
+#
+[mugen.modules.core]
+#
+client.matrix = "mugen.core.client.matrix"
+#
+client.whatsapp = "mugen.core.client.whatsapp"
+#
+gateway.completion = "mugen.core.gateway.completion.bedrock"
+#
+gateway.knowledge = "mugen.core.gateway.knowledge.qdrant"
+#
+gateway.logging = "mugen.core.gateway.logging.standard"
+#
+gateway.storage.keyval = "mugen.core.gateway.storage.keyval.dbm"
+#
+service.ipc = "mugen.core.service.ipc"
+#
+service.messaging = "mugen.core.service.messaging"
+#
+service.nlp = "mugen.core.service.nlp"
+#
+service.user = "mugen.core.service.user"
+#
+[[mugen.modules.core.plugins]]
+type = "ipc"
+path = "mugen.core.plugin.muapp_whatsapp.ipc_ext_wacapi"
+#
+[[mugen.modules.extensions]]
+# type = ""
+# path = ""
+#===MATRIX===
+[matrix]
+#
+assistant.name = ""
+#
+beta.users = []
+#
+client.device = "vorsocom-mugen"
+#
+client.password = ""
+#
+client.user = ""
+#
+domain = ""
+#
+domains.allowed = []
+#
+domains.denied = []
+#
+homeserver = ""
+#===WHATSAPP===
+[whatsapp]
+#
+app.id = ""
+#
+app.secret = ""
+#
+beta.users = []
+#
+business.phone_number_id = ""
+#
+graphapi.access_token = ""
+#
+graphapi.base_url = ""
+#
+graphapi.version = ""
+#
+servers.allowed = ""
+#
+servers.verify_ip = false
+#
+webhook.verification_token = ""
+#===AWS BEDROCK===
+[aws.bedrock]
+#
+api.access_key_id = ""
+#
+api.classification.model = ""
+#
+api.classification.temp = 0.0
+#
+api.completion.model = ""
+#
+api.completion.temp = 0.0
+#
+api.region = ""
+#
+api.secret_access_key = ""
+#===GROQ===
+[groq]
+#
+api.classification.model = ""
+#
+api.classification.temp = 0.0
+#
+api.completion.model = ""
+#
+api.completion.temp = 0.0
+#
+api.key = ""
+#===SAMBANOVA===
+[sambanova]
+#
+api.classification.model = ""
+#
+api.classification.temp = 0.0
+#
+api.completion.model = ""
+#
+api.completion.temp = 0.0
+#
+api.endpoint = ""
+#
+api.key = ""
+#===QDRANT===
+[qdrant]
+#
+api.key = ""
+#
+api.url = ""
+#===TRANSFORMERS===
+[transformers]
+#
+hf.home = ""

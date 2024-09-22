@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "mugen"
+version = "0.27.0"
+description = "Microframework for instant messaging AI assistants."
+authors = ["Vorso Computing, Inc. <brightideas@vorsocomputing.com>"]
+maintainers = ["Sando George <sando.csc@gmail.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.12"
+aiodns = "^3.2.0"
+async-timeout = "^4.0.3"
+atomicwrites = "^1.4.1"
+boto3 = "^1.35.23"
+brotli = "^1.1.0"
+cachetools = "^5.5.0"
+dependency-injector = "^4.42.0"
+groq = "^0.11.0"
+matrix-nio = "^0.25.1"
+qdrant-client = "^1.11.2"
+quart = "^0.19.6"
+sentence-transformers = "^3.1.1"
+yake = "^0.4.8"
+tomlkit = "^0.13.2"
+peewee = "^3.17.6"
+python-olm = "^3.2.16"
+
+
+[tool.poetry.group.dev.dependencies]
+pipdeptree = "^2.23.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
