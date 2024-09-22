@@ -178,6 +178,7 @@ cython_debug/
 
 ### APPPLICATION
 hypercorn.toml
+mugen.toml
 
 data/fb.allow.list.txt
 data/storage.*
