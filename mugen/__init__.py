@@ -215,7 +215,8 @@ async def run_assistants() -> None:
 
         await asyncio.gather(*tasks)
     except asyncio.exceptions.CancelledError:
-        await di.whatsapp_client().close()
+        if di.whatsapp_client() is not None:
+            await di.whatsapp_client().close()
 
 
 async def run_matrix_assistant() -> None:
