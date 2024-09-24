@@ -32,10 +32,24 @@ service.nlp = "mugen.core.service.nlp"
 #
 service.user = "mugen.core.service.user"
 #
+#
+# Core Plugins
+#
+# Taskman
+# [[mugen.modules.core.plugins]]
+# type = "ctx"
+# path = "mugen.core.plugin.muapp.taskman.ctx_ext"
+#
+# [[mugen.modules.core.plugins]]
+# type = "rpp"
+# path = "mugen.core.plugin.muapp.taskman.rpp_ext"
+#
+# WACAPI
 [[mugen.modules.core.plugins]]
 type = "ipc"
-path = "mugen.core.plugin.muapp_whatsapp.ipc_ext_wacapi"
+path = "mugen.core.plugin.muapp.wacapi.ipc_ext"
 #
+# Extensions
 [[mugen.modules.extensions]]
 # type = ""
 # path = ""

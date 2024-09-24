@@ -193,7 +193,7 @@ async def run_assistants() -> None:
                 logging_gateway.debug(
                     f"Registered {ext_type.upper()} extension: {ext_path}"
                 )
-    except TypeError as e:
+    except (IndexError, TypeError) as e:
         logging_gateway.error(e.__traceback__)
         sys.exit(1)
 
