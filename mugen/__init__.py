@@ -121,6 +121,7 @@ async def run_assistants() -> None:
         for ext in extensions:
             ext_type = ext["type"]
             ext_path = ext["path"]
+            registered = False
 
             import_module(name=ext_path)
 
@@ -131,6 +132,7 @@ async def run_assistants() -> None:
                 ct_ext = ct_ext_class()
                 if platforms_supported(ct_ext):
                     messaging_service.register_ct_extension(ct_ext)
+                    registered = True
             elif ext_type == "ctx":
                 ctx_ext_class = [
                     x
@@ -140,6 +142,7 @@ async def run_assistants() -> None:
                 ctx_ext = ctx_ext_class()
                 if platforms_supported(ctx_ext):
                     messaging_service.register_ctx_extension(ctx_ext)
+                    registered = True
             elif ext_type == "fw":
                 fw_ext_class = [
                     x for x in IFWExtension.__subclasses__() if x.__module__ == ext_path
@@ -147,6 +150,7 @@ async def run_assistants() -> None:
                 fw_ext = fw_ext_class()
                 if platforms_supported(fw_ext):
                     await fw_ext.setup()
+                    registered = True
             elif ext_type == "ipc":
                 ipc_ext_class = [
                     x
@@ -156,6 +160,7 @@ async def run_assistants() -> None:
                 ipc_ext = ipc_ext_class()
                 if platforms_supported(ipc_ext):
                     ipc_service.register_ipc_extension(ipc_ext)
+                    registered = True
             elif ext_type == "mh":
                 mh_ext_class = [
                     x for x in IMHExtension.__subclasses__() if x.__module__ == ext_path
@@ -163,6 +168,7 @@ async def run_assistants() -> None:
                 mh_ext = mh_ext_class()
                 if platforms_supported(mh_ext):
                     messaging_service.register_mh_extension(mh_ext)
+                    registered = True
             elif ext_type == "rag":
                 rag_ext_class = [
                     x
@@ -172,6 +178,7 @@ async def run_assistants() -> None:
                 rag_ext = rag_ext_class()
                 if platforms_supported(rag_ext):
                     messaging_service.register_rag_extension(rag_ext)
+                    registered = True
             elif ext_type == "rpp":
                 rpp_ext_class = [
                     x
@@ -181,10 +188,12 @@ async def run_assistants() -> None:
                 rpp_ext = rpp_ext_class()
                 if platforms_supported(rpp_ext):
                     messaging_service.register_rpp_extension(rpp_ext)
-            logging_gateway.debug(
-                f"Registered {ext_type.upper()} extension: {ext_path}"
-            )
-    except TypeError as e:
+                    registered = True
+            if registered:
+                logging_gateway.debug(
+                    f"Registered {ext_type.upper()} extension: {ext_path}"
+                )
+    except (IndexError, TypeError) as e:
         logging_gateway.error(e.__traceback__)
         sys.exit(1)
 
@@ -206,7 +215,8 @@ async def run_assistants() -> None:
 
         await asyncio.gather(*tasks)
     except asyncio.exceptions.CancelledError:
-        await di.whatsapp_client().close()
+        if di.whatsapp_client() is not None:
+            await di.whatsapp_client().close()
 
 
 async def run_matrix_assistant() -> None:
