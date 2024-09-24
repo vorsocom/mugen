@@ -14,6 +14,11 @@ from mugen.core.contract.extension.rpp import IRPPExtension
 class IMessagingService(ABC):
     """An abstract base class for messaging services."""
 
+    @property
+    @abstractmethod
+    def mh_extensions(self) -> list[IMHExtension]:
+        """Get the list of Message Handler extensions registered with the service."""
+
     @abstractmethod
     async def handle_text_message(
         self,
@@ -25,6 +30,19 @@ class IMessagingService(ABC):
         """Handle a text message from a chat."""
 
     @abstractmethod
+    def add_message_to_thread(
+        self,
+        message: str,
+        role: str,
+        thread_id: str,
+    ) -> None:
+        """Add a message to the attention thread.
+
+        thread_id may be a room id in the case of Matrix or a phone number in the case
+        of WhatsApp.
+        """
+
+    @abstractmethod
     def get_attention_thread_key(
         self,
         room_id: str,
@@ -32,11 +50,6 @@ class IMessagingService(ABC):
         start_task: bool = False,
     ) -> str:
         """Get the keyval storage key of the chat thread for a room."""
-
-    @property
-    @abstractmethod
-    def mh_extensions(self) -> list[IMHExtension]:
-        """Get the list of Message Handler extensions registered with the service."""
 
     @abstractmethod
     def register_ct_extension(self, ext: ICTExtension) -> None:
