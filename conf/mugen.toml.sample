@@ -35,6 +35,15 @@ service.user = "mugen.core.service.user"
 #
 # Core Plugins
 #
+# Matrix Manager
+# [[mugen.modules.core.plugins]]
+# type = "ipc"
+# path = "mugen.core.plugin.muapp.matrix.manager.device"
+#
+# [[mugen.modules.core.plugins]]
+# type = "ipc"
+# path = "mugen.core.plugin.muapp.matrix.manager.room"
+#
 # Taskman
 # [[mugen.modules.core.plugins]]
 # type = "ctx"
