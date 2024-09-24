@@ -227,6 +227,32 @@ class DefaultMessagingService(IMessagingService):
 
         return assistant_response
 
+    def add_message_to_thread(
+        self,
+        message: str,
+        role: str,
+        thread_id: str,
+    ) -> None:
+        # Load the chat thread.
+        chat_thread_key = self.get_attention_thread_key(thread_id)
+        chat_thread = pickle.loads(
+            self._keyval_storage_gateway.get(
+                chat_thread_key,
+                False,
+            )
+        )
+
+        # Preserve alternating turns.
+        if role == "assistant" and chat_thread["messages"][-1]["role"] == "assistant":
+            chat_thread["messages"].append({"role": "user", "content": "ok."})
+
+        # Append a new assistant response.
+        chat_thread["messages"].append({"role": role, "content": message})
+
+        # Save the chat thread.
+        chat_thread["last_saved"] = datetime.now().strftime("%s")
+        self._keyval_storage_gateway.put(chat_thread_key, pickle.dumps(chat_thread))
+
     def get_attention_thread_key(
         self,
         room_id: str,
