@@ -4,6 +4,7 @@ __all__ = ["DefaultMessagingService"]
 
 import asyncio
 from datetime import datetime
+import json
 import pickle
 from types import SimpleNamespace
 from typing import Mapping
@@ -89,9 +90,7 @@ class DefaultMessagingService(IMessagingService):
 
         # Load previous history from storage if it exists.
         if self._keyval_storage_gateway.has_key(attention_thread_key):
-            attention_thread = pickle.loads(
-                self._keyval_storage_gateway.get(attention_thread_key, False)
-            )
+            attention_thread = self.load_attention_thread(attention_thread_key)
             # Ensure that older threads are versioned.
             # This can be removed after the application stabalises.
             if "version" not in attention_thread.keys():
@@ -109,6 +108,13 @@ class DefaultMessagingService(IMessagingService):
 
         # Add chat history to completion context.
         attention_thread["messages"].append({"role": "user", "content": content})
+
+        # Log history before adding if flag set.
+        if self._config.mugen.debug_chat_threads():
+            self._logging_gateway.debug(
+                json.dumps(attention_thread["messages"], indent=4)
+            )
+
         completion_context += attention_thread["messages"]
 
         # Execute RAG pipelines and get data if any was found.
@@ -137,7 +143,7 @@ class DefaultMessagingService(IMessagingService):
             context=completion_context,
         )
 
-        # If the chat completion attempt failed, set it to "Error" so that the user
+        # If the chat completion attempt failed, set response to "Error" so that the user
         # will be aware of the failure.
         if chat_completion is None:
             self._logging_gateway.debug("chat_completion: None.")
@@ -147,7 +153,14 @@ class DefaultMessagingService(IMessagingService):
         assistant_response = chat_completion.content
 
         # Save current thread first.
-        self._save_chat_thread(attention_thread_key, attention_thread)
+        self._logging_gateway.debug("Persist attention thread.")
+        attention_thread["messages"].append(
+            {
+                "role": "assistant",
+                "content": assistant_response,
+            }
+        )
+        self.save_attention_thread(attention_thread_key, attention_thread)
 
         # Pass the response to pre-processor extensions.
         for rpp_ext in self._rpp_extensions:
@@ -157,7 +170,7 @@ class DefaultMessagingService(IMessagingService):
                 continue
 
             assistant_response, task, end_task = await rpp_ext.preprocess_response(
-                assistant_response,
+                attention_thread_key,
                 sender,
             )
 
@@ -189,16 +202,6 @@ class DefaultMessagingService(IMessagingService):
         if assistant_response == "":
             self._logging_gateway.debug("Empty response.")
             return assistant_response
-
-        # Persist chat history.
-        self._logging_gateway.debug("Persist attention thread.")
-        attention_thread["messages"].append(
-            {
-                "role": "assistant",
-                "content": assistant_response,
-            }
-        )
-        self._save_chat_thread(attention_thread_key, attention_thread)
 
         self._logging_gateway.debug(
             "Pass response to triggered services for processing."
@@ -235,12 +238,7 @@ class DefaultMessagingService(IMessagingService):
     ) -> None:
         # Load the chat thread.
         chat_thread_key = self.get_attention_thread_key(thread_id)
-        chat_thread = pickle.loads(
-            self._keyval_storage_gateway.get(
-                chat_thread_key,
-                False,
-            )
-        )
+        chat_thread = self.load_attention_thread(chat_thread_key)
 
         # Preserve alternating turns.
         if role == "assistant" and chat_thread["messages"][-1]["role"] == "assistant":
@@ -251,7 +249,7 @@ class DefaultMessagingService(IMessagingService):
 
         # Save the chat thread.
         chat_thread["last_saved"] = datetime.now().strftime("%s")
-        self._keyval_storage_gateway.put(chat_thread_key, pickle.dumps(chat_thread))
+        self.save_attention_thread(chat_thread_key, chat_thread)
 
     def get_attention_thread_key(
         self,
@@ -277,22 +275,26 @@ class DefaultMessagingService(IMessagingService):
         )
 
         if refresh:
-            attention_thread = pickle.loads(
-                self._keyval_storage_gateway.get(
-                    chat_threads_list["attention_thread"], False
-                )
+            attention_thread = self.load_attention_thread(
+                chat_threads_list["attention_thread"]
             )
             if start_task:
                 self._logging_gateway.debug("Refreshing attention thread (Start task).")
-                attention_thread["messages"] = attention_thread["messages"][-1:]
+                attention_thread["messages"] = attention_thread["messages"][-3:]
             else:
                 self._logging_gateway.debug("Refreshing attention thread (other).")
                 attention_thread["messages"] = []
-            self._save_chat_thread(
+            self.save_attention_thread(
                 chat_threads_list["attention_thread"], attention_thread
             )
-
         return chat_threads_list["attention_thread"]
+
+    def load_attention_thread(self, key: str) -> dict:
+        return pickle.loads(self._keyval_storage_gateway.get(key, False))
+
+    def save_attention_thread(self, key: str, thread: dict) -> None:
+        thread["last_saved"] = datetime.now().strftime("%s")
+        self._keyval_storage_gateway.put(key, pickle.dumps(thread))
 
     @property
     def mh_extensions(self) -> list[IMHExtension]:
@@ -336,22 +338,12 @@ class DefaultMessagingService(IMessagingService):
                 self._keyval_storage_gateway.get(chat_threads_list_key, False)
             )
 
-            # Migrate old lists.
-            if isinstance(chat_threads_list, list):
-                self._logging_gateway.debug("Migrate old thread list to new format.")
-                chat_threads_list = {"threads": chat_threads_list}
-
-            if "version" not in chat_threads_list.keys():
-                chat_threads_list["version"] = self._chat_threads_list_version
-
             # Set new key as attention thread and append it to the threads list.
             chat_threads_list["attention_thread"] = key
             chat_threads_list["threads"].append(key)
 
         # Persist thread list.
-        self._keyval_storage_gateway.put(
-            chat_threads_list_key, pickle.dumps(chat_threads_list)
-        )
+        self._keyval_storage_gateway.put(chat_threads_list_key, chat_threads_list)
         return key
 
     def _get_system_context(self, platform: str, sender: str) -> list[dict]:
@@ -392,30 +384,3 @@ class DefaultMessagingService(IMessagingService):
             return True
 
         return platform in ext.platforms
-
-    def _save_chat_thread(self, key: str, thread: dict) -> None:
-        """Save an attention thread."""
-        thread["last_saved"] = datetime.now().strftime("%s")
-        self._keyval_storage_gateway.put(key, pickle.dumps(thread))
-
-    def _set_attention_thread(
-        self, chat_threads_list_key: str, attention_thread: str
-    ) -> None:
-        """Set the attention thread in a chat threads list."""
-        if self._keyval_storage_gateway.has_key(chat_threads_list_key):
-            # Load list.
-            chat_threads_list = pickle.loads(
-                self._keyval_storage_gateway.get(chat_threads_list_key, False)
-            )
-
-            # Migrate old lists to new format if necessary.
-            if isinstance(chat_threads_list, list):
-                self._logging_gateway.debug("Migrate old thread list to new format.")
-                chat_threads_list = {"threads": chat_threads_list}
-
-            chat_threads_list["attention_thread"] = attention_thread
-
-            # Persist thread list.
-            self._keyval_storage_gateway.put(
-                chat_threads_list_key, pickle.dumps(chat_threads_list)
-            )

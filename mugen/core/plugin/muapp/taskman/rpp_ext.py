@@ -7,6 +7,7 @@ from dependency_injector.wiring import inject, Provide
 
 from mugen.core.contract.extension.rpp import IRPPExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.di import DIContainer
 
 
@@ -21,9 +22,11 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
             DIContainer.config.delegate()
         ],
         logging_gateway: ILoggingGateway = Provide[DIContainer.logging_gateway],
+        messaging_service: IMessagingService = Provide[DIContainer.messaging_service],
     ) -> None:
         self._config = config
         self._logging_gateway = logging_gateway
+        self._messaging_service = messaging_service
 
     @property
     def platforms(self) -> list[str]:
@@ -31,23 +34,42 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
 
     async def preprocess_response(
         self,
-        response: str,
+        attention_thread_key: str,
         user_id: str,
     ) -> tuple[str, bool, bool]:
         task = False
         end_task = False
+        thread = self._messaging_service.load_attention_thread(attention_thread_key)
+        assistant_response = thread["messages"][-1]["content"]
+
         # Check for start task indicator.
-        if "[task]" in response:
+        if "[task]" in assistant_response:
             self._logging_gateway.debug("[task] detected.")
             task = True
-            response = response.replace("[task]", "").strip()
+            assistant_response = assistant_response.replace("[task]", "").strip()
 
         # Check for end task indicator.
-        if "[end-task]" in response:
+        if "[end-task]" in assistant_response:
             self._logging_gateway.debug("[end-task] detected.")
             end_task = True
-            response = response.replace("[end-task]", "").strip()
-            if response == "":
-                response = f"{self._config.matrix.assistant.name().split(" ")[0]} out."
+            assistant_response = assistant_response.replace("[end-task]", "").strip()
 
-        return (response, task, end_task)
+            if (
+                assistant_response == ""
+                and self._config.muapp.taskman.empty_response_text() != ""
+            ):
+                assistant_response = self._config.muapp.taskman.empty_response_text()
+
+        if task:
+            thread["messages"][-1] = {
+                "role": "system",
+                "content": "A task is ongoing.",
+            }
+            thread["messages"].append(
+                {"role": "assistant", "content": assistant_response}
+            )
+        else:
+            thread["messages"][-1]["content"] = assistant_response
+
+        self._messaging_service.save_attention_thread(attention_thread_key, thread)
+        return (assistant_response, task, end_task)
