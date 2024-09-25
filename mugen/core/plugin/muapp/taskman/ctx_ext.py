@@ -31,13 +31,7 @@ A task is considered ended if:
 - The user thanks you or indicates that no further assistance is needed.
 - The user explicitly cancels the task.
 
-IMPORTANT: Once you detect that a task has ended, you must respond with a message summarizing or confirming the completion of the task, skip a line, then append [end-task]. For example:
-
-- "I have completed the task as requested. Let me know if you need anything else." 
-
-  [end-task]
-
-Under no circumstances should your response consist solely of "[end-task]." Always provide a meaningful message before including [end-task].
+IMPORTANT: Once you detect that a task has ended, you must respond with a message summarizing or confirming the completion of the task, skip a line, then append [end-task].
 """,
             },
         ]
