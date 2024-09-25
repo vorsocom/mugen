@@ -36,7 +36,7 @@ class IMessagingService(ABC):
         role: str,
         thread_id: str,
     ) -> None:
-        """Add a message to the attention thread.
+        """Add a message to a chat thread.
 
         thread_id may be a room id in the case of Matrix or a phone number in the case
         of WhatsApp.
@@ -50,6 +50,14 @@ class IMessagingService(ABC):
         start_task: bool = False,
     ) -> str:
         """Get the keyval storage key of the chat thread for a room."""
+
+    @abstractmethod
+    def load_attention_thread(self, key: str) -> dict:
+        """Get the attention thread from storage."""
+
+    @abstractmethod
+    def save_attention_thread(self, key: str, thread: dict) -> None:
+        """Persist the attention thread."""
 
     @abstractmethod
     def register_ct_extension(self, ext: ICTExtension) -> None:

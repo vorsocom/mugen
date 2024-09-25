@@ -16,7 +16,7 @@ class IRPPExtension(ABC):  # pylint: disable=too-few-public-methods
     @abstractmethod
     async def preprocess_response(
         self,
-        response: str,
+        attention_thread_key: str,
         user_id: str,
     ) -> tuple[str, bool, bool]:
         """Preprocess the assistant response."""
