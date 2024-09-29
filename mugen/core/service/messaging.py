@@ -7,7 +7,6 @@ from datetime import datetime
 import json
 import pickle
 from types import SimpleNamespace
-from typing import Mapping
 import uuid
 
 from dependency_injector import providers
@@ -28,9 +27,9 @@ from mugen.core.contract.service.user import IUserService
 class DefaultMessagingService(IMessagingService):
     """The default implementation of IMessagingService."""
 
-    _chat_thread_version: int = 1
+    _thread_version: int = 1
 
-    _chat_threads_list_version: int = 1
+    _thread_list_version: int = 1
 
     _ct_extensions: list[ICTExtension] = []
 
@@ -69,7 +68,7 @@ class DefaultMessagingService(IMessagingService):
     ) -> str | None:
         if content.strip() == "//clear.":
             # Clear attention thread.
-            self.get_attention_thread_key(room_id, True)
+            self.clear_attention_thread(room_id)
 
             # Clear RAG caches.
             for rag_ext in self._rag_extensions:
@@ -82,22 +81,8 @@ class DefaultMessagingService(IMessagingService):
                     self._keyval_storage_gateway.remove(rag_ext.cache_key)
             return "PUC executed."
 
-        # Get the attention thread key.
-        attention_thread_key = self.get_attention_thread_key(room_id)
-
-        # Initialise lists to store chat history.
-        attention_thread: Mapping[str, str | list[Mapping[str, str]]] = {"messages": []}
-
         # Load previous history from storage if it exists.
-        if self._keyval_storage_gateway.has_key(attention_thread_key):
-            attention_thread = self.load_attention_thread(attention_thread_key)
-            # Ensure that older threads are versioned.
-            # This can be removed after the application stabalises.
-            if "version" not in attention_thread.keys():
-                attention_thread["version"] = self._chat_thread_version
-        else:
-            attention_thread["version"] = self._chat_thread_version
-            attention_thread["created"] = datetime.now().strftime("%s")
+        attention_thread = self.load_attention_thread(room_id)
 
         # self._logging_gateway.debug(f"attention_thread: {attention_thread}")
 
@@ -106,15 +91,16 @@ class DefaultMessagingService(IMessagingService):
         # Add system context to completion context.
         completion_context += self._get_system_context(platform, sender)
 
-        # Add chat history to completion context.
+        # Add user message to attention thread.
         attention_thread["messages"].append({"role": "user", "content": content})
 
-        # Log history before adding if flag set.
-        if self._config.mugen.debug_chat_threads():
+        # Log user message if conversation debugging flag set.
+        if self._config.mugen.debug_conversation():
             self._logging_gateway.debug(
                 json.dumps(attention_thread["messages"], indent=4)
             )
 
+        # Add thread history to completion context.
         completion_context += attention_thread["messages"]
 
         # Execute RAG pipelines and get data if any was found.
@@ -137,20 +123,21 @@ class DefaultMessagingService(IMessagingService):
                 completion_context += rp_cache
 
         # self._logging_gateway.debug(json.dumps(completion_context, indent=4))
-        # Get assistant response based on chat history, system context, and RAG data.
+        # Get assistant response based on conversation history, system context,
+        # and RAG data.
         self._logging_gateway.debug("Get completion.")
-        chat_completion = await self._completion_gateway.get_completion(
+        completion = await self._completion_gateway.get_completion(
             context=completion_context,
         )
 
-        # If the chat completion attempt failed, set response to "Error" so that the user
+        # If the completion attempt failed, set response to "Error" so that the user
         # will be aware of the failure.
-        if chat_completion is None:
-            self._logging_gateway.debug("chat_completion: None.")
-            chat_completion = SimpleNamespace()
-            chat_completion.content = "Error"
+        if completion is None:
+            self._logging_gateway.debug("Completion is None.")
+            completion = SimpleNamespace()
+            completion.content = "Error"
 
-        assistant_response = chat_completion.content
+        assistant_response = completion.content
 
         # Save current thread first.
         self._logging_gateway.debug("Persist attention thread.")
@@ -160,7 +147,13 @@ class DefaultMessagingService(IMessagingService):
                 "content": assistant_response,
             }
         )
-        self.save_attention_thread(attention_thread_key, attention_thread)
+        self.save_attention_thread(room_id, attention_thread)
+
+        # Log assistant message if conversation debugging flag set.
+        if self._config.mugen.debug_conversation():
+            self._logging_gateway.debug(
+                json.dumps(attention_thread["messages"], indent=4)
+            )
 
         # Pass the response to pre-processor extensions.
         for rpp_ext in self._rpp_extensions:
@@ -170,8 +163,8 @@ class DefaultMessagingService(IMessagingService):
                 continue
 
             assistant_response, task, end_task = await rpp_ext.preprocess_response(
-                attention_thread_key,
-                sender,
+                room_id,
+                user_id=sender,
             )
 
             # If no task or end task is detected,
@@ -181,7 +174,7 @@ class DefaultMessagingService(IMessagingService):
 
             # We must determine if the response contains
             # a conversational trigger before we attempt
-            # to refresh the chat thread.
+            # to clear the attention thread.
             trigger_hits = 0
             if end_task:
                 for ct_ext in self._ct_extensions:
@@ -197,7 +190,7 @@ class DefaultMessagingService(IMessagingService):
             # Only attempt the refresh if a conversational trigger was not
             # detected.
             if not trigger_hits > 0:
-                self.get_attention_thread_key(room_id, True, task)
+                self.clear_attention_thread(room_id, task)
 
         if assistant_response == "":
             self._logging_gateway.debug("Empty response.")
@@ -218,11 +211,10 @@ class DefaultMessagingService(IMessagingService):
             tasks.append(
                 asyncio.create_task(
                     ct_ext.process_message(
-                        assistant_response,
-                        "assistant",
-                        room_id,
-                        sender,
-                        attention_thread_key,
+                        message=assistant_response,
+                        role="assistant",
+                        room_id=room_id,
+                        user_id=sender,
                     )
                 )
             )
@@ -230,71 +222,41 @@ class DefaultMessagingService(IMessagingService):
 
         return assistant_response
 
-    def add_message_to_thread(
-        self,
-        message: str,
-        role: str,
-        thread_id: str,
-    ) -> None:
-        # Load the chat thread.
-        chat_thread_key = self.get_attention_thread_key(thread_id)
-        chat_thread = self.load_attention_thread(chat_thread_key)
-
-        # Preserve alternating turns.
-        if role == "assistant" and chat_thread["messages"][-1]["role"] == "assistant":
-            chat_thread["messages"].append({"role": "user", "content": "ok."})
+    def add_message_to_thread(self, message: str, role: str, room_id: str) -> None:
+        # Load the attention thread.
+        attention_thread = self.load_attention_thread(room_id)
 
         # Append a new assistant response.
-        chat_thread["messages"].append({"role": role, "content": message})
+        attention_thread["messages"].append({"role": role, "content": message})
 
-        # Save the chat thread.
-        chat_thread["last_saved"] = datetime.now().strftime("%s")
-        self.save_attention_thread(chat_thread_key, chat_thread)
+        # Persist the attention thread.
+        self.save_attention_thread(room_id, attention_thread)
 
-    def get_attention_thread_key(
-        self,
-        room_id: str,
-        refresh: bool = False,
-        start_task: bool = False,
-    ) -> str:
-        """Get the chat thread that the message is related to."""
-        # Get the key to retrieve the list of chat threads for this room.
-        chat_threads_list_key = f"chat_threads_list:{room_id}"
+    def clear_attention_thread(self, room_id: str, start_task: bool = False) -> None:
+        # Get the attention thread.
+        attention_thread = self.load_attention_thread(room_id)
 
-        # If chat threads list key does not exist.
-        if not self._keyval_storage_gateway.has_key(chat_threads_list_key):
-            # This is the first message in this room.
-            # Create a new chat thread key and return it as the attention thread key.
-            self._logging_gateway.debug("New chat. Generating new list and new thread.")
-            return self._get_new_chat_thread_key(chat_threads_list_key, True)
+        # If we clearing at the beginning of a task...
+        if start_task:
+            self._logging_gateway.debug("Clear attention thread: start task.")
+            # Save the last three messages for context.
+            attention_thread["messages"] = attention_thread["messages"][-3:]
+        else:
+            # Clear the entire thread.
+            self._logging_gateway.debug("Clear attention thread: other.")
+            attention_thread["messages"] = attention_thread["messages"][-2:]
 
-        # else:
-        # The key does exist.
-        chat_threads_list = pickle.loads(
-            self._keyval_storage_gateway.get(chat_threads_list_key, False)
-        )
+        # Persist the cleared thread.
+        self.save_attention_thread(room_id, attention_thread)
 
-        if refresh:
-            attention_thread = self.load_attention_thread(
-                chat_threads_list["attention_thread"]
-            )
-            if start_task:
-                self._logging_gateway.debug("Refreshing attention thread (Start task).")
-                attention_thread["messages"] = attention_thread["messages"][-3:]
-            else:
-                self._logging_gateway.debug("Refreshing attention thread (other).")
-                attention_thread["messages"] = []
-            self.save_attention_thread(
-                chat_threads_list["attention_thread"], attention_thread
-            )
-        return chat_threads_list["attention_thread"]
+    def load_attention_thread(self, room_id: str) -> dict | None:
+        thread_key = self._get_attention_thread_key(room_id)
+        return pickle.loads(self._keyval_storage_gateway.get(thread_key, False))
 
-    def load_attention_thread(self, key: str) -> dict:
-        return pickle.loads(self._keyval_storage_gateway.get(key, False))
-
-    def save_attention_thread(self, key: str, thread: dict) -> None:
+    def save_attention_thread(self, room_id: str, thread: dict) -> None:
         thread["last_saved"] = datetime.now().strftime("%s")
-        self._keyval_storage_gateway.put(key, pickle.dumps(thread))
+        thread_key = self._get_attention_thread_key(room_id)
+        self._keyval_storage_gateway.put(thread_key, pickle.dumps(thread))
 
     @property
     def mh_extensions(self) -> list[IMHExtension]:
@@ -315,36 +277,62 @@ class DefaultMessagingService(IMessagingService):
     def register_rpp_extension(self, ext: IRPPExtension) -> None:
         self._rpp_extensions.append(ext)
 
-    def _get_new_chat_thread_key(
-        self, chat_threads_list_key: str, new_list: bool
-    ) -> str:
-        """Generate a new chat thread key."""
-        # Generate new key.
-        self._logging_gateway.debug("Generating new chat thread key.")
-        key = f"chat_thread:{uuid.uuid1()}"
+    def _get_attention_thread_key(self, room_id: str) -> str:
+        """Get the attention thread that the message is related to."""
+        # Get the key to retrieve the list of attention threads for this room.
+        thread_list_key = f"chat_threads_list:{room_id}"
 
-        chat_threads_list = {}
+        # If thread_list_key does not exist.
+        if not self._keyval_storage_gateway.has_key(thread_list_key):
+            # This is the first message in this room.
+            # Create a new thread list and get the attention thread key.
+            self._logging_gateway.debug("New room. Generating new list and new thread.")
+            thread_key = self._generate_thread_list(thread_list_key, True)
+            return thread_key
+        # else:
+        # The key does exist.
+        thread_list = pickle.loads(
+            self._keyval_storage_gateway.get(thread_list_key, False)
+        )
+        return thread_list["attention_thread"]
+
+    def _generate_thread_list(self, thread_list_key: str, new_list: bool) -> str:
+        """Generate a new attention thread key."""
+        # Generate new key.
+        self._logging_gateway.debug("Generating new attention thread key.")
+        thread_key = f"chat_thread:{uuid.uuid1()}"
+
+        thread_list = {}
         # If its a new thread list.
         if new_list:
             # Create a new thread list, and make the new thread the attention thread.
             self._logging_gateway.debug("Creating new thread list.")
-            chat_threads_list["version"] = self._chat_threads_list_version
-            chat_threads_list["attention_thread"] = key
-            chat_threads_list["threads"] = [key]
+            thread_list["version"] = self._thread_list_version
+            thread_list["attention_thread"] = thread_key
+            thread_list["threads"] = [thread_key]
         else:
             # The thread list exists.
             self._logging_gateway.debug("Load existing thread list.")
-            chat_threads_list = pickle.loads(
-                self._keyval_storage_gateway.get(chat_threads_list_key, False)
+            thread_list = pickle.loads(
+                self._keyval_storage_gateway.get(thread_list_key, False)
             )
 
             # Set new key as attention thread and append it to the threads list.
-            chat_threads_list["attention_thread"] = key
-            chat_threads_list["threads"].append(key)
+            thread_list["attention_thread"] = thread_key
+            thread_list["threads"].append(thread_key)
 
         # Persist thread list.
-        self._keyval_storage_gateway.put(chat_threads_list_key, chat_threads_list)
-        return key
+        self._keyval_storage_gateway.put(thread_list_key, thread_list)
+
+        # Default values for attention thread.
+        attention_thread = {
+            "created": datetime.now().strftime("%s"),
+            "last_saved": datetime.now().strftime("%s"),
+            "version": self._thread_version,
+        }
+        self._keyval_storage_gateway.put(thread_key, pickle.dumps(attention_thread))
+
+        return thread_key
 
     def _get_system_context(self, platform: str, sender: str) -> list[dict]:
         """Return a list of system messages to add context to user message."""

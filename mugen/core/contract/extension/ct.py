@@ -29,6 +29,5 @@ class ICTExtension(ABC):
         role: str,
         room_id: str,
         user_id: str,
-        chat_thread_key: str,
     ) -> None:
         """Process message for conversational triggers."""
