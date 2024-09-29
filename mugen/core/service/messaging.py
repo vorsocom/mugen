@@ -66,20 +66,23 @@ class DefaultMessagingService(IMessagingService):
         sender: str,
         content: str,
     ) -> str | None:
-        if content.strip() == "//clear.":
-            # Clear attention thread.
-            self.clear_attention_thread(room_id)
+        match content.strip():
+            case "//clear.":
+                # Clear attention thread.
+                self.clear_attention_thread(room_id)
 
-            # Clear RAG caches.
-            for rag_ext in self._rag_extensions:
-                # Filter extensions that don't support the
-                # calling platform.
-                if not self._platform_supported(platform, rag_ext):
-                    continue
+                # Clear RAG caches.
+                for rag_ext in self._rag_extensions:
+                    # Filter extensions that don't support the
+                    # calling platform.
+                    if not self._platform_supported(platform, rag_ext):
+                        continue
 
-                if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
-                    self._keyval_storage_gateway.remove(rag_ext.cache_key)
-            return "PUC executed."
+                    if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
+                        self._keyval_storage_gateway.remove(rag_ext.cache_key)
+                return "PUC executed."
+            case _:
+                pass
 
         # Load previous history from storage if it exists.
         attention_thread = self.load_attention_thread(room_id)
@@ -162,39 +165,10 @@ class DefaultMessagingService(IMessagingService):
             if not self._platform_supported(platform, rpp_ext):
                 continue
 
-            assistant_response, task, end_task = await rpp_ext.preprocess_response(
+            assistant_response = await rpp_ext.preprocess_response(
                 room_id,
                 user_id=sender,
             )
-
-            # If no task or end task is detected,
-            # we have nothing else to do.
-            if not (task or end_task):
-                continue
-
-            # We must determine if the response contains
-            # a conversational trigger before we attempt
-            # to clear the attention thread.
-            trigger_hits = 0
-            if end_task:
-                for ct_ext in self._ct_extensions:
-                    # Filter extensions that don't support the
-                    # calling platform.
-                    if not self._platform_supported(platform, ct_ext):
-                        continue
-
-                    for trigger in ct_ext.triggers:
-                        if trigger in assistant_response:
-                            trigger_hits += 1
-
-            # Only attempt the refresh if a conversational trigger was not
-            # detected.
-            if not trigger_hits > 0:
-                self.clear_attention_thread(room_id, task)
-
-        if assistant_response == "":
-            self._logging_gateway.debug("Empty response.")
-            return assistant_response
 
         self._logging_gateway.debug(
             "Pass response to triggered services for processing."
@@ -232,19 +206,14 @@ class DefaultMessagingService(IMessagingService):
         # Persist the attention thread.
         self.save_attention_thread(room_id, attention_thread)
 
-    def clear_attention_thread(self, room_id: str, start_task: bool = False) -> None:
+    def clear_attention_thread(self, room_id: str, keep: int = 0) -> None:
         # Get the attention thread.
         attention_thread = self.load_attention_thread(room_id)
 
-        # If we clearing at the beginning of a task...
-        if start_task:
-            self._logging_gateway.debug("Clear attention thread: start task.")
-            # Save the last three messages for context.
-            attention_thread["messages"] = attention_thread["messages"][-3:]
+        if keep == 0:
+            attention_thread["messages"] = []
         else:
-            # Clear the entire thread.
-            self._logging_gateway.debug("Clear attention thread: other.")
-            attention_thread["messages"] = attention_thread["messages"][-2:]
+            attention_thread["messages"] = attention_thread["messages"][-abs(keep) :]
 
         # Persist the cleared thread.
         self.save_attention_thread(room_id, attention_thread)
