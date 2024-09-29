@@ -18,5 +18,5 @@ class IRPPExtension(ABC):  # pylint: disable=too-few-public-methods
         self,
         room_id: str,
         user_id: str,
-    ) -> tuple[str, bool, bool]:
+    ) -> str:
         """Preprocess the assistant response."""

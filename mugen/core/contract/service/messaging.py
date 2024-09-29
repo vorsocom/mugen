@@ -34,7 +34,7 @@ class IMessagingService(ABC):
         """Add a message to a room's attention thread."""
 
     @abstractmethod
-    def clear_attention_thread(self, room_id: str, start_task: bool = False) -> None:
+    def clear_attention_thread(self, room_id: str, keep: int = 0) -> None:
         """Clear a room's attention thread."""
 
     @abstractmethod

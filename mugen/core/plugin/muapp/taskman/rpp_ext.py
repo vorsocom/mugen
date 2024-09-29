@@ -36,7 +36,7 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
         self,
         room_id: str,
         user_id: str,
-    ) -> tuple[str, bool, bool]:
+    ) -> str:
         task = False
         end_task = False
         thread = self._messaging_service.load_attention_thread(room_id)
@@ -68,8 +68,10 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
             thread["messages"].append(
                 {"role": "assistant", "content": assistant_response}
             )
-        else:
+            thread["messages"] = thread["messages"][-3:]
+        elif end_task:
             thread["messages"][-1]["content"] = assistant_response
+            thread["messages"] = thread["messages"][-2:]
 
         self._messaging_service.save_attention_thread(room_id, thread)
-        return (assistant_response, task, end_task)
+        return assistant_response
