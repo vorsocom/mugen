@@ -1,3 +1,3 @@
-# Gloria v0.29.1
+# muGen v0.30.0
 
-Gloria is a microframework that enables rapid deployment of AI assistants to popular instant messaging platforms.
+muGen is a microframework that enables rapid development and deployment of AI assistants for instant messaging platforms.
