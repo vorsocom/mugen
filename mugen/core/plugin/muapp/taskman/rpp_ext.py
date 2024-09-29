@@ -34,12 +34,12 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
 
     async def preprocess_response(
         self,
-        attention_thread_key: str,
+        room_id: str,
         user_id: str,
     ) -> tuple[str, bool, bool]:
         task = False
         end_task = False
-        thread = self._messaging_service.load_attention_thread(attention_thread_key)
+        thread = self._messaging_service.load_attention_thread(room_id)
         assistant_response = thread["messages"][-1]["content"]
 
         # Check for start task indicator.
@@ -71,5 +71,5 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
         else:
             thread["messages"][-1]["content"] = assistant_response
 
-        self._messaging_service.save_attention_thread(attention_thread_key, thread)
+        self._messaging_service.save_attention_thread(room_id, thread)
         return (assistant_response, task, end_task)

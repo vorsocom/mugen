@@ -4,6 +4,8 @@ assistant.persona = ""
 #
 beta = true
 #
+debug_conversation = true
+#
 environment = "development"
 #
 logger.name = "COM.VORSOCOMPUTING.MUGEN"
