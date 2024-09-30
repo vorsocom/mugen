@@ -6,6 +6,7 @@ from dependency_injector import providers
 from dependency_injector.wiring import inject, Provide
 
 from mugen.core.contract.extension.rpp import IRPPExtension
+from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.di import DIContainer
@@ -18,12 +19,16 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
     @inject
     def __init__(
         self,
+        completion_gateway: ICompletionGateway = Provide[
+            DIContainer.completion_gateway
+        ],
         config: providers.Configuration = Provide[  # pylint: disable=c-extension-no-member
             DIContainer.config.delegate()
         ],
         logging_gateway: ILoggingGateway = Provide[DIContainer.logging_gateway],
         messaging_service: IMessagingService = Provide[DIContainer.messaging_service],
     ) -> None:
+        self._completion_gateway = completion_gateway
         self._config = config
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
@@ -59,6 +64,28 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
                 and self._config.muapp.taskman.empty_response_text() != ""
             ):
                 assistant_response = self._config.muapp.taskman.empty_response_text()
+            elif (
+                assistant_response == ""
+                and self._config.muapp.taskman.empty_response_text() == ""
+            ):
+                self._logging_gateway.debug("Generating end of task response.")
+                completion = await self._completion_gateway.get_completion(
+                    context=thread["messages"][:-1]
+                    + [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Your conversation with the user has ended. Let them"
+                                " know this and that they can reach out to you if they"
+                                " need assistance with anything else. They do not have"
+                                " to respond to your message."
+                            ),
+                        }
+                    ]
+                )
+
+                assistant_response = completion.content
+                thread["messages"][-1]["content"] = assistant_response
 
         if task:
             thread["messages"][-1] = {
