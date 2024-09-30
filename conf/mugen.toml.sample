@@ -4,7 +4,7 @@ assistant.persona = ""
 #
 beta = true
 #
-debug_conversation = true
+debug_conversation = false
 #
 environment = "development"
 #
@@ -58,7 +58,7 @@ service.user = "mugen.core.service.user"
 # WACAPI
 [[mugen.modules.core.plugins]]
 type = "ipc"
-path = "mugen.core.plugin.muapp.wacapi.ipc_ext"
+path = "mugen.core.plugin.muapp.whatsapp.wacapi.ipc_ext"
 #
 # Extensions
 [[mugen.modules.extensions]]
