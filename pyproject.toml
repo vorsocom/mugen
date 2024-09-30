@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mugen"
-version = "0.31.0"
+version = "0.31.1"
 description = "Microframework for instant messaging AI assistants."
 authors = ["Vorso Computing, Inc. <brightideas@vorsocomputing.com>"]
 maintainers = ["Sando George <sando.csc@gmail.com>"]
