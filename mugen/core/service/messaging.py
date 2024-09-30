@@ -291,12 +291,13 @@ class DefaultMessagingService(IMessagingService):
             thread_list["threads"].append(thread_key)
 
         # Persist thread list.
-        self._keyval_storage_gateway.put(thread_list_key, thread_list)
+        self._keyval_storage_gateway.put(thread_list_key, pickle.dumps(thread_list))
 
         # Default values for attention thread.
         attention_thread = {
             "created": datetime.now().strftime("%s"),
             "last_saved": datetime.now().strftime("%s"),
+            "messages": [],
             "version": self._thread_version,
         }
         self._keyval_storage_gateway.put(thread_key, pickle.dumps(attention_thread))
