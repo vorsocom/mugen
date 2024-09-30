@@ -297,6 +297,7 @@ class DefaultMessagingService(IMessagingService):
         attention_thread = {
             "created": datetime.now().strftime("%s"),
             "last_saved": datetime.now().strftime("%s"),
+            "messages": [],
             "version": self._thread_version,
         }
         self._keyval_storage_gateway.put(thread_key, pickle.dumps(attention_thread))
