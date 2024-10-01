@@ -113,7 +113,7 @@ async def whatsapp_wcapi_verification():
     if (
         request.args.get("hub.mode") == "subscribe"
         and request.args.get("hub.verify_token")
-        == current_app.config["ENV"].whatsapp.webhook.verification_token
+        == current_app.config["ENV"].whatsapp.webhook.verification_token()
     ):
         return request.args.get("hub.challenge")
     abort(400)
