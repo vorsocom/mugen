@@ -257,7 +257,7 @@ class DefaultMatrixClient(AsyncClient):  # pylint: disable=too-many-instance-att
 
         # If the assistant is in limited-beta mode, only process invites from the
         # list of selected beta users.
-        if self._config.mugen.beta():
+        if self._config.mugen.beta.active():
             beta_users: list = self._config.matrix.beta.users()
             if event.sender not in beta_users:
                 await self.room_leave(room.room_id)

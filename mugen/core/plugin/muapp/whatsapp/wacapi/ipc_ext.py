@@ -66,14 +66,11 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             message = event["entry"][0]["changes"][0]["value"]["messages"][0]
             sender = contact["wa_id"]
 
-            if self._config.mugen.beta():
+            if self._config.mugen.beta.active():
                 beta_users: list = self._config.whatsapp.beta.users()
                 if sender not in beta_users:
                     await self._client.send_text_message(
-                        message=(
-                            "This application is in limted beta and you are not on the"
-                            " beta list."
-                        ),
+                        message=self._config.mugen.beta.message(),
                         recipient=sender,
                     )
                     await payload["response_queue"].put({"response": "OK"})
