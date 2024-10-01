@@ -2,7 +2,9 @@
 #
 assistant.persona = ""
 #
-beta = true
+beta.active = true
+#
+beta.message = ""
 #
 debug_conversation = false
 #

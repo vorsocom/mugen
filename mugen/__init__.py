@@ -94,12 +94,15 @@ async def run_assistants() -> None:
     # 4. Message Handler (MH) extensions.
     # 5. Retrieval Augmented Generation (RAG) extensions.
     # 6. Response Pre-Processor (RPP) extensions.
+    extensions = []
 
     # Load core plugins.
-    extensions = di.config.mugen.modules.core.plugins()
+    if di.config.mugen.modules.core.plugins() is not None:
+        extensions += di.config.mugen.modules.core.plugins()
 
     # Load third party extensions.
-    extensions += di.config.mugen.modules.extensions()
+    if di.config.mugen.modules.extensions() is not None:
+        extensions += di.config.mugen.modules.extensions()
 
     # Wire the extensions for dependency injection.
     di.wire([x["path"] for x in extensions])
