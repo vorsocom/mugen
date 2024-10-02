@@ -64,3 +64,7 @@ class IMessagingService(ABC):
     @abstractmethod
     def register_rpp_extension(self, ext: IRPPExtension) -> None:
         """Register a Response Pre-Processor (RPP) extension."""
+
+    @abstractmethod
+    def trigger_in_response(self, response: str, platform: str = None) -> bool:
+        """Determine if a response contains a conversational trigger."""

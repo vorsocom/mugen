@@ -246,6 +246,19 @@ class DefaultMessagingService(IMessagingService):
     def register_rpp_extension(self, ext: IRPPExtension) -> None:
         self._rpp_extensions.append(ext)
 
+    def trigger_in_response(self, response: str, platform: str = None) -> bool:
+        hits = 0
+        for ct_ext in self._ct_extensions:
+
+            if platform is not None and not self._platform_supported(platform, ct_ext):
+                continue
+
+            for trigger in ct_ext.triggers:
+                if trigger in response:
+                    hits += 1
+
+        return hits > 0
+
     def _get_attention_thread_key(self, room_id: str) -> str:
         """Get the attention thread that the message is related to."""
         # Get the key to retrieve the list of attention threads for this room.
