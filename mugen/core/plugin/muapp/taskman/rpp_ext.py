@@ -98,7 +98,9 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
             thread["messages"] = thread["messages"][-3:]
         elif end_task:
             thread["messages"][-1]["content"] = assistant_response
-            thread["messages"] = thread["messages"][-2:]
+
+            if not self._messaging_service.trigger_in_response(assistant_response):
+                thread["messages"] = thread["messages"][-2:]
 
         self._messaging_service.save_attention_thread(room_id, thread)
         return assistant_response
