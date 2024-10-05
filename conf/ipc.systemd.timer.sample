@@ -1,5 +1,5 @@
 [Unit]
-Description=Timer for Gloria cron job.
+Description=Timer for muGen IPC service.
 
 [Timer]
 OnBootSec=60                ## Run 60 seconds after (re)boot.

@@ -1,0 +1,9 @@
+[Unit]
+Description=muGen Microframework Service
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=simple
+ExecStart={path/to/venv}/bin/hypercorn --config /opt/com.vorsocomputing/mugen/{app}/hypercorn.toml /opt/com.vorsocomputing/mugen/{app}/quartman:mugen
+[Install]
+WantedBy=multi-user.target
