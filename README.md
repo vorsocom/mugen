@@ -39,7 +39,7 @@ muGen supports seven types of extensions which can all be platform agnostic or s
 
 4. **Context (CTX)** extensions: that provide context to the LLM by injecting messages into conversation histories.
 
-5. **Retrieval Augmented Generation (RAG)** extensions: that performs knowlegde retrieval from arbitrary sources and injects this knowledge into the LLM context.
+5. **Retrieval Augmented Generation (RAG)** extensions: that perform knowlegde retrieval from arbitrary sources and inject this knowledge into the LLM context.
 
 6. **Response Pre-processor (RPP)** extensions: that intercept and modify LLM responses before they are shown to the user.
 
@@ -74,7 +74,8 @@ Gateways and services lie at the core of the framework and provide platform agno
 ~$ cp conf/mugen.toml.sample mugen.toml
 
 ## Edit mugen.toml to set your preffered values.
-# Note that you should configure at least one completion gateway.
+# Note that you should configure at least at least
+# one platform and one completion gateway.
 ~$ nano mugen.toml
 
 ## Install Python dependencies.
@@ -89,7 +90,7 @@ Gateways and services lie at the core of the framework and provide platform agno
 
 ## License
 
-muGen is [fair-code](https://faircode.io) distributed under the [**Sustainable Use License**](). Proprietary enterprise licenses are available on [**request**](mailto:license@vorsocomputing.com).
+muGen is [fair-code](https://faircode.io) distributed under the [**Sustainable Use License**](LICENSE.md). Proprietary enterprise licenses are available on [**request**](mailto:license@vorsocomputing.com).
 
 ## Enterprise Services
 
