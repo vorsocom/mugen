@@ -25,10 +25,8 @@ yake = "^0.4.8"
 tomlkit = "^0.13.2"
 peewee = "^3.17.6"
 python-olm = "^3.2.16"
+pycurl = "^7.45.3"
 
-
-[tool.poetry.group.dev.dependencies]
-pipdeptree = "^2.23.4"
 
 [build-system]
 requires = ["poetry-core"]
