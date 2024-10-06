@@ -2,7 +2,6 @@
 
 __all__ = ["DefaultWhatsAppClient"]
 
-import asyncio
 from http import HTTPMethod
 from io import BytesIO
 import json
@@ -31,7 +30,6 @@ class DefaultWhatsAppClient(IWhatsAppClient):
     def __init__(  # pylint: disable=too-many-arguments
         self,
         config: providers.Configuration = None,  # pylint: disable=c-extension-no-member
-        ipc_queue: asyncio.Queue = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
@@ -40,7 +38,6 @@ class DefaultWhatsAppClient(IWhatsAppClient):
     ) -> None:
         self._client_session: aiohttp.ClientSession = None
         self._config = config
-        self._ipc_queue = ipc_queue
         self._ipc_service = ipc_service
         self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway

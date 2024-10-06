@@ -6,8 +6,8 @@ import textwrap
 
 from dependency_injector import providers
 from dependency_injector.wiring import inject, Provide
-from nio import AsyncClient
 
+from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.di import DIContainer
@@ -22,7 +22,7 @@ class DeviceManagementIPCExtension(IIPCExtension):
         config: providers.Configuration = Provide[  # pylint: disable=c-extension-no-member
             DIContainer.config.delegate()
         ],
-        matrix_client: AsyncClient = Provide[DIContainer.matrix_client],
+        matrix_client: IMatrixClient = Provide[DIContainer.matrix_client],
         logging_gateway: ILoggingGateway = Provide[DIContainer.logging_gateway],
     ) -> None:
         self._client = matrix_client
