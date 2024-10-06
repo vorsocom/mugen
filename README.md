@@ -4,16 +4,21 @@
 
 # muGen - The GenAI Microframework
 
-muGen (pronounced mew-jen) is a [fair-code](https://faircode.io) Python microframework for prototyping and deploying multimodal Generative AI applications. The aim is to have a simple, lean, extensible code base that allows developers to mix and match technologies and vendors providing, among other things, LLMs, vector storage, and communication platforms, to get from zero to deployment in as little time as possible. Continue reading for an overview of the framework, or skip ahead to [start building](#getting-started)
+[![Static Badge](https://img.shields.io/badge/License-Sustainable_Use_1.0-blue)](LICENSE.md)
+
+muGen (pronounced mew-jen) is a [fair-code](https://faircode.io) model licensed microframework for prototyping and deploying multimodal Generative AI applications. muGen is written in Python and aims to have a simple, lean, extensible codebase that allows developers to mix and match technologies and vendors providing, among other things, LLMs, vector storage, and communication platforms, to get from zero to deployment in as little time as possible. Continue reading for an overview of the framework, or skip ahead to [start building](#getting-started).
+
+## Contents
 
 1. [Architecture](#architecture)
 2. [Getting Started](#getting-started)
 3. [License](#license)
+4. [Why Source-Available](#why-source-available)
 4. [Enterprise Services](#enterprise-services)
 
 ## Architecture
 
-There are five layers in a muGen app. They go from high-level platform UIs, to low-level core modules in the framework. Except for situations where a target platform uses a pull API, or where extensions implement API endpoints, the code base for the entire app can be kept fairly [clean](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html). This means that dependencies always point towards lower layers, increasing flexibility and testability.
+There are five layers in a muGen app. They go from high-level platform UIs, to low-level core modules in the framework. Except for situations where a target platform uses a pull API, or where extensions implement API endpoints, the codebase for the entire app can be kept fairly [clean](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html). This means that dependencies always point towards lower layers, increasing flexibility and testability.
 
 <p align="center">
     <img src="assets/images/mugen-architecture.png" width="501">
@@ -25,7 +30,7 @@ The platform layer includes communication platforms through which users interact
 
 ### API
 
-muGen, at its core, is a [Quart](https://palletsprojects.com/projects/quart) application and, therefore, supports all the API building functionality of that framework. Blueprint registration of the core API is delayed until after extensions have been registered. This allows extensions to add their own endpoints to the core API, or implment custom API routes altogether.
+muGen, at its core, is a [Quart](https://palletsprojects.com/projects/quart) application and, therefore, supports all the API building functionality of that framework. Blueprint registration of the core API is delayed until extensions have been registered. This allows extensions to add their own endpoints to the core API, or implment custom API routes altogether.
 
 ### Extensions
 
@@ -53,7 +58,7 @@ Clients provide platform specific functionality and can be built for push and pu
 
 ### Gateways and Services
 
-Gateways and services lie at the core of the framework and provide platform agnostic functionality. The naming convention was adopted to differentiate between core implemented functionality (services) and functionality provided by external libraries/systems (gateways). The gateway and service modules used by the core are configurable using the TOML configuration file.
+Gateways and services lie at the core of the framework and provide platform agnostic functionality. This functionality includes coomunication with various chat completion APIs, vector databases, and a key-value storage. The naming convention was adopted to differentiate between core implemented functionality (services) and functionality provided by external libraries/systems (gateways). The service and gateway modules used by the core are configurable using the TOML configuration file.
 
 ## Getting Started
 
@@ -91,6 +96,10 @@ Gateways and services lie at the core of the framework and provide platform agno
 ## License
 
 muGen is [fair-code](https://faircode.io) distributed under the [**Sustainable Use License**](LICENSE.md). Proprietary enterprise licenses are available on [**request**](mailto:license@vorsocomputing.com).
+
+## Why Source-Available?
+
+muGen started out as a closed-source project. Vorsocom, however, soon realised that many clients are more comfortable buying into using codebases that are publicly available for scrutiny and also offer some level of protection against vendor lock-in. We decided that if we are going to expose the codebase publicly, we might as well do it in a way that allows anyone who stumbles on the repository to use it in ways that are not harmful to our business goals. Being free, source-available, and fair-code licensed helps us achieve this.
 
 ## Enterprise Services
 
