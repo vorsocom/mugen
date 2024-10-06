@@ -7,9 +7,9 @@ from importlib import import_module
 import os
 
 from dependency_injector import containers, providers
-from nio import AsyncClient
 import tomlkit
 
+from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeRetrievalGateway
@@ -62,18 +62,15 @@ if "knowledge" in core["gateway"].keys() and core["gateway"]["knowledge"] != "":
     knowledge_gateway_class = IKnowledgeRetrievalGateway.__subclasses__()[0]
 
 matrix_client_class = None
-matrix_ipc_queue = None
 if (
     "matrix" in core["client"].keys()
     and core["client"]["matrix"] != ""
     and "matrix" in config["mugen"]["platforms"]
 ):
     import_module(name=core["client"]["matrix"])
-    matrix_client_class = AsyncClient.__subclasses__()[0]
-    matrix_ipc_queue = asyncio.Queue()
+    matrix_client_class = IMatrixClient.__subclasses__()[0]
 
 whatsapp_client_class = None
-whatsapp_ipc_queue = None
 if (
     "whatsapp" in core["client"].keys()
     and core["client"]["whatsapp"] != ""
@@ -81,7 +78,6 @@ if (
 ):
     import_module(name=core["client"]["whatsapp"])
     whatsapp_client_class = IWhatsAppClient.__subclasses__()[0]
-    whatsapp_ipc_queue = asyncio.Queue()
 
 
 # pylint: disable=c-extension-no-member
@@ -144,11 +140,9 @@ class DIContainer(containers.DeclarativeContainer):
         knowledge_gateway = providers.Object(None)
 
     if matrix_client_class:
-        matrix_ipc_queue = providers.Object(matrix_ipc_queue)
         matrix_client = providers.Singleton(
             matrix_client_class,
             config=config.delegate(),
-            ipc_queue=matrix_ipc_queue,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
             logging_gateway=logging_gateway,
@@ -157,14 +151,11 @@ class DIContainer(containers.DeclarativeContainer):
         )
     else:
         matrix_client = providers.Object(None)
-        matrix_ipc_queue = providers.Object(None)
 
     if whatsapp_client_class:
-        whatsapp_ipc_queue = providers.Object(whatsapp_ipc_queue)
         whatsapp_client = providers.Singleton(
             whatsapp_client_class,
             config=config.delegate(),
-            ipc_queue=whatsapp_ipc_queue,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
             logging_gateway=logging_gateway,
@@ -173,4 +164,3 @@ class DIContainer(containers.DeclarativeContainer):
         )
     else:
         whatsapp_client = providers.Object(None)
-        whatsapp_ipc_queue = providers.Object(None)

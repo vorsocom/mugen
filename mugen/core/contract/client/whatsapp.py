@@ -33,7 +33,7 @@ class IWhatsAppClient(ABC):
         self,
         audio: dict,
         recipient: str,
-        reply_to: str,
+        reply_to: str = None,
     ) -> str | None:
         """Send an Audio message to a WhatsApp user."""
 
@@ -42,7 +42,7 @@ class IWhatsAppClient(ABC):
         self,
         contacts: dict,
         recipient: str,
-        reply_to: str,
+        reply_to: str = None,
     ) -> str | None:
         """Send a Contacts message to a WhatsApp user."""
 
@@ -51,7 +51,7 @@ class IWhatsAppClient(ABC):
         self,
         document: dict,
         recipient: str,
-        reply_to: str,
+        reply_to: str = None,
     ) -> str | None:
         """Send a Document message to a WhatsApp user."""
 
@@ -60,7 +60,7 @@ class IWhatsAppClient(ABC):
         self,
         image: dict,
         recipient: str,
-        reply_to: str,
+        reply_to: str = None,
     ) -> str | None:
         """Send an Image message to a WhatsApp user."""
 
@@ -69,7 +69,7 @@ class IWhatsAppClient(ABC):
         self,
         interactive: dict,
         recipient: str,
-        reply_to: str,
+        reply_to: str = None,
     ) -> str | None:
         """Send an Interactive message to a WhatsApp user.
 
@@ -87,7 +87,7 @@ class IWhatsAppClient(ABC):
         self,
         location: dict,
         recipient: str,
-        reply_to: str,
+        reply_to: str = None,
     ) -> str | None:
         """Send a Location message to a WhatsApp user."""
 
@@ -100,7 +100,7 @@ class IWhatsAppClient(ABC):
         self,
         sticker: dict,
         recipient: str,
-        reply_to: str,
+        reply_to: str = None,
     ) -> str | None:
         """Send a Sticker message to a WhatsApp user."""
 
@@ -109,7 +109,7 @@ class IWhatsAppClient(ABC):
         self,
         template: dict,
         recipient: str,
-        reply_to: str,
+        reply_to: str = None,
     ) -> str | None:
         """Send a Template message to a WhatsApp user.
 
@@ -127,7 +127,7 @@ class IWhatsAppClient(ABC):
         self,
         message: str,
         recipient: str,
-        reply_to: str,
+        reply_to: str = None,
     ) -> str | None:
         """Send a Text message to a WhatsApp user."""
 
@@ -136,7 +136,7 @@ class IWhatsAppClient(ABC):
         self,
         video: dict,
         recipient: str,
-        reply_to: str,
+        reply_to: str = None,
     ) -> str | None:
         """Send a Video message to a WhatsApp user."""
 

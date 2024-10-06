@@ -5,8 +5,8 @@ __all__ = ["RoomManagementIPCExtension"]
 import pickle
 
 from dependency_injector.wiring import inject, Provide
-from nio import AsyncClient
 
+from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -19,7 +19,7 @@ class RoomManagementIPCExtension(IIPCExtension):
     @inject
     def __init__(
         self,
-        matrix_client: AsyncClient = Provide[DIContainer.matrix_client],
+        matrix_client: IMatrixClient = Provide[DIContainer.matrix_client],
         keyval_storage_gateway: IKeyValStorageGateway = Provide[
             DIContainer.keyval_storage_gateway
         ],
