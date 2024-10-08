@@ -11,7 +11,12 @@ class MuAppTaskmanCTXExtension(ICTXExtension):
 
     @property
     def platforms(self) -> list[str]:
+        """Get the platform that the extension is targeting."""
         return []
+
+    def platform_supported(self, platform: str) -> bool:
+        """Determine if the extension supports the specified platform."""
+        return not self.platforms or platform in self.platforms
 
     def get_context(self, user_id: str) -> list[dict]:
         return [

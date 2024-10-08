@@ -2,21 +2,18 @@
 
 __all__ = ["IRAGExtension"]
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
+
+from . import IExtensionBase
 
 
-class IRAGExtension(ABC):
+class IRAGExtension(IExtensionBase):
     """An ABC for RAG extensions."""
 
     @property
     @abstractmethod
     def cache_key(self) -> str:
         """Get key used to access the provider cache."""
-
-    @property
-    @abstractmethod
-    def platforms(self) -> list[str]:
-        """Get the platform that the extension is targeting."""
 
     @abstractmethod
     async def retrieve(self, sender: str, message: str) -> None:

@@ -17,7 +17,7 @@ class DeviceManagementIPCExtension(IIPCExtension):
     """An implementation of IIPCExtension to manage devices."""
 
     @inject
-    def __init__(
+    def __init__(  # pylint: disable=super-init-not-called
         self,
         config: providers.Configuration = Provide[  # pylint: disable=c-extension-no-member
             DIContainer.config.delegate()
@@ -37,7 +37,12 @@ class DeviceManagementIPCExtension(IIPCExtension):
 
     @property
     def platforms(self) -> list[str]:
+        """Get the platform that the extension is targeting."""
         return ["matrix"]
+
+    def platform_supported(self, platform: str) -> bool:
+        """Determine if the extension supports the specified platform."""
+        return not self.platforms or platform in self.platforms
 
     async def process_ipc_command(self, payload: dict) -> None:
         self._logging_gateway.debug(

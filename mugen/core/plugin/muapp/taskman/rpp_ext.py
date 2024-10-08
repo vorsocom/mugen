@@ -17,7 +17,7 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
     """An implementation of IRPPExtension to manage task indicators."""
 
     @inject
-    def __init__(
+    def __init__(  # pylint: disable=super-init-not-called
         self,
         completion_gateway: ICompletionGateway = Provide[
             DIContainer.completion_gateway
@@ -35,7 +35,12 @@ class MuAppTaskmanRPPExtension(IRPPExtension):
 
     @property
     def platforms(self) -> list[str]:
+        """Get the platform that the extension is targeting."""
         return []
+
+    def platform_supported(self, platform: str) -> bool:
+        """Determine if the extension supports the specified platform."""
+        return not self.platforms or platform in self.platforms
 
     async def preprocess_response(
         self,
