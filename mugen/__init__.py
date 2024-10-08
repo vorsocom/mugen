@@ -10,6 +10,8 @@ import sys
 from quart import Quart, g
 import tomlkit
 
+from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.fw import IFWExtension
@@ -208,6 +210,10 @@ async def run_assistants() -> None:
     platforms = di.config.mugen.platforms()
 
     try:
+        # Run Telnet assistant.
+        if "telnet" in platforms:
+            tasks.append(asyncio.create_task(run_telnet_client()))
+
         # Run Matrix assistant.
         if "matrix" in platforms:
             tasks.append(asyncio.create_task(run_matrix_assistant()))
@@ -222,12 +228,26 @@ async def run_assistants() -> None:
             await di.whatsapp_client().close()
 
 
+async def run_telnet_client() -> None:
+    """Run assistant for Telnet server."""
+    # Get logging gateway.
+    logging_gateway = di.logging_gateway()
+
+    telnet_client: ITelnetClient
+    async with di.telnet_client() as telnet_client:
+        try:
+            await asyncio.create_task(telnet_client.start_server())
+        except asyncio.exceptions.CancelledError:
+            logging_gateway.debug("Telnet client shutting down.")
+
+
 async def run_matrix_assistant() -> None:
     """Run assistant for the Matrix platform."""
     # Get logging gateway.
     logging_gateway = di.logging_gateway()
 
-    # Initialise matrix-nio async client.
+    # Initialise matrix client.
+    matrix_client: IMatrixClient
     async with di.matrix_client() as matrix_client:
         # We have to wait on the first sync event to perform some setup tasks.
         async def wait_on_first_sync():
