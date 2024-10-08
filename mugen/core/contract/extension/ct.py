@@ -2,16 +2,13 @@
 
 __all__ = ["ICTExtension"]
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
+
+from . import IExtensionBase
 
 
-class ICTExtension(ABC):
+class ICTExtension(IExtensionBase):
     """An ABC for CT extensions."""
-
-    @property
-    @abstractmethod
-    def platforms(self) -> list[str]:
-        """Get the platform that the extension is targeting."""
 
     @property
     @abstractmethod

@@ -17,7 +17,7 @@ class RoomManagementIPCExtension(IIPCExtension):
     """An implementation of IIPCExtension to manage rooms."""
 
     @inject
-    def __init__(
+    def __init__(  # pylint: disable=super-init-not-called
         self,
         matrix_client: IMatrixClient = Provide[DIContainer.matrix_client],
         keyval_storage_gateway: IKeyValStorageGateway = Provide[
@@ -39,7 +39,12 @@ class RoomManagementIPCExtension(IIPCExtension):
 
     @property
     def platforms(self) -> list[str]:
+        """Get the platform that the extension is targeting."""
         return ["matrix"]
+
+    def platform_supported(self, platform: str) -> bool:
+        """Determine if the extension supports the specified platform."""
+        return not self.platforms or platform in self.platforms
 
     async def process_ipc_command(self, payload: dict) -> None:
         self._logging_gateway.debug(

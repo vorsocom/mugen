@@ -18,6 +18,7 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.nlp import INLPService
+from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.contract.service.user import IUserService
 
 
@@ -47,6 +48,9 @@ storage_gateway_class = IKeyValStorageGateway.__subclasses__()[0]
 
 import_module(name=core["service"]["nlp"])
 nlp_service_class = INLPService.__subclasses__()[0]
+
+import_module(name=core["service"]["platform"])
+platform_service_class = IPlatformService.__subclasses__()[0]
 
 import_module(name=core["service"]["user"])
 user_service_class = IUserService.__subclasses__()[0]
@@ -120,6 +124,12 @@ class DIContainer(containers.DeclarativeContainer):
 
     nlp_service = providers.Singleton(
         nlp_service_class,
+        logging_gateway=logging_gateway,
+    )
+
+    platform_service = providers.Singleton(
+        platform_service_class,
+        config=config.delegate(),
         logging_gateway=logging_gateway,
     )
 

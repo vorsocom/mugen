@@ -113,13 +113,7 @@ async def run_assistants() -> None:
     # with the IPC and Messaging services.
     ipc_service = di.ipc_service()
     messaging_service = di.messaging_service()
-
-    def platforms_supported(ext) -> bool:
-        """Filter extensions that are not needed."""
-        if ext.platforms == []:
-            return True
-
-        return len(list(set(ext.platforms) & set(di.config.mugen.platforms()))) != 0
+    platform_service = di.platform_service()
 
     # Register the extensions.
     try:
@@ -135,7 +129,7 @@ async def run_assistants() -> None:
                     x for x in ICTExtension.__subclasses__() if x.__module__ == ext_path
                 ][0]
                 ct_ext = ct_ext_class()
-                if platforms_supported(ct_ext):
+                if platform_service.extension_supported(ct_ext):
                     messaging_service.register_ct_extension(ct_ext)
                     registered = True
             elif ext_type == "ctx":
@@ -145,7 +139,7 @@ async def run_assistants() -> None:
                     if x.__module__ == ext_path
                 ][0]
                 ctx_ext = ctx_ext_class()
-                if platforms_supported(ctx_ext):
+                if platform_service.extension_supported(ctx_ext):
                     messaging_service.register_ctx_extension(ctx_ext)
                     registered = True
             elif ext_type == "fw":
@@ -153,7 +147,7 @@ async def run_assistants() -> None:
                     x for x in IFWExtension.__subclasses__() if x.__module__ == ext_path
                 ][0]
                 fw_ext = fw_ext_class()
-                if platforms_supported(fw_ext):
+                if platform_service.extension_supported(fw_ext):
                     await fw_ext.setup()
                     registered = True
             elif ext_type == "ipc":
@@ -163,7 +157,7 @@ async def run_assistants() -> None:
                     if x.__module__ == ext_path
                 ][0]
                 ipc_ext = ipc_ext_class()
-                if platforms_supported(ipc_ext):
+                if platform_service.extension_supported(ipc_ext):
                     ipc_service.register_ipc_extension(ipc_ext)
                     registered = True
             elif ext_type == "mh":
@@ -171,7 +165,7 @@ async def run_assistants() -> None:
                     x for x in IMHExtension.__subclasses__() if x.__module__ == ext_path
                 ][0]
                 mh_ext = mh_ext_class()
-                if platforms_supported(mh_ext):
+                if platform_service.extension_supported(mh_ext):
                     messaging_service.register_mh_extension(mh_ext)
                     registered = True
             elif ext_type == "rag":
@@ -181,7 +175,7 @@ async def run_assistants() -> None:
                     if x.__module__ == ext_path
                 ][0]
                 rag_ext = rag_ext_class()
-                if platforms_supported(rag_ext):
+                if platform_service.extension_supported(rag_ext):
                     messaging_service.register_rag_extension(rag_ext)
                     registered = True
             elif ext_type == "rpp":
@@ -191,7 +185,7 @@ async def run_assistants() -> None:
                     if x.__module__ == ext_path
                 ][0]
                 rpp_ext = rpp_ext_class()
-                if platforms_supported(rpp_ext):
+                if platform_service.extension_supported(rpp_ext):
                     messaging_service.register_rpp_extension(rpp_ext)
                     registered = True
             if registered:

@@ -2,16 +2,13 @@
 
 __all__ = ["IFWExtension"]
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
+
+from . import IExtensionBase
 
 
-class IFWExtension(ABC):  # pylint: disable=too-few-public-methods
+class IFWExtension(IExtensionBase):  # pylint: disable=too-few-public-methods
     """An ABC for Framework (FW) extensions."""
-
-    @property
-    @abstractmethod
-    def platforms(self) -> list[str]:
-        """Get the platforms that the extension is targeting."""
 
     @abstractmethod
     async def setup(self) -> None:

@@ -103,7 +103,7 @@ class DefaultMessagingService(IMessagingService):
         for rag_ext in self._rag_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not self._platform_supported(platform, rag_ext):
+            if not rag_ext.platform_supported(platform):
                 continue
 
             await rag_ext.retrieve(sender, content)
@@ -153,7 +153,7 @@ class DefaultMessagingService(IMessagingService):
         for rpp_ext in self._rpp_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not self._platform_supported(platform, rpp_ext):
+            if not rpp_ext.platform_supported(platform):
                 continue
 
             assistant_response = await rpp_ext.preprocess_response(
@@ -170,7 +170,7 @@ class DefaultMessagingService(IMessagingService):
         for ct_ext in self._ct_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not self._platform_supported(platform, ct_ext):
+            if not ct_ext.platform_supported(platform):
                 continue
 
             tasks.append(
@@ -241,7 +241,7 @@ class DefaultMessagingService(IMessagingService):
         hits = 0
         for ct_ext in self._ct_extensions:
 
-            if platform is not None and not self._platform_supported(platform, ct_ext):
+            if platform is not None and not ct_ext.platform_supported(platform):
                 continue
 
             for trigger in ct_ext.triggers:
@@ -324,7 +324,7 @@ class DefaultMessagingService(IMessagingService):
         for ctx_ext in self._ctx_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not self._platform_supported(platform, ctx_ext):
+            if not ctx_ext.platform_supported(platform):
                 continue
 
             context += ctx_ext.get_context(sender)
@@ -333,7 +333,7 @@ class DefaultMessagingService(IMessagingService):
         for ct_ext in self._ct_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not self._platform_supported(platform, ct_ext):
+            if not ct_ext.platform_supported(platform):
                 continue
 
             context += ct_ext.get_context(sender)
@@ -350,7 +350,7 @@ class DefaultMessagingService(IMessagingService):
                 for rag_ext in self._rag_extensions:
                     # Filter extensions that don't support the
                     # calling platform.
-                    if not self._platform_supported(platform, rag_ext):
+                    if not rag_ext.platform_supported(platform):
                         continue
 
                     if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
@@ -358,10 +358,3 @@ class DefaultMessagingService(IMessagingService):
                 return "PUC executed."
             case _:
                 pass
-
-    def _platform_supported(self, platform: str, ext) -> bool:
-        """Filter extensions that don't support the calling platform."""
-        if ext.platforms == []:
-            return True
-
-        return platform in ext.platforms
