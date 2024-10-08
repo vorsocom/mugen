@@ -16,10 +16,6 @@ class ICTExtension(IExtensionBase):
         """Get the list of triggers that activate the service provider."""
 
     @abstractmethod
-    def get_context(self, user_id: str) -> list[dict]:
-        """Provides conversation context through system messages."""
-
-    @abstractmethod
     async def process_message(  # pylint: disable=too-many-arguments
         self,
         message: str,
