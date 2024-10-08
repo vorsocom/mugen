@@ -12,7 +12,11 @@ environment = "development"
 #
 logger.name = "COM.VORSOCOMPUTING.MUGEN"
 #
-platforms = [] # choices: matrix, whatsapp
+platforms = [
+    "telnet,
+    #"matrix",
+    #"whatsapp",
+]
 #
 [mugen.modules.core]
 #
@@ -66,6 +70,14 @@ path = "mugen.core.plugin.muapp.whatsapp.wacapi.ipc_ext"
 [[mugen.modules.extensions]]
 # type = ""
 # path = ""
+#
+#===TELNET===
+[telnet]
+#
+socket.host = "localhost"
+#
+socket.port = 8888
+#
 #===MATRIX===
 [matrix]
 #

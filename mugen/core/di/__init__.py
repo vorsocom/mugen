@@ -2,13 +2,13 @@
 
 __all__ = ["DIContainer"]
 
-import asyncio
 from importlib import import_module
 import os
 
 from dependency_injector import containers, providers
 import tomlkit
 
+from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -60,6 +60,15 @@ knowledge_gateway_class = None
 if "knowledge" in core["gateway"].keys() and core["gateway"]["knowledge"] != "":
     import_module(name=core["gateway"]["knowledge"])
     knowledge_gateway_class = IKnowledgeRetrievalGateway.__subclasses__()[0]
+
+telnet_client_class = None
+if (
+    "telnet" in core["client"].keys()
+    and core["client"]["telnet"] != ""
+    and "telnet" in config["mugen"]["platforms"]
+):
+    import_module(name=core["client"]["telnet"])
+    telnet_client_class = ITelnetClient.__subclasses__()[0]
 
 matrix_client_class = None
 if (
@@ -138,6 +147,19 @@ class DIContainer(containers.DeclarativeContainer):
         )
     else:
         knowledge_gateway = providers.Object(None)
+
+    if telnet_client_class:
+        telnet_client = providers.Singleton(
+            telnet_client_class,
+            config=config.delegate(),
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+    else:
+        telnet_client = providers.Object(None)
 
     if matrix_client_class:
         matrix_client = providers.Singleton(
