@@ -66,23 +66,14 @@ class DefaultMessagingService(IMessagingService):
         sender: str,
         content: str,
     ) -> str | None:
-        match content.strip():
-            case "//clear.":
-                # Clear attention thread.
-                self.clear_attention_thread(room_id)
-
-                # Clear RAG caches.
-                for rag_ext in self._rag_extensions:
-                    # Filter extensions that don't support the
-                    # calling platform.
-                    if not self._platform_supported(platform, rag_ext):
-                        continue
-
-                    if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
-                        self._keyval_storage_gateway.remove(rag_ext.cache_key)
-                return "PUC executed."
-            case _:
-                pass
+        # Handle commands.
+        # They contain no spaces, start with "//" and end with ".".
+        if (
+            len(content.strip().split()) == 1
+            and content.strip()[:2] == "//"
+            and content.strip()[-1] == "."
+        ):
+            return await self._handle_command(platform, room_id, content.strip())
 
         # Load previous history from storage if it exists.
         attention_thread = self.load_attention_thread(room_id)
@@ -348,6 +339,25 @@ class DefaultMessagingService(IMessagingService):
             context += ct_ext.get_context(sender)
 
         return context
+
+    async def _handle_command(self, platform: str, room_id: str, cmd: str) -> str:
+        match cmd:
+            case "//clear.":
+                # Clear attention thread.
+                self.clear_attention_thread(room_id)
+
+                # Clear RAG caches.
+                for rag_ext in self._rag_extensions:
+                    # Filter extensions that don't support the
+                    # calling platform.
+                    if not self._platform_supported(platform, rag_ext):
+                        continue
+
+                    if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
+                        self._keyval_storage_gateway.remove(rag_ext.cache_key)
+                return "PUC executed."
+            case _:
+                pass
 
     def _platform_supported(self, platform: str, ext) -> bool:
         """Filter extensions that don't support the calling platform."""
