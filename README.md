@@ -79,8 +79,7 @@ Gateways and services lie at the core of the framework and provide platform agno
 ~$ cp conf/mugen.toml.sample mugen.toml
 
 ## Edit mugen.toml to set your preffered values.
-# Note that you should configure at least at least
-# one platform and one completion gateway.
+# You should configure at least one completion gateway.
 ~$ nano mugen.toml
 
 ## Install Python dependencies.
@@ -92,6 +91,14 @@ Gateways and services lie at the core of the framework and provide platform agno
 ## Run the app.
 ~$ hypercorn -c hypercorn.toml quartman:mugen
 ```
+
+You can now open a new terminal and connect to the running instance using telnet.
+
+```bash
+~$ telnet localhost 8888
+```
+
+The telnet client is meant for **development** use only.
 
 ## License
 
