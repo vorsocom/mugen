@@ -1,24 +1,25 @@
+# muGen - The GenAI Microframework
+
 <p align="center">
     <img src="assets/images/mugen-logotype.png" width="401">
 </p>
 
-# muGen - The GenAI Microframework
-
 [![Static Badge](https://img.shields.io/badge/License-Sustainable_Use_1.0-blue)](LICENSE.md)
 
-muGen (pronounced mew-jen) is a [fair-code](https://faircode.io) model licensed microframework for prototyping and deploying multimodal Generative AI applications. muGen is written in Python and aims to have a simple, lean, extensible codebase that allows developers to mix and match technologies and vendors providing, among other things, LLMs, vector storage, and communication platforms, to get from zero to deployment in as little time as possible. Continue reading for an overview of the framework, or skip ahead to [start building](#getting-started).
+muGen (pronounced "mew-jen") is a [fair-code](https://faircode.io) licensed microframework for prototyping and deploying multimodal Generative AI applications. Written in Python, muGen aims to have a simple, lean, and extensible codebase that allows developers to mix and match technologies and vendors—such as LLMs, vector storage, and communication platforms—to get from zero to deployment quickly. Read on for an overview of the framework, or skip ahead to [get started](#getting-started).
 
 ## Contents
 
 1. [Architecture](#architecture)
 2. [Getting Started](#getting-started)
-3. [License](#license)
-4. [Why Source-Available](#why-source-available)
-4. [Enterprise Services](#enterprise-services)
+3. [Building Applications with muGen](#building-applications-with-mugen)
+4. [License](#license)
+5. [Why Source-Available](#why-source-available)
+6. [Enterprise Services](#enterprise-services)
 
 ## Architecture
 
-There are five layers in a muGen app. They go from high-level platform UIs, to low-level core modules in the framework. Except for situations where a target platform uses a pull API, or where extensions implement API endpoints, the codebase for the entire app can be kept fairly [clean](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html). This means that dependencies always point towards lower layers, increasing flexibility and testability.
+A muGen application consists of five layers, ranging from high-level platform interfaces to low-level core modules. These layers help maintain a [clean architecture](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html), ensuring that dependencies always point towards lower layers. This approach increases flexibility, testability, and separation of concerns.
 
 <p align="center">
     <img src="assets/images/mugen-architecture.png" width="501">
@@ -26,88 +27,93 @@ There are five layers in a muGen app. They go from high-level platform UIs, to l
 
 ### Platforms
 
-The platform layer includes communication platforms through which users interact with your application. This could be anything from instant messaging platforms such as Matrix and WhatsApp (currently supported by muGen core), to your own web applications. More platforms will be added as the framework matures. It is possible to serve multiple platforms concurrently from a single muGen instance. It is left to the developer to decide if this would be desirable in their unique use case.
+The platform layer includes communication platforms through which users interact with your application. These platforms can range from instant messaging services like Matrix and WhatsApp (currently supported by muGen core) to custom web applications. As muGen evolves, support for additional platforms will be added. A single muGen instance can handle multiple platforms concurrently, allowing for flexible multi-channel deployment.
 
 ### API
 
-muGen, at its core, is a [Quart](https://palletsprojects.com/projects/quart) application and, therefore, supports all the API building functionality of that framework. Blueprint registration of the core API is delayed until extensions have been registered. This allows extensions to add their own endpoints to the core API, or implment custom API routes altogether.
+muGen is built on [Quart](https://palletsprojects.com/projects/quart), a Python web framework that supports asynchronous programming. This means you can leverage all of Quart's API-building functionality in muGen. The registration of the core API is delayed until extensions have been registered, allowing extensions to define custom endpoints or add routes to the core API.
 
 ### Extensions
 
-muGen supports seven types of extensions which can all be platform agnostic or specific, each of which are activated at different stages of the message lifecycle. These types are:
+muGen supports seven types of extensions, which can be platform-agnostic or specific, and are activated at different stages of the message lifecycle. The extensions allow developers to customize how the application behaves in response to user interactions. These types are:
 
-1. **Framework (FW)** extensions: that work outside the message lifecycle to add functionality, such as API endpoints, to the core framework. They are registered and initialised during application startup.
+1. **Framework (FW) Extensions:** These operate outside the message lifecycle, adding core functionalities like API endpoints. They are initialized during application startup.
+2. **Inter-process Communication (IPC) Extensions:** These handle incoming requests to execute commands, enabling tasks such as running scheduled jobs and processing push API requests.
+3. **Message Handler (MH) Extensions:** These manage non-text input, such as images or audio, and handle their processing within the system.
+4. **Context (CTX) Extensions:** These provide additional context for the language model by injecting information into conversation histories.
+5. **Retrieval Augmented Generation (RAG) Extensions:** These perform knowledge retrieval from external sources, enriching the language model's context with relevant information.
+6. **Response Pre-processor (RPP) Extensions:** These modify the language model's responses before they are sent to the user, allowing for custom transformations.
+7. **Conversational Trigger (CT) Extensions:** These detect specific cues in the final version of the language model's response and trigger operations based on those cues.
 
-2. **Inter-process Communication (IPC)** extensions: that handle incoming requests from the API to execute commands. They allow us to perform operations such as executing cron tasks and handling calls from push APIs.
-
-3. **Message Hanlder (MH)** extensions: that are primarily used to handle non-text input to the system.
-
-4. **Context (CTX)** extensions: that provide context to the LLM by injecting messages into conversation histories.
-
-5. **Retrieval Augmented Generation (RAG)** extensions: that perform knowlegde retrieval from arbitrary sources and inject this knowledge into the LLM context.
-
-6. **Response Pre-processor (RPP)** extensions: that intercept and modify LLM responses before they are shown to the user.
-
-7. **Conversational Trigger (CT)** extensions: that look for cues in the final version of the LLM response and carry out operations if those cues are detected.
-
-Extensions are developed against OOP style interfaces, never concrete implementations, and rely on dependency injection to get access to core modules.
+Extensions are built against object-oriented programming (OOP) style interfaces, not concrete implementations, and rely on dependency injection to interact with core modules. This design promotes flexibility and reusability.
 
 ### Clients
 
-Clients provide platform specific functionality and can be built for push and pull APIs. Clients for push APIs rely on IPC extensions to handle incoming requests from the core API. The client modules used by the core are configurable using the TOML configuration file.
+Clients provide platform-specific functionality and can be built for either push or pull APIs. Push API clients rely on IPC extensions to handle requests from the core API. Configuration for the client modules is managed using a TOML configuration file, allowing for easy customization.
 
 ### Gateways and Services
 
-Gateways and services lie at the core of the framework and provide platform agnostic functionality. This functionality includes coomunication with various chat completion APIs, vector databases, and a key-value storage. The naming convention was adopted to differentiate between core implemented functionality (services) and functionality provided by external libraries/systems (gateways). The service and gateway modules used by the core are configurable using the TOML configuration file.
+Gateways and services form the core of muGen, providing platform-agnostic functionality such as communication with chat completion APIs, vector databases, and key-value storage. The naming convention distinguishes between:
+
+- **Services:** Core functionality implemented within the framework.
+- **Gateways:** Integrations with external libraries or systems.
+
+The configuration for these modules is also managed using a TOML file, giving developers flexibility in selecting and configuring the services they need.
 
 ## Getting Started
 
+To quickly set up a muGen environment, follow these steps:
+
 ```bash
-## Clone the main branch.
+# Clone the main branch.
 ~$ git clone -b main --single-branch git@github.com:vorsocom/mugen.git
 
-## Switch to the repo directory.
+# Switch to the repository directory.
 ~$ cd mugen
 
-## Copy the hypercorn config sample to the root folder.
+# Copy the Hypercorn configuration sample to the root folder.
 ~$ cp conf/hypercorn.toml.sample hypercorn.toml
 
-## Edit hypercorn.toml to set your preferred values.
+# Edit hypercorn.toml to set your preferred values.
 ~$ nano hypercorn.toml
 
-## Copy the app config sample to the root folder
+# Copy the app configuration sample to the root folder.
 ~$ cp conf/mugen.toml.sample mugen.toml
 
-## Edit mugen.toml to set your preffered values.
-# You should configure at least one completion gateway.
+# Edit mugen.toml to set your preferred values.
+# At minimum, configure one completion gateway.
 ~$ nano mugen.toml
 
-## Install Python dependencies.
+# Install Python dependencies.
 ~$ poetry install
 
-## Activate the Python environment.
+# Activate the Python environment.
 ~$ poetry shell
 
-## Run the app.
+# Run the application.
 ~$ hypercorn -c hypercorn.toml quartman:mugen
 ```
 
-You can now open a new terminal and connect to the running instance using telnet.
+You can now open a new terminal and connect to the running instance using Telnet:
 
 ```bash
 ~$ telnet localhost 8888
 ```
 
-The telnet client is meant for **development** use only.
+**Note:** The Telnet client is for **development use only** and should not be used in production environments.
+
+## Building Applications with muGen
+
+To start building, check out the guide on [building muGen applications](docs/apps.md).
 
 ## License
 
-muGen is [fair-code](https://faircode.io) distributed under the [**Sustainable Use License**](LICENSE.md). Proprietary enterprise licenses are available on [**request**](mailto:license@vorsocomputing.com).
+muGen is [fair-code](https://faircode.io), distributed under the [**Sustainable Use License**](LICENSE.md). For proprietary enterprise licenses, please [**request one**](mailto:license@vorsocomputing.com).
 
 ## Why Source-Available?
 
-muGen started out as a closed-source project. Vorsocom, however, soon realised that many clients are more comfortable buying into using codebases that are publicly available for scrutiny and also offer some level of protection against vendor lock-in. We decided that if we are going to expose the codebase publicly, we might as well do it in a way that allows anyone who stumbles on the repository to use it in ways that are not harmful to our business goals. Being free, source-available, and fair-code licensed helps us achieve this.
+muGen began as a closed-source project. However, we realized that many clients prefer software that is open to public scrutiny and offers protection against vendor lock-in. By making muGen source-available and adopting a fair-code license, we allow broader use of the framework in ways that do not harm our business objectives while increasing transparency.
 
 ## Enterprise Services
 
-You may [**get in touch**](mailto:brightideas@vorsocomputing.com) with [Vorsocom](https://vorsocomputing.com) for enterprise support in building applications using muGen. Leverage our intimate knowledge of the platform to help you achieve your goals in a timely manner.
+[Vorsocom](https://vorsocomputing.com) provides enterprise support for building applications using muGen. Leverage our expertise to accelerate your project. [**Get in touch**](mailto:brightideas@vorsocomputing.com) to learn more.
