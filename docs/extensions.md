@@ -62,8 +62,6 @@ def platforms(self) -> list[str]:
 
 ## Dependency Injection
 
-## Dependency Injection
-
 Dependency injection allows extensions to access application configuration, core clients, gateways, and services in a flexible manner without hardcoding dependencies. This approach makes the code more modular and easier to maintain, as dependencies are managed by the framework instead of being directly instantiated within the extension. The `dependency_injector` library is used to enable this feature.
 
 For example, a Context extension that requires access to the TOML configuration and logging could have the following setup.
