@@ -5,13 +5,14 @@
 </p>
 
 [![Static Badge](https://img.shields.io/badge/License-Sustainable_Use_1.0-blue)](LICENSE.md)
+[![Static Badge](https://img.shields.io/badge/Latest_Release-v0.34.0-blue)](https://github.com/vorsocom/mugen/releases/tag/0.34.0)  
 
-muGen (pronounced "mew-jen") is a [fair-code](https://faircode.io) licensed microframework for prototyping and deploying multimodal Generative AI applications. Written in Python, muGen aims to have a simple, lean, and extensible codebase that allows developers to mix and match technologies and vendors—such as LLMs, vector storage, and communication platforms—to get from zero to deployment quickly. Read on for an overview of the framework, or skip ahead to [get started](#getting-started).
+muGen (pronounced "mew-jen") is a [fair-code](https://faircode.io) licensed microframework for prototyping and deploying multimodal Generative AI applications. Written in Python, muGen aims to have a simple, lean, and extensible codebase that allows developers to mix and match technologies and vendors—such as LLMs, vector storage, and communication platforms—to get from zero to deployment quickly. Read on for an overview of the framework, or skip ahead to our [quick start guide](#quick-start).
 
 ## Contents
 
 1. [Architecture](#architecture)
-2. [Getting Started](#getting-started)
+2. [Quick Start Guide](#quick-start)
 3. [Building Applications with muGen](#building-applications-with-mugen)
 4. [License](#license)
 5. [Why Source-Available](#why-source-available)
@@ -31,7 +32,7 @@ The platform layer includes communication platforms through which users interact
 
 ### API
 
-muGen is built on [Quart](https://palletsprojects.com/projects/quart), a Python web framework that supports asynchronous programming. This means you can leverage all of Quart's API-building functionality in muGen. The registration of the core API is delayed until extensions have been registered, allowing extensions to define custom endpoints or add routes to the core API.
+muGen is built on [Quart](https://palletsprojects.com/projects/quart), a Python web framework that supports asynchronous programming. This means you can leverage all of Quart's API-building functionality in muGen. The registration of the core API blueprint is delayed until extensions have been registered, allowing extensions to define custom endpoints or add routes to the core API.
 
 ### Extensions
 
@@ -60,9 +61,9 @@ Gateways and services form the core of muGen, providing platform-agnostic functi
 
 The configuration for these modules is also managed using a TOML file, giving developers flexibility in selecting and configuring the services they need.
 
-## Getting Started
+## Quick Start
 
-To quickly set up a muGen environment, follow these steps:
+To quickly set up and evaluate a muGen environment, follow these steps:
 
 ```bash
 # Clone the main branch.
@@ -71,11 +72,11 @@ To quickly set up a muGen environment, follow these steps:
 # Switch to the repository directory.
 ~$ cd mugen
 
-# Copy the Hypercorn configuration sample to the root folder.
-~$ cp conf/hypercorn.toml.sample hypercorn.toml
+# Create a Hypercorn config file in the root folder.
+~$ touch hypercorn.toml
 
 # Edit hypercorn.toml to set your preferred values.
-~$ nano hypercorn.toml
+~$ echo 'bind = "127.0.0.1:8081"' > hypercorn.toml
 
 # Copy the app configuration sample to the root folder.
 ~$ cp conf/mugen.toml.sample mugen.toml
@@ -116,4 +117,4 @@ muGen began as a closed-source project. However, we realized that many clients p
 
 ## Enterprise Services
 
-[Vorsocom](https://vorsocomputing.com) provides enterprise support for building applications using muGen. Leverage our expertise to accelerate your project. [**Get in touch**](mailto:brightideas@vorsocomputing.com) to learn more.
+[Vorsocom](https://vorsocomputing.com) provides enterprise support for building applications using muGen. Leverage our expertise to accelerate your project. [**Get in touch**](mailto:brightideas@vorsocomputing.com) to learn more or request a quote.
