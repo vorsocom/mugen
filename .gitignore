@@ -187,5 +187,4 @@ data/*.sqlite
 data/*.sqlite3
 data/.olmstore/@*
 
-test_*
-dev_*
+_dev*
