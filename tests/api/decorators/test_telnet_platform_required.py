@@ -14,6 +14,36 @@ from mugen.core.api.decorators import telnet_platform_required
 class TestTelnetPlatformRequired(unittest.IsolatedAsyncioTestCase):
     """Unit tests for telnet_platform_required API decorator."""
 
+    async def test_config_variable_not_set(self) -> None:
+        """Test endpoint called when platform configuration is unavailable."""
+        # Create dummy app to get context.
+        app = Quart("test")
+
+        # Use dummy context.
+        async with app.app_context():
+
+            # Create dummy config object to patch current_app.config.
+            config = lambda: {
+                "ENV": SimpleNamespace(),
+                "DEBUG": True,
+            }
+
+            # Define and patch dummy endpoint.
+            @unittest.mock.patch(
+                target="quart.current_app.config",
+                new_callable=config,
+            )
+            @unittest.mock.patch(target="quart.current_app.logger")
+            @telnet_platform_required
+            async def endpoint(*args, **kwargs):
+                pass
+
+            # We supposed to get an exception because the required platform
+            # configuration is not available.
+            with self.assertRaises(werkzeug.exceptions.InternalServerError):
+                # Try calling endpoint.
+                await endpoint()
+
     async def test_telnet_platform_is_enabled(self) -> None:
         """Test endpoint called when Telnet is enabled."""
         # Create dummy app to get context.

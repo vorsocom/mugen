@@ -16,9 +16,13 @@ def matrix_platform_required(arg=None):
     def decorator(func):
         @wraps(func)
         async def decorated(*args, **kwargs):
-            if "matrix" not in current_app.config["ENV"].mugen.platforms():
-                abort(501)
-            return await func(*args, **kwargs)
+            try:
+                if "matrix" not in current_app.config["ENV"].mugen.platforms():
+                    abort(501)
+                return await func(*args, **kwargs)
+            except (AttributeError, KeyError):
+                current_app.logger.error("Could not get platform configuration.")
+                abort(500)
 
         return decorated
 
@@ -33,9 +37,13 @@ def telnet_platform_required(arg=None):
     def decorator(func):
         @wraps(func)
         async def decorated(*args, **kwargs):
-            if "telnet" not in current_app.config["ENV"].mugen.platforms():
-                abort(501)
-            return await func(*args, **kwargs)
+            try:
+                if "telnet" not in current_app.config["ENV"].mugen.platforms():
+                    abort(501)
+                return await func(*args, **kwargs)
+            except (AttributeError, KeyError):
+                current_app.logger.error("Could not get platform configuration.")
+                abort(500)
 
         return decorated
 
@@ -50,9 +58,13 @@ def whatsapp_platform_required(arg=None):
     def decorator(func):
         @wraps(func)
         async def decorated(*args, **kwargs):
-            if "whatsapp" not in current_app.config["ENV"].mugen.platforms():
-                abort(501)
-            return await func(*args, **kwargs)
+            try:
+                if "whatsapp" not in current_app.config["ENV"].mugen.platforms():
+                    abort(501)
+                return await func(*args, **kwargs)
+            except (AttributeError, KeyError):
+                current_app.logger.error("Could not get platform configuration.")
+                abort(500)
 
         return decorated
 
