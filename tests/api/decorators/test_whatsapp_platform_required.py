@@ -14,6 +14,36 @@ from mugen.core.api.decorators import whatsapp_platform_required
 class TestWhatsAppPlatformRequired(unittest.IsolatedAsyncioTestCase):
     """Unit tests for whatsapp_platform_required API decorator."""
 
+    async def test_config_variable_not_set(self) -> None:
+        """Test endpoint called when platform configuration is unavailable."""
+        # Create dummy app to get context.
+        app = Quart("test")
+
+        # Use dummy context.
+        async with app.app_context():
+
+            # Create dummy config object to patch current_app.config.
+            config = lambda: {
+                "ENV": SimpleNamespace(),
+                "DEBUG": True,
+            }
+
+            # Define and patch dummy endpoint.
+            @unittest.mock.patch(
+                target="quart.current_app.config",
+                new_callable=config,
+            )
+            @unittest.mock.patch(target="quart.current_app.logger")
+            @whatsapp_platform_required
+            async def endpoint(*args, **kwargs):
+                pass
+
+            # We supposed to get an exception because the required platform
+            # configuration is not available.
+            with self.assertRaises(werkzeug.exceptions.InternalServerError):
+                # Try calling endpoint.
+                await endpoint()
+
     async def test_whatsapp_platform_is_enabled(self) -> None:
         """Test endpoint called when WhatsApp is enabled."""
         # Create dummy app to get context.
