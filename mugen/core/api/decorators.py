@@ -27,6 +27,23 @@ def matrix_platform_required(arg=None):
     return decorator
 
 
+def telnet_platform_required(arg=None):
+    """Check that the Telnet platform is enabled."""
+
+    def decorator(func):
+        @wraps(func)
+        async def decorated(*args, **kwargs):
+            if "telnet" not in current_app.config["ENV"].mugen.platforms():
+                abort(501)
+            return await func(*args, **kwargs)
+
+        return decorated
+
+    if callable(arg):
+        return decorator(arg)
+    return decorator
+
+
 def whatsapp_platform_required(arg=None):
     """Check that the WhatsApp platform is enabled."""
 
@@ -58,7 +75,7 @@ def whatsapp_server_ip_allow_list_required(arg=None):
                     f"{basedir}{os.sep}{allow_list_path}", "r", encoding="utf8"
                 ) as f:
                     networks = [l.rstrip() for l in f]
-            except KeyError:
+            except (AttributeError, FileNotFoundError, IsADirectoryError, KeyError):
                 current_app.logger.error("WhatsApp servers allow list not found.")
                 abort(500)
 
@@ -67,13 +84,13 @@ def whatsapp_server_ip_allow_list_required(arg=None):
                 verification_required = current_app.config[
                     "ENV"
                 ].whatsapp.servers.verify_ip()
-            except KeyError:
+            except (AttributeError, KeyError):
                 current_app.logger.error(
                     "WhatsApp ip verification requirement unknown."
                 )
                 verification_required = None
 
-            if verification_required == "true":
+            if verification_required is True:
                 remote_addr = request.headers["Remote-Addr"]
                 hits = [
                     x
@@ -102,7 +119,7 @@ def whatsapp_request_signature_verification_required(arg=None):
         async def decorated(*args, **kwargs):
             try:
                 app_secret = current_app.config["ENV"].whatsapp.app.secret()
-            except KeyError:
+            except (AttributeError, KeyError):
                 current_app.logger.error("WhatsApp app secret not found.")
                 abort(500)
 
