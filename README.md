@@ -73,9 +73,6 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 ~$ cd mugen
 
 # Create a Hypercorn config file in the root folder.
-~$ touch hypercorn.toml
-
-# Edit hypercorn.toml to set your preferred values.
 ~$ echo 'bind = "127.0.0.1:8081"' > hypercorn.toml
 
 # Copy the app configuration sample to the root folder.
