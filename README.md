@@ -113,7 +113,7 @@ muGen is [fair-code](https://faircode.io), distributed under the [**Sustainable 
 
 ## Why Source-Available?
 
-muGen began as a closed-source project. However, we realized that many clients prefer software that is open to public scrutiny and offers protection against vendor lock-in. By making muGen source-available and adopting a fair-code license, we allow broader use of the framework in ways that do not harm our business objectives while increasing transparency.
+muGen began as a closed-source project. However, we realized that many clients prefer software that is open to public scrutiny and offers protection against consultancy vendor lock-in. By making muGen source-available and adopting a fair-code license, we allow broader use of the framework in ways that do not harm our business objectives while increasing transparency.
 
 ## Enterprise Services
 
