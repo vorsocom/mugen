@@ -125,15 +125,33 @@ async def whatsapp_index():
 @api.get("/whatsapp/wacapi/webhook")
 @whatsapp_platform_required
 @whatsapp_server_ip_allow_list_required
-async def whatsapp_wcapi_verification():
+async def whatsapp_wacapi_subscription():
     """Whatsapp Cloud API verification."""
-    if (
-        request.args.get("hub.mode") == "subscribe"
-        and request.args.get("hub.verify_token")
-        == current_app.config["ENV"].whatsapp.webhook.verification_token()
-    ):
-        return request.args.get("hub.challenge")
-    abort(400)
+
+    if request.args.get("hub.mode") != "subscribe":
+        current_app.logger.error("hub.mode incorrect.")
+        abort(400)
+
+    if request.args.get("hub.verify_token") in [None, ""]:
+        current_app.logger.error("hub.verify_token not supplied or is empty.")
+        abort(400)
+
+    try:
+        if (
+            request.args.get("hub.verify_token")
+            != current_app.config["ENV"].whatsapp.webhook.verification_token()
+        ):
+            current_app.logger.error("Incorrect verification token.")
+            abort(400)
+    except AttributeError:
+        current_app.logger.error("Could not get verification token.")
+        abort(500)
+
+    if request.args.get("hub.challenge") in [None, ""]:
+        current_app.logger.error("hub.challenge not supplied or is empty.")
+        abort(400)
+
+    return request.args.get("hub.challenge")
 
 
 @api.post("/whatsapp/wacapi/webhook")
