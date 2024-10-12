@@ -13,7 +13,7 @@ from mugen.core.api.views import matrix_webhook
 from mugen.core.contract.service.ipc import IIPCService
 
 
-class TestMatrixIPC(unittest.IsolatedAsyncioTestCase):
+class TestMatrixWebhook(unittest.IsolatedAsyncioTestCase):
     """Unit tests for the matrix_webhook endpoint."""
 
     async def test_json_data_none(self):
@@ -23,12 +23,12 @@ class TestMatrixIPC(unittest.IsolatedAsyncioTestCase):
 
         # Create dummy config object to patch current_app.config.
         app.config = app.config | {
+            "DEBUG": True,
             "ENV": SimpleNamespace(
                 mugen=SimpleNamespace(
                     platforms=lambda: ["matrix"],
                 ),
             ),
-            "DEBUG": True,
         }
 
         # Use dummy app context.
@@ -49,12 +49,12 @@ class TestMatrixIPC(unittest.IsolatedAsyncioTestCase):
 
         # Create dummy config object to patch current_app.config.
         app.config = app.config | {
+            "DEBUG": True,
             "ENV": SimpleNamespace(
                 mugen=SimpleNamespace(
                     platforms=lambda: ["matrix"],
                 ),
             ),
-            "DEBUG": True,
         }
 
         # Use dummy app context.
@@ -75,12 +75,12 @@ class TestMatrixIPC(unittest.IsolatedAsyncioTestCase):
 
         # Create dummy config object to patch current_app.config.
         app.config = app.config | {
+            "DEBUG": True,
             "ENV": SimpleNamespace(
                 mugen=SimpleNamespace(
                     platforms=lambda: ["matrix"],
                 ),
             ),
-            "DEBUG": True,
         }
 
         # Use dummy app context.
@@ -101,12 +101,12 @@ class TestMatrixIPC(unittest.IsolatedAsyncioTestCase):
 
         # Create dummy config object to patch current_app.config.
         app.config = app.config | {
+            "DEBUG": True,
             "ENV": SimpleNamespace(
                 mugen=SimpleNamespace(
                     platforms=lambda: ["matrix"],
                 ),
             ),
-            "DEBUG": True,
         }
 
         # Use dummy app context.
@@ -127,12 +127,12 @@ class TestMatrixIPC(unittest.IsolatedAsyncioTestCase):
 
         # Create dummy config object to patch current_app.config.
         app.config = app.config | {
+            "DEBUG": True,
             "ENV": SimpleNamespace(
                 mugen=SimpleNamespace(
                     platforms=lambda: ["matrix"],
                 ),
             ),
-            "DEBUG": True,
         }
 
         # Create dummy di object with IPC service.

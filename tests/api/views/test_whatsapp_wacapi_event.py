@@ -40,6 +40,7 @@ class TestWhatsAppWACAPIEvent(unittest.IsolatedAsyncioTestCase):
             ),
         }
 
+        # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
         }
@@ -83,6 +84,7 @@ class TestWhatsAppWACAPIEvent(unittest.IsolatedAsyncioTestCase):
             ),
         }
 
+        # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
         }
@@ -140,6 +142,7 @@ class TestWhatsAppWACAPIEvent(unittest.IsolatedAsyncioTestCase):
             digestmod=hashlib.sha256,
         ).hexdigest()
 
+        # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
             "X-Hub-Signature-256": f"sha256={digest}",

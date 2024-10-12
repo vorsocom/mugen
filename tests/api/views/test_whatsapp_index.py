@@ -23,12 +23,12 @@ class TestWhatsAppIndex(unittest.IsolatedAsyncioTestCase):
 
         # Create dummy config object to patch current_app.config.
         app.config = app.config | {
+            "DEBUG": True,
             "ENV": SimpleNamespace(
                 mugen=SimpleNamespace(
                     platforms=lambda: ["whatsapp"],
                 ),
             ),
-            "DEBUG": True,
         }
 
         # Use dummy app context.
@@ -45,12 +45,12 @@ class TestWhatsAppIndex(unittest.IsolatedAsyncioTestCase):
 
         # Create dummy config object to patch current_app.config.
         app.config = app.config | {
+            "DEBUG": True,
             "ENV": SimpleNamespace(
                 mugen=SimpleNamespace(
                     platforms=lambda: ["whatsapp"],
                 ),
             ),
-            "DEBUG": True,
         }
 
         app.di = SimpleNamespace(

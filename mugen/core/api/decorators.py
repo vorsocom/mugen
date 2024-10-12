@@ -18,6 +18,7 @@ def matrix_platform_required(arg=None):
         async def decorated(*args, **kwargs):
             try:
                 if "matrix" not in current_app.config["ENV"].mugen.platforms():
+                    current_app.logger.error("Matrix platform not enabled.")
                     abort(501)
                 return await func(*args, **kwargs)
             except (AttributeError, KeyError):
@@ -39,6 +40,7 @@ def telnet_platform_required(arg=None):
         async def decorated(*args, **kwargs):
             try:
                 if "telnet" not in current_app.config["ENV"].mugen.platforms():
+                    current_app.logger.error("Telnet platform not enabled.")
                     abort(501)
                 return await func(*args, **kwargs)
             except (AttributeError, KeyError):
@@ -60,6 +62,7 @@ def whatsapp_platform_required(arg=None):
         async def decorated(*args, **kwargs):
             try:
                 if "whatsapp" not in current_app.config["ENV"].mugen.platforms():
+                    current_app.logger.error("WhatsApp platform not enabled.")
                     abort(501)
                 return await func(*args, **kwargs)
             except (AttributeError, KeyError):

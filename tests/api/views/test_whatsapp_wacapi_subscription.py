@@ -11,7 +11,7 @@ import werkzeug.exceptions
 from mugen.core.api.views import whatsapp_wacapi_subscription
 
 
-class TestWhatsAppIPC(unittest.IsolatedAsyncioTestCase):
+class TestWhatsAppWACAPISubscription(unittest.IsolatedAsyncioTestCase):
     """Unit tests for the whatsapp_wacapi_subscription endpoint."""
 
     async def test_hub_mode_unavailable_or_incorrect(self):
@@ -36,6 +36,7 @@ class TestWhatsAppIPC(unittest.IsolatedAsyncioTestCase):
             ),
         }
 
+        # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
         }
@@ -79,6 +80,7 @@ class TestWhatsAppIPC(unittest.IsolatedAsyncioTestCase):
             ),
         }
 
+        # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
         }
@@ -126,6 +128,7 @@ class TestWhatsAppIPC(unittest.IsolatedAsyncioTestCase):
             ),
         }
 
+        # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
         }
@@ -179,6 +182,7 @@ class TestWhatsAppIPC(unittest.IsolatedAsyncioTestCase):
             ),
         }
 
+        # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
         }
@@ -232,6 +236,7 @@ class TestWhatsAppIPC(unittest.IsolatedAsyncioTestCase):
             ),
         }
 
+        # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
         }
@@ -285,6 +290,7 @@ class TestWhatsAppIPC(unittest.IsolatedAsyncioTestCase):
             ),
         }
 
+        # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
         }
