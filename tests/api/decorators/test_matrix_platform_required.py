@@ -19,20 +19,16 @@ class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
         # Create dummy app to get context.
         app = Quart("test")
 
+        # Create dummy config object to patch current_app.config.
+        app.config = app.config | {
+            "DEBUG": True,
+            "ENV": SimpleNamespace(),
+        }
+
         # Use dummy context.
         async with app.app_context():
 
-            # Create dummy config object to patch current_app.config.
-            config = lambda: {
-                "ENV": SimpleNamespace(),
-                "DEBUG": True,
-            }
-
             # Define and patch dummy endpoint.
-            @unittest.mock.patch(
-                target="quart.current_app.config",
-                new_callable=config,
-            )
             @unittest.mock.patch(target="quart.current_app.logger")
             @matrix_platform_required
             async def endpoint(*args, **kwargs):
@@ -49,23 +45,21 @@ class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
         # Create dummy app to get context.
         app = Quart("test")
 
+        # Create dummy config object to patch current_app.config.
+        app.config = app.config | {
+            "DEBUG": True,
+            "ENV": SimpleNamespace(
+                mugen=SimpleNamespace(
+                    platforms=lambda: ["matrix", "whatsapp"],
+                ),
+            ),
+        }
+
         # Use dummy context.
         async with app.app_context():
 
-            # Create dummy config object to patch current_app.config.
-            config = lambda: {
-                "ENV": SimpleNamespace(
-                    mugen=SimpleNamespace(
-                        platforms=lambda: ["matrix", "whatsapp"],
-                    ),
-                ),
-            }
-
             # Define and patch dummy endpoint.
-            @unittest.mock.patch(
-                target="quart.current_app.config",
-                new_callable=config,
-            )
+            @unittest.mock.patch(target="quart.current_app.logger")
             @matrix_platform_required
             async def endpoint(*args, **kwargs):
                 pass
@@ -83,23 +77,21 @@ class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
         # Create dummy app to get context.
         app = Quart("test")
 
+        # Create dummy config object to patch current_app.config.
+        app.config = app.config | {
+            "DEBUG": True,
+            "ENV": SimpleNamespace(
+                mugen=SimpleNamespace(
+                    platforms=lambda: ["whatsapp"],
+                ),
+            ),
+        }
+
         # Use dummy context.
         async with app.app_context():
 
-            # Create dummy config object to patch current_app.config.
-            config = lambda: {
-                "ENV": SimpleNamespace(
-                    mugen=SimpleNamespace(
-                        platforms=lambda: ["whatsapp"],
-                    ),
-                ),
-            }
-
             # Define and patch dummy endpoint.
-            @unittest.mock.patch(
-                target="quart.current_app.config",
-                new_callable=config,
-            )
+            @unittest.mock.patch(target="quart.current_app.logger")
             @matrix_platform_required
             async def endpoint(*args, **kwargs):
                 pass
