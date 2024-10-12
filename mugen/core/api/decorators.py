@@ -27,9 +27,7 @@ def matrix_platform_required(arg=None):
 
         return decorated
 
-    if callable(arg):
-        return decorator(arg)
-    return decorator
+    return decorator(arg)
 
 
 def telnet_platform_required(arg=None):
@@ -49,9 +47,7 @@ def telnet_platform_required(arg=None):
 
         return decorated
 
-    if callable(arg):
-        return decorator(arg)
-    return decorator
+    return decorator(arg)
 
 
 def whatsapp_platform_required(arg=None):
@@ -71,9 +67,7 @@ def whatsapp_platform_required(arg=None):
 
         return decorated
 
-    if callable(arg):
-        return decorator(arg)
-    return decorator
+    return decorator(arg)
 
 
 def whatsapp_server_ip_allow_list_required(arg=None):
@@ -121,9 +115,7 @@ def whatsapp_server_ip_allow_list_required(arg=None):
 
         return decorated
 
-    if callable(arg):
-        return decorator(arg)
-    return decorator
+    return decorator(arg)
 
 
 def whatsapp_request_signature_verification_required(arg=None):
@@ -160,6 +152,4 @@ def whatsapp_request_signature_verification_required(arg=None):
 
         return decorated
 
-    if callable(arg):
-        return decorator(arg)
-    return decorator
+    return decorator(arg)
