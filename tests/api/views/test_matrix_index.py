@@ -33,7 +33,9 @@ class TestMatrixIndex(unittest.IsolatedAsyncioTestCase):
 
         # Use dummy app context.
         async with app.app_context():
-            with self.assertRaises(werkzeug.exceptions.InternalServerError):
+            with unittest.mock.patch("quart.current_app.logger"), self.assertRaises(
+                werkzeug.exceptions.InternalServerError
+            ):
                 await matrix_index()
 
     async def test_ipc_service_available(self):
