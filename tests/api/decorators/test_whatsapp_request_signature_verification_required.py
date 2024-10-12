@@ -13,26 +13,17 @@ import werkzeug.exceptions
 from mugen.core.api.decorators import whatsapp_request_signature_verification_required
 
 
-class TestWhatsAppRequestSignatureVerificationRequired(
-    unittest.IsolatedAsyncioTestCase
-):
+class TestWhatsAppRequestSigVerificationRequired(unittest.IsolatedAsyncioTestCase):
     """Unit tests for whatsapp_request_signature_verification_required."""
 
     async def test_config_variable_not_set(self):
-        """Test decorator output when whatsapp.app.secret is not set."""
+        """Test output when whatsapp.app.secret is not set."""
         # Create dummy app to get context.
         app = Quart("test")
 
         async with app.app_context():
 
-            # Create dummy config object to patch current_app.config.
-            config = lambda: {}
-
             # Define and patch dummy endpoint.
-            @unittest.mock.patch(
-                target="quart.current_app.config",
-                new_callable=config,
-            )
             @unittest.mock.patch(target="quart.current_app.logger")
             @whatsapp_request_signature_verification_required
             async def endpoint(*args, **kwargs):
@@ -42,94 +33,77 @@ class TestWhatsAppRequestSignatureVerificationRequired(
                 await endpoint()
 
     async def test_x_hub_signature_header_not_set(self):
-        """Test decorator output when X-Hub-Signature header is not set."""
+        """Test output when X-Hub-Signature header is not set."""
         # Create dummy app to get context.
         app = Quart("test")
 
-        # Use dummy app context.
-        async with app.app_context():
-
-            headers = {}
-
-            # Use dummy request context.
-            async with app.test_request_context("test", headers=headers):
-
-                # Create dummy config object to patch current_app.config.
-                config = lambda: {
-                    "ENV": SimpleNamespace(
-                        whatsapp=SimpleNamespace(
-                            app=SimpleNamespace(
-                                secret=lambda: "",
-                            ),
-                        ),
-                    ),
-                }
-
-                # Define and patch dummy endpoint.
-                @unittest.mock.patch(
-                    target="quart.current_app.config",
-                    new_callable=config,
-                )
-                @unittest.mock.patch(target="quart.current_app.logger")
-                @whatsapp_request_signature_verification_required
-                async def endpoint(*args, **kwargs):
-                    pass
-
-                with self.assertRaises(werkzeug.exceptions.BadRequest):
-                    await endpoint()
-
-    async def test_x_hub_signature_header_is_set(self):
-        """Test decorator output when X-Hub-Signature header is set."""
-        # Create dummy app to get context.
-        app = Quart("test")
-
-        # Use dummy app context.
-        async with app.app_context():
-
-            # Generate token to use as app secret.
-            app_secret = secrets.token_urlsafe()
-
-            # Create dummy config object to patch current_app.config.
-            config = lambda: {
-                "ENV": SimpleNamespace(
-                    whatsapp=SimpleNamespace(
-                        app=SimpleNamespace(
-                            secret=lambda: app_secret,
-                        ),
+        # Create dummy config object to patch current_app.config.
+        app.config = app.config | {
+            "ENV": SimpleNamespace(
+                whatsapp=SimpleNamespace(
+                    app=SimpleNamespace(
+                        secret=lambda: "",
                     ),
                 ),
-            }
+            ),
+        }
 
-            # Set data and calculate hex digest to create dummy request.
-            request_data = "test data"
-            digest = hmac.new(
-                key=app_secret.encode(),
-                msg=request_data.encode("utf8"),
-                digestmod=hashlib.sha256,
-            ).hexdigest()
+        # Use dummy app context.
+        async with app.app_context(), app.test_request_context("test"):
+            # Define and patch dummy endpoint.
+            @unittest.mock.patch(target="quart.current_app.logger")
+            @whatsapp_request_signature_verification_required
+            async def endpoint(*args, **kwargs):
+                pass
 
-            headers = {
-                "X-Hub-Signature-256": f"sha256={digest}",
-            }
+            with self.assertRaises(werkzeug.exceptions.BadRequest):
+                await endpoint()
 
-            # Use dummy request context.
-            async with app.test_request_context(
-                "test",
-                data=request_data,
-                headers=headers,
-            ):
+    async def test_x_hub_signature_header_is_set(self):
+        """Test output when X-Hub-Signature header is set."""
+        # Create dummy app to get context.
+        app = Quart("test")
 
-                # Define and patch dummy endpoint.
-                @unittest.mock.patch(
-                    target="quart.current_app.config",
-                    new_callable=config,
-                )
-                @unittest.mock.patch(target="quart.current_app.logger")
-                @whatsapp_request_signature_verification_required
-                async def endpoint(*args, **kwargs):
-                    pass
+        # Generate token to use as app secret.
+        app_secret = secrets.token_urlsafe()
 
-                try:
-                    await endpoint()
-                except:
-                    self.fail("Unauthorized exception raised unexpectedly.")
+        # Create dummy config object to patch current_app.config.
+        app.config = app.config | {
+            "ENV": SimpleNamespace(
+                whatsapp=SimpleNamespace(
+                    app=SimpleNamespace(
+                        secret=lambda: app_secret,
+                    ),
+                ),
+            ),
+        }
+
+        # Set data and calculate hex digest to create dummy request.
+        request_data = "test data"
+        digest = hmac.new(
+            key=app_secret.encode(),
+            msg=request_data.encode("utf8"),
+            digestmod=hashlib.sha256,
+        ).hexdigest()
+
+        # Create header object for request context.
+        headers = {
+            "X-Hub-Signature-256": f"sha256={digest}",
+        }
+
+        # Use dummy app context.
+        async with app.app_context(), app.test_request_context(
+            "test",
+            data=request_data,
+            headers=headers,
+        ):
+            # Define and patch dummy endpoint.
+            @unittest.mock.patch(target="quart.current_app.logger")
+            @whatsapp_request_signature_verification_required
+            async def endpoint(*args, **kwargs):
+                pass
+
+            try:
+                await endpoint()
+            except:
+                self.fail("Unauthorized exception raised unexpectedly.")
