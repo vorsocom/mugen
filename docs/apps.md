@@ -85,12 +85,8 @@ Now you’ll integrate muGen into your project. This involves setting up the ups
 # Fetch the latest changes from the upstream repository.
 ~$ git fetch upstream main:upstream/main --no-tags
 
-# Merge the upstream main branch into your develop branch
-# combining all changes into a single commit.
-~$ git merge --squash upstream/main
-
-# Commit the merged changes to your local repository.
-~$ git commit -m "Merge upstream changes into develop"
+# Merge the upstream main branch into your develop branch.
+~$ git merge upstream/main
 
 # Push the updated develop branch to your GitHub repository.
 ~$ git push origin develop
