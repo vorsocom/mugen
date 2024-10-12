@@ -32,7 +32,8 @@ The platform layer includes communication platforms through which users interact
 
 ### API
 
-muGen is built on [Quart](https://palletsprojects.com/projects/quart), a Python web framework that supports asynchronous programming. This means you can leverage all of Quart's API-building functionality in muGen. The registration of the core API blueprint is delayed until extensions have been registered, allowing extensions to define custom endpoints or add routes to the core API.
+muGen runs on the same asyncio event loop as [Quart](https://palletsprojects.com/projects/quart), a Python web framework that supports asynchronous programming. This allows muGen to coexist with Quart and leverage its API-building functionality without being entirely dependent on it. The registration of the core API blueprint is delayed until extensions have been registered, enabling extensions to define custom endpoints or add routes to the core API seamlessly.
+
 
 ### Extensions
 
@@ -114,4 +115,4 @@ muGen began as a closed-source project. However, we realized that many clients p
 
 ## Enterprise Services
 
-[Vorsocom](https://vorsocomputing.com) provides enterprise support for building applications using muGen. Leverage our expertise to accelerate your project. [**Get in touch**](mailto:brightideas@vorsocomputing.com) to learn more or request a quote.
+We provide enterprise support for building applications using muGen. Leverage our expertise to accelerate your project. [**Get in touch**](mailto:brightideas@vorsocomputing.com) to learn more or request a quote.
