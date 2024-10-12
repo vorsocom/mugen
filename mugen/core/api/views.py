@@ -95,7 +95,11 @@ async def matrix_ipc():
 async def whatsapp_index():
     """Whatsapp index endpoint."""
     # Get the IPC service from the dependency injector.
-    ipc_service: IIPCService = current_app.di.ipc_service()
+    try:
+        ipc_service: IIPCService = current_app.di.ipc_service()
+    except AttributeError:
+        current_app.logger.error("Could not get IPC service.")
+        abort(500)
 
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
