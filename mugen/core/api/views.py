@@ -1,6 +1,7 @@
 """Implements API endpoints."""
 
 import asyncio
+import json
 
 from quart import abort, current_app, request
 
@@ -158,13 +159,26 @@ async def whatsapp_wacapi_subscription():
 @whatsapp_platform_required
 @whatsapp_server_ip_allow_list_required
 @whatsapp_request_signature_verification_required
-async def whatsapp_wcapi_webhook():
+async def whatsapp_wacapi_event():
     """Respond to Whatsapp Cloud API events."""
     # Get request data.
-    data = await request.get_json()
+    # get_json was not used to make code more
+    # cosistent with signature verification decorator
+    # for testing.
+    data = await request.get_data()
+
+    try:
+        json_data = json.loads(data)
+    except json.decoder.JSONDecodeError:
+        current_app.logger.error("JSON data could not be decoded.")
+        abort(500)
 
     # Get the IPC service from the dependency injector.
-    ipc_service: IIPCService = current_app.di.ipc_service()
+    try:
+        ipc_service: IIPCService = current_app.di.ipc_service()
+    except AttributeError:
+        current_app.logger.error("Could not get IPC service.")
+        abort(500)
 
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
@@ -174,7 +188,7 @@ async def whatsapp_wcapi_webhook():
         {
             "response_queue": response_queue,
             "command": "whatsapp_wacapi_event",
-            "data": data,
+            "data": json_data,
         },
     )
 
