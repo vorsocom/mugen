@@ -22,6 +22,7 @@ async def matrix_index():
     try:
         ipc_service: IIPCService = current_app.di.ipc_service()
     except AttributeError:
+        current_app.logger.error("Could not get IPC service.")
         abort(500)
 
     # Queue allowing IPC queue consumer to send back a response.
