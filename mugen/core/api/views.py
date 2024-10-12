@@ -177,11 +177,20 @@ async def whatsapp_webhook():
     # Get request data.
     data = await request.get_json()
 
-    if "command" not in data.keys() or data["command"] == "":
-        abort(400)
+    try:
+        if "command" not in data.keys() or data["command"] == "":
+            current_app.logger.error("Invalid JSON data supplied.")
+            abort(400)
+    except AttributeError:
+        current_app.logger.error("JSON data empty.")
+        abort(500)
 
     # Get the IPC service from the dependency injector.
-    ipc_service: IIPCService = current_app.di.ipc_service()
+    try:
+        ipc_service: IIPCService = current_app.di.ipc_service()
+    except AttributeError:
+        current_app.logger.error("Could not get IPC service.")
+        abort(500)
 
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
