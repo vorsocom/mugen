@@ -153,6 +153,7 @@ def whatsapp_request_signature_verification_required(arg=None):
             ).hexdigest()
 
             if not hmac.compare_digest(xhubsig, hexdigest):
+                current_app.logger.error("API call unauthorized.")
                 abort(401)
 
             return await func(*args, **kwargs)
