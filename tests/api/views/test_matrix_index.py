@@ -64,6 +64,14 @@ class TestMatrixIndex(unittest.IsolatedAsyncioTestCase):
         # Use dummy app context.
         async with app.app_context():
             with unittest.mock.patch(target="asyncio.Queue", new=get_queue):
-                await queue.put({"response": "Ok"})
+                # This function allows the while loop that checks
+                # the response queue to execute until data is placed
+                # in the queue.
+                async def delayed_put() -> None:
+                    """Delay adding info to response queue."""
+                    await asyncio.sleep(0.1)
+                    await queue.put({"response": "Ok"})
+
+                asyncio.create_task(delayed_put())
                 response = await matrix_index()
                 self.assertEqual(response["status"], "Ok")

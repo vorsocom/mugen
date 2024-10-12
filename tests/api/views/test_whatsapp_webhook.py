@@ -154,6 +154,14 @@ class TestWhatsAppWebhook(unittest.IsolatedAsyncioTestCase):
             with unittest.mock.patch("quart.current_app.logger"), unittest.mock.patch(
                 target="asyncio.Queue", new=get_queue
             ):
-                await queue.put({"response": "Ok"})
+                # This function allows the while loop that checks
+                # the response queue to execute until data is placed
+                # in the queue.
+                async def delayed_put() -> None:
+                    """Delay adding info to response queue."""
+                    await asyncio.sleep(0.1)
+                    await queue.put({"response": "Ok"})
+
+                asyncio.create_task(delayed_put())
                 response = await whatsapp_webhook()
                 self.assertEqual(response["response"], "Ok")

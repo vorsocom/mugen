@@ -23,6 +23,9 @@ class TestWhatsAppWACAPIEvent(unittest.IsolatedAsyncioTestCase):
         # Create dummy app to get context.
         app = Quart("test")
 
+        # Create dummy app secret.
+        app_secret = "test_app_secret"
+
         # Create dummy config object to patch current_app.config.
         app.config = app.config | {
             "BASEDIR": "",
@@ -36,13 +39,25 @@ class TestWhatsAppWACAPIEvent(unittest.IsolatedAsyncioTestCase):
                         allowed=lambda: "",
                         verify_ip=lambda: True,
                     ),
+                    app=SimpleNamespace(
+                        secret=lambda: app_secret,
+                    ),
                 ),
             ),
         }
 
+        # Create dummy request data and hex signature.
+        request_data = ""
+        digest = hmac.new(
+            key=app_secret.encode(),
+            msg=request_data.encode("utf8"),
+            digestmod=hashlib.sha256,
+        ).hexdigest()
+
         # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
+            "X-Hub-Signature-256": f"sha256={digest}",
         }
 
         # Dummy file
@@ -52,7 +67,7 @@ class TestWhatsAppWACAPIEvent(unittest.IsolatedAsyncioTestCase):
         async with app.app_context(), app.test_request_context(
             "/whatsapp/wacapi/webhook",
             headers=headers,
-            json=None,
+            data="",
         ):
             # Patch logger to suppress output, and
             # Patch builtins.open, and
@@ -67,6 +82,9 @@ class TestWhatsAppWACAPIEvent(unittest.IsolatedAsyncioTestCase):
         # Create dummy app to get context.
         app = Quart("test")
 
+        # Create dummy app secret.
+        app_secret = "test_app_secret"
+
         # Create dummy config object to patch current_app.config.
         app.config = app.config | {
             "BASEDIR": "",
@@ -80,13 +98,25 @@ class TestWhatsAppWACAPIEvent(unittest.IsolatedAsyncioTestCase):
                         allowed=lambda: "",
                         verify_ip=lambda: True,
                     ),
+                    app=SimpleNamespace(
+                        secret=lambda: app_secret,
+                    ),
                 ),
             ),
         }
 
+        # Create dummy request data and hex signature.
+        request_data = '{"test": "data"}'
+        digest = hmac.new(
+            key=app_secret.encode(),
+            msg=request_data.encode("utf8"),
+            digestmod=hashlib.sha256,
+        ).hexdigest()
+
         # Create header object for request context.
         headers = {
             "Remote-Addr": "127.0.0.1",
+            "X-Hub-Signature-256": f"sha256={digest}",
         }
 
         # Dummy file
@@ -96,7 +126,7 @@ class TestWhatsAppWACAPIEvent(unittest.IsolatedAsyncioTestCase):
         async with app.app_context(), app.test_request_context(
             "/whatsapp/wacapi/webhook",
             headers=headers,
-            json={},
+            data=request_data,
         ):
             # Patch logger to suppress output, and
             # Patch builtins.open, and
@@ -174,6 +204,14 @@ class TestWhatsAppWACAPIEvent(unittest.IsolatedAsyncioTestCase):
             ), unittest.mock.patch("quart.current_app.logger"), unittest.mock.patch(
                 target="asyncio.Queue", new=get_queue
             ):
-                await queue.put({"response": "Ok"})
+                # This function allows the while loop that checks
+                # the response queue to execute until data is placed
+                # in the queue.
+                async def delayed_put() -> None:
+                    """Delay adding info to response queue."""
+                    await asyncio.sleep(0.1)
+                    await queue.put({"response": "Ok"})
+
+                asyncio.create_task(delayed_put())
                 response = await whatsapp_wacapi_event()
                 self.assertEqual(response["response"], "Ok")
