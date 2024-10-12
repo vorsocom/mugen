@@ -48,7 +48,7 @@ async def matrix_index():
 
 @api.put("/matrix/webhook")
 @matrix_platform_required
-async def matrix_ipc():
+async def matrix_webhook():
     """Handle IPC calls for the Matrix platform."""
     # Get request data.
     data = await request.get_json()
