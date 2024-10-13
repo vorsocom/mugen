@@ -32,14 +32,18 @@ di = DIContainer()
 
 def create_quart_app(basedir: str):
     """Application factory."""
-    with open(f"{basedir}{os.sep}mugen.toml", "r", encoding="utf8") as f:
-        config = tomlkit.loads(f.read()).value
-        di.config.from_dict(config)
+    try:
+        with open(f"{basedir}{os.sep}mugen.toml", "r", encoding="utf8") as f:
+            config = tomlkit.loads(f.read()).value
+            di.config.from_dict(config)
+    except FileNotFoundError:
+        mugen.logger.error("Configuration file not found.")
+        sys.exit(1)
 
     # Check for valid configuration name.
     environment = di.config.mugen.environment()
     if environment not in ("default", "development", "testing", "production"):
-        print("Invalid configuration name.")
+        mugen.logger.error("Invalid configuration name.")
         sys.exit(1)
 
     # Create application configuration object.
@@ -56,13 +60,6 @@ def create_quart_app(basedir: str):
 
     # Initialize application.
     AppConfig[environment].init_app(mugen)
-
-    @mugen.after_request
-    def call_after_request_callbacks(response):
-        """Ensure all registered after-request-callbacks are called."""
-        for callback in getattr(g, "after_request_callbacks", ()):
-            callback(response)
-        return response
 
     # Ensure that API endpoints can access the ipc_queue
     # through current_app.ipc_queue

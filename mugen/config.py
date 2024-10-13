@@ -12,6 +12,9 @@ class Config:  # pylint: disable=too-few-public-methods
 
     BASEDIR: str = os.path.abspath(os.path.dirname(__file__) + "/../")
 
+    # Clear debug flag.
+    DEBUG: bool = False
+
     # Set log level.
     LOG_LEVEL: int = 10
 
@@ -30,6 +33,9 @@ class DevelopmentConfig(Config):  # pylint: disable=too-few-public-methods
 
 class TestingConfig(Config):  # pylint: disable=too-few-public-methods
     """Testing environment-specific configuration class"""
+
+    # Set debug flag.
+    DEBUG: bool = True
 
     # Set log level.
     LOG_LEVEL: int = 20
