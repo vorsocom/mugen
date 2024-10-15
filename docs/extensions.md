@@ -62,36 +62,31 @@ def platforms(self) -> list[str]:
 
 ## Dependency Injection
 
-Dependency injection allows extensions to access application configuration, core clients, gateways, and services in a flexible manner without hardcoding dependencies. This approach makes the code more modular and easier to maintain, as dependencies are managed by the framework instead of being directly instantiated within the extension. The `dependency_injector` library is used to enable this feature.
+Dependency injection allows extensions to access application configuration, core clients, gateways, and services in a flexible manner without hardcoding dependencies. This approach makes the code more modular and easier to maintain, as dependencies are managed by the framework instead of being directly instantiated within the extension. The `mugen.core.di` module is used to enable this feature.
 
 For example, a Context extension that requires access to the TOML configuration and logging could have the following setup.
 
 
 ```python
-from dependency_injector import providers
-from dependency_injector.wiring import inject, Provide
 
+from mugen.core import di
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.di import DIContainer
 
 
 class MyCTXExtension(ICTXExtension):
     
-    @inject
     def __init__(
         self,
-        config: providers.Configuration = Provide[
-            DIContainer.config.delegate()
-        ],
-        logging_gateway: ILoggingGateway = Provide[DIContainer.logging_gateway],
+        config: providers.Configuration = di.container.config,
+        logging_gateway: ILoggingGateway = di.container.logging_gateway,
     ) -> None:
         self._config = config
         self._logging_gateway = logging_gateway
 
         self._logging_gateway.info("Init complete.")
         self._logging_gateway.info(
-            f"Application environment: {self._config.mugen.environment()}"
+            f"Application environment: {self._config.mugen.environment}"
         )
 
     ...
@@ -100,21 +95,21 @@ class MyCTXExtension(ICTXExtension):
 The following is a listing of available clients, gateways, and services.
 
 * Clients:
-    * [Matrix](/mugen/core/contract/client/matrix.py) (DIContainer.matrix_client)
-    * [Telnet](/mugen/core/contract/client/telnet.py) (DIContainer.telnet_client)
-    * [WhatsApp](/mugen/core/contract/client/whatsapp.py) (DIContainer.whatsapp_client)
+    * [Matrix](/mugen/core/contract/client/matrix.py) (di.container.matrix_client)
+    * [Telnet](/mugen/core/contract/client/telnet.py) (di.container.telnet_client)
+    * [WhatsApp](/mugen/core/contract/client/whatsapp.py) (di.container.whatsapp_client)
 * Gateways:
-    * [Completion](/mugen/core/contract/gateway/completion.py) (DIContainer.completion_gateway)
-    * [Knowledge](/mugen/core/contract/gateway/knowledge.py) (DIContainer.knowledge_gateway)
-    * [Logging](/mugen/core/contract/gateway/logging.py) (DIContainer.logging_gateway)
+    * [Completion](/mugen/core/contract/gateway/completion.py) (di.container.completion_gateway)
+    * [Knowledge](/mugen/core/contract/gateway/knowledge.py) (di.container.knowledge_gateway)
+    * [Logging](/mugen/core/contract/gateway/logging.py) (di.container.logging_gateway)
     * Storage:
-        * [key-val](/mugen/core/contract/gateway/storage/keyval.py) (DIContainer.keyval_storage_gateway)
+        * [key-val](/mugen/core/contract/gateway/storage/keyval.py) (di.container.keyval_storage_gateway)
 * Services:
-    * [IPC](/mugen/core/contract/service/ipc.py) (DIContainer.ipc_service)
-    * [Messaging](/mugen/core/contract/service/messaging.py) (DIContainer.messaging_service)
-    * [NLP](/mugen/core/contract/service/nlp.py) (DIContainer.nlp_service)
-    * [Platform](/mugen/core/contract/service/platform.py) (DIContainer.platform_service)
-    * [User](/mugen/core/contract/service/user.py) (DIContainer.user_service)
+    * [IPC](/mugen/core/contract/service/ipc.py) (di.container.ipc_service)
+    * [Messaging](/mugen/core/contract/service/messaging.py) (di.container.messaging_service)
+    * [NLP](/mugen/core/contract/service/nlp.py) (di.container.nlp_service)
+    * [Platform](/mugen/core/contract/service/platform.py) (di.container.platform_service)
+    * [User](/mugen/core/contract/service/user.py) (di.container.user_service)
 
 ## Loading extensions
 

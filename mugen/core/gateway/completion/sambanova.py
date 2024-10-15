@@ -8,7 +8,6 @@ import traceback
 from types import SimpleNamespace
 from typing import Any
 
-from dependency_injector import providers
 import pycurl
 
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -21,7 +20,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
 
     def __init__(
         self,
-        config: providers.Configuration,  # pylint: disable=c-extension-no-member
+        config: SimpleNamespace,
         logging_gateway: ILoggingGateway,
     ) -> None:
         super().__init__()
@@ -33,13 +32,13 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         context: list[dict],
         operation: str = "completion",
     ) -> SimpleNamespace | None:
-        model = self._config.sambanova.api()[operation]["model"]
-        _temperature = float(self._config.sambanova.api()[operation]["temp"])
+        model = self._config.sambanova.api.dict[operation]["model"]
+        _temperature = float(self._config.sambanova.api.dict[operation]["temp"])
 
         response = None
         try:
             headers: list[str] = [
-                f"Authorization: Basic {self._config.sambanova.api.key()}",
+                f"Authorization: Basic {self._config.sambanova.api.key}",
                 "Content-Type: application/json",
             ]
             data: dict[str, Any] = {
@@ -56,7 +55,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
 
             # pylint: disable=c-extension-no-member
             c = pycurl.Curl()
-            c.setopt(c.URL, self._config.sambanova.api.endpoint())
+            c.setopt(c.URL, self._config.sambanova.api.endpoint)
             c.setopt(c.POSTFIELDS, json.dumps(data))
             c.setopt(c.HTTPHEADER, headers)
             c.setopt(c.WRITEFUNCTION, buffer.write)

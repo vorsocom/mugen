@@ -9,16 +9,15 @@ __email__ = "brightideas@vorsocomputing.com"
 __version__ = "0.34.0"
 
 import asyncio
-import os
 
-from mugen import create_quart_app, run_assistants
+from mugen import create_quart_app, run_clients
 
 # Create Quart mugen.
-mugen = create_quart_app(basedir=os.path.dirname(os.path.realpath(__file__)))
+app = create_quart_app()
 
 
-@mugen.before_serving
+@app.before_serving
 async def startup():
     """Initialise matrix-nio using the Quart event loop."""
     loop = asyncio.get_event_loop()
-    loop.create_task(run_assistants())
+    loop.create_task(run_clients(app))

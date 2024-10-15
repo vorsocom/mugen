@@ -1,18 +1,19 @@
-"""Provides a dependency injection container."""
+"""Provides an application-wide dependency injection container."""
 
-__all__ = ["DIContainer"]
+__all__ = ["container"]
 
 from importlib import import_module
 import os
+import sys
+from types import SimpleNamespace
 
-from dependency_injector import containers, providers
 import tomlkit
 
 from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
-from mugen.core.contract.gateway.knowledge import IKnowledgeRetrievalGateway
+from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
@@ -21,178 +22,299 @@ from mugen.core.contract.service.nlp import INLPService
 from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.contract.service.user import IUserService
 
-
-config: dict
-with open(
-    os.path.join(
-        os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "mugen.toml"
-    ),
-    "r",
-    encoding="utf8",
-) as f:
-    config = tomlkit.loads(f.read()).value
-
-core = config["mugen"]["modules"]["core"]
-
-import_module(name=core["gateway"]["logging"])
-logging_gateway_class = ILoggingGateway.__subclasses__()[0]
-
-import_module(name=core["gateway"]["completion"])
-completion_gateway_class = ICompletionGateway.__subclasses__()[0]
-
-import_module(name=core["service"]["ipc"])
-ipc_service_class = IIPCService.__subclasses__()[0]
-
-import_module(name=core["gateway"]["storage"]["keyval"])
-storage_gateway_class = IKeyValStorageGateway.__subclasses__()[0]
-
-import_module(name=core["service"]["nlp"])
-nlp_service_class = INLPService.__subclasses__()[0]
-
-import_module(name=core["service"]["platform"])
-platform_service_class = IPlatformService.__subclasses__()[0]
-
-import_module(name=core["service"]["user"])
-user_service_class = IUserService.__subclasses__()[0]
-
-import_module(name=core["service"]["messaging"])
-messaging_service_class = IMessagingService.__subclasses__()[0]
-
-# pylint: disable=invalid-name
-
-knowledge_gateway_class = None
-if "knowledge" in core["gateway"].keys() and core["gateway"]["knowledge"] != "":
-    import_module(name=core["gateway"]["knowledge"])
-    knowledge_gateway_class = IKnowledgeRetrievalGateway.__subclasses__()[0]
-
-telnet_client_class = None
-if (
-    "telnet" in core["client"].keys()
-    and core["client"]["telnet"] != ""
-    and "telnet" in config["mugen"]["platforms"]
-):
-    import_module(name=core["client"]["telnet"])
-    telnet_client_class = ITelnetClient.__subclasses__()[0]
-
-matrix_client_class = None
-if (
-    "matrix" in core["client"].keys()
-    and core["client"]["matrix"] != ""
-    and "matrix" in config["mugen"]["platforms"]
-):
-    import_module(name=core["client"]["matrix"])
-    matrix_client_class = IMatrixClient.__subclasses__()[0]
-
-whatsapp_client_class = None
-if (
-    "whatsapp" in core["client"].keys()
-    and core["client"]["whatsapp"] != ""
-    and "whatsapp" in config["mugen"]["platforms"]
-):
-    import_module(name=core["client"]["whatsapp"])
-    whatsapp_client_class = IWhatsAppClient.__subclasses__()[0]
+from .injector import DependencyInjector
 
 
-# pylint: disable=c-extension-no-member
-# pylint: disable=too-few-public-methods
-class DIContainer(containers.DeclarativeContainer):
-    """An application-wide dependency injector container."""
+def _nested_namespace_from_dict(items: dict, ns: SimpleNamespace) -> None:
+    """Convert a nested dict to a nested SimpleNamespace"""
 
-    config = providers.Configuration()
+    for key in items.keys():
+        if isinstance(items[key], dict):
+            nested_space = SimpleNamespace()
+            _nested_namespace_from_dict(items[key], nested_space)
+            setattr(ns, key, nested_space)
+            setattr(ns, "dict", items)
+            continue
 
-    logging_gateway = providers.Singleton(
-        logging_gateway_class,
-        config=config.delegate(),
+        if isinstance(items[key], list):
+            if len(items[key]) > 0 and isinstance(items[key][0], dict):
+                space_list = []
+                for list_item in items[key]:
+                    nested_space = SimpleNamespace()
+                    _nested_namespace_from_dict(list_item, nested_space)
+                    space_list.append(nested_space)
+                setattr(ns, key, space_list)
+                continue
+
+        setattr(ns, key, items[key])
+
+
+def _build_config_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    config["dbm_keyval_storage_path"] = os.path.join(
+        config["basedir"], "data", "storage.db"
+    )
+    config["matrix"]["olm_store_path"] = os.path.join(
+        config["basedir"], "data", ".olmstore"
     )
 
-    completion_gateway = providers.Singleton(
-        completion_gateway_class,
-        config=config.delegate(),
-        logging_gateway=logging_gateway,
+    ns = SimpleNamespace()
+    _nested_namespace_from_dict(config, ns)
+    injector.config = ns
+
+
+def _build_logging_gateway_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    import_module(name=config["mugen"]["modules"]["core"]["gateway"]["logging"])
+
+    injector.logging_gateway = ILoggingGateway.__subclasses__()[0](
+        config=injector.config,
     )
 
-    ipc_service = providers.Singleton(
-        ipc_service_class,
-        logging_gateway=logging_gateway,
+
+def _build_completion_gateway_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    import_module(name=config["mugen"]["modules"]["core"]["gateway"]["completion"])
+
+    injector.completion_gateway = ICompletionGateway.__subclasses__()[0](
+        config=injector.config,
+        logging_gateway=injector.logging_gateway,
     )
 
-    keyval_storage_gateway = providers.Singleton(
-        storage_gateway_class,
-        config=config.delegate(),
-        logging_gateway=logging_gateway,
+
+def _build_ipc_service_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    import_module(name=config["mugen"]["modules"]["core"]["service"]["ipc"])
+
+    injector.ipc_service = IIPCService.__subclasses__()[0](
+        logging_gateway=injector.logging_gateway,
     )
 
-    nlp_service = providers.Singleton(
-        nlp_service_class,
-        logging_gateway=logging_gateway,
+
+def _build_keyval_storage_gateway_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    import_module(
+        name=config["mugen"]["modules"]["core"]["gateway"]["storage"]["keyval"]
     )
 
-    platform_service = providers.Singleton(
-        platform_service_class,
-        config=config.delegate(),
-        logging_gateway=logging_gateway,
+    injector.keyval_storage_gateway = IKeyValStorageGateway.__subclasses__()[0](
+        config=injector.config,
+        logging_gateway=injector.logging_gateway,
     )
 
-    user_service = providers.Singleton(
-        user_service_class,
-        keyval_storage_gateway=keyval_storage_gateway,
-        logging_gateway=logging_gateway,
+
+def _build_nlp_service_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    import_module(name=config["mugen"]["modules"]["core"]["service"]["nlp"])
+
+    injector.nlp_service = INLPService.__subclasses__()[0](
+        logging_gateway=injector.logging_gateway,
     )
 
-    messaging_service = providers.Singleton(
-        messaging_service_class,
-        config=config.delegate(),
-        completion_gateway=completion_gateway,
-        keyval_storage_gateway=keyval_storage_gateway,
-        logging_gateway=logging_gateway,
-        user_service=user_service,
+
+def _build_platform_service_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    import_module(name=config["mugen"]["modules"]["core"]["service"]["platform"])
+
+    injector.platform_service = IPlatformService.__subclasses__()[0](
+        config=injector.config,
+        logging_gateway=injector.logging_gateway,
     )
 
-    if knowledge_gateway_class:
-        knowledge_gateway = providers.Singleton(
-            knowledge_gateway_class,
-            config=config.delegate(),
-            logging_gateway=logging_gateway,
-            nlp_service=nlp_service,
-        )
-    else:
-        knowledge_gateway = providers.Object(None)
 
-    if telnet_client_class:
-        telnet_client = providers.Singleton(
-            telnet_client_class,
-            config=config.delegate(),
-            ipc_service=ipc_service,
-            keyval_storage_gateway=keyval_storage_gateway,
-            logging_gateway=logging_gateway,
-            messaging_service=messaging_service,
-            user_service=user_service,
-        )
-    else:
-        telnet_client = providers.Object(None)
+def _build_user_service_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    import_module(name=config["mugen"]["modules"]["core"]["service"]["user"])
 
-    if matrix_client_class:
-        matrix_client = providers.Singleton(
-            matrix_client_class,
-            config=config.delegate(),
-            ipc_service=ipc_service,
-            keyval_storage_gateway=keyval_storage_gateway,
-            logging_gateway=logging_gateway,
-            messaging_service=messaging_service,
-            user_service=user_service,
-        )
-    else:
-        matrix_client = providers.Object(None)
+    injector.user_service = IUserService.__subclasses__()[0](
+        keyval_storage_gateway=injector.keyval_storage_gateway,
+        logging_gateway=injector.logging_gateway,
+    )
 
-    if whatsapp_client_class:
-        whatsapp_client = providers.Singleton(
-            whatsapp_client_class,
-            config=config.delegate(),
-            ipc_service=ipc_service,
-            keyval_storage_gateway=keyval_storage_gateway,
-            logging_gateway=logging_gateway,
-            messaging_service=messaging_service,
-            user_service=user_service,
-        )
-    else:
-        whatsapp_client = providers.Object(None)
+
+def _build_messaging_service_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    import_module(name=config["mugen"]["modules"]["core"]["service"]["messaging"])
+
+    injector.messaging_service = IMessagingService.__subclasses__()[0](
+        config=injector.config,
+        completion_gateway=injector.completion_gateway,
+        keyval_storage_gateway=injector.keyval_storage_gateway,
+        logging_gateway=injector.logging_gateway,
+        user_service=injector.user_service,
+    )
+
+
+def _build_knowledge_gateway_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    try:
+        import_module(name=config["mugen"]["modules"]["core"]["gateway"]["knowledge"])
+    except KeyError:
+        return
+
+    injector.knowledge_gateway = IKnowledgeGateway.__subclasses__()[0](
+        config=injector.config,
+        logging_gateway=injector.logging_gateway,
+        nlp_service=injector.nlp_service,
+    )
+
+
+def _build_matrix_client_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    # Don't load the client if the platform is not enabled.
+    if "matrix" not in config["mugen"]["platforms"]:
+        return
+
+    # Attempt to import the client module.
+    try:
+        import_module(name=config["mugen"]["modules"]["core"]["client"]["matrix"])
+    except ModuleNotFoundError:
+        # Exit if the client module could not be imported.
+        return
+
+    injector.matrix_client = IMatrixClient.__subclasses__()[0](
+        config=injector.config,
+        ipc_service=injector.ipc_service,
+        keyval_storage_gateway=injector.keyval_storage_gateway,
+        logging_gateway=injector.logging_gateway,
+        messaging_service=injector.messaging_service,
+        user_service=injector.user_service,
+    )
+
+
+def _build_telnet_client_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    # Don't load the client if the platform is not enabled.
+    if "telnet" not in config["mugen"]["platforms"]:
+        return
+
+    # Attempt to import the client module.
+    try:
+        import_module(name=config["mugen"]["modules"]["core"]["client"]["telnet"])
+    except ModuleNotFoundError:
+        # Exit if the client module could not be imported.
+        return
+
+    injector.telnet_client = ITelnetClient.__subclasses__()[0](
+        config=injector.config,
+        ipc_service=injector.ipc_service,
+        keyval_storage_gateway=injector.keyval_storage_gateway,
+        logging_gateway=injector.logging_gateway,
+        messaging_service=injector.messaging_service,
+        user_service=injector.user_service,
+    )
+
+
+def _build_whatsapp_client_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """"""
+    # Don't load the client if the platform is not enabled.
+    if "whatsapp" not in config["mugen"]["platforms"]:
+        return
+
+    # Attempt to import the client module.
+    try:
+        import_module(name=config["mugen"]["modules"]["core"]["client"]["whatsapp"])
+    except ModuleNotFoundError:
+        # Exit if the client module could not be imported.
+        return
+
+    injector.whatsapp_client = IWhatsAppClient.__subclasses__()[0](
+        config=injector.config,
+        ipc_service=injector.ipc_service,
+        keyval_storage_gateway=injector.keyval_storage_gateway,
+        logging_gateway=injector.logging_gateway,
+        messaging_service=injector.messaging_service,
+        user_service=injector.user_service,
+    )
+
+
+def _load_config(config_file: str) -> dict:
+    """Load TOML configuration."""
+    rel = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..")
+    basedir = os.path.realpath(rel)
+    try:
+        with open(os.path.join(basedir, config_file), "r", encoding="utf8") as f:
+            config = tomlkit.loads(f.read()).value
+            config["basedir"] = basedir
+            return config
+    except FileNotFoundError:
+        sys.exit(1)
+
+
+def _build_container() -> DependencyInjector:
+    """Build providers.
+
+    Order is important.
+    """
+    config = _load_config("mugen.toml")
+    injector = DependencyInjector()
+
+    _build_config_provider(config, injector)
+
+    _build_logging_gateway_provider(config, injector)
+
+    _build_completion_gateway_provider(config, injector)
+
+    _build_ipc_service_provider(config, injector)
+
+    _build_keyval_storage_gateway_provider(config, injector)
+
+    _build_nlp_service_provider(config, injector)
+
+    _build_platform_service_provider(config, injector)
+
+    _build_user_service_provider(config, injector)
+
+    _build_messaging_service_provider(config, injector)
+
+    _build_knowledge_gateway_provider(config, injector)
+
+    _build_matrix_client_provider(config, injector)
+
+    _build_telnet_client_provider(config, injector)
+
+    _build_whatsapp_client_provider(config, injector)
+
+    return injector
+
+
+container = _build_container()

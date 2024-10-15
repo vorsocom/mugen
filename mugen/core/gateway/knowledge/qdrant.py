@@ -1,30 +1,31 @@
 """Provides a knowledge retrieval gateway for the Qdrant vector database."""
 
-__all__ = ["QdrantKnowledgeRetrievalGateway"]
+__all__ = ["QdrantKnowledgeGateway"]
 
-from dependency_injector import providers
+from types import SimpleNamespace
+
 from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import ResponseHandlingException
 from sentence_transformers import SentenceTransformer
 
-from mugen.core.contract.gateway.knowledge import IKnowledgeRetrievalGateway
+from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.nlp import INLPService
 
 
-class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
+class QdrantKnowledgeGateway(IKnowledgeGateway):
     """A knowledge retrieval gateway for the Qdrant vector database."""
 
     def __init__(
         self,
-        config: providers.Configuration,  # pylint: disable=c-extension-no-member
+        config: SimpleNamespace,
         logging_gateway: ILoggingGateway,
         nlp_service: INLPService,
     ) -> None:
         self._config = config
         self._client = AsyncQdrantClient(
-            api_key=self._config.qdrant.api.key(),
-            url=self._config.qdrant.api.url(),
+            api_key=self._config.qdrant.api.key,
+            url=self._config.qdrant.api.url,
             port=None,
         )
         self._logging_gateway = logging_gateway
@@ -35,7 +36,7 @@ class QdrantKnowledgeRetrievalGateway(IKnowledgeRetrievalGateway):
             tokenizer_kwargs={
                 "clean_up_tokenization_spaces": False,
             },
-            cache_folder=self._config.hf.home(),
+            cache_folder=self._config.hf.home,
         )
 
     # pylint: disable=too-many-arguments

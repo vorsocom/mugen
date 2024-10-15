@@ -2,7 +2,7 @@
 
 __all__ = ["DefaultPlatformService"]
 
-from dependency_injector import providers
+from types import SimpleNamespace
 
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.platform import IPlatformService
@@ -13,7 +13,7 @@ class DefaultPlatformService(IPlatformService):
 
     def __init__(
         self,
-        config: providers.Configuration,  # pylint: disable=c-extension-no-member
+        config: SimpleNamespace,
         logging_gateway: ILoggingGateway,
     ) -> None:
         self._config = config
@@ -21,7 +21,7 @@ class DefaultPlatformService(IPlatformService):
 
     @property
     def active_platforms(self) -> list[str]:
-        return self._config.mugen.platforms()
+        return self._config.mugen.platforms
 
     def extension_supported(self, ext) -> bool:
         return (

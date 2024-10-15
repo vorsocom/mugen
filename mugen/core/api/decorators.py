@@ -9,6 +9,8 @@ import os
 
 from quart import abort, current_app, request
 
+from mugen.core import di
+
 
 def matrix_platform_required(arg=None):
     """Check that the Matrix platform is enabled."""
@@ -17,7 +19,7 @@ def matrix_platform_required(arg=None):
         @wraps(func)
         async def decorated(*args, **kwargs):
             try:
-                if "matrix" not in current_app.config["ENV"].mugen.platforms():
+                if "matrix" not in di.container.config.mugen.platforms:
                     current_app.logger.error("Matrix platform not enabled.")
                     abort(501)
                 return await func(*args, **kwargs)
@@ -37,7 +39,7 @@ def telnet_platform_required(arg=None):
         @wraps(func)
         async def decorated(*args, **kwargs):
             try:
-                if "telnet" not in current_app.config["ENV"].mugen.platforms():
+                if "telnet" not in di.container.config.mugen.platforms:
                     current_app.logger.error("Telnet platform not enabled.")
                     abort(501)
                 return await func(*args, **kwargs)
@@ -57,7 +59,7 @@ def whatsapp_platform_required(arg=None):
         @wraps(func)
         async def decorated(*args, **kwargs):
             try:
-                if "whatsapp" not in current_app.config["ENV"].mugen.platforms():
+                if "whatsapp" not in di.container.config.mugen.platforms:
                     current_app.logger.error("WhatsApp platform not enabled.")
                     abort(501)
                 return await func(*args, **kwargs)
@@ -77,7 +79,7 @@ def whatsapp_server_ip_allow_list_required(arg=None):
         @wraps(func)
         async def decorated(*args, **kwargs):
             try:
-                allow_list_path = current_app.config["ENV"].whatsapp.servers.allowed()
+                allow_list_path = di.container.config.whatsapp.servers.allowed
                 basedir = current_app.config["BASEDIR"]
                 networks: list
                 with open(
@@ -125,7 +127,7 @@ def whatsapp_request_signature_verification_required(arg=None):
         @wraps(func)
         async def decorated(*args, **kwargs):
             try:
-                app_secret = current_app.config["ENV"].whatsapp.app.secret()
+                app_secret = di.container.config.whatsapp.app.secret
             except (AttributeError, KeyError):
                 current_app.logger.error("WhatsApp app secret not found.")
                 abort(500)
