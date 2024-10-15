@@ -27,26 +27,44 @@ from .injector import DependencyInjector
 
 def _nested_namespace_from_dict(items: dict, ns: SimpleNamespace) -> None:
     """Convert a nested dict to a nested SimpleNamespace"""
-
-    for key in items.keys():
-        if isinstance(items[key], dict):
-            nested_space = SimpleNamespace()
-            _nested_namespace_from_dict(items[key], nested_space)
-            setattr(ns, key, nested_space)
-            setattr(ns, "dict", items)
-            continue
-
-        if isinstance(items[key], list):
-            if len(items[key]) > 0 and isinstance(items[key][0], dict):
-                space_list = []
-                for list_item in items[key]:
-                    nested_space = SimpleNamespace()
-                    _nested_namespace_from_dict(list_item, nested_space)
-                    space_list.append(nested_space)
-                setattr(ns, key, space_list)
+    # If null values are passed, this try-except
+    # will catch the AttributeError that results
+    # from calling items.keys().
+    try:  # pylint: disable=too-many-nested-blocks
+        for key in items.keys():
+            # If it's a dict, recurse.
+            # Also place the original dict alongside
+            # the namespace as an attribute called "dict".
+            if isinstance(items[key], dict):
+                nested_space = SimpleNamespace()
+                _nested_namespace_from_dict(items[key], nested_space)
+                setattr(ns, key, nested_space)
+                setattr(ns, "dict", items)
                 continue
 
-        setattr(ns, key, items[key])
+            # Handle list of dicts.
+            if isinstance(items[key], list):
+                # try-except for empty list.
+                try:
+                    if isinstance(items[key][0], dict):
+                        space_list = []
+                        for list_item in items[key]:
+                            nested_space = SimpleNamespace()
+                            _nested_namespace_from_dict(list_item, nested_space)
+                            space_list.append(nested_space)
+                        setattr(ns, key, space_list)
+                        continue
+                except IndexError:
+                    # Empty barrel. No noise though.
+                    pass
+
+            # Flat item.
+            setattr(ns, key, items[key])
+    except AttributeError:
+        # If you don't stand for something,
+        # you'll fall for anything. And nothing,
+        # in this case.
+        pass
 
 
 def _build_config_provider(
