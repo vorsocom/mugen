@@ -3,9 +3,9 @@
 # https://console.groq.com/docs/api-reference#chat
 
 import traceback
+from types import SimpleNamespace
 from typing import Any
 
-from dependency_injector import providers
 from groq import AsyncGroq, GroqError
 
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -20,12 +20,12 @@ class GroqCompletionGateway(ICompletionGateway):
 
     def __init__(
         self,
-        config: providers.Configuration,  # pylint: disable=c-extension-no-member
+        config: SimpleNamespace,
         logging_gateway: ILoggingGateway,
     ) -> None:
         super().__init__()
         self._config = config
-        self._api = AsyncGroq(api_key=self._config.groq.api.key())
+        self._api = AsyncGroq(api_key=self._config.groq.api.key)
         self._logging_gateway = logging_gateway
 
     async def get_completion(
@@ -33,8 +33,8 @@ class GroqCompletionGateway(ICompletionGateway):
         context: list[dict],
         operation: str = "completion",
     ) -> Any | None:
-        model = self._config.aws.bedrock.api()[operation]["model"]
-        temperature = float(self._config.aws.bedrock.api()[operation]["temp"])
+        model = self._config.aws.bedrock.api.dict[operation]["model"]
+        temperature = float(self._config.aws.bedrock.api.dict[operation]["temp"])
 
         response = None
         # self._logging_gateway.debug(context)

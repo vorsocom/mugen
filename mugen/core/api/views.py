@@ -13,6 +13,7 @@ from mugen.core.api.decorators import (
     whatsapp_server_ip_allow_list_required,
 )
 from mugen.core.contract.service.ipc import IIPCService
+from mugen.core import di
 
 
 @api.get("/matrix")
@@ -21,7 +22,7 @@ async def matrix_index():
     """Matrix index endpoint."""
     # Get the IPC service from the dependency injector.
     try:
-        ipc_service: IIPCService = current_app.di.ipc_service()
+        ipc_service: IIPCService = di.container.ipc_service
     except AttributeError:
         current_app.logger.error("Could not get IPC service.")
         abort(500)
@@ -64,7 +65,7 @@ async def matrix_webhook():
 
     # Get the IPC service from the dependency injector.
     try:
-        ipc_service: IIPCService = current_app.di.ipc_service()
+        ipc_service: IIPCService = di.container.ipc_service
     except AttributeError:
         current_app.logger.error("Could not get IPC service.")
         abort(500)
@@ -97,7 +98,7 @@ async def whatsapp_index():
     """Whatsapp index endpoint."""
     # Get the IPC service from the dependency injector.
     try:
-        ipc_service: IIPCService = current_app.di.ipc_service()
+        ipc_service: IIPCService = di.container.ipc_service
     except AttributeError:
         current_app.logger.error("Could not get IPC service.")
         abort(500)
@@ -175,7 +176,7 @@ async def whatsapp_wacapi_event():
 
     # Get the IPC service from the dependency injector.
     try:
-        ipc_service: IIPCService = current_app.di.ipc_service()
+        ipc_service: IIPCService = di.container.ipc_service
     except AttributeError:
         current_app.logger.error("Could not get IPC service.")
         abort(500)
@@ -219,7 +220,7 @@ async def whatsapp_webhook():
 
     # Get the IPC service from the dependency injector.
     try:
-        ipc_service: IIPCService = current_app.di.ipc_service()
+        ipc_service: IIPCService = di.container.ipc_service
     except AttributeError:
         current_app.logger.error("Could not get IPC service.")
         abort(500)

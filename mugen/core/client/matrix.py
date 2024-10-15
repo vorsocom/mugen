@@ -6,9 +6,9 @@ import asyncio
 import pickle
 import sys
 import traceback
+from types import SimpleNamespace
 from typing import Coroutine
 
-from dependency_injector import providers
 from nio import (
     InviteAliasEvent,
     InviteMemberEvent,
@@ -61,8 +61,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     # pylint: disable=too-many-arguments
     def __init__(
         self,
-        # pylint: disable=c-extension-no-member
-        config: providers.Configuration = None,
+        config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
@@ -71,9 +70,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     ):
         self._config = config
         super().__init__(
-            homeserver=self._config.matrix.homeserver(),
-            user=self._config.matrix.client_user(),
-            store_path=self._config.matrix.olm_store_path(),
+            homeserver=self._config.matrix.homeserver,
+            user=self._config.matrix.client.user,
+            store_path=self._config.matrix.olm_store_path,
         )
         self._ipc_service = ipc_service
         self._keyval_storage_gateway = keyval_storage_gateway
@@ -109,8 +108,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
         if self._keyval_storage_gateway.get("client_access_token") is None:
             # Load password and device name from storage.
-            pw = self._config.matrix.client.password()
-            dn = self._config.matrix.client.device()
+            pw = self._config.matrix.client.password
+            dn = self._config.matrix.client.device
 
             # Attempt  password login.
             resp = await self.login(pw, dn)
@@ -244,8 +243,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # Only process invites from allowed domains.
         # Federated servers need to be in the allowed domains list for their users
         # to initiate conversations with the assistant.
-        allowed_domains: list = self._config.matrix.domains.allowed()
-        denied_domains: list = self._config.matrix.domains.denied()
+        allowed_domains: list = self._config.matrix.domains.allowed
+        denied_domains: list = self._config.matrix.domains.denied
         sender_domain: str = event.sender.split(":")[1]
         if sender_domain not in allowed_domains or sender_domain in denied_domains:
             await self.room_leave(room.room_id)
@@ -257,8 +256,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
         # If the assistant is in limited-beta mode, only process invites from the
         # list of selected beta users.
-        if self._config.mugen.beta.active():
-            beta_users: list = self._config.matrix.beta.users()
+        if self._config.mugen.beta.active:
+            beta_users: list = self._config.matrix.beta.users
             if event.sender not in beta_users:
                 await self.room_leave(room.room_id)
                 self._logging_gateway.warning(

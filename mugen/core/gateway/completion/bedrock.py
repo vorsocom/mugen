@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import boto3
 from botocore.exceptions import ClientError
-from dependency_injector import providers
 
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -19,7 +18,7 @@ class BedrockCompletionGateway(ICompletionGateway):
 
     def __init__(
         self,
-        config: providers.Configuration,  # pylint: disable=c-extension-no-member
+        config: SimpleNamespace,
         logging_gateway: ILoggingGateway,
     ) -> None:
         super().__init__()
@@ -28,9 +27,9 @@ class BedrockCompletionGateway(ICompletionGateway):
 
         self._client = boto3.client(
             service_name="bedrock-runtime",
-            region_name=self._config.aws.bedrock.api.region(),
-            aws_access_key_id=self._config.aws.bedrock.api.access_key_id(),
-            aws_secret_access_key=self._config.aws.bedrock.api.secret_access_key(),
+            region_name=self._config.aws.bedrock.api.region,
+            aws_access_key_id=self._config.aws.bedrock.api.access_key_id,
+            aws_secret_access_key=self._config.aws.bedrock.api.secret_access_key,
         )
 
     async def get_completion(
@@ -38,8 +37,8 @@ class BedrockCompletionGateway(ICompletionGateway):
         context: list[dict],
         operation: str = "completion",
     ) -> SimpleNamespace | None:
-        model = self._config.aws.bedrock.api()[operation]["model"]
-        temperature = float(self._config.aws.bedrock.api()[operation]["temp"])
+        model = self._config.aws.bedrock.api.dict[operation]["model"]
+        temperature = float(self._config.aws.bedrock.api.dict[operation]["temp"])
 
         response = None
         conversation = []
