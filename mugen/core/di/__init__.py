@@ -71,10 +71,16 @@ def _build_config_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
+    """Build configuration provider object for DI container."""
     ns = SimpleNamespace()
     _nested_namespace_from_dict(config, ns)
-    injector.config = ns
+    try:
+        injector.config = ns
+    except AttributeError:
+        # System cannot run without configuration.
+        # We can get here due to a null or any other
+        # incorrectly typed injector.
+        sys.exit(1)
 
 
 def _build_logging_gateway_provider(
