@@ -23,7 +23,7 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
     ) -> None:
         self._config = config
         self._logging_gateway = logging_gateway
-        self._storage = _gdbm.open(self._config.dbm_keyval_storage_path, "c")
+        self._storage = _gdbm.open(self._config.mugen.storage.keyval.dbm.path, "c")
 
     def put(self, key: str, value: str) -> None:
         self._storage[key] = value
