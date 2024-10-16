@@ -3,6 +3,7 @@
 __all__ = ["DefaultMatrixClient"]
 
 import asyncio
+import os
 import pickle
 import sys
 import traceback
@@ -72,7 +73,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         super().__init__(
             homeserver=self._config.matrix.homeserver,
             user=self._config.matrix.client.user,
-            store_path=self._config.matrix.olm_store_path,
+            store_path=os.path.join(
+                self._config.basedir,
+                self._config.matrix.storage.olm.path,
+            ),
         )
         self._ipc_service = ipc_service
         self._keyval_storage_gateway = keyval_storage_gateway

@@ -72,13 +72,6 @@ def _build_config_provider(
     injector: DependencyInjector,
 ) -> None:
     """"""
-    config["dbm_keyval_storage_path"] = os.path.join(
-        config["basedir"], "data", "storage.db"
-    )
-    config["matrix"]["olm_store_path"] = os.path.join(
-        config["basedir"], "data", ".olmstore"
-    )
-
     ns = SimpleNamespace()
     _nested_namespace_from_dict(config, ns)
     injector.config = ns
