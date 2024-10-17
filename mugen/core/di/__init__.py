@@ -357,13 +357,45 @@ def _build_user_service_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
-    import_module(name=config["mugen"]["modules"]["core"]["service"]["user"])
+    """Build user service provider for DI container."""
+    # Get logger.
+    # Exceptions/conditions are for a
+    # testing environment.
+    try:
+        logger = injector.logging_gateway
+        if not logger:
+            logger = logging.getLogger()
+    except AttributeError:
+        logger = logging.getLogger()
 
-    injector.user_service = IUserService.__subclasses__()[0](
-        keyval_storage_gateway=injector.keyval_storage_gateway,
-        logging_gateway=injector.logging_gateway,
-    )
+    try:
+        try:
+            import_module(name=config["mugen"]["modules"]["core"]["service"]["user"])
+        except KeyError:
+            logger.error("Invalid configuration (user_service).")
+            return
+    except ModuleNotFoundError:
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (user_service).")
+        return
+
+    try:
+        try:
+            injector.user_service = IUserService.__subclasses__()[0](
+                keyval_storage_gateway=injector.keyval_storage_gateway,
+                logging_gateway=injector.logging_gateway,
+            )
+        except AttributeError:
+            # We'll get an AttributeError if injector
+            # is incorrectly typed.
+            logger.error("Invalid injector (user_service).")
+            return
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (user_service).")
 
 
 def _build_messaging_service_provider(
