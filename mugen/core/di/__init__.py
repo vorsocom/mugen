@@ -3,9 +3,11 @@
 __all__ = ["container"]
 
 from importlib import import_module
+import logging
 import os
 import sys
 from types import SimpleNamespace
+from typing import Any
 
 import tomlkit
 
@@ -87,12 +89,39 @@ def _build_logging_gateway_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
-    import_module(name=config["mugen"]["modules"]["core"]["gateway"]["logging"])
+    """Build logging gateway provider for DI container."""
+    try:
+        logger = logging.getLogger(config.mugen.logger.name)
+    except AttributeError:
+        logger = logging.getLogger()
 
-    injector.logging_gateway = ILoggingGateway.__subclasses__()[0](
-        config=injector.config,
-    )
+    try:
+        try:
+            import_module(name=config["mugen"]["modules"]["core"]["gateway"]["logging"])
+        except KeyError:
+            logger.error("Invalid configuration (logging_gateway).")
+            return
+    except ModuleNotFoundError:
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (logging_gateway).")
+        return
+
+    try:
+        try:
+            injector.logging_gateway = ILoggingGateway.__subclasses__()[0](
+                config=injector.config,
+            )
+        except AttributeError:
+            # We'll get an AttributeError if injector
+            # is incorrectly typed.
+            logger.error("Invalid injector (logging_gateway).")
+            return
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (logging_gateway).")
 
 
 def _build_completion_gateway_provider(
