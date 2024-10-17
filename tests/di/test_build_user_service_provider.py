@@ -1,4 +1,4 @@
-"""Provides unit tests for mugen.core.di._build_user_service."""
+"""Provides unit tests for mugen.core.di._build_user_service_provider."""
 
 import unittest
 import unittest.mock
@@ -9,7 +9,7 @@ from mugen.core.contract.service.user import IUserService
 
 # pylint: disable=protected-access
 class TestDIBuildUserService(unittest.TestCase):
-    """Unit tests for mugen.core.di._build_user_service."""
+    """Unit tests for mugen.core.di._build_user_service_provider."""
 
     def test_module_configuration_unavailable(self):
         """Test effects of missing module configuration."""

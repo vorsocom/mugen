@@ -1,4 +1,4 @@
-"""Provides unit tests for mugen.core.di._build_ipc_service."""
+"""Provides unit tests for mugen.core.di._build_ipc_service_provider."""
 
 import unittest
 import unittest.mock
@@ -9,7 +9,7 @@ from mugen.core.contract.service.ipc import IIPCService
 
 # pylint: disable=protected-access
 class TestDIBuildIPCService(unittest.TestCase):
-    """Unit tests for mugen.core.di._build_ipc_service."""
+    """Unit tests for mugen.core.di._build_ipc_service_provider."""
 
     def test_module_configuration_unavailable(self):
         """Test effects of missing module configuration."""
