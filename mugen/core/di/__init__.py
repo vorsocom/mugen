@@ -128,7 +128,7 @@ def _build_completion_gateway_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """Build logging gateway provider for DI container."""
+    """Build completion gateway provider for DI container."""
     # Get logger.
     # Exceptions/conditions are for a
     # testing environment.
@@ -402,16 +402,50 @@ def _build_messaging_service_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
-    import_module(name=config["mugen"]["modules"]["core"]["service"]["messaging"])
+    """Build messaging service provider for DI container."""
+    # Get logger.
+    # Exceptions/conditions are for a
+    # testing environment.
+    try:
+        logger = injector.logging_gateway
+        if not logger:
+            logger = logging.getLogger()
+    except AttributeError:
+        logger = logging.getLogger()
 
-    injector.messaging_service = IMessagingService.__subclasses__()[0](
-        config=injector.config,
-        completion_gateway=injector.completion_gateway,
-        keyval_storage_gateway=injector.keyval_storage_gateway,
-        logging_gateway=injector.logging_gateway,
-        user_service=injector.user_service,
-    )
+    try:
+        try:
+            import_module(
+                name=config["mugen"]["modules"]["core"]["service"]["messaging"]
+            )
+        except KeyError:
+            logger.error("Invalid configuration (messaging_service).")
+            return
+    except ModuleNotFoundError:
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (messaging_service).")
+        return
+
+    try:
+        try:
+            injector.messaging_service = IMessagingService.__subclasses__()[0](
+                config=injector.config,
+                completion_gateway=injector.completion_gateway,
+                keyval_storage_gateway=injector.keyval_storage_gateway,
+                logging_gateway=injector.logging_gateway,
+                user_service=injector.user_service,
+            )
+        except AttributeError:
+            # We'll get an AttributeError if injector
+            # is incorrectly typed.
+            logger.error("Invalid injector (messaging_service).")
+            return
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (messaging_service).")
 
 
 def _build_knowledge_gateway_provider(
