@@ -175,12 +175,44 @@ def _build_ipc_service_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
-    import_module(name=config["mugen"]["modules"]["core"]["service"]["ipc"])
+    """Build IPC service provider for DI container."""
+    # Get logger.
+    # Exceptions/conditions are for a
+    # testing environment.
+    try:
+        logger = injector.logging_gateway
+        if not logger:
+            logger = logging.getLogger()
+    except AttributeError:
+        logger = logging.getLogger()
 
-    injector.ipc_service = IIPCService.__subclasses__()[0](
-        logging_gateway=injector.logging_gateway,
-    )
+    try:
+        try:
+            import_module(name=config["mugen"]["modules"]["core"]["service"]["ipc"])
+        except KeyError:
+            logger.error("Invalid configuration (ipc_service).")
+            return
+    except ModuleNotFoundError:
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (ipc_service).")
+        return
+
+    try:
+        try:
+            injector.ipc_service = IIPCService.__subclasses__()[0](
+                logging_gateway=injector.logging_gateway,
+            )
+        except AttributeError:
+            # We'll get an AttributeError if injector
+            # is incorrectly typed.
+            logger.error("Invalid injector (ipc_service).")
+            return
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (ipc_service).")
 
 
 def _build_keyval_storage_gateway_provider(
