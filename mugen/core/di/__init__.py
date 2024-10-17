@@ -310,13 +310,47 @@ def _build_platform_service_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
-    import_module(name=config["mugen"]["modules"]["core"]["service"]["platform"])
+    """Build platform service provider for DI container."""
+    # Get logger.
+    # Exceptions/conditions are for a
+    # testing environment.
+    try:
+        logger = injector.logging_gateway
+        if not logger:
+            logger = logging.getLogger()
+    except AttributeError:
+        logger = logging.getLogger()
 
-    injector.platform_service = IPlatformService.__subclasses__()[0](
-        config=injector.config,
-        logging_gateway=injector.logging_gateway,
-    )
+    try:
+        try:
+            import_module(
+                name=config["mugen"]["modules"]["core"]["service"]["platform"]
+            )
+        except KeyError:
+            logger.error("Invalid configuration (platform_service).")
+            return
+    except ModuleNotFoundError:
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (platform_service).")
+        return
+
+    try:
+        try:
+            injector.platform_service = IPlatformService.__subclasses__()[0](
+                config=injector.config,
+                logging_gateway=injector.logging_gateway,
+            )
+        except AttributeError:
+            # We'll get an AttributeError if injector
+            # is incorrectly typed.
+            logger.error("Invalid injector (platform_service).")
+            return
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (platform_service).")
 
 
 def _build_user_service_provider(
