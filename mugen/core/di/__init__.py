@@ -266,12 +266,44 @@ def _build_nlp_service_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
-    import_module(name=config["mugen"]["modules"]["core"]["service"]["nlp"])
+    """Build NLP service provider for DI container."""
+    # Get logger.
+    # Exceptions/conditions are for a
+    # testing environment.
+    try:
+        logger = injector.logging_gateway
+        if not logger:
+            logger = logging.getLogger()
+    except AttributeError:
+        logger = logging.getLogger()
 
-    injector.nlp_service = INLPService.__subclasses__()[0](
-        logging_gateway=injector.logging_gateway,
-    )
+    try:
+        try:
+            import_module(name=config["mugen"]["modules"]["core"]["service"]["nlp"])
+        except KeyError:
+            logger.error("Invalid configuration (nlp_service).")
+            return
+    except ModuleNotFoundError:
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (nlp_service).")
+        return
+
+    try:
+        try:
+            injector.nlp_service = INLPService.__subclasses__()[0](
+                logging_gateway=injector.logging_gateway,
+            )
+        except AttributeError:
+            # We'll get an AttributeError if injector
+            # is incorrectly typed.
+            logger.error("Invalid injector (nlp_service).")
+            return
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (nlp_service).")
 
 
 def _build_platform_service_provider(
