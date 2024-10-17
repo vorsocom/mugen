@@ -170,7 +170,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     self.assertEqual(logger.records[0].name, "root")
 
                     # The operation cannot be completed since a valid
-                    # subclass of ILoggingGateway would not be found.
+                    # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
                         "ERROR:root:Valid subclass not found (completion_gateway).",
