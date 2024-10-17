@@ -1,4 +1,4 @@
-"""Provides unit tests for mugen.core.di._build_logging_gateway."""
+"""Provides unit tests for mugen.core.di._build_logging_gateway_provider."""
 
 import unittest
 import unittest.mock
@@ -9,7 +9,7 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 
 # pylint: disable=protected-access
 class TestDIBuildLoggingGateway(unittest.TestCase):
-    """Unit tests for mugen.core.di._build_logging_gateway."""
+    """Unit tests for mugen.core.di._build_logging_gateway_provider."""
 
     def test_module_configuration_unavailable(self):
         """Test effects of missing module configuration."""
