@@ -7,7 +7,6 @@ import logging
 import os
 import sys
 from types import SimpleNamespace
-from typing import Any
 
 import tomlkit
 
@@ -452,17 +451,45 @@ def _build_knowledge_gateway_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
+    """Build knowledge gateway provider for DI container."""
+    # Get logger.
     try:
-        import_module(name=config["mugen"]["modules"]["core"]["gateway"]["knowledge"])
-    except KeyError:
+        logger = injector.logging_gateway
+    except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (knowledge_gateway).")
         return
 
-    injector.knowledge_gateway = IKnowledgeGateway.__subclasses__()[0](
-        config=injector.config,
-        logging_gateway=injector.logging_gateway,
-        nlp_service=injector.nlp_service,
-    )
+    if logger is None:
+        logger = logging.getLogger()
+        logger.warning("Using root logger (knowledge_gateway).")
+
+    try:
+        try:
+            import_module(
+                name=config["mugen"]["modules"]["core"]["gateway"]["knowledge"]
+            )
+        except (KeyError, ValueError):
+            logger.error("Invalid configuration (knowledge_gateway).")
+            return
+    except ModuleNotFoundError:
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (knowledge_gateway).")
+        return
+
+    try:
+        injector.knowledge_gateway = IKnowledgeGateway.__subclasses__()[0](
+            config=injector.config,
+            logging_gateway=injector.logging_gateway,
+            nlp_service=injector.nlp_service,
+        )
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (knowledge_gateway).")
 
 
 def _build_matrix_client_provider(
