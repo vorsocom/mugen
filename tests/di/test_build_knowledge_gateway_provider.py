@@ -1,6 +1,5 @@
 """Provides unit tests for mugen.core.di._build_knowledge_gateway_provider."""
 
-import logging
 import unittest
 import unittest.mock
 
@@ -56,19 +55,12 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
     def test_module_configuration_unavailable(self):
         """Test effects of missing module configuration."""
         try:
-            # Replacement logger for testing.
-            logger_patch = logging.getLogger()
-
             # Replacement config loader that does
             # not load the application config file.
             _load_config = unittest.mock.Mock()
             _load_config.return_value = {}
 
             with (
-                unittest.mock.patch(
-                    target="mugen.core.di.injector.DependencyInjector.logging_gateway",
-                    new=logger_patch,
-                ),
                 self.assertLogs("root", level="ERROR") as logger,
                 unittest.mock.patch(
                     target="mugen.core.di._load_config",
@@ -103,19 +95,12 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
     def test_module_import_failure(self):
         """Test effects of module import failure."""
         try:
-            # Replacement logger for testing.
-            logger_patch = logging.getLogger()
-
             # Replacement config loader that does
             # not load the application config file.
             _load_config = unittest.mock.Mock()
             _load_config.return_value = {}
 
             with (
-                unittest.mock.patch(
-                    target="mugen.core.di.injector.DependencyInjector.logging_gateway",
-                    new=logger_patch,
-                ),
                 self.assertLogs("root", level="ERROR") as logger,
                 unittest.mock.patch(
                     target="mugen.core.di._load_config",
@@ -160,19 +145,12 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
     def test_valid_subclass_not_found(self):
         """Test effects of invalid subclass import."""
         try:
-            # Replacement logger for testing.
-            logger_patch = logging.getLogger()
-
             # Replacement config loader that does
             # not load the application config file.
             _load_config = unittest.mock.Mock()
             _load_config.return_value = {}
 
             with (
-                unittest.mock.patch(
-                    target="mugen.core.di.injector.DependencyInjector.logging_gateway",
-                    new=logger_patch,
-                ),
                 self.assertLogs("root", level="ERROR") as logger,
                 unittest.mock.patch(
                     target="mugen.core.di._load_config",
@@ -233,19 +211,12 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
     def test_normal_execution(self):
         """Test normal execution with correct configuration and injector."""
         try:
-            # Replacement logger for testing.
-            logger_patch = logging.getLogger()
-
             # Replacement config loader that does
             # not load the application config file.
             _load_config = unittest.mock.Mock()
             _load_config.return_value = {}
 
             with (
-                unittest.mock.patch(
-                    target="mugen.core.di.injector.DependencyInjector.logging_gateway",
-                    new=logger_patch,
-                ),
                 # No logs expected.
                 self.assertNoLogs("root", level="ERROR"),
                 unittest.mock.patch(
