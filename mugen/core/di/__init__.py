@@ -129,14 +129,17 @@ def _build_completion_gateway_provider(
 ) -> None:
     """Build completion gateway provider for DI container."""
     # Get logger.
-    # Exceptions/conditions are for a
-    # testing environment.
     try:
         logger = injector.logging_gateway
-        if not logger:
-            logger = logging.getLogger()
     except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (completion_gateway).")
+        return
+
+    if logger is None:
         logger = logging.getLogger()
+        logger.warning("Using root logger (completion_gateway).")
 
     try:
         try:
@@ -154,16 +157,10 @@ def _build_completion_gateway_provider(
         return
 
     try:
-        try:
-            injector.completion_gateway = ICompletionGateway.__subclasses__()[0](
-                config=injector.config,
-                logging_gateway=injector.logging_gateway,
-            )
-        except AttributeError:
-            # We'll get an AttributeError if injector
-            # is incorrectly typed.
-            logger.error("Invalid injector (completion_gateway).")
-            return
+        injector.completion_gateway = ICompletionGateway.__subclasses__()[0](
+            config=injector.config,
+            logging_gateway=injector.logging_gateway,
+        )
     except IndexError:
         # We'll get an IndexError if the imported module
         # doesn't provide a subclass of ILoggingGateway.
@@ -176,14 +173,17 @@ def _build_ipc_service_provider(
 ) -> None:
     """Build IPC service provider for DI container."""
     # Get logger.
-    # Exceptions/conditions are for a
-    # testing environment.
     try:
         logger = injector.logging_gateway
-        if not logger:
-            logger = logging.getLogger()
     except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (ipc_service).")
+        return
+
+    if logger is None:
         logger = logging.getLogger()
+        logger.warning("Using root logger (ipc_service).")
 
     try:
         try:
@@ -199,15 +199,9 @@ def _build_ipc_service_provider(
         return
 
     try:
-        try:
-            injector.ipc_service = IIPCService.__subclasses__()[0](
-                logging_gateway=injector.logging_gateway,
-            )
-        except AttributeError:
-            # We'll get an AttributeError if injector
-            # is incorrectly typed.
-            logger.error("Invalid injector (ipc_service).")
-            return
+        injector.ipc_service = IIPCService.__subclasses__()[0](
+            logging_gateway=injector.logging_gateway,
+        )
     except IndexError:
         # We'll get an IndexError if the imported module
         # doesn't provide a subclass of ILoggingGateway.
@@ -220,14 +214,17 @@ def _build_keyval_storage_gateway_provider(
 ) -> None:
     """Build key-value storage gateway provider for DI container."""
     # Get logger.
-    # Exceptions/conditions are for a
-    # testing environment.
     try:
         logger = injector.logging_gateway
-        if not logger:
-            logger = logging.getLogger()
     except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (keyval_storage_gateway).")
+        return
+
+    if logger is None:
         logger = logging.getLogger()
+        logger.warning("Using root logger (keyval_storage_gateway).")
 
     try:
         try:
@@ -245,16 +242,10 @@ def _build_keyval_storage_gateway_provider(
         return
 
     try:
-        try:
-            injector.keyval_storage_gateway = IKeyValStorageGateway.__subclasses__()[0](
-                config=injector.config,
-                logging_gateway=injector.logging_gateway,
-            )
-        except AttributeError:
-            # We'll get an AttributeError if injector
-            # is incorrectly typed.
-            logger.error("Invalid injector (keyval_storage_gateway).")
-            return
+        injector.keyval_storage_gateway = IKeyValStorageGateway.__subclasses__()[0](
+            config=injector.config,
+            logging_gateway=injector.logging_gateway,
+        )
     except IndexError:
         # We'll get an IndexError if the imported module
         # doesn't provide a subclass of ILoggingGateway.
@@ -267,14 +258,17 @@ def _build_nlp_service_provider(
 ) -> None:
     """Build NLP service provider for DI container."""
     # Get logger.
-    # Exceptions/conditions are for a
-    # testing environment.
     try:
         logger = injector.logging_gateway
-        if not logger:
-            logger = logging.getLogger()
     except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (nlp_service).")
+        return
+
+    if logger is None:
         logger = logging.getLogger()
+        logger.warning("Using root logger (nlp_service).")
 
     try:
         try:
@@ -290,15 +284,9 @@ def _build_nlp_service_provider(
         return
 
     try:
-        try:
-            injector.nlp_service = INLPService.__subclasses__()[0](
-                logging_gateway=injector.logging_gateway,
-            )
-        except AttributeError:
-            # We'll get an AttributeError if injector
-            # is incorrectly typed.
-            logger.error("Invalid injector (nlp_service).")
-            return
+        injector.nlp_service = INLPService.__subclasses__()[0](
+            logging_gateway=injector.logging_gateway,
+        )
     except IndexError:
         # We'll get an IndexError if the imported module
         # doesn't provide a subclass of ILoggingGateway.
@@ -311,14 +299,17 @@ def _build_platform_service_provider(
 ) -> None:
     """Build platform service provider for DI container."""
     # Get logger.
-    # Exceptions/conditions are for a
-    # testing environment.
     try:
         logger = injector.logging_gateway
-        if not logger:
-            logger = logging.getLogger()
     except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (platform_service).")
+        return
+
+    if logger is None:
         logger = logging.getLogger()
+        logger.warning("Using root logger (platform_service).")
 
     try:
         try:
@@ -336,16 +327,10 @@ def _build_platform_service_provider(
         return
 
     try:
-        try:
-            injector.platform_service = IPlatformService.__subclasses__()[0](
-                config=injector.config,
-                logging_gateway=injector.logging_gateway,
-            )
-        except AttributeError:
-            # We'll get an AttributeError if injector
-            # is incorrectly typed.
-            logger.error("Invalid injector (platform_service).")
-            return
+        injector.platform_service = IPlatformService.__subclasses__()[0](
+            config=injector.config,
+            logging_gateway=injector.logging_gateway,
+        )
     except IndexError:
         # We'll get an IndexError if the imported module
         # doesn't provide a subclass of ILoggingGateway.
@@ -358,14 +343,17 @@ def _build_user_service_provider(
 ) -> None:
     """Build user service provider for DI container."""
     # Get logger.
-    # Exceptions/conditions are for a
-    # testing environment.
     try:
         logger = injector.logging_gateway
-        if not logger:
-            logger = logging.getLogger()
     except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (user_service).")
+        return
+
+    if logger is None:
         logger = logging.getLogger()
+        logger.warning("Using root logger (user_service).")
 
     try:
         try:
@@ -381,16 +369,10 @@ def _build_user_service_provider(
         return
 
     try:
-        try:
-            injector.user_service = IUserService.__subclasses__()[0](
-                keyval_storage_gateway=injector.keyval_storage_gateway,
-                logging_gateway=injector.logging_gateway,
-            )
-        except AttributeError:
-            # We'll get an AttributeError if injector
-            # is incorrectly typed.
-            logger.error("Invalid injector (user_service).")
-            return
+        injector.user_service = IUserService.__subclasses__()[0](
+            keyval_storage_gateway=injector.keyval_storage_gateway,
+            logging_gateway=injector.logging_gateway,
+        )
     except IndexError:
         # We'll get an IndexError if the imported module
         # doesn't provide a subclass of ILoggingGateway.
@@ -403,14 +385,17 @@ def _build_messaging_service_provider(
 ) -> None:
     """Build messaging service provider for DI container."""
     # Get logger.
-    # Exceptions/conditions are for a
-    # testing environment.
     try:
         logger = injector.logging_gateway
-        if not logger:
-            logger = logging.getLogger()
     except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (messaging_service).")
+        return
+
+    if logger is None:
         logger = logging.getLogger()
+        logger.warning("Using root logger (messaging_service).")
 
     try:
         try:
@@ -428,19 +413,13 @@ def _build_messaging_service_provider(
         return
 
     try:
-        try:
-            injector.messaging_service = IMessagingService.__subclasses__()[0](
-                config=injector.config,
-                completion_gateway=injector.completion_gateway,
-                keyval_storage_gateway=injector.keyval_storage_gateway,
-                logging_gateway=injector.logging_gateway,
-                user_service=injector.user_service,
-            )
-        except AttributeError:
-            # We'll get an AttributeError if injector
-            # is incorrectly typed.
-            logger.error("Invalid injector (messaging_service).")
-            return
+        injector.messaging_service = IMessagingService.__subclasses__()[0](
+            config=injector.config,
+            completion_gateway=injector.completion_gateway,
+            keyval_storage_gateway=injector.keyval_storage_gateway,
+            logging_gateway=injector.logging_gateway,
+            user_service=injector.user_service,
+        )
     except IndexError:
         # We'll get an IndexError if the imported module
         # doesn't provide a subclass of ILoggingGateway.

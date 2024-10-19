@@ -11,17 +11,28 @@ from mugen.core.contract.service.messaging import IMessagingService
 class TestDIBuildMessagingService(unittest.TestCase):
     """Unit tests for mugen.core.di._build_messaging_service_provider."""
 
-    def test_module_configuration_unavailable(self):
-        """Test effects of missing module configuration."""
+    def test_incorrectly_typed_injector(self):
+        """Test effects of an incorrectly typed injector."""
         try:
-            with self.assertLogs("root", level="ERROR") as logger:
-                # Empty config.
+            # Replacement config loader that does
+            # not load the application config file.
+            _load_config = unittest.mock.Mock()
+            _load_config.return_value = {}
+
+            with (
+                self.assertLogs("root", level="ERROR") as logger,
+                unittest.mock.patch(
+                    target="mugen.core.di._load_config",
+                    new_callable=_load_config,
+                ),
+            ):
+                # Logging config.
                 config = {}
 
                 # New injector
-                injector = di.injector.DependencyInjector()
+                injector = None
 
-                # Attempt to build the messaging service.
+                # Attempt to build the Messaging service.
                 di._build_messaging_service_provider(config, injector)
 
                 # The root logger should be used since the name
@@ -29,7 +40,48 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 # config.
                 self.assertEqual(logger.records[0].name, "root")
 
-                # The messaging service cannot be configured since
+                # The operation cannot be completed since the
+                # injector is incorrectly typed and "logger = injector.logging_gateway"
+                # will fail.
+                self.assertEqual(
+                    logger.output[0],
+                    "ERROR:root:Invalid injector (messaging_service).",
+                )
+        except:  # pylint: disable=bare-except
+            # We should not get here because all exceptions
+            # should be handled in the called function.
+            self.fail("Exception raised unexpectedly.")
+
+    def test_module_configuration_unavailable(self):
+        """Test effects of missing module configuration."""
+        try:
+            # Replacement config loader that does
+            # not load the application config file.
+            _load_config = unittest.mock.Mock()
+            _load_config.return_value = {}
+
+            with (
+                self.assertLogs("root", level="ERROR") as logger,
+                unittest.mock.patch(
+                    target="mugen.core.di._load_config",
+                    new_callable=_load_config,
+                ),
+            ):
+                # Empty config.
+                config = {}
+
+                # New injector
+                injector = di.injector.DependencyInjector()
+
+                # Attempt to build the Messaging service.
+                di._build_messaging_service_provider(config, injector)
+
+                # The root logger should be used since the name
+                # of the muGen logger is not available from the
+                # config.
+                self.assertEqual(logger.records[0].name, "root")
+
+                # The Messaging service cannot be configured since
                 # there is no configuration specifying the module.
                 self.assertEqual(
                     logger.output[0],
@@ -43,7 +95,18 @@ class TestDIBuildMessagingService(unittest.TestCase):
     def test_module_import_failure(self):
         """Test effects of module import failure."""
         try:
-            with self.assertLogs("root", level="ERROR") as logger:
+            # Replacement config loader that does
+            # not load the application config file.
+            _load_config = unittest.mock.Mock()
+            _load_config.return_value = {}
+
+            with (
+                self.assertLogs("root", level="ERROR") as logger,
+                unittest.mock.patch(
+                    target="mugen.core.di._load_config",
+                    new_callable=_load_config,
+                ),
+            ):
                 # Logging config.
                 config = {
                     "mugen": {
@@ -60,7 +123,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 # New injector
                 injector = di.injector.DependencyInjector()
 
-                # Attempt to build the messaging service.
+                # Attempt to build the Messaging service.
                 di._build_messaging_service_provider(config, injector)
 
                 # The root logger should be used since the name
@@ -68,7 +131,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 # config.
                 self.assertEqual(logger.records[0].name, "root")
 
-                # The messaging service module cannot be imported
+                # The Messaging service module cannot be imported
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
@@ -79,56 +142,21 @@ class TestDIBuildMessagingService(unittest.TestCase):
             # should be handled in the called function.
             self.fail("Exception raised unexpectedly.")
 
-    def test_incorrectly_typed_injector(self):
-        """Test effects of an incorrectly typed injector."""
-        try:
-            with self.assertLogs("root", level="ERROR") as logger:
-                # Logging config.
-                config = {
-                    "mugen": {
-                        "modules": {
-                            "core": {
-                                "service": {
-                                    "messaging": "valid_messaging_module",
-                                }
-                            }
-                        }
-                    }
-                }
-
-                # New injector
-                injector = None
-
-                with unittest.mock.patch.dict(
-                    "sys.modules",
-                    {
-                        "valid_messaging_module": unittest.mock.Mock(),
-                    },
-                ):
-                    # Attempt to build the messaging service.
-                    di._build_messaging_service_provider(config, injector)
-
-                    # The root logger should be used since the name
-                    # of the muGen logger is not available from the
-                    # config.
-                    self.assertEqual(logger.records[0].name, "root")
-
-                    # The operation cannot be completed since the
-                    # injector is incorrectly typed and "config=injector.config"
-                    # will fail.
-                    self.assertEqual(
-                        logger.output[0],
-                        "ERROR:root:Invalid injector (messaging_service).",
-                    )
-        except:  # pylint: disable=bare-except
-            # We should not get here because all exceptions
-            # should be handled in the called function.
-            self.fail("Exception raised unexpectedly.")
-
     def test_valid_subclass_not_found(self):
         """Test effects of invalid subclass import."""
         try:
-            with self.assertLogs("root", level="ERROR") as logger:
+            # Replacement config loader that does
+            # not load the application config file.
+            _load_config = unittest.mock.Mock()
+            _load_config.return_value = {}
+
+            with (
+                self.assertLogs("root", level="ERROR") as logger,
+                unittest.mock.patch(
+                    target="mugen.core.di._load_config",
+                    new_callable=_load_config,
+                ),
+            ):
                 # Logging config.
                 config = {
                     "mugen": {
@@ -163,7 +191,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         new_callable=sc,
                     ),
                 ):
-                    # Attempt to build the messaging service.
+                    # Attempt to build the Messaging service.
                     di._build_messaging_service_provider(config, injector)
 
                     # The root logger should be used since the name
@@ -182,11 +210,22 @@ class TestDIBuildMessagingService(unittest.TestCase):
             # should be handled in the called function.
             self.fail("Exception raised unexpectedly.")
 
-    def test_valid_subclass_available(self):
-        """Test effects of a valid subclass being available."""
+    def test_normal_execution(self):
+        """Test normal execution with correct configuration and injector."""
         try:
-            # No logs expected.
-            with self.assertNoLogs("root", level="ERROR"):
+            # Replacement config loader that does
+            # not load the application config file.
+            _load_config = unittest.mock.Mock()
+            _load_config.return_value = {}
+
+            with (
+                # No logs expected.
+                self.assertNoLogs("root", level="ERROR"),
+                unittest.mock.patch(
+                    target="mugen.core.di._load_config",
+                    new_callable=_load_config,
+                ),
+            ):
                 # Logging config.
                 config = {
                     "mugen": {
@@ -205,7 +244,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
 
                 # Dummy subclasses
                 # pylint: disable=too-few-public-methods
-                class DummyMessagingClass(IMessagingService):
+                class DummyMessagingServiceClass(IMessagingService):
                     """Dummy messaging class."""
 
                     def __init__(  # pylint: disable=too-many-arguments
@@ -264,7 +303,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         pass
 
                 sc = unittest.mock.Mock
-                sc.return_value = [DummyMessagingClass]
+                sc.return_value = [DummyMessagingServiceClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -280,7 +319,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         new_callable=sc,
                     ),
                 ):
-                    # Attempt to build the messaging service.
+                    # Attempt to build the Messaging service.
                     di._build_messaging_service_provider(config, injector)
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
