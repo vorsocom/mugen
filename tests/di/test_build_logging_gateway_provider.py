@@ -202,7 +202,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                class DummyLoggingClass(ILoggingGateway):
+                class DummyLoggingGatewayClass(ILoggingGateway):
                     """Dummy logging class."""
 
                     def __init__(self, config: dict):
@@ -224,7 +224,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                         pass
 
                 sc = unittest.mock.Mock
-                sc.return_value = [DummyLoggingClass]
+                sc.return_value = [DummyLoggingGatewayClass]
 
                 with (
                     unittest.mock.patch.dict(

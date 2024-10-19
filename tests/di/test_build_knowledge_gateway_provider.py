@@ -242,7 +242,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
 
                 # Dummy subclasses
                 # pylint: disable=too-few-public-methods
-                class DummyKnowledgeClass(IKnowledgeGateway):
+                class DummyKnowledgeGatewayClass(IKnowledgeGateway):
                     """Dummy knowledge class."""
 
                     def __init__(self, config, logging_gateway, nlp_service):
@@ -261,7 +261,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                         pass
 
                 sc = unittest.mock.Mock
-                sc.return_value = [DummyKnowledgeClass]
+                sc.return_value = [DummyKnowledgeGatewayClass]
 
                 with (
                     unittest.mock.patch.dict(
