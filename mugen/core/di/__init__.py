@@ -476,25 +476,52 @@ def _build_matrix_client_provider(
     injector: DependencyInjector,
 ) -> None:
     """"""
+    # Get logger.
+    try:
+        logger = injector.logging_gateway
+    except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (matrix_client).")
+        return
+
+    if logger is None:
+        logger = logging.getLogger()
+        logger.warning("Using root logger (matrix_client).")
+
     # Don't load the client if the platform is not enabled.
     if "matrix" not in config["mugen"]["platforms"]:
+        logger.warning("Matrix platform not active. Client not loaded.")
         return
 
     # Attempt to import the client module.
+
     try:
-        import_module(name=config["mugen"]["modules"]["core"]["client"]["matrix"])
+        try:
+            import_module(name=config["mugen"]["modules"]["core"]["client"]["matrix"])
+        except (KeyError, ValueError):
+            logger.error("Invalid configuration (matrix_client).")
+            return
     except ModuleNotFoundError:
-        # Exit if the client module could not be imported.
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (matrix_client).")
         return
 
-    injector.matrix_client = IMatrixClient.__subclasses__()[0](
-        config=injector.config,
-        ipc_service=injector.ipc_service,
-        keyval_storage_gateway=injector.keyval_storage_gateway,
-        logging_gateway=injector.logging_gateway,
-        messaging_service=injector.messaging_service,
-        user_service=injector.user_service,
-    )
+    try:
+        injector.matrix_client = IMatrixClient.__subclasses__()[0](
+            config=injector.config,
+            ipc_service=injector.ipc_service,
+            keyval_storage_gateway=injector.keyval_storage_gateway,
+            logging_gateway=injector.logging_gateway,
+            messaging_service=injector.messaging_service,
+            user_service=injector.user_service,
+        )
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (matrix_client).")
 
 
 def _build_telnet_client_provider(
