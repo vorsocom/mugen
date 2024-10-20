@@ -630,14 +630,18 @@ def _build_whatsapp_client_provider(
 
 def _load_config(config_file: str) -> dict:
     """Load TOML configuration."""
+    # Get application base path.
     rel = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..")
     basedir = os.path.realpath(rel)
+    # Attempt to read TOML config file.
     try:
         with open(os.path.join(basedir, config_file), "r", encoding="utf8") as f:
             config = tomlkit.loads(f.read()).value
+            # Add base directory to configuration.
             config["basedir"] = basedir
             return config
     except FileNotFoundError:
+        # Exit application if config file not found.
         sys.exit(1)
 
 
