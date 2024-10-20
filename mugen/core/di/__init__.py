@@ -475,7 +475,7 @@ def _build_matrix_client_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
+    """Build Matrix platform client provider for DI container."""
     # Get logger.
     try:
         logger = injector.logging_gateway
@@ -528,7 +528,7 @@ def _build_telnet_client_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
+    """Build telnet platform client provider for DI container."""
     # Get logger.
     try:
         logger = injector.logging_gateway
@@ -548,7 +548,6 @@ def _build_telnet_client_provider(
         return
 
     # Attempt to import the client module.
-
     try:
         try:
             import_module(name=config["mugen"]["modules"]["core"]["client"]["telnet"])
@@ -581,26 +580,52 @@ def _build_whatsapp_client_provider(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
-    """"""
+    """Build WhatsApp platform client provider for DI container."""
+    # Get logger.
+    try:
+        logger = injector.logging_gateway
+    except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (whatsapp_client).")
+        return
+
+    if logger is None:
+        logger = logging.getLogger()
+        logger.warning("Using root logger (whatsapp_client).")
+
     # Don't load the client if the platform is not enabled.
     if "whatsapp" not in config["mugen"]["platforms"]:
+        logger.warning("WhatsApp platform not active. Client not loaded.")
         return
 
     # Attempt to import the client module.
     try:
-        import_module(name=config["mugen"]["modules"]["core"]["client"]["whatsapp"])
+        try:
+            import_module(name=config["mugen"]["modules"]["core"]["client"]["whatsapp"])
+        except (KeyError, ValueError):
+            logger.error("Invalid configuration (whatsapp_client).")
+            return
     except ModuleNotFoundError:
-        # Exit if the client module could not be imported.
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (whatsapp_client).")
         return
 
-    injector.whatsapp_client = IWhatsAppClient.__subclasses__()[0](
-        config=injector.config,
-        ipc_service=injector.ipc_service,
-        keyval_storage_gateway=injector.keyval_storage_gateway,
-        logging_gateway=injector.logging_gateway,
-        messaging_service=injector.messaging_service,
-        user_service=injector.user_service,
-    )
+    try:
+        injector.whatsapp_client = IWhatsAppClient.__subclasses__()[0](
+            config=injector.config,
+            ipc_service=injector.ipc_service,
+            keyval_storage_gateway=injector.keyval_storage_gateway,
+            logging_gateway=injector.logging_gateway,
+            messaging_service=injector.messaging_service,
+            user_service=injector.user_service,
+        )
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (whatsapp_client).")
 
 
 def _load_config(config_file: str) -> dict:
