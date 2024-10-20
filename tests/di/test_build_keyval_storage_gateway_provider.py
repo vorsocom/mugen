@@ -247,7 +247,6 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                # pylint: disable=too-few-public-methods
                 class DummyKeyValStorageGatewayClass(IKeyValStorageGateway):
                     """Dummy key-value storage class."""
 

@@ -294,7 +294,6 @@ class TestDIBuildTelnetClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                # pylint: disable=too-few-public-methods
                 class DummyTelnetClientClass(ITelnetClient):
                     """Dummy Telnet class."""
 

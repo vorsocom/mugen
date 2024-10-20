@@ -294,7 +294,6 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                # pylint: disable=too-few-public-methods
                 class DummyMatrixClientClass(IMatrixClient):
                     """Dummy Matrix class."""
 

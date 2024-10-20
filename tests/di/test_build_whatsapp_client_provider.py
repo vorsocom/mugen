@@ -294,7 +294,6 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                # pylint: disable=too-few-public-methods
                 class DummyWhatsAppClientClass(IWhatsAppClient):
                     """Dummy WhatsApp class."""
 
