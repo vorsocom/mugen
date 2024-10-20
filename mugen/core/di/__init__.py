@@ -529,25 +529,52 @@ def _build_telnet_client_provider(
     injector: DependencyInjector,
 ) -> None:
     """"""
+    # Get logger.
+    try:
+        logger = injector.logging_gateway
+    except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (telnet_client).")
+        return
+
+    if logger is None:
+        logger = logging.getLogger()
+        logger.warning("Using root logger (telnet_client).")
+
     # Don't load the client if the platform is not enabled.
     if "telnet" not in config["mugen"]["platforms"]:
+        logger.warning("Telnet platform not active. Client not loaded.")
         return
 
     # Attempt to import the client module.
+
     try:
-        import_module(name=config["mugen"]["modules"]["core"]["client"]["telnet"])
+        try:
+            import_module(name=config["mugen"]["modules"]["core"]["client"]["telnet"])
+        except (KeyError, ValueError):
+            logger.error("Invalid configuration (telnet_client).")
+            return
     except ModuleNotFoundError:
-        # Exit if the client module could not be imported.
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (telnet_client).")
         return
 
-    injector.telnet_client = ITelnetClient.__subclasses__()[0](
-        config=injector.config,
-        ipc_service=injector.ipc_service,
-        keyval_storage_gateway=injector.keyval_storage_gateway,
-        logging_gateway=injector.logging_gateway,
-        messaging_service=injector.messaging_service,
-        user_service=injector.user_service,
-    )
+    try:
+        injector.telnet_client = ITelnetClient.__subclasses__()[0](
+            config=injector.config,
+            ipc_service=injector.ipc_service,
+            keyval_storage_gateway=injector.keyval_storage_gateway,
+            logging_gateway=injector.logging_gateway,
+            messaging_service=injector.messaging_service,
+            user_service=injector.user_service,
+        )
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (telnet_client).")
 
 
 def _build_whatsapp_client_provider(
