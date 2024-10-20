@@ -243,7 +243,6 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                # pylint: disable=too-few-public-methods
                 class DummyMessagingServiceClass(IMessagingService):
                     """Dummy messaging class."""
 

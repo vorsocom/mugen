@@ -243,7 +243,6 @@ class TestDIBuildUserService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                # pylint: disable=too-few-public-methods
                 class DummyUserServiceClass(IUserService):
                     """Dummy user class."""
 
