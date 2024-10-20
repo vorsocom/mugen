@@ -32,7 +32,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 # New injector
                 injector = None
 
-                # Attempt to build the IPC service.
+                # Attempt to build the Matrix service.
                 di._build_matrix_client_provider(config, injector)
 
                 # The root logger should be used since the name
@@ -77,7 +77,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 # New injector
                 injector = di.injector.DependencyInjector()
 
-                # Attempt to build the IPC service.
+                # Attempt to build the Matrix service.
                 di._build_matrix_client_provider(config, injector)
 
                 # The root logger should be used since the name
@@ -85,7 +85,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 # config.
                 self.assertEqual(logger.records[0].name, "root")
 
-                # The IPC service cannot be configured since
+                # The Matrix service cannot be configured since
                 # there is no configuration specifying the module.
                 self.assertEqual(
                     logger.output[1],
@@ -121,7 +121,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 # New injector
                 injector = di.injector.DependencyInjector()
 
-                # Attempt to build the IPC service.
+                # Attempt to build the Matrix service.
                 di._build_matrix_client_provider(config, injector)
 
                 # The root logger should be used since the name
@@ -129,7 +129,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 # config.
                 self.assertEqual(logger.records[0].name, "root")
 
-                # The IPC service cannot be configured since
+                # The Matrix service cannot be configured since
                 # there is no configuration specifying the module.
                 self.assertEqual(
                     logger.output[0],
@@ -172,7 +172,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 # New injector
                 injector = di.injector.DependencyInjector()
 
-                # Attempt to build the IPC service.
+                # Attempt to build the Matrix service.
                 di._build_matrix_client_provider(config, injector)
 
                 # The root logger should be used since the name
@@ -180,7 +180,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 # config.
                 self.assertEqual(logger.records[0].name, "root")
 
-                # The IPC service module cannot be imported
+                # The Matrix service module cannot be imported
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
@@ -241,7 +241,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         new_callable=sc,
                     ),
                 ):
-                    # Attempt to build the IPC service.
+                    # Attempt to build the Matrix service.
                     di._build_matrix_client_provider(config, injector)
 
                     # The root logger should be used since the name
@@ -296,7 +296,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 # Dummy subclasses
                 # pylint: disable=too-few-public-methods
                 class DummyMatrixClientClass(IMatrixClient):
-                    """Dummy IPC class."""
+                    """Dummy Matrix class."""
 
                     def __init__(  # pylint: disable=too-many-arguments
                         self,
@@ -345,7 +345,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         new_callable=sc,
                     ),
                 ):
-                    # Attempt to build the IPC service.
+                    # Attempt to build the Matrix service.
                     di._build_matrix_client_provider(config, injector)
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
