@@ -17,86 +17,76 @@ class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
     async def test_config_variable_not_set(self) -> None:
         """Test endpoint called when platform configuration is unavailable."""
         # Create dummy app to get context.
-        app = Quart("test")
+        app = Quart("test_app")
 
-        # Create dummy config object to patch current_app.config.
-        app.config = app.config | {
-            "DEBUG": True,
-            "ENV": SimpleNamespace(),
-        }
+        # Create dummy config for testing.
+        config = SimpleNamespace()
 
         # Use dummy context.
         async with app.app_context():
 
             # Define and patch dummy endpoint.
-            @unittest.mock.patch(target="quart.current_app.logger")
-            @matrix_platform_required
-            async def endpoint(*args, **kwargs):
+            @matrix_platform_required(config=config)  # replace config
+            async def endpoint(*_args, **_kwargs):
                 pass
 
-            # We supposed to get an exception because the required platform
+            # We're supposed to get an exception because the required platform
             # configuration is not available.
-            with self.assertRaises(werkzeug.exceptions.InternalServerError):
+            with (
+                self.assertLogs(logger="test_app", level="ERROR"),
+                self.assertRaises(werkzeug.exceptions.InternalServerError),
+            ):
                 # Try calling endpoint.
+                await endpoint()
+
+    async def test_matrix_platform_not_enabled(self) -> None:
+        """Test NotImplmented raised when Matrix not enabled."""
+        # Create dummy app to get context.
+        app = Quart("test_app")
+
+        # Create dummy config for testing.
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                platforms=["whatsapp"],
+            ),
+        )
+
+        # Use dummy context.
+        async with app.app_context():
+
+            # Define and patch dummy endpoint.
+            @matrix_platform_required(config=config)  # replace config
+            async def endpoint(*_args, **_kwargs):
+                pass
+
+            # We must get an exception since the Matrix platform is
+            # not enabled.
+            with (
+                self.assertLogs(logger="test_app", level="ERROR"),
+                self.assertRaises(werkzeug.exceptions.NotImplemented),
+            ):
                 await endpoint()
 
     async def test_matrix_platform_is_enabled(self) -> None:
         """Test endpoint called when Matrix is enabled."""
         # Create dummy app to get context.
-        app = Quart("test")
+        app = Quart("test_app")
 
-        # Create dummy config object to patch current_app.config.
-        app.config = app.config | {
-            "DEBUG": True,
-            "ENV": SimpleNamespace(
-                mugen=SimpleNamespace(
-                    platforms=lambda: ["matrix", "whatsapp"],
-                ),
+        # Create dummy config for testing.
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                platforms=["matrix", "whatsapp"],
             ),
-        }
+        )
 
         # Use dummy context.
         async with app.app_context():
 
             # Define and patch dummy endpoint.
-            @unittest.mock.patch(target="quart.current_app.logger")
-            @matrix_platform_required
-            async def endpoint(*args, **kwargs):
+            @matrix_platform_required(config=config)  # replace config
+            async def endpoint(*_args, **_kwargs):
                 pass
 
-            try:
+            with self.assertNoLogs():
                 # Try calling endpoint.
-                await endpoint()
-            except werkzeug.exceptions.NotImplemented:
-                # We are not supposed to get an exception since the Matrix
-                # platform is enabled.
-                self.fail("NotImplemented exception raised uexpectedly.")
-
-    async def test_matrix_platform_not_enabled(self) -> None:
-        """Test NotImplmented raised when Matrix not enabled."""
-        # Create dummy app to get context.
-        app = Quart("test")
-
-        # Create dummy config object to patch current_app.config.
-        app.config = app.config | {
-            "DEBUG": True,
-            "ENV": SimpleNamespace(
-                mugen=SimpleNamespace(
-                    platforms=lambda: ["whatsapp"],
-                ),
-            ),
-        }
-
-        # Use dummy context.
-        async with app.app_context():
-
-            # Define and patch dummy endpoint.
-            @unittest.mock.patch(target="quart.current_app.logger")
-            @matrix_platform_required
-            async def endpoint(*args, **kwargs):
-                pass
-
-            # We must get an exception since the Matrix platform is
-            # not enabled.
-            with self.assertRaises(werkzeug.exceptions.NotImplemented):
                 await endpoint()
