@@ -33,7 +33,12 @@ def create_quart_app(
     app = Quart(__name__)
 
     # Check for valid configuration name.
-    environment = config.mugen.environment
+    try:
+        environment = config.mugen.environment
+    except AttributeError:
+        logger.error("Configuration unavailable.")
+        sys.exit(1)
+
     logger.debug(f"Configured environment: {environment}.")
     if environment not in (
         "default",
