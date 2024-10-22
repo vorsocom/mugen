@@ -28,6 +28,8 @@ class TestMuGenConfigInitApp(unittest.TestCase):
                     logger.output[0], "ERROR:test_app:LOG_LEVEL not configured."
                 )
         except:  # pylint: disable=bare-except
+            # We should not get here because all exceptions
+            # should be handled in the called function.
             self.fail("Exception raised unexpectedly.")
 
     def test_log_level_configured(self) -> None:
@@ -44,4 +46,6 @@ class TestMuGenConfigInitApp(unittest.TestCase):
             with self.assertNoLogs():
                 Config.init_app(app)
         except:  # pylint: disable=bare-except
+            # We should not get here because all exceptions
+            # should be handled in the called function.
             self.fail("Exception raised unexpectedly.")
