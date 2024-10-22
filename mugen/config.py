@@ -19,12 +19,12 @@ class Config:  # pylint: disable=too-few-public-methods
     LOG_LEVEL: int = 10
 
     @staticmethod
-    def init_app(mugen: Quart):
+    def init_app(app: Quart):
         """Configuration specific application initialisation."""
         try:
-            mugen.logger.setLevel(mugen.config["LOG_LEVEL"])
+            app.logger.setLevel(app.config["LOG_LEVEL"])
         except KeyError:
-            mugen.logger.error("LOG_LEVEL not configured.")
+            app.logger.error("LOG_LEVEL not configured.")
 
 
 class DevelopmentConfig(Config):  # pylint: disable=too-few-public-methods

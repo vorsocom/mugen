@@ -17,16 +17,17 @@ class TestMuGenConfigInitApp(unittest.TestCase):
         # Create dummy app.
         app = Quart("test_app")
 
-        # Suppress logger output.
-        app.logger.error = unittest.mock.Mock()
-
         # We do not expect to get any exceptions here.
         try:
-            Config.init_app(app)
+            with self.assertLogs(logger="test_app", level="ERROR") as logger:
+                Config.init_app(app)
 
-            # app.logger.error should have been called.
-            self.assertTrue(app.logger.error.called)
-        except:
+                # The Quart app logger level cannot be set because
+                # LOG_LEVEL is not configured.
+                self.assertEqual(
+                    logger.output[0], "ERROR:test_app:LOG_LEVEL not configured."
+                )
+        except:  # pylint: disable=bare-except
             self.fail("Exception raised unexpectedly.")
 
     def test_log_level_configured(self) -> None:
@@ -38,14 +39,9 @@ class TestMuGenConfigInitApp(unittest.TestCase):
         # Set LOG_LEVEL
         app.config["LOG_LEVEL"] = 10
 
-        # Suppress logger output.
-        app.logger.error = unittest.mock.Mock()
-
         # We do not expect to get any exceptions here.
         try:
-            Config.init_app(app)
-
-            # app.logger.error should NOT have been called.
-            self.assertFalse(app.logger.error.called)
-        except:
+            with self.assertNoLogs():
+                Config.init_app(app)
+        except:  # pylint: disable=bare-except
             self.fail("Exception raised unexpectedly.")
