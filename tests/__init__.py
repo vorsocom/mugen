@@ -1,4 +1,4 @@
-"""Test module."""
+"""muGen unit tests."""
 
 import logging
 

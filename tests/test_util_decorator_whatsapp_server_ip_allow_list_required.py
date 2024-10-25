@@ -8,7 +8,7 @@ from quart import Quart
 import werkzeug
 import werkzeug.exceptions
 
-from mugen.core.api.decorators import whatsapp_server_ip_allow_list_required
+from util.decorator import whatsapp_server_ip_allow_list_required
 
 
 class TestWhatsAppServerIPAllowListRequired(unittest.IsolatedAsyncioTestCase):
@@ -42,6 +42,7 @@ class TestWhatsAppServerIPAllowListRequired(unittest.IsolatedAsyncioTestCase):
 
         # Create dummy config for testing.
         config = SimpleNamespace(
+            basedir="",
             whatsapp=SimpleNamespace(
                 servers=SimpleNamespace(
                     allowed="data/test_file.txt",
@@ -77,10 +78,13 @@ class TestWhatsAppServerIPAllowListRequired(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+        # Dummy file
+        dummy_file = unittest.mock.mock_open(read_data="")
+
         async with app.app_context():
 
             # Define and patch dummy endpoint.
-            @unittest.mock.patch(target="builtins.open")
+            @unittest.mock.patch(target="builtins.open", new=dummy_file)
             @whatsapp_server_ip_allow_list_required(config=config)
             async def endpoint(*_args, **_kwargs):
                 pass
@@ -95,6 +99,7 @@ class TestWhatsAppServerIPAllowListRequired(unittest.IsolatedAsyncioTestCase):
 
         # Create dummy config for testing.
         config = SimpleNamespace(
+            basedir="",
             whatsapp=SimpleNamespace(
                 servers=SimpleNamespace(
                     allowed="",
