@@ -1,11 +1,11 @@
-"""Provides an abstract base class for knowledge retrieval gateways."""
+"""Provides an abstract base class for knowledge gateways."""
 
-__all__ = ["IKnowledgeRetrievalGateway"]
+__all__ = ["IKnowledgeGateway"]
 
 from abc import ABC, abstractmethod
 
 
-class IKnowledgeRetrievalGateway(ABC):  # pylint: disable=too-few-public-methods
+class IKnowledgeGateway(ABC):  # pylint: disable=too-few-public-methods
     """An ABC for knowledge retrival gateways."""
 
     @abstractmethod

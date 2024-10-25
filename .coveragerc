@@ -3,5 +3,4 @@ branch = true
 
 [report]
 show_missing = true
-skip_covered = true
-omit = */tests/*
+omit = tests/*

@@ -18,6 +18,8 @@ platforms = [
     #"whatsapp",
 ]
 #
+storage.keyval.dbm.path = "data/storage.db"
+#
 [mugen.modules.core]
 #
 client.matrix = "mugen.core.client.matrix"
@@ -80,6 +82,9 @@ domains.allowed = []
 domains.denied = []
 #
 homeserver = ""
+#
+storage.olm.path = "data/.olmstore"
+#
 #===WHATSAPP===
 [whatsapp]
 #

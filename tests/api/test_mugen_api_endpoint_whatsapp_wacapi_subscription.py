@@ -8,7 +8,7 @@ from quart import Quart
 import werkzeug
 import werkzeug.exceptions
 
-from mugen.core.api.views import whatsapp_wacapi_subscription
+from mugen.core.api.endpoint import whatsapp_wacapi_subscription
 
 
 class TestWhatsAppWACAPISubscription(unittest.IsolatedAsyncioTestCase):
@@ -17,24 +17,7 @@ class TestWhatsAppWACAPISubscription(unittest.IsolatedAsyncioTestCase):
     async def test_hub_mode_unavailable_or_incorrect(self):
         """Test response when hub.mode is unavailable or incorrect."""
         # Create dummy app to get context.
-        app = Quart("test")
-
-        # Create dummy config object to patch current_app.config.
-        app.config = app.config | {
-            "BASEDIR": "",
-            "DEBUG": True,
-            "ENV": SimpleNamespace(
-                mugen=SimpleNamespace(
-                    platforms=lambda: ["whatsapp"],
-                ),
-                whatsapp=SimpleNamespace(
-                    servers=SimpleNamespace(
-                        allowed=lambda: "",
-                        verify_ip=lambda: True,
-                    ),
-                ),
-            ),
-        }
+        app = Quart("test_app")
 
         # Create header object for request context.
         headers = {
@@ -53,32 +36,17 @@ class TestWhatsAppWACAPISubscription(unittest.IsolatedAsyncioTestCase):
             # Patch logger to suppress output, and
             # Patch builtins.open, and
             # Expect Bad Request.
-            with unittest.mock.patch("quart.current_app.logger"), unittest.mock.patch(
-                target="builtins.open", new=dummy_file
-            ), self.assertRaises(werkzeug.exceptions.BadRequest):
-                await whatsapp_wacapi_subscription()
+            with (
+                unittest.mock.patch(target="builtins.open", new=dummy_file),
+                self.assertLogs(logger="test_app", level="ERROR"),
+                self.assertRaises(werkzeug.exceptions.BadRequest),
+            ):
+                await whatsapp_wacapi_subscription(config=None)
 
     async def test_hub_verify_token_unavailable_or_empty(self):
         """Test response when hub.verify_token is unavailable or empty."""
         # Create dummy app to get context.
-        app = Quart("test")
-
-        # Create dummy config object to patch current_app.config.
-        app.config = app.config | {
-            "BASEDIR": "",
-            "DEBUG": True,
-            "ENV": SimpleNamespace(
-                mugen=SimpleNamespace(
-                    platforms=lambda: ["whatsapp"],
-                ),
-                whatsapp=SimpleNamespace(
-                    servers=SimpleNamespace(
-                        allowed=lambda: "",
-                        verify_ip=lambda: True,
-                    ),
-                ),
-            ),
-        }
+        app = Quart("test_app")
 
         # Create header object for request context.
         headers = {
@@ -101,32 +69,17 @@ class TestWhatsAppWACAPISubscription(unittest.IsolatedAsyncioTestCase):
             # Patch logger to suppress output, and
             # Patch builtins.open, and
             # Expect Bad Request.
-            with unittest.mock.patch("quart.current_app.logger"), unittest.mock.patch(
-                target="builtins.open", new=dummy_file
-            ), self.assertRaises(werkzeug.exceptions.BadRequest):
-                await whatsapp_wacapi_subscription()
+            with (
+                unittest.mock.patch(target="builtins.open", new=dummy_file),
+                self.assertLogs(logger="test_app", level="ERROR"),
+                self.assertRaises(werkzeug.exceptions.BadRequest),
+            ):
+                await whatsapp_wacapi_subscription(config=None)
 
     async def test_config_verification_token_unavailable(self):
         """Test response when config verification token is unavailable."""
         # Create dummy app to get context.
-        app = Quart("test")
-
-        # Create dummy config object to patch current_app.config.
-        app.config = app.config | {
-            "BASEDIR": "",
-            "DEBUG": True,
-            "ENV": SimpleNamespace(
-                mugen=SimpleNamespace(
-                    platforms=lambda: ["whatsapp"],
-                ),
-                whatsapp=SimpleNamespace(
-                    servers=SimpleNamespace(
-                        allowed=lambda: "",
-                        verify_ip=lambda: True,
-                    ),
-                ),
-            ),
-        }
+        app = Quart("test_app")
 
         # Create header object for request context.
         headers = {
@@ -149,38 +102,29 @@ class TestWhatsAppWACAPISubscription(unittest.IsolatedAsyncioTestCase):
             # Patch logger to suppress output, and
             # Patch builtins.open, and
             # Expect Internal Server Error.
-            with unittest.mock.patch("quart.current_app.logger"), unittest.mock.patch(
-                target="builtins.open", new=dummy_file
-            ), self.assertRaises(werkzeug.exceptions.InternalServerError):
-                await whatsapp_wacapi_subscription()
+            with (
+                unittest.mock.patch(target="builtins.open", new=dummy_file),
+                self.assertLogs(logger="test_app", level="ERROR"),
+                self.assertRaises(werkzeug.exceptions.InternalServerError),
+            ):
+                await whatsapp_wacapi_subscription(config=None)
 
     async def test_hub_verify_token_incorrect(self):
         """Test response when hub.verify_token is incorrect."""
         # Create dummy app to get context.
-        app = Quart("test")
+        app = Quart("test_app")
 
         # Dummy verification token.
         verification_token = "test_verification_token"
 
         # Create dummy config object to patch current_app.config.
-        app.config = app.config | {
-            "BASEDIR": "",
-            "DEBUG": True,
-            "ENV": SimpleNamespace(
-                mugen=SimpleNamespace(
-                    platforms=lambda: ["whatsapp"],
-                ),
-                whatsapp=SimpleNamespace(
-                    servers=SimpleNamespace(
-                        allowed=lambda: "",
-                        verify_ip=lambda: True,
-                    ),
-                    webhook=SimpleNamespace(
-                        verification_token=lambda: verification_token,
-                    ),
+        config = SimpleNamespace(
+            whatsapp=SimpleNamespace(
+                webhook=SimpleNamespace(
+                    verification_token=verification_token,
                 ),
             ),
-        }
+        )
 
         # Create header object for request context.
         headers = {
@@ -203,38 +147,29 @@ class TestWhatsAppWACAPISubscription(unittest.IsolatedAsyncioTestCase):
             # Patch logger to suppress output, and
             # Patch builtins.open, and
             # Expect Bad Request.
-            with unittest.mock.patch("quart.current_app.logger"), unittest.mock.patch(
-                target="builtins.open", new=dummy_file
-            ), self.assertRaises(werkzeug.exceptions.BadRequest):
-                await whatsapp_wacapi_subscription()
+            with (
+                unittest.mock.patch(target="builtins.open", new=dummy_file),
+                self.assertLogs(logger="test_app", level="ERROR"),
+                self.assertRaises(werkzeug.exceptions.BadRequest),
+            ):
+                await whatsapp_wacapi_subscription(config=config)
 
     async def test_hub_challenge_unavailable_or_empty(self):
         """Test response when hub.challenge is not supplied or is empty."""
         # Create dummy app to get context.
-        app = Quart("test")
+        app = Quart("test_app")
 
         # Dummy verification token.
         verification_token = "test_verification_token"
 
-        # Create dummy config object to patch current_app.config.
-        app.config = app.config | {
-            "BASEDIR": "",
-            "DEBUG": True,
-            "ENV": SimpleNamespace(
-                mugen=SimpleNamespace(
-                    platforms=lambda: ["whatsapp"],
-                ),
-                whatsapp=SimpleNamespace(
-                    servers=SimpleNamespace(
-                        allowed=lambda: "",
-                        verify_ip=lambda: True,
-                    ),
-                    webhook=SimpleNamespace(
-                        verification_token=lambda: verification_token,
-                    ),
+        # Create dummy config.
+        config = SimpleNamespace(
+            whatsapp=SimpleNamespace(
+                webhook=SimpleNamespace(
+                    verification_token=verification_token,
                 ),
             ),
-        }
+        )
 
         # Create header object for request context.
         headers = {
@@ -257,38 +192,29 @@ class TestWhatsAppWACAPISubscription(unittest.IsolatedAsyncioTestCase):
             # Patch logger to suppress output, and
             # Patch builtins.open, and
             # Expect Bad Request.
-            with unittest.mock.patch("quart.current_app.logger"), unittest.mock.patch(
-                target="builtins.open", new=dummy_file
-            ), self.assertRaises(werkzeug.exceptions.BadRequest):
-                await whatsapp_wacapi_subscription()
+            with (
+                unittest.mock.patch(target="builtins.open", new=dummy_file),
+                self.assertLogs(logger="test_app", level="ERROR"),
+                self.assertRaises(werkzeug.exceptions.BadRequest),
+            ):
+                await whatsapp_wacapi_subscription(config=config)
 
     async def test_hub_challenge_available(self):
         """Test response when hub.challenge is supplied."""
         # Create dummy app to get context.
-        app = Quart("test")
+        app = Quart("test_app")
 
         # Dummy verification token.
         verification_token = "test_verification_token"
 
-        # Create dummy config object to patch current_app.config.
-        app.config = app.config | {
-            "BASEDIR": "",
-            "DEBUG": True,
-            "ENV": SimpleNamespace(
-                mugen=SimpleNamespace(
-                    platforms=lambda: ["whatsapp"],
-                ),
-                whatsapp=SimpleNamespace(
-                    servers=SimpleNamespace(
-                        allowed=lambda: "",
-                        verify_ip=lambda: True,
-                    ),
-                    webhook=SimpleNamespace(
-                        verification_token=lambda: verification_token,
-                    ),
+        # Create dummy config.
+        config = SimpleNamespace(
+            whatsapp=SimpleNamespace(
+                webhook=SimpleNamespace(
+                    verification_token=verification_token,
                 ),
             ),
-        }
+        )
 
         # Create header object for request context.
         headers = {
@@ -312,10 +238,8 @@ class TestWhatsAppWACAPISubscription(unittest.IsolatedAsyncioTestCase):
             # Patch logger to suppress output, and
             # Patch builtins.open, and
             # Expect Bad Request.
-            with unittest.mock.patch("quart.current_app.logger"), unittest.mock.patch(
-                target="builtins.open", new=dummy_file
+            with (
+                unittest.mock.patch(target="builtins.open", new=dummy_file),
+                self.assertNoLogs(),
             ):
-                try:
-                    await whatsapp_wacapi_subscription()
-                except:
-                    self.fail("Exception raised unexpectedly.")
+                await whatsapp_wacapi_subscription(config=config)

@@ -5,37 +5,36 @@ import json
 
 from quart import abort, current_app, request
 
+from mugen.core import di
 from mugen.core.api import api
-from mugen.core.api.decorators import (
+from util.decorator import (
     matrix_platform_required,
     whatsapp_platform_required,
     whatsapp_request_signature_verification_required,
     whatsapp_server_ip_allow_list_required,
 )
-from mugen.core.contract.service.ipc import IIPCService
 
 
 @api.get("/matrix")
-@matrix_platform_required
-async def matrix_index():
+@matrix_platform_required(config=di.container.config)
+async def matrix_index(ipc_service=di.container.ipc_service):
     """Matrix index endpoint."""
-    # Get the IPC service from the dependency injector.
-    try:
-        ipc_service: IIPCService = current_app.di.ipc_service()
-    except AttributeError:
-        current_app.logger.error("Could not get IPC service.")
-        abort(500)
 
-    # Queue allowing IPC queue consumer to send back a response.
+    # Queue allowing IPC queue consumer
+    # to send back a response.
     response_queue = asyncio.Queue()
 
-    await ipc_service.handle_ipc_request(
-        "matrix",
-        {
-            "response_queue": response_queue,
-            "command": "matrix_get_status",
-        },
-    )
+    try:
+        await ipc_service.handle_ipc_request(
+            "matrix",
+            {
+                "response_queue": response_queue,
+                "command": "matrix_get_status",
+            },
+        )
+    except AttributeError:
+        current_app.logger.error("Invalid IPC service.")
+        abort(500)
 
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
@@ -48,8 +47,8 @@ async def matrix_index():
 
 
 @api.put("/matrix/webhook")
-@matrix_platform_required
-async def matrix_webhook():
+@matrix_platform_required(config=di.container.config)
+async def matrix_webhook(ipc_service=di.container.ipc_service):
     """Handle IPC calls for the Matrix platform."""
     # Get request data.
     data = await request.get_json()
@@ -62,24 +61,21 @@ async def matrix_webhook():
         current_app.logger.error("JSON data empty.")
         abort(500)
 
-    # Get the IPC service from the dependency injector.
-    try:
-        ipc_service: IIPCService = current_app.di.ipc_service()
-    except AttributeError:
-        current_app.logger.error("Could not get IPC service.")
-        abort(500)
-
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
 
-    await ipc_service.handle_ipc_request(
-        "matrix",
-        {
-            "response_queue": response_queue,
-            "command": data["command"],
-            "data": data,
-        },
-    )
+    try:
+        await ipc_service.handle_ipc_request(
+            "matrix",
+            {
+                "response_queue": response_queue,
+                "command": data["command"],
+                "data": data,
+            },
+        )
+    except AttributeError:
+        current_app.logger.error("Invalid IPC service.")
+        abort(500)
 
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
@@ -92,26 +88,24 @@ async def matrix_webhook():
 
 
 @api.get("/whatsapp")
-@whatsapp_platform_required
-async def whatsapp_index():
+@whatsapp_platform_required(config=di.container.config)
+async def whatsapp_index(ipc_service=di.container.ipc_service):
     """Whatsapp index endpoint."""
-    # Get the IPC service from the dependency injector.
-    try:
-        ipc_service: IIPCService = current_app.di.ipc_service()
-    except AttributeError:
-        current_app.logger.error("Could not get IPC service.")
-        abort(500)
 
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
 
-    await ipc_service.handle_ipc_request(
-        "whatsapp",
-        {
-            "response_queue": response_queue,
-            "command": "whatsapp_get_status",
-        },
-    )
+    try:
+        await ipc_service.handle_ipc_request(
+            "whatsapp",
+            {
+                "response_queue": response_queue,
+                "command": "whatsapp_get_status",
+            },
+        )
+    except AttributeError:
+        current_app.logger.error("Invalid IPC service.")
+        abort(500)
 
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
@@ -124,9 +118,9 @@ async def whatsapp_index():
 
 
 @api.get("/whatsapp/wacapi/webhook")
-@whatsapp_platform_required
-@whatsapp_server_ip_allow_list_required
-async def whatsapp_wacapi_subscription():
+@whatsapp_platform_required(config=di.container.config)
+@whatsapp_server_ip_allow_list_required(config=di.container.config)
+async def whatsapp_wacapi_subscription(config=di.container.config):
     """Whatsapp Cloud API verification."""
 
     if request.args.get("hub.mode") != "subscribe":
@@ -140,7 +134,7 @@ async def whatsapp_wacapi_subscription():
     try:
         if (
             request.args.get("hub.verify_token")
-            != current_app.config["ENV"].whatsapp.webhook.verification_token()
+            != config.whatsapp.webhook.verification_token
         ):
             current_app.logger.error("Incorrect verification token.")
             abort(400)
@@ -156,10 +150,10 @@ async def whatsapp_wacapi_subscription():
 
 
 @api.post("/whatsapp/wacapi/webhook")
-@whatsapp_platform_required
-@whatsapp_server_ip_allow_list_required
-@whatsapp_request_signature_verification_required
-async def whatsapp_wacapi_event():
+@whatsapp_platform_required(config=di.container.config)
+@whatsapp_server_ip_allow_list_required(config=di.container.config)
+@whatsapp_request_signature_verification_required(config=di.container.config)
+async def whatsapp_wacapi_event(ipc_service=di.container.ipc_service):
     """Respond to Whatsapp Cloud API events."""
     # Get request data.
     # get_json was not used to make code more
@@ -173,24 +167,21 @@ async def whatsapp_wacapi_event():
         current_app.logger.error("JSON data could not be decoded.")
         abort(500)
 
-    # Get the IPC service from the dependency injector.
-    try:
-        ipc_service: IIPCService = current_app.di.ipc_service()
-    except AttributeError:
-        current_app.logger.error("Could not get IPC service.")
-        abort(500)
-
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
 
-    await ipc_service.handle_ipc_request(
-        "whatsapp",
-        {
-            "response_queue": response_queue,
-            "command": "whatsapp_wacapi_event",
-            "data": json_data,
-        },
-    )
+    try:
+        await ipc_service.handle_ipc_request(
+            "whatsapp",
+            {
+                "response_queue": response_queue,
+                "command": "whatsapp_wacapi_event",
+                "data": json_data,
+            },
+        )
+    except AttributeError:
+        current_app.logger.error("Invalid IPC service.")
+        abort(500)
 
     # Ensure other tasks can run,
     # otherwise no response will be sent back.
@@ -203,8 +194,8 @@ async def whatsapp_wacapi_event():
 
 
 @api.put("/whatsapp/webhook")
-@whatsapp_platform_required
-async def whatsapp_webhook():
+@whatsapp_platform_required(config=di.container.config)
+async def whatsapp_webhook(ipc_service=di.container.ipc_service):
     """Handle IPC calls for the WhatsApp platform."""
     # Get request data.
     data = await request.get_json()
@@ -217,24 +208,21 @@ async def whatsapp_webhook():
         current_app.logger.error("JSON data empty.")
         abort(500)
 
-    # Get the IPC service from the dependency injector.
-    try:
-        ipc_service: IIPCService = current_app.di.ipc_service()
-    except AttributeError:
-        current_app.logger.error("Could not get IPC service.")
-        abort(500)
-
     # Queue allowing IPC queue consumer to send back a response.
     response_queue = asyncio.Queue()
 
-    await ipc_service.handle_ipc_request(
-        "whatsapp",
-        {
-            "response_queue": response_queue,
-            "command": data["command"],
-            "data": data,
-        },
-    )
+    try:
+        await ipc_service.handle_ipc_request(
+            "whatsapp",
+            {
+                "response_queue": response_queue,
+                "command": data["command"],
+                "data": data,
+            },
+        )
+    except AttributeError:
+        current_app.logger.error("Invalid IPC service.")
+        abort(500)
 
     # Ensure other tasks can run,
     # otherwise no response will be sent back.

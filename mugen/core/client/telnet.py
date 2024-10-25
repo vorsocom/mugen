@@ -3,9 +3,7 @@
 __all__ = ["DefaultTelnetClient"]
 
 import asyncio
-from types import TracebackType
-
-from dependency_injector import providers
+from types import SimpleNamespace, TracebackType
 
 from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -20,7 +18,7 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
 
     def __init__(  # pylint: disable=too-many-arguments
         self,
-        config: providers.Configuration = None,  # pylint: disable=c-extension-no-member
+        config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
@@ -49,8 +47,8 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
     async def start_server(self) -> None:
         server = await asyncio.start_server(
             self._handle_connection,
-            self._config.telnet.socket.host(),
-            int(self._config.telnet.socket.port()),
+            self._config.telnet.socket.host,
+            int(self._config.telnet.socket.port),
         )
         async with server:
             sock = server.sockets[0].getsockname()
