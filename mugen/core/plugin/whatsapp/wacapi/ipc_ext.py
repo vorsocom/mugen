@@ -4,9 +4,7 @@ __all__ = ["WhatsAppWACAPIIPCExtension"]
 
 import asyncio
 import json
-
-from dependency_injector import providers
-from dependency_injector.wiring import inject, Provide
+from types import SimpleNamespace
 
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.extension.ipc import IIPCExtension
@@ -14,21 +12,19 @@ from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
-from mugen.core.di import DIContainer
+from mugen.core import di
 
 
 class WhatsAppWACAPIIPCExtension(IIPCExtension):
     """An implementation of IIPCExtension for WhatsApp Cloud API support."""
 
-    @inject
     def __init__(  # pylint: disable=too-many-arguments
         self,
-        # pylint: disable=c-extension-no-member
-        config: providers.Configuration = Provide[DIContainer.config.delegate()],
-        logging_gateway: ILoggingGateway = Provide[DIContainer.logging_gateway],
-        messaging_service: IMessagingService = Provide[DIContainer.messaging_service],
-        user_service: IUserService = Provide[DIContainer.user_service],
-        whatsapp_client: IWhatsAppClient = Provide[DIContainer.whatsapp_client],
+        config: SimpleNamespace = di.container.config,
+        logging_gateway: ILoggingGateway = di.container.logging_gateway,
+        messaging_service: IMessagingService = di.container.messaging_service,
+        user_service: IUserService = di.container.user_service,
+        whatsapp_client: IWhatsAppClient = di.container.whatsapp_client,
     ) -> None:
         self._client = whatsapp_client
         self._config = config
@@ -71,11 +67,11 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             message = event["entry"][0]["changes"][0]["value"]["messages"][0]
             sender = contact["wa_id"]
 
-            if self._config.mugen.beta.active():
-                beta_users: list = self._config.whatsapp.beta.users()
+            if self._config.mugen.beta.active:
+                beta_users: list = self._config.whatsapp.beta.users
                 if sender not in beta_users:
                     await self._client.send_text_message(
-                        message=self._config.mugen.beta.message(),
+                        message=self._config.mugen.beta.message,
                         recipient=sender,
                     )
                     await payload["response_queue"].put({"response": "OK"})

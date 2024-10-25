@@ -9,8 +9,6 @@ import pickle
 from types import SimpleNamespace
 import uuid
 
-from dependency_injector import providers
-
 from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.mh import IMHExtension
@@ -44,7 +42,7 @@ class DefaultMessagingService(IMessagingService):
     # pylint: disable=too-many-arguments
     def __init__(
         self,
-        config: providers.Configuration,  # pylint: disable=c-extension-no-member
+        config: SimpleNamespace,
         completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
         logging_gateway: ILoggingGateway,
@@ -89,7 +87,7 @@ class DefaultMessagingService(IMessagingService):
         attention_thread["messages"].append({"role": "user", "content": content})
 
         # Log user message if conversation debugging flag set.
-        if self._config.mugen.debug_conversation():
+        if self._config.mugen.debug_conversation:
             self._logging_gateway.debug(
                 json.dumps(attention_thread["messages"], indent=4)
             )
@@ -144,7 +142,7 @@ class DefaultMessagingService(IMessagingService):
         self.save_attention_thread(room_id, attention_thread)
 
         # Log assistant message if conversation debugging flag set.
-        if self._config.mugen.debug_conversation():
+        if self._config.mugen.debug_conversation:
             self._logging_gateway.debug(
                 json.dumps(attention_thread["messages"], indent=4)
             )
@@ -316,7 +314,7 @@ class DefaultMessagingService(IMessagingService):
         context.append(
             {
                 "role": "system",
-                "content": self._config.mugen.assistant.persona(),
+                "content": self._config.mugen.assistant.persona,
             }
         )
 

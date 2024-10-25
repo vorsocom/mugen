@@ -12,8 +12,8 @@ class StandardLoggingGateway(ILoggingGateway):
 
     def __init__(self, config: dict) -> None:
         self._config = config
-        self._logger = logging.getLogger(self._config.mugen.logger.name())
-        self._logger.setLevel(self._config.mugen.logger.level())
+        self._logger = logging.getLogger(self._config.mugen.logger.name)
+        self._logger.setLevel(self._config.mugen.logger.level)
 
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(

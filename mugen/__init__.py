@@ -1,15 +1,17 @@
 """Quart application package."""
 
-__all__ = ["create_quart_app", "run_assistants"]
+__all__ = ["create_quart_app", "run_clients"]
 
 import asyncio
 from importlib import import_module
-import os
 import sys
+from types import SimpleNamespace
 
-from quart import Quart, g
-import tomlkit
+from quart import Quart
 
+from mugen.config import AppConfig
+from mugen.core import di
+from mugen.core.api import api
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.extension.ct import ICTExtension
@@ -19,75 +21,72 @@ from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
-from mugen.core.di import DIContainer
-
-from mugen.config import AppConfig
-
-from .core.api import api
-
-mugen = Quart(__name__)
-
-di = DIContainer()
+from mugen.core.contract.gateway.logging import ILoggingGateway
 
 
-def create_quart_app(basedir: str):
+def create_quart_app(
+    config: SimpleNamespace = di.container.config,
+    logger: ILoggingGateway = di.container.logging_gateway,
+) -> Quart:
     """Application factory."""
-    with open(f"{basedir}{os.sep}mugen.toml", "r", encoding="utf8") as f:
-        config = tomlkit.loads(f.read()).value
-        di.config.from_dict(config)
+    # Create new Quart application.
+    app = Quart(__name__)
 
     # Check for valid configuration name.
-    environment = di.config.mugen.environment()
-    if environment not in ("default", "development", "testing", "production"):
-        print("Invalid configuration name.")
+    try:
+        environment = config.mugen.environment
+    except AttributeError:
+        logger.error("Configuration unavailable.")
+        sys.exit(1)
+
+    logger.debug(f"Configured environment: {environment}.")
+    if environment not in (
+        "default",
+        "development",
+        "testing",
+        "production",
+    ):
+        logger.error("Invalid environment name.")
         sys.exit(1)
 
     # Create application configuration object.
-    mugen.config.from_object(AppConfig[environment])
-    mugen.config["ENV"] = di.config
-
-    # Get log level and base directory from environment.
-    di.config.mugen.logger.level.from_value(mugen.config["LOG_LEVEL"])
-    di.config.basedir.from_value(mugen.config["BASEDIR"])
-
-    # Get logger.
-    logging_gateway = di.logging_gateway()
-    logging_gateway.warning(f"Creating app with {environment} configuration.")
+    app.config.from_object(AppConfig[environment])
 
     # Initialize application.
-    AppConfig[environment].init_app(mugen)
-
-    @mugen.after_request
-    def call_after_request_callbacks(response):
-        """Ensure all registered after-request-callbacks are called."""
-        for callback in getattr(g, "after_request_callbacks", ()):
-            callback(response)
-        return response
-
-    # Ensure that API endpoints can access the ipc_queue
-    # through current_app.ipc_queue
-    mugen.di = di
+    AppConfig[environment].init_app(app)
 
     # Return the built application object.
-    return mugen
+    return app
 
 
 # pylint: disable=too-many-locals
 # pylint: disable=too-many-statements
 # pylint: disable=too-many-branches
-async def run_assistants() -> None:
+async def run_clients(app: Quart) -> None:
     """Entrypoint for assistants."""
-    # Dependency Injection.
-    basedir = di.config.basedir()
-    di.config.dbm_keyval_storage_path.from_value(
-        os.path.join(basedir, "data", "storage.db")
-    )
-    di.config.matrix.olm_store_path.from_value(
-        os.path.join(basedir, "data", ".olmstore")
-    )
 
     # Get logging gateway.
-    logging_gateway = di.logging_gateway()
+    logging_gateway = di.container.logging_gateway
+
+    # Do platform checks.
+    tasks = []
+    platforms = di.container.config.mugen.platforms
+
+    try:
+        # Run Matrix assistant.
+        if "matrix" in platforms:
+            tasks.append(asyncio.create_task(run_matrix_client()))
+
+        # Run Telnet assistant.
+        if "telnet" in platforms:
+            tasks.append(asyncio.create_task(run_telnet_client()))
+
+        # Run Whatsapp assistant.
+        if "whatsapp" in platforms:
+            tasks.append(asyncio.create_task(run_whatsapp_client()))
+    except TypeError:
+        logging_gateway.error("Platforms not configured.")
+        sys.exit(1)
 
     # Load extensions if specified. These include:
     # 1. Conversational Trigger (CT) extensions.
@@ -99,90 +98,90 @@ async def run_assistants() -> None:
     extensions = []
 
     # Load core plugins.
-    if di.config.mugen.modules.core.plugins() is not None:
-        extensions += di.config.mugen.modules.core.plugins()
+    if di.container.config.mugen.modules.core.plugins is not None:
+        extensions += di.container.config.mugen.modules.core.plugins
 
     # Load third party extensions.
-    if di.config.mugen.modules.extensions() is not None:
-        extensions += di.config.mugen.modules.extensions()
+    if di.container.config.mugen.modules.extensions is not None:
+        extensions += di.container.config.mugen.modules.extensions
 
-    # Wire the extensions for dependency injection.
-    di.wire([x["path"] for x in extensions])
+    # Wire the plugins/extensions for dependency injection.
+    # di.container.wire([x["path"] for x in extensions])
 
     # CT, IPC, and RAG extensions need to be registered
     # with the IPC and Messaging services.
-    ipc_service = di.ipc_service()
-    messaging_service = di.messaging_service()
-    platform_service = di.platform_service()
+    ipc_service = di.container.ipc_service
+    messaging_service = di.container.messaging_service
+
+    # Platform service is needed to check extension support.
+    platform_service = di.container.platform_service
 
     # Register the extensions.
     try:
         for ext in extensions:
-            ext_type = ext["type"]
-            ext_path = ext["path"]
             registered = False
 
-            import_module(name=ext_path)
+            import_module(name=ext.path)
 
-            if ext_type == "ct":
+            if ext.type == "ct":
                 ct_ext_class = [
-                    x for x in ICTExtension.__subclasses__() if x.__module__ == ext_path
+                    x for x in ICTExtension.__subclasses__() if x.__module__ == ext.path
                 ][0]
                 ct_ext = ct_ext_class()
                 if platform_service.extension_supported(ct_ext):
                     messaging_service.register_ct_extension(ct_ext)
                     registered = True
-            elif ext_type == "ctx":
+            elif ext.type == "ctx":
                 ctx_ext_class = [
                     x
                     for x in ICTXExtension.__subclasses__()
-                    if x.__module__ == ext_path
+                    if x.__module__ == ext.path
                 ][0]
                 ctx_ext = ctx_ext_class()
                 if platform_service.extension_supported(ctx_ext):
                     messaging_service.register_ctx_extension(ctx_ext)
                     registered = True
-            elif ext_type == "fw":
+            elif ext.type == "fw":
                 fw_ext_class = [
-                    x for x in IFWExtension.__subclasses__() if x.__module__ == ext_path
+                    x for x in IFWExtension.__subclasses__() if x.__module__ == ext.path
                 ][0]
                 fw_ext = fw_ext_class()
                 if platform_service.extension_supported(fw_ext):
                     await fw_ext.setup()
                     registered = True
-            elif ext_type == "ipc":
+            elif ext.type == "ipc":
                 ipc_ext_class = [
                     x
                     for x in IIPCExtension.__subclasses__()
-                    if x.__module__ == ext_path
+                    if x.__module__ == ext.path
                 ][0]
                 ipc_ext = ipc_ext_class()
                 if platform_service.extension_supported(ipc_ext):
                     ipc_service.register_ipc_extension(ipc_ext)
                     registered = True
-            elif ext_type == "mh":
+            elif ext.type == "mh":
                 mh_ext_class = [
-                    x for x in IMHExtension.__subclasses__() if x.__module__ == ext_path
+                    x for x in IMHExtension.__subclasses__() if x.__module__ == ext.path
                 ][0]
                 mh_ext = mh_ext_class()
                 if platform_service.extension_supported(mh_ext):
                     messaging_service.register_mh_extension(mh_ext)
                     registered = True
-            elif ext_type == "rag":
+            elif ext.type == "rag":
                 rag_ext_class = [
                     x
                     for x in IRAGExtension.__subclasses__()
-                    if x.__module__ == ext_path
+                    if x.__module__ == ext.path
                 ][0]
                 rag_ext = rag_ext_class()
                 if platform_service.extension_supported(rag_ext):
                     messaging_service.register_rag_extension(rag_ext)
                     registered = True
-            elif ext_type == "rpp":
+            elif ext.type == "rpp":
                 rpp_ext_class = [
                     x
                     for x in IRPPExtension.__subclasses__()
-                    if x.__module__ == ext_path
+                    if x.__module__ == ext.path
                 ][0]
                 rpp_ext = rpp_ext_class()
                 if platform_service.extension_supported(rpp_ext):
@@ -190,7 +189,7 @@ async def run_assistants() -> None:
                     registered = True
             if registered:
                 logging_gateway.debug(
-                    f"Registered {ext_type.upper()} extension: {ext_path}"
+                    f"Registered {ext.type.upper()} extension: {ext.path}"
                 )
     except (IndexError, TypeError) as e:
         logging_gateway.error(e.__traceback__)
@@ -198,51 +197,38 @@ async def run_assistants() -> None:
 
     # Register blueprints after extensions have been loaded.
     # This allows extensions to hack the api.
-    mugen.register_blueprint(api, url_prefix="/api")
-
-    tasks = []
-    platforms = di.config.mugen.platforms()
+    app.register_blueprint(api, url_prefix="/api")
 
     try:
-        # Run Telnet assistant.
-        if "telnet" in platforms:
-            tasks.append(asyncio.create_task(run_telnet_client()))
-
-        # Run Matrix assistant.
-        if "matrix" in platforms:
-            tasks.append(asyncio.create_task(run_matrix_assistant()))
-
-        # Run Whatsapp assistant.
-        if "whatsapp" in platforms:
-            tasks.append(asyncio.create_task(run_whatsapp_assistant()))
-
         await asyncio.gather(*tasks)
     except asyncio.exceptions.CancelledError:
-        if di.whatsapp_client() is not None:
-            await di.whatsapp_client().close()
+        if di.container.whatsapp_client is not None:
+            await di.container.whatsapp_client.close()
 
 
 async def run_telnet_client() -> None:
     """Run assistant for Telnet server."""
+
     # Get logging gateway.
-    logging_gateway = di.logging_gateway()
+    logging_gateway = di.container.logging_gateway
 
     telnet_client: ITelnetClient
-    async with di.telnet_client() as telnet_client:
+    async with di.container.telnet_client as telnet_client:
         try:
             await asyncio.create_task(telnet_client.start_server())
         except asyncio.exceptions.CancelledError:
             logging_gateway.debug("Telnet client shutting down.")
 
 
-async def run_matrix_assistant() -> None:
+async def run_matrix_client() -> None:
     """Run assistant for the Matrix platform."""
+
     # Get logging gateway.
-    logging_gateway = di.logging_gateway()
+    logging_gateway = di.container.logging_gateway
 
     # Initialise matrix client.
     matrix_client: IMatrixClient
-    async with di.matrix_client() as matrix_client:
+    async with di.container.matrix_client as matrix_client:
         # We have to wait on the first sync event to perform some setup tasks.
         async def wait_on_first_sync():
             # Wait for first sync to complete.
@@ -250,7 +236,7 @@ async def run_matrix_assistant() -> None:
 
             # Set profile name if it's not already set.
             profile = await matrix_client.get_profile()
-            assistant_display_name = di.config.matrix_assistant_display_name()
+            assistant_display_name = di.container.config.matrix.assistant.name
             if (
                 assistant_display_name is not None
                 and profile.displayname != assistant_display_name
@@ -278,6 +264,6 @@ async def run_matrix_assistant() -> None:
             logging_gateway.debug("Matrix client shutting down.")
 
 
-async def run_whatsapp_assistant() -> None:
+async def run_whatsapp_client() -> None:
     """Run assistant for the whatsapp platform."""
-    await asyncio.gather(asyncio.create_task(di.whatsapp_client().init()))
+    await asyncio.gather(asyncio.create_task(di.container.whatsapp_client.init()))
