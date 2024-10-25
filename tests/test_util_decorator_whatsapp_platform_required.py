@@ -1,4 +1,4 @@
-"""Provides unit tests for matrix_platform_required API decorator."""
+"""Provides unit tests for whatsapp_platform_required API decorator."""
 
 from types import SimpleNamespace
 import unittest
@@ -8,11 +8,11 @@ from quart import Quart
 import werkzeug
 import werkzeug.exceptions
 
-from mugen.core.api.decorators import matrix_platform_required
+from util.decorator import whatsapp_platform_required
 
 
-class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
-    """Unit tests for matrix_platform_required API decorator."""
+class TestWhatsAppPlatformRequired(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for whatsapp_platform_required API decorator."""
 
     async def test_config_variable_not_set(self) -> None:
         """Test endpoint called when platform configuration is unavailable."""
@@ -26,7 +26,7 @@ class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
         async with app.app_context():
 
             # Define and patch dummy endpoint.
-            @matrix_platform_required(config=config)  # replace config
+            @whatsapp_platform_required(config=config)  # replace config
             async def endpoint(*_args, **_kwargs):
                 pass
 
@@ -39,15 +39,15 @@ class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
                 # Try calling endpoint.
                 await endpoint()
 
-    async def test_matrix_platform_not_enabled(self) -> None:
-        """Test NotImplmented raised when Matrix not enabled."""
+    async def test_whatsapp_platform_not_enabled(self) -> None:
+        """Test NotImplmented raised when WhatsApp not enabled."""
         # Create dummy app to get context.
         app = Quart("test_app")
 
         # Create dummy config for testing.
         config = SimpleNamespace(
             mugen=SimpleNamespace(
-                platforms=["whatsapp"],
+                platforms=["matrix", "telnet"],
             ),
         )
 
@@ -55,7 +55,7 @@ class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
         async with app.app_context():
 
             # Define and patch dummy endpoint.
-            @matrix_platform_required(config=config)  # replace config
+            @whatsapp_platform_required(config=config)  # replace config
             async def endpoint(*_args, **_kwargs):
                 pass
 
@@ -67,8 +67,8 @@ class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
             ):
                 await endpoint()
 
-    async def test_matrix_platform_is_enabled(self) -> None:
-        """Test endpoint called when Matrix is enabled."""
+    async def test_whatsapp_platform_is_enabled(self) -> None:
+        """Test endpoint called when WhatsApp is enabled."""
         # Create dummy app to get context.
         app = Quart("test_app")
 
@@ -83,7 +83,7 @@ class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
         async with app.app_context():
 
             # Define and patch dummy endpoint.
-            @matrix_platform_required(config=config)  # replace config
+            @whatsapp_platform_required(config=config)  # replace config
             async def endpoint(*_args, **_kwargs):
                 pass
 

@@ -10,12 +10,9 @@ from types import SimpleNamespace
 
 from quart import abort, current_app, request
 
-from mugen.core import di
-
 
 def matrix_platform_required(
-    arg=None,
-    config: SimpleNamespace = di.container.config,
+    config: SimpleNamespace = None,
 ):
     """Check that the Matrix platform is enabled."""
 
@@ -33,15 +30,11 @@ def matrix_platform_required(
 
         return wrapper
 
-    if callable(arg):
-        return decorator(arg)
-
     return decorator
 
 
 def telnet_platform_required(
-    arg=None,
-    config: SimpleNamespace = di.container.config,
+    config: SimpleNamespace = None,
 ):
     """Check that the Telnet platform is enabled."""
 
@@ -59,15 +52,11 @@ def telnet_platform_required(
 
         return wrapper
 
-    if callable(arg):
-        return decorator(arg)
-
     return decorator
 
 
 def whatsapp_platform_required(
-    arg=None,
-    config: SimpleNamespace = di.container.config,
+    config: SimpleNamespace = None,
 ):
     """Check that the WhatsApp platform is enabled."""
 
@@ -85,15 +74,11 @@ def whatsapp_platform_required(
 
         return wrapper
 
-    if callable(arg):
-        return decorator(arg)
-
     return decorator
 
 
 def whatsapp_request_signature_verification_required(
-    arg=None,
-    config: SimpleNamespace = di.container.config,
+    config: SimpleNamespace = None,
 ):
     """Authenticate requests to the webhook using app secret."""
 
@@ -128,15 +113,11 @@ def whatsapp_request_signature_verification_required(
 
         return wrapper
 
-    if callable(arg):
-        return decorator(arg)
-
     return decorator
 
 
 def whatsapp_server_ip_allow_list_required(
-    arg=None,
-    config: SimpleNamespace = di.container.config,
+    config: SimpleNamespace = None,
 ):
     """Authenticate requests to the webhook using app secret."""
 
@@ -144,11 +125,11 @@ def whatsapp_server_ip_allow_list_required(
         @wraps(func)
         async def wrapper(*args, **kwargs):
             try:
-                allow_list_path = config.whatsapp.servers.allowed
-                basedir = config.basedir
                 networks: list
                 with open(
-                    f"{basedir}{os.sep}{allow_list_path}", "r", encoding="utf8"
+                    os.path.join(config.basedir, config.whatsapp.servers.allowed),
+                    "r",
+                    encoding="utf8",
                 ) as f:
                     networks = [l.rstrip() for l in f]
             except (AttributeError, FileNotFoundError, IsADirectoryError, KeyError):
@@ -179,8 +160,5 @@ def whatsapp_server_ip_allow_list_required(
             return await func(*args, **kwargs)
 
         return wrapper
-
-    if callable(arg):
-        return decorator(arg)
 
     return decorator

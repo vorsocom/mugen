@@ -1,4 +1,4 @@
-"""Provides unit tests for telnet_platform_required API decorator."""
+"""Provides unit tests for matrix_platform_required API decorator."""
 
 from types import SimpleNamespace
 import unittest
@@ -8,11 +8,11 @@ from quart import Quart
 import werkzeug
 import werkzeug.exceptions
 
-from mugen.core.api.decorators import telnet_platform_required
+from util.decorator import matrix_platform_required
 
 
-class TestTelnetPlatformRequired(unittest.IsolatedAsyncioTestCase):
-    """Unit tests for telnet_platform_required API decorator."""
+class TestMatrixPlatformRequired(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for matrix_platform_required API decorator."""
 
     async def test_config_variable_not_set(self) -> None:
         """Test endpoint called when platform configuration is unavailable."""
@@ -26,7 +26,7 @@ class TestTelnetPlatformRequired(unittest.IsolatedAsyncioTestCase):
         async with app.app_context():
 
             # Define and patch dummy endpoint.
-            @telnet_platform_required(config=config)  # replace config
+            @matrix_platform_required(config=config)  # replace config
             async def endpoint(*_args, **_kwargs):
                 pass
 
@@ -39,8 +39,36 @@ class TestTelnetPlatformRequired(unittest.IsolatedAsyncioTestCase):
                 # Try calling endpoint.
                 await endpoint()
 
-    async def test_telnet_platform_not_enabled(self) -> None:
-        """Test NotImplmented raised when Telnet not enabled."""
+    async def test_matrix_platform_not_enabled(self) -> None:
+        """Test NotImplmented raised when Matrix not enabled."""
+        # Create dummy app to get context.
+        app = Quart("test_app")
+
+        # Create dummy config for testing.
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                platforms=["whatsapp"],
+            ),
+        )
+
+        # Use dummy context.
+        async with app.app_context():
+
+            # Define and patch dummy endpoint.
+            @matrix_platform_required(config=config)  # replace config
+            async def endpoint(*_args, **_kwargs):
+                pass
+
+            # We must get an exception since the Matrix platform is
+            # not enabled.
+            with (
+                self.assertLogs(logger="test_app", level="ERROR"),
+                self.assertRaises(werkzeug.exceptions.NotImplemented),
+            ):
+                await endpoint()
+
+    async def test_matrix_platform_is_enabled(self) -> None:
+        """Test endpoint called when Matrix is enabled."""
         # Create dummy app to get context.
         app = Quart("test_app")
 
@@ -55,35 +83,7 @@ class TestTelnetPlatformRequired(unittest.IsolatedAsyncioTestCase):
         async with app.app_context():
 
             # Define and patch dummy endpoint.
-            @telnet_platform_required(config=config)  # replace config
-            async def endpoint(*_args, **_kwargs):
-                pass
-
-            # We must get an exception since the Matrix platform is
-            # not enabled.
-            with (
-                self.assertLogs(logger="test_app", level="ERROR"),
-                self.assertRaises(werkzeug.exceptions.NotImplemented),
-            ):
-                await endpoint()
-
-    async def test_telnet_platform_is_enabled(self) -> None:
-        """Test endpoint called when Telnet is enabled."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                platforms=["matrix", "telnet"],
-            ),
-        )
-
-        # Use dummy context.
-        async with app.app_context():
-
-            # Define and patch dummy endpoint.
-            @telnet_platform_required(config=config)  # replace config
+            @matrix_platform_required(config=config)  # replace config
             async def endpoint(*_args, **_kwargs):
                 pass
 
