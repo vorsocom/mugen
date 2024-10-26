@@ -8,7 +8,7 @@ from quart import Quart
 import werkzeug
 import werkzeug.exceptions
 
-from util.decorator import whatsapp_server_ip_allow_list_required
+from mugen_util.decorator import whatsapp_server_ip_allow_list_required
 
 
 class TestWhatsAppServerIPAllowListRequired(unittest.IsolatedAsyncioTestCase):
