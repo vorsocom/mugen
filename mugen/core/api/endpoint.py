@@ -7,7 +7,7 @@ from quart import abort, current_app, request
 
 from mugen.core import di
 from mugen.core.api import api
-from util.decorator import (
+from mugen_util.decorator import (
     matrix_platform_required,
     whatsapp_platform_required,
     whatsapp_request_signature_verification_required,

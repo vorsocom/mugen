@@ -10,7 +10,7 @@ from quart import Quart
 import werkzeug
 import werkzeug.exceptions
 
-from util.decorator import whatsapp_request_signature_verification_required
+from mugen_util.decorator import whatsapp_request_signature_verification_required
 
 
 class TestWhatsAppRequestSigVerificationRequired(unittest.IsolatedAsyncioTestCase):
