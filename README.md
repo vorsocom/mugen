@@ -90,7 +90,7 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 ~$ poetry shell
 
 # Run the application.
-~$ hypercorn -c hypercorn.toml quartman:mugen
+~$ hypercorn -c hypercorn.toml quartman
 ```
 
 You can now open a new terminal and connect to the running instance using Telnet:
