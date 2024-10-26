@@ -2,25 +2,18 @@
 
 __all__ = ["ICTExtension"]
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
+
+from . import IExtensionBase
 
 
-class ICTExtension(ABC):
+class ICTExtension(IExtensionBase):
     """An ABC for CT extensions."""
-
-    @property
-    @abstractmethod
-    def platforms(self) -> list[str]:
-        """Get the platform that the extension is targeting."""
 
     @property
     @abstractmethod
     def triggers(self) -> list[str]:
         """Get the list of triggers that activate the service provider."""
-
-    @abstractmethod
-    def get_context(self, user_id: str) -> list[dict]:
-        """Provides conversation context through system messages."""
 
     @abstractmethod
     async def process_message(  # pylint: disable=too-many-arguments

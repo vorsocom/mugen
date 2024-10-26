@@ -1,11 +1,11 @@
-"""Provides an abstract base class for knowledge retrieval gateways."""
+"""Provides an abstract base class for knowledge gateways."""
 
-__all__ = ["IKnowledgeRetrievalGateway"]
+__all__ = ["IKnowledgeGateway"]
 
 from abc import ABC, abstractmethod
 
 
-class IKnowledgeRetrievalGateway(ABC):  # pylint: disable=too-few-public-methods
+class IKnowledgeGateway(ABC):  # pylint: disable=too-few-public-methods
     """An ABC for knowledge retrival gateways."""
 
     @abstractmethod
@@ -13,10 +13,10 @@ class IKnowledgeRetrievalGateway(ABC):  # pylint: disable=too-few-public-methods
         self,
         collection_name: str,
         search_term: str,
-        dataset: str,
-        date_from: str,
-        date_to: str,
-        limit: int,
-        strategy: str,
+        dataset: str = None,
+        date_from: str = None,
+        date_to: str = None,
+        limit: int = 10,
+        strategy: str = "must",
     ) -> list:
         """Search for documents in the knowledge base containing similar strings."""

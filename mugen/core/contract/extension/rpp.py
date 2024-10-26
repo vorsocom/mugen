@@ -2,16 +2,13 @@
 
 __all__ = ["IRPPExtension"]
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
+
+from . import IExtensionBase
 
 
-class IRPPExtension(ABC):  # pylint: disable=too-few-public-methods
+class IRPPExtension(IExtensionBase):  # pylint: disable=too-few-public-methods
     """An ABC for RPP extensions."""
-
-    @property
-    @abstractmethod
-    def platforms(self) -> list[str]:
-        """Get the platform that the extension is targeting."""
 
     @abstractmethod
     async def preprocess_response(

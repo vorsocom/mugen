@@ -2,13 +2,12 @@
 
 __all__ = ["DefaultWhatsAppClient"]
 
-import asyncio
 from http import HTTPMethod
 from io import BytesIO
 import json
+from types import SimpleNamespace
 
 import aiohttp
-from dependency_injector import providers
 
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -30,8 +29,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
     def __init__(  # pylint: disable=too-many-arguments
         self,
-        config: providers.Configuration = None,  # pylint: disable=c-extension-no-member
-        ipc_queue: asyncio.Queue = None,
+        config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
@@ -40,7 +38,6 @@ class DefaultWhatsAppClient(IWhatsAppClient):
     ) -> None:
         self._client_session: aiohttp.ClientSession = None
         self._config = config
-        self._ipc_queue = ipc_queue
         self._ipc_service = ipc_service
         self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway
@@ -48,16 +45,14 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         self._user_service = user_service
 
         self._api_base_path = (
-            f"{self._config.whatsapp.graphapi.base_url()}/"
-            f"{self._config.whatsapp.graphapi.version()}"
+            f"{self._config.whatsapp.graphapi.base_url}/"
+            f"{self._config.whatsapp.graphapi.version}"
         )
 
-        self._api_media_path = (
-            f"{self._config.whatsapp.business.phone_number_id()}/media"
-        )
+        self._api_media_path = f"{self._config.whatsapp.business.phone_number_id}/media"
 
         self._api_messages_path = (
-            f"{self._config.whatsapp.business.phone_number_id()}/messages"
+            f"{self._config.whatsapp.business.phone_number_id}/messages"
         )
 
     async def init(self) -> None:
@@ -328,7 +323,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
     ) -> str | None:
         """Make a call to Graph API."""
         headers = {
-            "Authorization": f"Bearer {self._config.whatsapp.graphapi.access_token()}",
+            "Authorization": f"Bearer {self._config.whatsapp.graphapi.access_token}",
         }
 
         if content_type:

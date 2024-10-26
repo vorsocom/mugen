@@ -9,8 +9,6 @@ import pickle
 from types import SimpleNamespace
 import uuid
 
-from dependency_injector import providers
-
 from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.mh import IMHExtension
@@ -44,7 +42,7 @@ class DefaultMessagingService(IMessagingService):
     # pylint: disable=too-many-arguments
     def __init__(
         self,
-        config: providers.Configuration,  # pylint: disable=c-extension-no-member
+        config: SimpleNamespace,
         completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
         logging_gateway: ILoggingGateway,
@@ -66,23 +64,14 @@ class DefaultMessagingService(IMessagingService):
         sender: str,
         content: str,
     ) -> str | None:
-        match content.strip():
-            case "//clear.":
-                # Clear attention thread.
-                self.clear_attention_thread(room_id)
-
-                # Clear RAG caches.
-                for rag_ext in self._rag_extensions:
-                    # Filter extensions that don't support the
-                    # calling platform.
-                    if not self._platform_supported(platform, rag_ext):
-                        continue
-
-                    if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
-                        self._keyval_storage_gateway.remove(rag_ext.cache_key)
-                return "PUC executed."
-            case _:
-                pass
+        # Handle commands.
+        # They contain no spaces, start with "//" and end with ".".
+        if (
+            len(content.strip().split()) == 1
+            and content.strip()[:2] == "//"
+            and content.strip()[-1] == "."
+        ):
+            return await self._handle_command(platform, room_id, content.strip())
 
         # Load previous history from storage if it exists.
         attention_thread = self.load_attention_thread(room_id)
@@ -98,7 +87,7 @@ class DefaultMessagingService(IMessagingService):
         attention_thread["messages"].append({"role": "user", "content": content})
 
         # Log user message if conversation debugging flag set.
-        if self._config.mugen.debug_conversation():
+        if self._config.mugen.debug_conversation:
             self._logging_gateway.debug(
                 json.dumps(attention_thread["messages"], indent=4)
             )
@@ -112,7 +101,7 @@ class DefaultMessagingService(IMessagingService):
         for rag_ext in self._rag_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not self._platform_supported(platform, rag_ext):
+            if not rag_ext.platform_supported(platform):
                 continue
 
             await rag_ext.retrieve(sender, content)
@@ -153,7 +142,7 @@ class DefaultMessagingService(IMessagingService):
         self.save_attention_thread(room_id, attention_thread)
 
         # Log assistant message if conversation debugging flag set.
-        if self._config.mugen.debug_conversation():
+        if self._config.mugen.debug_conversation:
             self._logging_gateway.debug(
                 json.dumps(attention_thread["messages"], indent=4)
             )
@@ -162,7 +151,7 @@ class DefaultMessagingService(IMessagingService):
         for rpp_ext in self._rpp_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not self._platform_supported(platform, rpp_ext):
+            if not rpp_ext.platform_supported(platform):
                 continue
 
             assistant_response = await rpp_ext.preprocess_response(
@@ -179,7 +168,7 @@ class DefaultMessagingService(IMessagingService):
         for ct_ext in self._ct_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not self._platform_supported(platform, ct_ext):
+            if not ct_ext.platform_supported(platform):
                 continue
 
             tasks.append(
@@ -250,7 +239,7 @@ class DefaultMessagingService(IMessagingService):
         hits = 0
         for ct_ext in self._ct_extensions:
 
-            if platform is not None and not self._platform_supported(platform, ct_ext):
+            if platform is not None and not ct_ext.platform_supported(platform):
                 continue
 
             for trigger in ct_ext.triggers:
@@ -325,7 +314,7 @@ class DefaultMessagingService(IMessagingService):
         context.append(
             {
                 "role": "system",
-                "content": self._config.mugen.assistant.persona(),
+                "content": self._config.mugen.assistant.persona,
             }
         )
 
@@ -333,7 +322,7 @@ class DefaultMessagingService(IMessagingService):
         for ctx_ext in self._ctx_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not self._platform_supported(platform, ctx_ext):
+            if not ctx_ext.platform_supported(platform):
                 continue
 
             context += ctx_ext.get_context(sender)
@@ -342,16 +331,28 @@ class DefaultMessagingService(IMessagingService):
         for ct_ext in self._ct_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not self._platform_supported(platform, ct_ext):
+            if not ct_ext.platform_supported(platform):
                 continue
 
             context += ct_ext.get_context(sender)
 
         return context
 
-    def _platform_supported(self, platform: str, ext) -> bool:
-        """Filter extensions that don't support the calling platform."""
-        if ext.platforms == []:
-            return True
+    async def _handle_command(self, platform: str, room_id: str, cmd: str) -> str:
+        match cmd:
+            case "//clear.":
+                # Clear attention thread.
+                self.clear_attention_thread(room_id)
 
-        return platform in ext.platforms
+                # Clear RAG caches.
+                for rag_ext in self._rag_extensions:
+                    # Filter extensions that don't support the
+                    # calling platform.
+                    if not rag_ext.platform_supported(platform):
+                        continue
+
+                    if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
+                        self._keyval_storage_gateway.remove(rag_ext.cache_key)
+                return "PUC executed."
+            case _:
+                pass

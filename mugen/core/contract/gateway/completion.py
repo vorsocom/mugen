@@ -11,6 +11,6 @@ class ICompletionGateway(ABC):  # pylint: disable=too-few-public-methods
     async def get_completion(
         self,
         context: list[dict],
-        operation: str,
+        operation: str = "completion",
     ) -> Any | None:
         """Get LLM response based on context (conversation history + relevant data)."""

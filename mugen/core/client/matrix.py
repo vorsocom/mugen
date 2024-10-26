@@ -1,16 +1,16 @@
-"""Provides an implementation of the nio.AsyncClient."""
+"""Provides an implementation of IMatrixClient."""
 
 __all__ = ["DefaultMatrixClient"]
 
 import asyncio
+import os
 import pickle
 import sys
 import traceback
+from types import SimpleNamespace
 from typing import Coroutine
 
-from dependency_injector import providers
 from nio import (
-    AsyncClient,
     InviteAliasEvent,
     InviteMemberEvent,
     InviteNameEvent,
@@ -38,6 +38,7 @@ from nio import (
 
 from nio.exceptions import OlmUnverifiedDeviceError
 
+from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
@@ -45,8 +46,10 @@ from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 
 
-class DefaultMatrixClient(AsyncClient):  # pylint: disable=too-many-instance-attributes
-    """A custom implementation of nio.AsyncClient."""
+class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
+    IMatrixClient
+):
+    """A custom implementation of IMatrixClient."""
 
     _flags_key: str = "m.agent_flags"
 
@@ -59,9 +62,7 @@ class DefaultMatrixClient(AsyncClient):  # pylint: disable=too-many-instance-att
     # pylint: disable=too-many-arguments
     def __init__(
         self,
-        # pylint: disable=c-extension-no-member
-        config: providers.Configuration = None,
-        ipc_queue: asyncio.Queue = None,
+        config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
@@ -70,11 +71,13 @@ class DefaultMatrixClient(AsyncClient):  # pylint: disable=too-many-instance-att
     ):
         self._config = config
         super().__init__(
-            homeserver=self._config.matrix.homeserver(),
-            user=self._config.matrix.client_user(),
-            store_path=self._config.matrix.olm_store_path(),
+            homeserver=self._config.matrix.homeserver,
+            user=self._config.matrix.client.user,
+            store_path=os.path.join(
+                self._config.basedir,
+                self._config.matrix.storage.olm.path,
+            ),
         )
-        self._ipc_queue = ipc_queue
         self._ipc_service = ipc_service
         self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway
@@ -109,8 +112,8 @@ class DefaultMatrixClient(AsyncClient):  # pylint: disable=too-many-instance-att
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
         if self._keyval_storage_gateway.get("client_access_token") is None:
             # Load password and device name from storage.
-            pw = self._config.matrix.client.password()
-            dn = self._config.matrix.client.device()
+            pw = self._config.matrix.client.password
+            dn = self._config.matrix.client.device
 
             # Attempt  password login.
             resp = await self.login(pw, dn)
@@ -244,8 +247,8 @@ class DefaultMatrixClient(AsyncClient):  # pylint: disable=too-many-instance-att
         # Only process invites from allowed domains.
         # Federated servers need to be in the allowed domains list for their users
         # to initiate conversations with the assistant.
-        allowed_domains: list = self._config.matrix.domains.allowed()
-        denied_domains: list = self._config.matrix.domains.denied()
+        allowed_domains: list = self._config.matrix.domains.allowed
+        denied_domains: list = self._config.matrix.domains.denied
         sender_domain: str = event.sender.split(":")[1]
         if sender_domain not in allowed_domains or sender_domain in denied_domains:
             await self.room_leave(room.room_id)
@@ -257,8 +260,8 @@ class DefaultMatrixClient(AsyncClient):  # pylint: disable=too-many-instance-att
 
         # If the assistant is in limited-beta mode, only process invites from the
         # list of selected beta users.
-        if self._config.mugen.beta.active():
-            beta_users: list = self._config.matrix.beta.users()
+        if self._config.mugen.beta.active:
+            beta_users: list = self._config.matrix.beta.users
             if event.sender not in beta_users:
                 await self.room_leave(room.room_id)
                 self._logging_gateway.warning(
