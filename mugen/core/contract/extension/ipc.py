@@ -2,21 +2,18 @@
 
 __all__ = ["IIPCExtension"]
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
+
+from . import IExtensionBase
 
 
-class IIPCExtension(ABC):
+class IIPCExtension(IExtensionBase):
     """An ABC for IPC extensions."""
 
     @property
     @abstractmethod
     def ipc_commands(self) -> list[str]:
         """Get the list of ipc commands processed by this provider.."""
-
-    @property
-    @abstractmethod
-    def platforms(self) -> list[str]:
-        """Get the platform that the extension is targeting."""
 
     @abstractmethod
     async def process_ipc_command(self, payload: dict) -> None:

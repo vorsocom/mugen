@@ -12,13 +12,19 @@ class Config:  # pylint: disable=too-few-public-methods
 
     BASEDIR: str = os.path.abspath(os.path.dirname(__file__) + "/../")
 
+    # Clear debug flag.
+    DEBUG: bool = False
+
     # Set log level.
     LOG_LEVEL: int = 10
 
     @staticmethod
-    def init_app(mugen: Quart):
+    def init_app(app: Quart):
         """Configuration specific application initialisation."""
-        mugen.logger.setLevel(mugen.config["LOG_LEVEL"])
+        try:
+            app.logger.setLevel(app.config["LOG_LEVEL"])
+        except KeyError:
+            app.logger.error("LOG_LEVEL not configured.")
 
 
 class DevelopmentConfig(Config):  # pylint: disable=too-few-public-methods
@@ -30,6 +36,9 @@ class DevelopmentConfig(Config):  # pylint: disable=too-few-public-methods
 
 class TestingConfig(Config):  # pylint: disable=too-few-public-methods
     """Testing environment-specific configuration class"""
+
+    # Set debug flag.
+    DEBUG: bool = True
 
     # Set log level.
     LOG_LEVEL: int = 20

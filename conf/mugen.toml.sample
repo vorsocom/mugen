@@ -12,7 +12,13 @@ environment = "development"
 #
 logger.name = "COM.VORSOCOMPUTING.MUGEN"
 #
-platforms = [] # choices: matrix, whatsapp
+platforms = [
+    "telnet,
+    #"matrix",
+    #"whatsapp",
+]
+#
+storage.keyval.dbm.path = "data/storage.db"
 #
 [mugen.modules.core]
 #
@@ -39,33 +45,23 @@ service.user = "mugen.core.service.user"
 #
 # Core Plugins
 #
-# Matrix Manager
-# [[mugen.modules.core.plugins]]
-# type = "ipc"
-# path = "mugen.core.plugin.muapp.matrix.manager.device"
-#
-# [[mugen.modules.core.plugins]]
-# type = "ipc"
-# path = "mugen.core.plugin.muapp.matrix.manager.room"
-#
-# Taskman
-# [[mugen.modules.core.plugins]]
-# type = "ctx"
-# path = "mugen.core.plugin.muapp.taskman.ctx_ext"
-#
-# [[mugen.modules.core.plugins]]
-# type = "rpp"
-# path = "mugen.core.plugin.muapp.taskman.rpp_ext"
-#
 # WACAPI
 [[mugen.modules.core.plugins]]
 type = "ipc"
-path = "mugen.core.plugin.muapp.whatsapp.wacapi.ipc_ext"
+path = "mugen.core.plugin.whatsapp.wacapi.ipc_ext"
 #
 # Extensions
 [[mugen.modules.extensions]]
 # type = ""
 # path = ""
+#
+#===TELNET===
+[telnet]
+#
+socket.host = "localhost"
+#
+socket.port = 8888
+#
 #===MATRIX===
 [matrix]
 #
@@ -86,6 +82,9 @@ domains.allowed = []
 domains.denied = []
 #
 homeserver = ""
+#
+storage.olm.path = "data/.olmstore"
+#
 #===WHATSAPP===
 [whatsapp]
 #
