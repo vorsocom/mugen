@@ -91,7 +91,7 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
 
     async def _handle_text_message(self, message: str) -> str:
         return await self._messaging_service.handle_text_message(
-            platform="cli",
+            platform="telnet",
             room_id="telnet_room",
             sender="telnet_user",
             content=message,
