@@ -327,15 +327,6 @@ class DefaultMessagingService(IMessagingService):
 
             context += ctx_ext.get_context(sender)
 
-        # Append information from CT extensions to context.
-        for ct_ext in self._ct_extensions:
-            # Filter extensions that don't support the
-            # calling platform.
-            if not ct_ext.platform_supported(platform):
-                continue
-
-            context += ct_ext.get_context(sender)
-
         return context
 
     async def _handle_command(self, platform: str, room_id: str, cmd: str) -> str:
