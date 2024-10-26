@@ -33,8 +33,8 @@ class GroqCompletionGateway(ICompletionGateway):
         context: list[dict],
         operation: str = "completion",
     ) -> Any | None:
-        model = self._config.aws.bedrock.api.dict[operation]["model"]
-        temperature = float(self._config.aws.bedrock.api.dict[operation]["temp"])
+        model = self._config.groq.api.dict[operation]["model"]
+        temperature = float(self._config.groq.api.dict[operation]["temp"])
 
         response = None
         # self._logging_gateway.debug(context)
