@@ -1,13 +1,3 @@
-# License
-
-Portions of this software are licensed as follows:
-
-- Content of branches other than the "main" branch are not licensed.
-- All third party components incorporated into the muGen Software are licensed under the original license
-  provided by the owner of the applicable component.
-- Content outside of the above mentioned files or restrictions is available under the "Sustainable Use
-  License" as defined below.
-
 ## Sustainable Use License
 
 Version 1.0
