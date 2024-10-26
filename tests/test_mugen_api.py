@@ -22,22 +22,22 @@ def dummy_decorator(arg=None, **_dargs):
 
 
 mpr_mock = unittest.mock.patch(
-    target="util.decorator.matrix_platform_required",
+    target="mugen_util.decorator.matrix_platform_required",
     new=dummy_decorator,
 )
 
 wpr_mock = unittest.mock.patch(
-    target="util.decorator.whatsapp_platform_required",
+    target="mugen_util.decorator.whatsapp_platform_required",
     new=dummy_decorator,
 )
 
 walr_mock = unittest.mock.patch(
-    target="util.decorator.whatsapp_server_ip_allow_list_required",
+    target="mugen_util.decorator.whatsapp_server_ip_allow_list_required",
     new=dummy_decorator,
 )
 
 wsvr_mock = unittest.mock.patch(
-    target="util.decorator.whatsapp_request_signature_verification_required",
+    target="mugen_util.decorator.whatsapp_request_signature_verification_required",
     new=dummy_decorator,
 )
 

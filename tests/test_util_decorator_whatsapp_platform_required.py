@@ -8,7 +8,7 @@ from quart import Quart
 import werkzeug
 import werkzeug.exceptions
 
-from util.decorator import whatsapp_platform_required
+from mugen_util.decorator import whatsapp_platform_required
 
 
 class TestWhatsAppPlatformRequired(unittest.IsolatedAsyncioTestCase):
