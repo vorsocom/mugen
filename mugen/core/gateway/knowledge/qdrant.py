@@ -8,11 +8,13 @@ from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import ResponseHandlingException
 from sentence_transformers import SentenceTransformer
 
+from mugen.core.contract.dto.qdrant.search import QdrantSearchVendorParams
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.nlp import INLPService
 
 
+# pylint: disable=too-few-public-methods
 class QdrantKnowledgeGateway(IKnowledgeGateway):
     """A knowledge retrieval gateway for the Qdrant vector database."""
 
@@ -40,64 +42,59 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         )
 
     # pylint: disable=too-many-arguments
-    async def search_similar(
+    async def search(
         self,
-        collection_name: str,
-        search_term: str,
-        dataset: str = None,
-        date_from: str = None,
-        date_to: str = None,
-        limit: int = 10,
-        strategy: str = "must",
+        params: QdrantSearchVendorParams,
     ) -> list:
         self._logging_gateway.debug(
-            f"QdrantKnowledgeRetrievalGateway.search_similar: search term {search_term}"
+            "QdrantKnowledgeRetrievalGateway.search_similar: search term"
+            f" {params.search_term}"
         )
         conditions = []
         dataset_filter = None
         # Restrict to dataset if specified.
-        if dataset:
+        if params.dataset:
             dataset_filter = [
                 models.FieldCondition(
                     key="dataset",
-                    match=models.MatchValue(value=dataset),
+                    match=models.MatchValue(value=params.dataset),
                 )
             ]
-            if strategy == "must":
+            if params.strategy == "must":
                 conditions += dataset_filter
 
         # Add date constraints.
-        if date_from and date_to:
+        if params.date_from and params.date_to:
             conditions.append(
                 models.FieldCondition(
                     key="date",
                     range=models.DatetimeRange(
-                        gte=date_from,
-                        lte=date_to,
+                        gte=params.date_from,
+                        lte=params.date_to,
                     ),
                 )
             )
-        elif date_from and not date_to:
+        elif params.date_from and not params.date_to:
             conditions.append(
                 models.FieldCondition(
                     key="date",
                     range=models.DatetimeRange(
-                        gte=date_from,
+                        gte=params.date_from,
                     ),
                 )
             )
-        elif date_to and not date_from:
+        elif params.date_to and not params.date_from:
             conditions.append(
                 models.FieldCondition(
                     key="date",
                     range=models.DatetimeRange(
-                        lte=date_to,
+                        lte=params.date_to,
                     ),
                 )
             )
 
         # Add keyword conditions.
-        keywords = self._nlp_service.get_keywords(search_term)
+        keywords = self._nlp_service.get_keywords(params.search_term)
         self._logging_gateway.debug(
             f"QdrantKnowledgeRetrievalGateway.search_similar: keywords {keywords}"
         )
@@ -107,22 +104,36 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             )
         # self._logging_gateway.debug(conditions)
         try:
-            if strategy == "should":
+            if params.strategy == "should":
+                if params.count:
+                    return await self._client.count(
+                        collection_name=params.collection_name,
+                        count_filter=models.Filter(should=conditions),
+                        exact=True,
+                    )
+
                 return await self._client.search(
-                    collection_name=collection_name,
-                    query_vector=self._encoder.encode(search_term).tolist(),
+                    collection_name=params.collection_name,
+                    query_vector=self._encoder.encode(params.search_term).tolist(),
                     query_filter=models.Filter(
                         must=dataset_filter,
                         should=conditions,
                     ),
-                    limit=limit,
+                    limit=params.limit,
+                )
+
+            if params.count:
+                return await self._client.count(
+                    collection_name=params.collection_name,
+                    count_filter=models.Filter(must=conditions),
+                    exact=True,
                 )
 
             return await self._client.search(
-                collection_name=collection_name,
-                query_vector=self._encoder.encode(search_term).tolist(),
+                collection_name=params.collection_name,
+                query_vector=self._encoder.encode(params.search_term).tolist(),
                 query_filter=models.Filter(must=conditions),
-                limit=limit,
+                limit=params.limit,
             )
         except ResponseHandlingException:
             self._logging_gateway.warning(
