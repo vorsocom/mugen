@@ -47,8 +47,7 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         params: QdrantSearchVendorParams,
     ) -> list:
         self._logging_gateway.debug(
-            "QdrantKnowledgeRetrievalGateway.search_similar: search term"
-            f" {params.search_term}"
+            f"QdrantKnowledgeRetrievalGateway.search: search term {params.search_term}"
         )
         conditions = []
         dataset_filter = None
@@ -137,7 +136,6 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             )
         except ResponseHandlingException:
             self._logging_gateway.warning(
-                "QdrantKnowledgeRetrievalGateway.search_similar:"
-                " ResponseHandlingException"
+                "QdrantKnowledgeRetrievalGateway.search: ResponseHandlingException"
             )
             return []
