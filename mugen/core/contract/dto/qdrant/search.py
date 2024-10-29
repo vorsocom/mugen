@@ -14,6 +14,8 @@ class QdrantSearchVendorParams(VendorParams):
 
     collection_name: str
 
+    search_term: str
+
     count: bool = False
 
     dataset: str = None
@@ -23,7 +25,5 @@ class QdrantSearchVendorParams(VendorParams):
     date_to: str = None
 
     limit: int = 10
-
-    search_term: str
 
     strategy: str = "must"
