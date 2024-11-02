@@ -1,11 +1,13 @@
-# muGen - The GenAI Microframework
 
 <p align="center">
     <img src="assets/images/mugen-logotype.png" width="401">
 </p>
 
+# muGen - The GenAI Microframework
+
 [![Static Badge](https://img.shields.io/badge/License-Sustainable_Use_1.0-blue)](LICENSE.md)
-[![Static Badge](https://img.shields.io/badge/Latest_Release-v0.36.1-blue)](https://github.com/vorsocom/mugen/releases/tag/0.36.1)  
+[![Static Badge](https://img.shields.io/badge/Latest_Release-v0.37.0-blue)](https://github.com/vorsocom/mugen/releases/tag/0.37.0)
+[![Static Badge](https://img.shields.io/badge/Test_Coverage-65%-green)]()
 
 muGen (pronounced "mew-jen") is a [fair-code](https://faircode.io) licensed microframework for prototyping and deploying multimodal/multichannel (MM/MC or 3MC) Generative AI applications. Written in Python, muGen aims to have a simple, lean, and extensible codebase that allows developers to mix and match technologies and vendors—such as LLMs, vector storage, and communication platforms—to get from zero to deployment quickly. Read on for an overview of the framework, or skip ahead to our [quick start guide](#quick-start).
 
@@ -20,7 +22,7 @@ muGen (pronounced "mew-jen") is a [fair-code](https://faircode.io) licensed micr
 
 ## Architecture
 
-A muGen application consists of five layers, ranging from high-level platform interfaces to low-level core modules. These layers help maintain a [clean architecture](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html), ensuring that dependencies always point towards lower layers. This approach increases flexibility, testability, and separation of concerns.
+A muGen application consists of five layers, ranging from high-level platform interfaces to low-level core modules. These layers help maintain a [clean architecture](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html), ensuring that dependencies always point towards lower layers. This approach increases flexibility, testability, and separation of concerns. Note, however, that clients which communicate with pull APIs and extensions which implement API endpoint will decrease "cleanliness".
 
 <p align="center">
     <img src="assets/images/mugen-architecture.png" width="501">
@@ -32,12 +34,12 @@ The platform layer includes communication platforms through which users interact
 
 ### API
 
-muGen runs on the same asyncio event loop as [Quart](https://palletsprojects.com/projects/quart), a Python web framework that supports asynchronous programming. This allows muGen to coexist with Quart and leverage its API-building functionality without being entirely dependent on it. The registration of the core API blueprint is delayed until extensions have been registered, enabling extensions to define custom endpoints or add routes to the core API seamlessly.
+muGen runs on the same asyncio event loop as [Quart](https://palletsprojects.com/projects/quart), a Python web framework that supports asynchronous programming. This allows muGen to coexist with Quart and leverage its API-building functionality without being entirely dependent on it. The registration muGen's core API blueprint is delayed until extensions have been registered, enabling extensions to define custom endpoints or add routes to the core API seamlessly.
 
 
 ### Extensions
 
-muGen supports seven types of extensions, which can be platform-agnostic or specific, and are activated at different stages of the message lifecycle. The extensions allow developers to customize how the application behaves in response to user interactions. These types are:
+muGen supports various types of extensions, which can be platform-agnostic or specific, and are activated at different stages of the message lifecycle. The extensions allow developers to customize how the application behaves in response to user interactions. These extension types are:
 
 1. **Framework (FW) Extensions:** These operate outside the message lifecycle, adding core functionalities like API endpoints. They are initialized during application startup.
 2. **Inter-process Communication (IPC) Extensions:** These handle incoming requests to execute commands, enabling tasks such as running scheduled jobs and processing push API requests.
@@ -51,7 +53,7 @@ Extensions are built against object-oriented programming (OOP) style interfaces,
 
 ### Clients
 
-Clients provide platform-specific functionality and can be built for either push or pull APIs. Push API clients rely on IPC extensions to handle requests from the core API. Configuration for the client modules is managed using a TOML configuration file, allowing for easy customization.
+Clients provide platform-specific functionality and can be built for either push or pull APIs. Push API clients rely on IPC extensions to handle incoming requests. Configuration for the client modules is managed using a TOML configuration file, allowing for easy customization.
 
 ### Gateways and Services
 
@@ -111,7 +113,7 @@ muGen is [fair-code](https://faircode.io), distributed under the [**Sustainable 
 
 ## Why Source-Available?
 
-muGen began as a closed-source project. However, we realized that many clients prefer software that is open to public scrutiny and offers protection against consultancy vendor lock-in. By making muGen source-available and adopting a fair-code license, we allow broader use of the framework in ways that do not harm our business objectives while increasing transparency.
+muGen began as a closed-source project. However, we realized that many clients prefer software that is open to public scrutiny and offers protection against consultancy lock-in. By making muGen source-available and adopting a fair-code license, we allow broader use of the framework in ways that do not harm our business objectives while increasing transparency.
 
 ## Enterprise Services
 
