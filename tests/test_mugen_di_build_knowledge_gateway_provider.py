@@ -248,15 +248,9 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                     def __init__(self, config, logging_gateway, nlp_service):
                         pass
 
-                    async def search_similar(  # pylint: disable=too-many-arguments
+                    async def search(  # pylint: disable=too-many-arguments
                         self,
-                        collection_name,
-                        search_term,
-                        dataset=None,
-                        date_from=None,
-                        date_to=None,
-                        limit=10,
-                        strategy="must",
+                        params,
                     ):
                         pass
 
