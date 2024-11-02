@@ -1,6 +1,6 @@
 # Developing muGen Extensions
 
-muGen extensions are modular components that allow developers to customize and extend the framework’s capabilities by adding platform-agnostic or platform-specific behaviors throughout different stages of the message lifecycle. There are seven extension types: Framework (FW) extensions for integrating core features, Inter-process Communication (IPC) extensions for managing commands and scheduled tasks, Message Handler (MH) extensions for processing non-text inputs, Context (CTX) extensions for enriching conversation histories, Retrieval Augmented Generation (RAG) extensions for performing knowledge retrieval, Response Pre-processor (RPP) extensions for adjusting LLM responses, and Conversational Trigger (CT) extensions for detecting cues and initiating actions. By using object-oriented programming (OOP) interfaces and dependency injection, these extensions enhance the flexibility, maintainability, and reusability of muGen applications.
+muGen extensions are modular components that allow developers to customize and extend the framework’s capabilities by adding platform-agnostic or platform-specific behaviors at different stages of the message lifecycle. There are seven extension types: Framework (FW) extensions for integrating core features, Inter-process Communication (IPC) extensions for managing commands and scheduled tasks, Message Handler (MH) extensions for processing non-text inputs, Context (CTX) extensions for enriching conversation histories, Retrieval Augmented Generation (RAG) extensions for performing knowledge retrieval, Response Pre-processor (RPP) extensions for adjusting LLM responses, and Conversational Trigger (CT) extensions for detecting cues and initiating actions. By using object-oriented programming (OOP) interfaces and dependency injection, these extensions enhance the flexibility, maintainability, and reusability of muGen applications.
 
 ## Prerequisites
 
@@ -11,26 +11,24 @@ Before starting, make sure you have:
 
 ## The Extension Directory
 
-While extension modules can be loaded from anywhere in the directory structure, the recommended directory is `mugen.extension`.
+While extension modules can be loaded from anywhere in the directory structure, we recommended creating an `extension` directory in the project root.
 
 ```text
 root
-└── mugen
-    └── extension
-        └── ...
+└── extension
+    └── ...
 ```
 
 As a best practice, consider grouping extensions that serve the same business use case into "app" directories. This would make it easier to reuse the functionality they provide in other systems. For example:
 
 ```text
 root
-└── mugen
-    └── extension
-        ├── app1
-        │   ├── ctx_ext.py
-        │   └── rag_ext.py
-        └── app2
-            └── mh_ext.py
+└── extension
+    ├── app1
+    │   ├── ctx_ext.py
+    │   └── rag_ext.py
+    └── app2
+        └── mh_ext.py
 ```
 
 You can use your own naming conventions for extension directories and files.
@@ -47,7 +45,7 @@ Remember that your extensions must strictly conform to the specified contracts a
 
 ## Platform Targeting
 
-All extensions must declare their target platform(s) using the `platforms` property, which must return a list of strings. Platform targeting ensures that an extension is only applied when interacting with specified platforms. For example, if you have features that are specific to WhatsApp or Telnet, setting up platform targeting allows your extension to activate only when the corresponding platform is in use.
+All extensions must declare their target platform(s) using the `platforms` property, which must return a list of strings. Platform targeting ensures that an extension is only applied when interacting with specified platforms. For example, if you have features that are specific to WhatsApp and Telnet, setting up platform targeting allows your extension to activate only when the corresponding platform is in use.
 
 For platform-agnostic extensions, the `platforms` property should return an empty list.
 
@@ -78,8 +76,8 @@ class MyCTXExtension(ICTXExtension):
     
     def __init__(
         self,
-        config: providers.Configuration = di.container.config,
-        logging_gateway: ILoggingGateway = di.container.logging_gateway,
+        config=di.container.config,
+        logging_gateway=di.container.logging_gateway,
     ) -> None:
         self._config = config
         self._logging_gateway = logging_gateway
@@ -157,10 +155,6 @@ class MyFWExtension(IFWExtension):
         """Get the platforms this extension supports."""
         return []
 
-    def platform_supported(self, platform: str) -> bool:
-        """Determine if the extension supports the specified platform."""
-        return not self.platforms or platform in self.platforms
-
     async def setup(self) -> None:
         """Perform extension setup during application initialization."""
         print("Setting up MyFWExtension...")
@@ -188,10 +182,6 @@ class MyIPCExtension(IIPCExtension):
     def platforms(self) -> list[str]:
         """Get the platforms this extension supports."""
         return []
-
-    def platform_supported(self, platform: str) -> bool:
-        """Determine if the extension supports the specified platform."""
-        return not self.platforms or platform in self.platforms
 
     @property
     def ipc_commands(self) -> list[str]:
@@ -226,10 +216,6 @@ class MyMHExtension(IMHExtension):
         """Get the platforms this extension supports."""
         return []
 
-    def platform_supported(self, platform: str) -> bool:
-        """Determine if the extension supports the specified platform."""
-        return not self.platforms or platform in self.platforms
-
     @property
     def message_types(self) -> list[str]:
         """Get the list of message types handled by this extension."""
@@ -242,7 +228,7 @@ class MyMHExtension(IMHExtension):
         message: dict
     ) -> None:
         """Handle a message."""
-        print(f"Handling message from {sender} in room {room_id}: {message}")
+        print(f"Message from {sender} in room {room_id}: {message}")
         # Implement message handling logic here
 ```
 
@@ -267,10 +253,6 @@ class MyCTXExtension(ICTXExtension):
     def platforms(self) -> list[str]:
         """Get the platforms this extension supports."""
         return []
-
-    def platform_supported(self, platform: str) -> bool:
-        """Determine if the extension supports the specified platform."""
-        return not self.platforms or platform in self.platforms
 
     def get_context(self, user_id: str) -> list[dict]:
         """Provide additional context for a given user."""
@@ -308,10 +290,6 @@ class MyRAGExtension(IRAGExtension):
         """Get the platforms this extension supports."""
         return []
 
-    def platform_supported(self, platform: str) -> bool:
-        """Determine if the extension supports the specified platform."""
-        return not self.platforms or platform in self.platforms
-
     @property
     def cache_key(self) -> str:
         """Get the key used to access the provider cache."""
@@ -345,10 +323,6 @@ class MyRPPExtension(IRPPExtension):
         """Get the platforms this extension supports."""
         return []
 
-    def platform_supported(self, platform: str) -> bool:
-        """Determine if the extension supports the specified platform."""
-        return not self.platforms or platform in self.platforms
-
     async def preprocess_response(self, room_id: str, user_id: str) -> str:
         """Modify the assistant response before it is delivered."""
         print(f"Preprocessing response for user {user_id} in room {room_id}")
@@ -377,10 +351,6 @@ class MyCTExtension(ICTExtension):
     def platforms(self) -> list[str]:
         """Get the platforms this extension supports."""
         return []
-
-    def platform_supported(self, platform: str) -> bool:
-        """Determine if the extension supports the specified platform."""
-        return not self.platforms or platform in self.platforms
 
     @property
     def triggers(self) -> list[str]:
