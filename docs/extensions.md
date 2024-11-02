@@ -117,15 +117,15 @@ Extensions are loaded by setting their type and path in `mugen.toml`.
 ...
 [[mugen.modules.extensions]]
 type = "ctx"
-path = "mugen.extension.app1.ctx_ext"
+path = "extension.app1.ctx_ext"
 
 [[mugen.modules.extensions]]
 type = "rag"
-path = "mugen.extension.app1.rag_ext"
+path = "extension.app1.rag_ext"
 
 [[mugen.modules.extensions]]
 type = "mh"
-path = "mugen.extension.app2.mh_ext"
+path = "extension.app2.mh_ext"
 ...
 ```
 
