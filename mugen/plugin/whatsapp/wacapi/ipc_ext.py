@@ -43,10 +43,6 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         """Get the platform that the extension is targeting."""
         return ["whatsapp"]
 
-    def platform_supported(self, platform: str) -> bool:
-        """Determine if the extension supports the specified platform."""
-        return not self.platforms or platform in self.platforms
-
     async def process_ipc_command(self, payload: dict) -> None:
         self._logging_gateway.debug(
             f"WhatsAppWACAPIIPCExtension: Executing command: {payload['command']}"
