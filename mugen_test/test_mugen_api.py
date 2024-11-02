@@ -47,7 +47,7 @@ walr_mock.start()
 wsvr_mock.start()
 
 loader = unittest.TestLoader()
-suite = loader.discover("tests/api")
+suite = loader.discover("mugen_test/api")
 
 runner = unittest.TextTestRunner()
 runner.run(suite)
