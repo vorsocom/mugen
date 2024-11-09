@@ -11,7 +11,6 @@ from sentence_transformers import SentenceTransformer
 from mugen.core.contract.dto.qdrant.search import QdrantSearchVendorParams
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.service.nlp import INLPService
 
 
 # pylint: disable=too-few-public-methods
@@ -22,7 +21,6 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         self,
         config: SimpleNamespace,
         logging_gateway: ILoggingGateway,
-        nlp_service: INLPService,
     ) -> None:
         self._config = config
         self._client = AsyncQdrantClient(
@@ -31,7 +29,6 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             port=None,
         )
         self._logging_gateway = logging_gateway
-        self._nlp_service = nlp_service
 
         self._encoder = SentenceTransformer(
             model_name_or_path="all-mpnet-base-v2",
@@ -41,13 +38,12 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             cache_folder=self._config.hf.home,
         )
 
-    # pylint: disable=too-many-arguments
     async def search(
         self,
         params: QdrantSearchVendorParams,
     ) -> list:
         self._logging_gateway.debug(
-            f"QdrantKnowledgeRetrievalGateway.search: search term {params.search_term}"
+            f"QdrantKnowledgeGateway: Search terms {params.search_term}"
         )
         conditions = []
         dataset_filter = None
@@ -93,13 +89,12 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             )
 
         # Add keyword conditions.
-        keywords = self._nlp_service.get_keywords(params.search_term)
-        self._logging_gateway.debug(
-            f"QdrantKnowledgeRetrievalGateway.search_similar: keywords {keywords}"
-        )
-        for keyword in keywords:
+        for keyword in params.keywords:
             conditions.append(
-                models.FieldCondition(key="data", match=models.MatchText(text=keyword))
+                models.FieldCondition(
+                    key="data",
+                    match=models.MatchText(text=keyword),
+                )
             )
         # self._logging_gateway.debug(conditions)
         try:
@@ -136,6 +131,6 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             )
         except ResponseHandlingException:
             self._logging_gateway.warning(
-                "QdrantKnowledgeRetrievalGateway.search: ResponseHandlingException"
+                "QdrantKnowledgeGateway - ResponseHandlingException"
             )
             return []
