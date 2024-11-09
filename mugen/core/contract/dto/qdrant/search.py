@@ -24,6 +24,8 @@ class QdrantSearchVendorParams(VendorParams):
 
     date_to: str = None
 
+    keywords: list[str] = []
+
     limit: int = 10
 
     strategy: str = "must"
