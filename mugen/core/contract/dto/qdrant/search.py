@@ -2,7 +2,7 @@
 
 __all__ = ["QdrantSearchVendorParams"]
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mugen.core.contract.dto.vendorparams import VendorParams
 
@@ -24,7 +24,7 @@ class QdrantSearchVendorParams(VendorParams):
 
     date_to: str = None
 
-    keywords: list[str] = []
+    keywords: list[str] = field(default_factory=list)
 
     limit: int = 10
 
