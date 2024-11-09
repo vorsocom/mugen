@@ -463,7 +463,6 @@ def _build_knowledge_gateway_provider(
         injector.knowledge_gateway = IKnowledgeGateway.__subclasses__()[0](
             config=injector.config,
             logging_gateway=injector.logging_gateway,
-            nlp_service=injector.nlp_service,
         )
     except IndexError:
         # We'll get an IndexError if the imported module

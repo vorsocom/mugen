@@ -245,7 +245,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                 class DummyKnowledgeGatewayClass(IKnowledgeGateway):
                     """Dummy knowledge class."""
 
-                    def __init__(self, config, logging_gateway, nlp_service):
+                    def __init__(self, config, logging_gateway):
                         pass
 
                     async def search(  # pylint: disable=too-many-arguments
