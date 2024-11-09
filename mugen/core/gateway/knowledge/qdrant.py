@@ -35,7 +35,7 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             tokenizer_kwargs={
                 "clean_up_tokenization_spaces": False,
             },
-            cache_folder=self._config.hf.home,
+            cache_folder=self._config.transformers.hf.home,
         )
 
     async def search(
