@@ -82,7 +82,15 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 ~$ cp conf/mugen.toml.sample mugen.toml
 
 # Edit mugen.toml to set your preferred values.
-# At minimum, configure one completion gateway.
+# At minimum, configure the completion gateway by
+# setting mugen.modules.core.gateway.completion.
+# Gateways are currently provided for AWS Bedrock,
+# Groq, and SambaNova.
+# For example, to use AWS Bedrock:
+#   1. Set mugen.modules.core.gateway.completion to
+#      "mugen.core.gateway.completion.bedrock".
+#   2. Configure your AWS Bedrock credentials in the
+#      [aws.bedrock] section.
 ~$ nano mugen.toml
 
 # Install Python dependencies.
