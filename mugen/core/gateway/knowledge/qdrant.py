@@ -5,7 +5,7 @@ __all__ = ["QdrantKnowledgeGateway"]
 from types import SimpleNamespace
 
 from qdrant_client import AsyncQdrantClient, models
-from qdrant_client.http.exceptions import ResponseHandlingException
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from sentence_transformers import SentenceTransformer
 
 from mugen.core.contract.dto.qdrant.search import QdrantSearchVendorParams
@@ -129,7 +129,7 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                 query_filter=models.Filter(must=conditions),
                 limit=params.limit,
             )
-        except ResponseHandlingException:
+        except (ResponseHandlingException, UnexpectedResponse):
             self._logging_gateway.warning(
                 "QdrantKnowledgeGateway - ResponseHandlingException"
             )
