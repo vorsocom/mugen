@@ -6,7 +6,7 @@
 # muGen - The GenAI Microframework
 
 [![Static Badge](https://img.shields.io/badge/License-Sustainable_Use_1.0-blue)](LICENSE.md)
-[![Static Badge](https://img.shields.io/badge/Latest_Release-v0.37.3-blue)](https://github.com/vorsocom/mugen/releases/tag/0.37.3)
+[![Static Badge](https://img.shields.io/badge/Latest_Release-v0.38.0-blue)](https://github.com/vorsocom/mugen/releases/tag/0.38.0)
 ![Static Badge](https://img.shields.io/badge/Test_Coverage-65%25-green)
 
 muGen (pronounced "mew-jen") is a [fair-code](https://faircode.io) licensed microframework for prototyping and deploying multimodal/multichannel (MM/MC or 3MC) Generative AI applications. Written in Python, muGen aims to have a simple, lean, and extensible codebase that allows developers to mix and match technologies and vendors—such as LLMs, vector storage, and communication platforms—to get from zero to deployment quickly. Read on for an overview of the framework, or skip ahead to our [quick start guide](#quick-start).
@@ -82,7 +82,15 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 ~$ cp conf/mugen.toml.sample mugen.toml
 
 # Edit mugen.toml to set your preferred values.
-# At minimum, configure one completion gateway.
+# At minimum, configure the completion gateway by
+# setting mugen.modules.core.gateway.completion.
+# Gateways are currently provided for AWS Bedrock,
+# Groq, and SambaNova.
+# For example, to use AWS Bedrock:
+#   1. Set mugen.modules.core.gateway.completion to
+#      "mugen.core.gateway.completion.bedrock".
+#   2. Configure your AWS Bedrock credentials in the
+#      [aws.bedrock] section.
 ~$ nano mugen.toml
 
 # Install Python dependencies.
