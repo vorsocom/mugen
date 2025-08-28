@@ -16,5 +16,5 @@ class IRAGExtension(IExtensionBase):
         """Get key used to access the provider cache."""
 
     @abstractmethod
-    async def retrieve(self, sender: str, message: str) -> None:
+    async def retrieve(self, sender: str, message: str, thread: dict) -> None:
         """Perform knowledge retrieval."""
