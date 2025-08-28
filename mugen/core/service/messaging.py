@@ -104,7 +104,7 @@ class DefaultMessagingService(IMessagingService):
             if not rag_ext.platform_supported(platform):
                 continue
 
-            await rag_ext.retrieve(sender, content)
+            await rag_ext.retrieve(sender, content, attention_thread)
             if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
                 rp_cache = pickle.loads(
                     self._keyval_storage_gateway.get(
