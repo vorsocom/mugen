@@ -65,13 +65,8 @@ class DefaultMessagingService(IMessagingService):
         content: str,
     ) -> str | None:
         # Handle commands.
-        # They contain no spaces, start with "//" and end with ".".
-        if (
-            len(content.strip().split()) == 1
-            and content.strip()[:2] == "//"
-            and content.strip()[-1] == "."
-        ):
-            return await self._handle_command(platform, room_id, content.strip())
+        if content.strip() == self._config.mugen.commands.clear:
+            return await self._handle_command(platform, room_id, "clear")
 
         # Load previous history from storage if it exists.
         attention_thread = self.load_attention_thread(room_id)
@@ -331,7 +326,7 @@ class DefaultMessagingService(IMessagingService):
 
     async def _handle_command(self, platform: str, room_id: str, cmd: str) -> str:
         match cmd:
-            case "//clear.":
+            case "clear":
                 # Clear attention thread.
                 self.clear_attention_thread(room_id)
 
