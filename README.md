@@ -6,7 +6,7 @@
 # muGen - The GenAI Microframework
 
 [![Static Badge](https://img.shields.io/badge/License-Sustainable_Use_1.0-blue)](LICENSE.md)
-[![Static Badge](https://img.shields.io/badge/Latest_Release-v0.38.0-blue)](https://github.com/vorsocom/mugen/releases/tag/0.38.0)
+[![Static Badge](https://img.shields.io/badge/Latest_Release-v0.39.0-blue)](https://github.com/vorsocom/mugen/releases/tag/0.39.0)
 ![Static Badge](https://img.shields.io/badge/Test_Coverage-65%25-green)
 
 muGen (pronounced "mew-jen") is a [fair-code](https://faircode.io) licensed microframework for prototyping and deploying multimodal/multichannel (MM/MC or 3MC) Generative AI applications. Written in Python, muGen aims to have a simple, lean, and extensible codebase that allows developers to mix and match technologies and vendors—such as LLMs, vector storage, and communication platforms—to get from zero to deployment quickly. Read on for an overview of the framework, or skip ahead to our [quick start guide](#quick-start).
