@@ -102,7 +102,7 @@ async def run_clients(app: Quart) -> None:
         extensions += di.container.config.mugen.modules.core.plugins
 
     # Load third party extensions.
-    if hasattr(di.container.config.mugen.modules.core, "extensions"):
+    if hasattr(di.container.config.mugen.modules, "extensions"):
         extensions += di.container.config.mugen.modules.extensions
 
     # Wire the plugins/extensions for dependency injection.
