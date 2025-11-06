@@ -339,6 +339,6 @@ class DefaultMessagingService(IMessagingService):
 
                     if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
                         self._keyval_storage_gateway.remove(rag_ext.cache_key)
-                return "PUC executed."
+                return "Context cleared."
             case _:
                 pass
