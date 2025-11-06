@@ -38,7 +38,9 @@ class BedrockCompletionGateway(ICompletionGateway):
         operation: str = "completion",
     ) -> SimpleNamespace | None:
         model = self._config.aws.bedrock.api.dict[operation]["model"]
+        max_tokens = int(self._config.aws.bedrock.api.dict[operation]["max_tokens"])
         temperature = float(self._config.aws.bedrock.api.dict[operation]["temp"])
+        top_p = float(self._config.aws.bedrock.api.dict[operation]["top_p"])
 
         response = None
         conversation = []
@@ -56,9 +58,9 @@ class BedrockCompletionGateway(ICompletionGateway):
                 messages=conversation,
                 system=system_prompts,
                 inferenceConfig={
-                    "maxTokens": 512,
+                    "maxTokens": max_tokens,
                     "temperature": temperature,
-                    "topP": 0.9,
+                    "topP": top_p,
                 },
             )
             response = SimpleNamespace()
