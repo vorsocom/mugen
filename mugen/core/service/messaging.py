@@ -66,7 +66,7 @@ class DefaultMessagingService(IMessagingService):
     ) -> str | None:
         # Handle commands.
         if content.strip() == self._config.mugen.commands.clear:
-            return await self._handle_command(platform, room_id, "clear")
+            return await self._handle_command(platform, room_id, sender, "clear")
 
         # Load previous history from storage if it exists.
         attention_thread = self.load_attention_thread(room_id)
@@ -100,10 +100,11 @@ class DefaultMessagingService(IMessagingService):
                 continue
 
             await rag_ext.retrieve(sender, content, attention_thread)
-            if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
+            cache_key = f"{rag_ext.cache_key}__{sender}"
+            if self._keyval_storage_gateway.has_key(cache_key):
                 rp_cache = pickle.loads(
                     self._keyval_storage_gateway.get(
-                        rag_ext.cache_key,
+                        cache_key,
                         False,
                     )
                 )
@@ -324,7 +325,13 @@ class DefaultMessagingService(IMessagingService):
 
         return context
 
-    async def _handle_command(self, platform: str, room_id: str, cmd: str) -> str:
+    async def _handle_command(
+        self,
+        platform: str,
+        room_id: str,
+        sender: str,
+        cmd: str,
+    ) -> str:
         match cmd:
             case "clear":
                 # Clear attention thread.
@@ -337,8 +344,9 @@ class DefaultMessagingService(IMessagingService):
                     if not rag_ext.platform_supported(platform):
                         continue
 
-                    if self._keyval_storage_gateway.has_key(rag_ext.cache_key):
-                        self._keyval_storage_gateway.remove(rag_ext.cache_key)
+                    cache_key = f"{rag_ext.cache_key}__{sender}"
+                    if self._keyval_storage_gateway.has_key(cache_key):
+                        self._keyval_storage_gateway.remove(cache_key)
                 return "Context cleared."
             case _:
                 pass
