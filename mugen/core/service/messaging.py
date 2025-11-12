@@ -307,12 +307,15 @@ class DefaultMessagingService(IMessagingService):
         context = []
 
         # Append assistant persona to context.
-        context.append(
-            {
-                "role": "system",
-                "content": self._config.mugen.assistant.persona,
-            }
-        )
+        if hasattr(self._config.mugen, "assistant"):
+            if hasattr(self._config.mugen.assistant, "persona"):
+                if len(self._config.mugen.assistant.persona) > 0:
+                    context.append(
+                        {
+                            "role": "system",
+                            "content": self._config.mugen.assistant.persona,
+                        }
+                    )
 
         # Append information from CTX extensions to context.
         for ctx_ext in self._ctx_extensions:
