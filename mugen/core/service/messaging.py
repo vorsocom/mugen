@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime
 import json
 import pickle
+from textwrap import dedent
 from types import SimpleNamespace
 import uuid
 
@@ -108,7 +109,19 @@ class DefaultMessagingService(IMessagingService):
                         False,
                     )
                 )
-                completion_context += rp_cache
+                augmentation = dedent(
+                    f"""\
+[CONTEXT]
+{"\n\n".join([x["content"] for x in rp_cache])}
+[/CONTEXT]
+
+[USER_MESSAGE]
+{completion_context[-1]["content"]}
+[/USER_MESSAGE]\
+"""
+                )
+                completion_context[-1]["content"] = augmentation
+                self._keyval_storage_gateway.remove(cache_key)
 
         # self._logging_gateway.debug(json.dumps(completion_context, indent=4))
         # Get assistant response based on conversation history, system context,
