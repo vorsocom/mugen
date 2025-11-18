@@ -46,7 +46,7 @@ service.user = "mugen.core.service.user"
 # Core Plugins
 #
 # WACAPI
-[[mugen.modules.core.plugins]]
+[[mugen.modules.plugins]]
 type = "ipc"
 path = "mugen.core.plugin.whatsapp.wacapi.ipc_ext"
 #
