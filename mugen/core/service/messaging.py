@@ -3,13 +3,11 @@
 __all__ = ["DefaultMessagingService"]
 
 import asyncio
-from datetime import datetime
 import json
 import pickle
-from textwrap import dedent
 from types import SimpleNamespace
-import uuid
 
+from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.mh import IMHExtension
@@ -29,6 +27,8 @@ class DefaultMessagingService(IMessagingService):
     _thread_version: int = 1
 
     _thread_list_version: int = 1
+
+    _cp_extensions: list[ICPExtension] = []
 
     _ct_extensions: list[ICTExtension] = []
 
@@ -66,30 +66,50 @@ class DefaultMessagingService(IMessagingService):
         content: str,
     ) -> str | None:
         # Handle commands.
-        if content.strip() == self._config.mugen.commands.clear:
-            return await self._handle_command(platform, room_id, sender, "clear")
+        command_responses: list[str] = []
+        for cp_ext in self._cp_extensions:
+            # Filter extensions that don't support the
+            # calling platform.
+            if not cp_ext.platform_supported(platform):
+                continue
+
+            command_response = await cp_ext.process_message(
+                content,
+                room_id,
+                sender,
+            )
+
+            if command_response is not None:
+                command_responses.append(command_response)
+
+        if len(command_responses) > 0:
+            return " ".join(command_responses)
 
         # Load previous history from storage if it exists.
-        attention_thread = self.load_attention_thread(room_id)
+        chat_history = self.load_chat_history(room_id)
 
         # self._logging_gateway.debug(f"attention_thread: {attention_thread}")
 
         completion_context = []
 
         # Add system context to completion context.
-        completion_context += self._get_system_context(platform, sender)
+        for ctx_ext in self._ctx_extensions:
+            # Filter extensions that don't support the
+            # calling platform.
+            if not ctx_ext.platform_supported(platform):
+                continue
+
+            completion_context += ctx_ext.get_context(sender)
 
         # Add user message to attention thread.
-        attention_thread["messages"].append({"role": "user", "content": content})
+        chat_history["messages"].append({"role": "user", "content": content})
 
         # Log user message if conversation debugging flag set.
         if self._config.mugen.debug_conversation:
-            self._logging_gateway.debug(
-                json.dumps(attention_thread["messages"], indent=4)
-            )
+            self._logging_gateway.debug(json.dumps(chat_history["messages"], indent=4))
 
         # Add thread history to completion context.
-        completion_context += attention_thread["messages"]
+        completion_context += chat_history["messages"]
 
         # Execute RAG pipelines and get data if any was found.
         # If the user message did not trigger an RAG queries, the information from
@@ -100,7 +120,7 @@ class DefaultMessagingService(IMessagingService):
             if not rag_ext.platform_supported(platform):
                 continue
 
-            await rag_ext.retrieve(sender, content, attention_thread)
+            await rag_ext.retrieve(sender, content, chat_history)
             cache_key = f"{rag_ext.cache_key}__{sender}"
             if self._keyval_storage_gateway.has_key(cache_key):
                 rp_cache = pickle.loads(
@@ -109,21 +129,17 @@ class DefaultMessagingService(IMessagingService):
                         False,
                     )
                 )
-                augmentation = dedent(
-                    f"""\
-[CONTEXT]
-{"\n\n".join([x["content"] for x in rp_cache])}
-[/CONTEXT]
-
-[USER_MESSAGE]
-{completion_context[-1]["content"]}
-[/USER_MESSAGE]\
-"""
+                augmentation = (
+                    "[CONTEXT]\n"
+                    f'{"\n\n".join([f'{i+1}. {x["content"]}' for i, x in enumerate(rp_cache)])}\n'
+                    "[/CONTEXT]\n\n"
+                    "[USER_MESSAGE]\n"
+                    f'{completion_context[-1]["content"]}\n'
+                    "[/USER_MESSAGE]"
                 )
                 completion_context[-1]["content"] = augmentation
                 self._keyval_storage_gateway.remove(cache_key)
 
-        # self._logging_gateway.debug(json.dumps(completion_context, indent=4))
         # Get assistant response based on conversation history, system context,
         # and RAG data.
         self._logging_gateway.debug("Get completion.")
@@ -142,19 +158,17 @@ class DefaultMessagingService(IMessagingService):
 
         # Save current thread first.
         self._logging_gateway.debug("Persist attention thread.")
-        attention_thread["messages"].append(
+        chat_history["messages"].append(
             {
                 "role": "assistant",
                 "content": assistant_response,
             }
         )
-        self.save_attention_thread(room_id, attention_thread)
+        self.save_chat_history(room_id, chat_history)
 
         # Log assistant message if conversation debugging flag set.
         if self._config.mugen.debug_conversation:
-            self._logging_gateway.debug(
-                json.dumps(attention_thread["messages"], indent=4)
-            )
+            self._logging_gateway.debug(json.dumps(chat_history["messages"], indent=4))
 
         # Pass the response to pre-processor extensions.
         for rpp_ext in self._rpp_extensions:
@@ -194,40 +208,45 @@ class DefaultMessagingService(IMessagingService):
 
         return assistant_response
 
-    def add_message_to_thread(self, message: str, role: str, room_id: str) -> None:
+    def add_message_to_history(self, message: str, role: str, room_id: str) -> None:
         # Load the attention thread.
-        attention_thread = self.load_attention_thread(room_id)
+        history = self.load_chat_history(room_id)
 
         # Append a new assistant response.
-        attention_thread["messages"].append({"role": role, "content": message})
+        history["messages"].append({"role": role, "content": message})
 
         # Persist the attention thread.
-        self.save_attention_thread(room_id, attention_thread)
+        self.save_chat_history(room_id, history)
 
-    def clear_attention_thread(self, room_id: str, keep: int = 0) -> None:
+    def clear_chat_history(self, room_id: str, keep: int = 0) -> None:
         # Get the attention thread.
-        attention_thread = self.load_attention_thread(room_id)
+        history = self.load_chat_history(room_id)
 
         if keep == 0:
-            attention_thread["messages"] = []
+            history["messages"] = []
         else:
-            attention_thread["messages"] = attention_thread["messages"][-abs(keep) :]
+            history["messages"] = history["messages"][-abs(keep) :]
 
         # Persist the cleared thread.
-        self.save_attention_thread(room_id, attention_thread)
+        self.save_chat_history(room_id, history)
 
-    def load_attention_thread(self, room_id: str) -> dict | None:
-        thread_key = self._get_attention_thread_key(room_id)
-        return pickle.loads(self._keyval_storage_gateway.get(thread_key, False))
+    def load_chat_history(self, room_id: str) -> dict | None:
+        history_key = f"chat_history:{room_id}"
+        if self._keyval_storage_gateway.has_key(history_key):
+            return pickle.loads(self._keyval_storage_gateway.get(history_key, False))
 
-    def save_attention_thread(self, room_id: str, thread: dict) -> None:
-        thread["last_saved"] = datetime.now().strftime("%s")
-        thread_key = self._get_attention_thread_key(room_id)
-        self._keyval_storage_gateway.put(thread_key, pickle.dumps(thread))
+        return {"messages": []}
+
+    def save_chat_history(self, room_id: str, history: dict) -> None:
+        history_key = f"chat_history:{room_id}"
+        self._keyval_storage_gateway.put(history_key, pickle.dumps(history))
 
     @property
     def mh_extensions(self) -> list[IMHExtension]:
         return self._mh_extensions
+
+    def register_cp_extension(self, ext: ICPExtension) -> None:
+        self._cp_extensions.append(ext)
 
     def register_ct_extension(self, ext: ICTExtension) -> None:
         self._ct_extensions.append(ext)
@@ -243,126 +262,3 @@ class DefaultMessagingService(IMessagingService):
 
     def register_rpp_extension(self, ext: IRPPExtension) -> None:
         self._rpp_extensions.append(ext)
-
-    def trigger_in_response(self, response: str, platform: str = None) -> bool:
-        hits = 0
-        for ct_ext in self._ct_extensions:
-
-            if platform is not None and not ct_ext.platform_supported(platform):
-                continue
-
-            for trigger in ct_ext.triggers:
-                if trigger in response:
-                    hits += 1
-
-        return hits > 0
-
-    def _get_attention_thread_key(self, room_id: str) -> str:
-        """Get the attention thread that the message is related to."""
-        # Get the key to retrieve the list of attention threads for this room.
-        thread_list_key = f"chat_threads_list:{room_id}"
-
-        # If thread_list_key does not exist.
-        if not self._keyval_storage_gateway.has_key(thread_list_key):
-            # This is the first message in this room.
-            # Create a new thread list and get the attention thread key.
-            self._logging_gateway.debug("New room. Generating new list and new thread.")
-            thread_key = self._generate_thread_list(thread_list_key, True)
-            return thread_key
-        # else:
-        # The key does exist.
-        thread_list = pickle.loads(
-            self._keyval_storage_gateway.get(thread_list_key, False)
-        )
-        return thread_list["attention_thread"]
-
-    def _generate_thread_list(self, thread_list_key: str, new_list: bool) -> str:
-        """Generate a new attention thread key."""
-        # Generate new key.
-        self._logging_gateway.debug("Generating new attention thread key.")
-        thread_key = f"chat_thread:{uuid.uuid1()}"
-
-        thread_list = {}
-        # If its a new thread list.
-        if new_list:
-            # Create a new thread list, and make the new thread the attention thread.
-            self._logging_gateway.debug("Creating new thread list.")
-            thread_list["version"] = self._thread_list_version
-            thread_list["attention_thread"] = thread_key
-            thread_list["threads"] = [thread_key]
-        else:
-            # The thread list exists.
-            self._logging_gateway.debug("Load existing thread list.")
-            thread_list = pickle.loads(
-                self._keyval_storage_gateway.get(thread_list_key, False)
-            )
-
-            # Set new key as attention thread and append it to the threads list.
-            thread_list["attention_thread"] = thread_key
-            thread_list["threads"].append(thread_key)
-
-        # Persist thread list.
-        self._keyval_storage_gateway.put(thread_list_key, pickle.dumps(thread_list))
-
-        # Default values for attention thread.
-        attention_thread = {
-            "created": datetime.now().strftime("%s"),
-            "last_saved": datetime.now().strftime("%s"),
-            "messages": [],
-            "version": self._thread_version,
-        }
-        self._keyval_storage_gateway.put(thread_key, pickle.dumps(attention_thread))
-
-        return thread_key
-
-    def _get_system_context(self, platform: str, sender: str) -> list[dict]:
-        """Return a list of system messages to add context to user message."""
-        context = []
-
-        # Append assistant persona to context.
-        if hasattr(self._config.mugen, "assistant"):
-            if hasattr(self._config.mugen.assistant, "persona"):
-                if len(self._config.mugen.assistant.persona) > 0:
-                    context.append(
-                        {
-                            "role": "system",
-                            "content": self._config.mugen.assistant.persona,
-                        }
-                    )
-
-        # Append information from CTX extensions to context.
-        for ctx_ext in self._ctx_extensions:
-            # Filter extensions that don't support the
-            # calling platform.
-            if not ctx_ext.platform_supported(platform):
-                continue
-
-            context += ctx_ext.get_context(sender)
-
-        return context
-
-    async def _handle_command(
-        self,
-        platform: str,
-        room_id: str,
-        sender: str,
-        cmd: str,
-    ) -> str:
-        match cmd:
-            case "clear":
-                # Clear attention thread.
-                self.clear_attention_thread(room_id)
-
-                # Clear RAG caches.
-                for rag_ext in self._rag_extensions:
-                    # Filter extensions that don't support the
-                    # calling platform.
-                    if not rag_ext.platform_supported(platform):
-                        continue
-
-                    cache_key = f"{rag_ext.cache_key}__{sender}"
-                    if self._keyval_storage_gateway.has_key(cache_key):
-                        self._keyval_storage_gateway.remove(cache_key)
-                return "Context cleared."
-            case _:
-                pass

@@ -4,6 +4,7 @@ __all__ = ["IMessagingService"]
 
 from abc import ABC, abstractmethod
 
+from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.mh import IMHExtension
@@ -30,20 +31,24 @@ class IMessagingService(ABC):
         """Handle a text message from a chat."""
 
     @abstractmethod
-    def add_message_to_thread(self, message: str, role: str, room_id: str) -> None:
-        """Add a message to a room's attention thread."""
+    def add_message_to_history(self, message: str, role: str, room_id: str) -> None:
+        """Add a message to a room's chat history."""
 
     @abstractmethod
-    def clear_attention_thread(self, room_id: str, keep: int = 0) -> None:
-        """Clear a room's attention thread."""
+    def clear_chat_history(self, room_id: str, keep: int = 0) -> None:
+        """Clear a room's chat history."""
 
     @abstractmethod
-    def load_attention_thread(self, room_id: str) -> dict:
-        """Get a room's attention thread from storage."""
+    def load_chat_history(self, room_id: str) -> dict:
+        """Get a room's chat history from storage."""
 
     @abstractmethod
-    def save_attention_thread(self, room_id: str, thread: dict) -> None:
-        """Persist a room's attention thread."""
+    def save_chat_history(self, room_id: str, history: dict) -> None:
+        """Persist a room's chat history."""
+
+    @abstractmethod
+    def register_cp_extension(self, ext: ICPExtension) -> None:
+        """Register a Command Processor (CP) extension."""
 
     @abstractmethod
     def register_ct_extension(self, ext: ICTExtension) -> None:
@@ -64,7 +69,3 @@ class IMessagingService(ABC):
     @abstractmethod
     def register_rpp_extension(self, ext: IRPPExtension) -> None:
         """Register a Response Pre-Processor (RPP) extension."""
-
-    @abstractmethod
-    def trigger_in_response(self, response: str, platform: str = None) -> bool:
-        """Determine if a response contains a conversational trigger."""
