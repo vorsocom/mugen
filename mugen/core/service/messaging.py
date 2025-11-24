@@ -2,10 +2,8 @@
 
 __all__ = ["DefaultMessagingService"]
 
-import asyncio
-import json
-import pickle
 from types import SimpleNamespace
+from typing import Any
 
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
@@ -41,6 +39,7 @@ class DefaultMessagingService(IMessagingService):
     _rpp_extensions: list[IRPPExtension] = []
 
     # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-positional-arguments
     def __init__(
         self,
         config: SimpleNamespace,
@@ -55,195 +54,255 @@ class DefaultMessagingService(IMessagingService):
         self._logging_gateway = logging_gateway
         self._user_service = user_service
 
-    # pylint: disable=too-many-branches
-    # pylint: disable=too-many-statements
-    # pylint: disable=too-many-locals
+    async def handle_audio_message(
+        self,
+        platform: str,
+        room_id: str,
+        sender: str,
+        message: Any,
+    ) -> list[dict] | None:
+        # Call message handlers.
+        handler_responses: list[dict] = []
+        for mh_ext in self._mh_extensions:
+            # Filter extensions that don't support the
+            # calling platform.
+            if not mh_ext.platform_supported(platform):
+                continue
+
+            # Filter extensions that don't handle audio
+            # messages.
+            if "audio" not in mh_ext.message_types:
+                continue
+
+            resp = await mh_ext.handle_message(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+            )
+
+            if resp:
+                handler_responses += resp
+
+        if not handler_responses:
+            return [
+                {
+                    "type": "text",
+                    "content": "Unsupported message type: audio.",
+                }
+            ]
+
+        return await self.handle_text_message(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message="Uploaded an audio file.",
+            message_context=handler_responses,
+        )
+
+    async def handle_file_message(
+        self,
+        platform: str,
+        room_id: str,
+        sender: str,
+        message: Any,
+    ) -> list[dict] | None:
+        # Call message handlers.
+        handler_responses: list[dict] = []
+        for mh_ext in self._mh_extensions:
+            # Filter extensions that don't support the
+            # calling platform.
+            if not mh_ext.platform_supported(platform):
+                continue
+
+            # Filter extensions that don't handle file
+            # messages.
+            if "file" not in mh_ext.message_types:
+                continue
+
+            resp = await mh_ext.handle_message(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+            )
+
+            if resp:
+                handler_responses += resp
+
+        if not handler_responses:
+            return [
+                {
+                    "type": "text",
+                    "content": "Unsupported message type: file.",
+                }
+            ]
+
+        return await self.handle_text_message(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message="Uploaded a file.",
+            message_context=handler_responses,
+        )
+
+    async def handle_image_message(
+        self,
+        platform: str,
+        room_id: str,
+        sender: str,
+        message: Any,
+    ) -> list[dict] | None:
+        # Call message handlers.
+        handler_responses: list[dict] = []
+        for mh_ext in self._mh_extensions:
+            # Filter extensions that don't support the
+            # calling platform.
+            if not mh_ext.platform_supported(platform):
+                continue
+
+            # Filter extensions that don't handle image
+            # messages.
+            if "image" not in mh_ext.message_types:
+                continue
+
+            resp = await mh_ext.handle_message(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+            )
+
+            if resp:
+                handler_responses += resp
+
+        if not handler_responses:
+            return [
+                {
+                    "type": "text",
+                    "content": "Unsupported message type: image.",
+                }
+            ]
+
+        return await self.handle_text_message(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message="Uploaded an image file.",
+            message_context=handler_responses,
+        )
+
     async def handle_text_message(
         self,
         platform: str,
         room_id: str,
         sender: str,
-        content: str,
-    ) -> str | None:
-        # Handle commands.
-        command_responses: list[str] = []
-        for cp_ext in self._cp_extensions:
+        message: str,
+        message_context: list[str] = None,
+    ) -> list[dict] | None:
+        # Call message handlers.
+        handler_responses: list[dict] = []
+        for mh_ext in self._mh_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not cp_ext.platform_supported(platform):
+            if not mh_ext.platform_supported(platform):
                 continue
 
-            command_response = await cp_ext.process_message(
-                content,
-                room_id,
-                sender,
+            # Filter extensions that don't handle text
+            # messages.
+            if "text" not in mh_ext.message_types:
+                continue
+
+            resp = await mh_ext.handle_message(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+                message_context=message_context,
             )
 
-            if command_response is not None:
-                command_responses.append(command_response)
+            if resp:
+                handler_responses += resp
 
-        if len(command_responses) > 0:
-            return " ".join(command_responses)
+        if not handler_responses:
+            return [
+                {
+                    "type": "text",
+                    "content": "Unsupported message type: text.",
+                }
+            ]
 
-        # Load previous history from storage if it exists.
-        chat_history = self.load_chat_history(room_id)
+        return handler_responses
 
-        # self._logging_gateway.debug(f"attention_thread: {attention_thread}")
-
-        completion_context = []
-
-        # Add system context to completion context.
-        for ctx_ext in self._ctx_extensions:
+    async def handle_video_message(
+        self,
+        platform: str,
+        room_id: str,
+        sender: str,
+        message: Any,
+    ) -> list[dict] | None:
+        # Call message handlers.
+        handler_responses: list[dict] = []
+        for mh_ext in self._mh_extensions:
             # Filter extensions that don't support the
             # calling platform.
-            if not ctx_ext.platform_supported(platform):
+            if not mh_ext.platform_supported(platform):
                 continue
 
-            completion_context += ctx_ext.get_context(sender)
-
-        # Add user message to attention thread.
-        chat_history["messages"].append({"role": "user", "content": content})
-
-        # Log user message if conversation debugging flag set.
-        if self._config.mugen.debug_conversation:
-            self._logging_gateway.debug(json.dumps(chat_history["messages"], indent=4))
-
-        # Add thread history to completion context.
-        completion_context += chat_history["messages"]
-
-        # Execute RAG pipelines and get data if any was found.
-        # If the user message did not trigger an RAG queries, the information from
-        # previous successful queries will still be cached.
-        for rag_ext in self._rag_extensions:
-            # Filter extensions that don't support the
-            # calling platform.
-            if not rag_ext.platform_supported(platform):
+            # Filter extensions that don't handle video
+            # messages.
+            if "video" not in mh_ext.message_types:
                 continue
 
-            await rag_ext.retrieve(sender, content, chat_history)
-            cache_key = f"{rag_ext.cache_key}__{sender}"
-            if self._keyval_storage_gateway.has_key(cache_key):
-                rp_cache = pickle.loads(
-                    self._keyval_storage_gateway.get(
-                        cache_key,
-                        False,
-                    )
-                )
-                augmentation = (
-                    "[CONTEXT]\n"
-                    f'{"\n\n".join([f'{i+1}. {x["content"]}' for i, x in enumerate(rp_cache)])}\n'
-                    "[/CONTEXT]\n\n"
-                    "[USER_MESSAGE]\n"
-                    f'{completion_context[-1]["content"]}\n'
-                    "[/USER_MESSAGE]"
-                )
-                completion_context[-1]["content"] = augmentation
-                self._keyval_storage_gateway.remove(cache_key)
-
-        # Get assistant response based on conversation history, system context,
-        # and RAG data.
-        self._logging_gateway.debug("Get completion.")
-        completion = await self._completion_gateway.get_completion(
-            context=completion_context,
-        )
-
-        # If the completion attempt failed, set response to "Error" so that the user
-        # will be aware of the failure.
-        if completion is None:
-            self._logging_gateway.debug("Completion is None.")
-            completion = SimpleNamespace()
-            completion.content = "Error"
-
-        assistant_response = completion.content
-
-        # Save current thread first.
-        self._logging_gateway.debug("Persist attention thread.")
-        chat_history["messages"].append(
-            {
-                "role": "assistant",
-                "content": assistant_response,
-            }
-        )
-        self.save_chat_history(room_id, chat_history)
-
-        # Log assistant message if conversation debugging flag set.
-        if self._config.mugen.debug_conversation:
-            self._logging_gateway.debug(json.dumps(chat_history["messages"], indent=4))
-
-        # Pass the response to pre-processor extensions.
-        for rpp_ext in self._rpp_extensions:
-            # Filter extensions that don't support the
-            # calling platform.
-            if not rpp_ext.platform_supported(platform):
-                continue
-
-            assistant_response = await rpp_ext.preprocess_response(
-                room_id,
-                user_id=sender,
+            resp = await mh_ext.handle_message(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
             )
 
-        self._logging_gateway.debug(
-            "Pass response to triggered services for processing."
+            if resp:
+                handler_responses += resp
+
+        if not handler_responses:
+            return [
+                {
+                    "type": "text",
+                    "content": "Unsupported message type: video.",
+                }
+            ]
+
+        return await self.handle_text_message(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message="Uploaded video file.",
+            message_context=handler_responses,
         )
 
-        # Pass the response to conversational trigger extensions for post processing.
-        tasks = []
-        for ct_ext in self._ct_extensions:
-            # Filter extensions that don't support the
-            # calling platform.
-            if not ct_ext.platform_supported(platform):
-                continue
+    @property
+    def cp_extensions(self) -> list[ICPExtension]:
+        return self._cp_extensions
 
-            tasks.append(
-                asyncio.create_task(
-                    ct_ext.process_message(
-                        message=assistant_response,
-                        role="assistant",
-                        room_id=room_id,
-                        user_id=sender,
-                    )
-                )
-            )
-        asyncio.gather(*tasks)
+    @property
+    def ct_extensions(self) -> list[ICTExtension]:
+        return self._ct_extensions
 
-        return assistant_response
-
-    def add_message_to_history(self, message: str, role: str, room_id: str) -> None:
-        # Load the attention thread.
-        history = self.load_chat_history(room_id)
-
-        # Append a new assistant response.
-        history["messages"].append({"role": role, "content": message})
-
-        # Persist the attention thread.
-        self.save_chat_history(room_id, history)
-
-    def clear_chat_history(self, room_id: str, keep: int = 0) -> None:
-        # Get the attention thread.
-        history = self.load_chat_history(room_id)
-
-        if keep == 0:
-            history["messages"] = []
-        else:
-            history["messages"] = history["messages"][-abs(keep) :]
-
-        # Persist the cleared thread.
-        self.save_chat_history(room_id, history)
-
-    def load_chat_history(self, room_id: str) -> dict | None:
-        history_key = f"chat_history:{room_id}"
-        if self._keyval_storage_gateway.has_key(history_key):
-            return pickle.loads(self._keyval_storage_gateway.get(history_key, False))
-
-        return {"messages": []}
-
-    def save_chat_history(self, room_id: str, history: dict) -> None:
-        history_key = f"chat_history:{room_id}"
-        self._keyval_storage_gateway.put(history_key, pickle.dumps(history))
+    @property
+    def ctx_extensions(self) -> list[ICTXExtension]:
+        return self._ctx_extensions
 
     @property
     def mh_extensions(self) -> list[IMHExtension]:
         return self._mh_extensions
+
+    @property
+    def rag_extensions(self) -> list[IRAGExtension]:
+        return self._rag_extensions
+
+    @property
+    def rpp_extensions(self) -> list[IRPPExtension]:
+        return self._rpp_extensions
 
     def register_cp_extension(self, ext: ICPExtension) -> None:
         self._cp_extensions.append(ext)

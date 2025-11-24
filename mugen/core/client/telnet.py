@@ -90,9 +90,14 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
         writer.close()
 
     async def _handle_text_message(self, message: str) -> str:
-        return await self._messaging_service.handle_text_message(
+        responses = await self._messaging_service.handle_text_message(
             platform="telnet",
             room_id="telnet_room",
             sender="telnet_user",
-            content=message,
+            message=message,
         )
+
+        self._logging_gateway.debug("Send responses to user.")
+        for response in responses:
+            if response["type"] == "text":
+                return response["content"]

@@ -10,6 +10,8 @@ debug_conversation = false
 #
 environment = "development"
 #
+logger.level = 10
+#
 logger.name = "COM.VORSOCOMPUTING.MUGEN"
 #
 platforms = [
@@ -18,9 +20,11 @@ platforms = [
     #"whatsapp",
 ]
 #
-storage.keyval.dbm.path = "data/storage.db"
+storage.keyval.dbm.path = "/absolute/path/to/data/storage.db"
 #
 [mugen.modules.core]
+#
+client.telnet = "mugen.core.client.telnet"
 #
 client.matrix = "mugen.core.client.matrix"
 #
@@ -45,22 +49,30 @@ service.user = "mugen.core.service.user"
 #
 # Core Plugins
 #
-# WACAPI
-[[mugen.modules.plugins]]
-type = "ipc"
-path = "mugen.core.plugin.whatsapp.wacapi.ipc_ext"
+# Context.
+# [[mugen.modules.core.plugins]]
+# type = "ctx"
+# path = "mugen.plugin.context.persona.ctx_ext"
+#
+# Commands.
+# [[mugen.modules.core.plugins]]
+# type = "cp"
+# path = "mugen.plugin.command.clear_history.cp_ext"
+#
+# Message Handler.
+# [[mugen.modules.core.plugins]]
+# type = "mh"
+# path = "mugen.plugin.message_handler.text.mh_ext"
+#
+# WACAPI.
+# [[mugen.modules.core.plugins]]
+# type = "ipc"
+# path = "mugen.plugin.whatsapp.wacapi.ipc_ext"
 #
 # Extensions
 [[mugen.modules.extensions]]
 # type = ""
 # path = ""
-#
-#===TELNET===
-[telnet]
-#
-socket.host = "localhost"
-#
-socket.port = 8888
 #
 #===MATRIX===
 [matrix]
@@ -83,7 +95,14 @@ domains.denied = []
 #
 homeserver = ""
 #
-storage.olm.path = "data/.olmstore"
+storage.olm.path = "/absolute/path/to/data/.olmstore"
+#
+#===TELNET===
+[telnet]
+#
+socket.host = "localhost"
+#
+socket.port = 8888
 #
 #===WHATSAPP===
 [whatsapp]
@@ -114,11 +133,19 @@ api.access_key_id = ""
 #
 api.classification.model = ""
 #
+api.classification.max_tokens = 1024
+#
 api.classification.temp = 0.0
+#
+api.classification.top_p = 0.9
 #
 api.completion.model = ""
 #
+api.completion.max_tokens = 1024
+#
 api.completion.temp = 0.0
+#
+api.completion.top_p = 0.9
 #
 api.region = ""
 #

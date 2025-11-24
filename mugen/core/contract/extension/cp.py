@@ -10,11 +10,16 @@ from . import IExtensionBase
 class ICPExtension(IExtensionBase):
     """An ABC for CP extensions."""
 
+    @property
+    @abstractmethod
+    def commands(self) -> list[str]:
+        """Get the commands that are processed by the extension."""
+
     @abstractmethod
     async def process_message(  # pylint: disable=too-many-arguments
         self,
         message: str,
         room_id: str,
         user_id: str,
-    ) -> str | None:
+    ) -> list[dict] | None:
         """Process message for commands."""
