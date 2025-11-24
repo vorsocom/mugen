@@ -3,7 +3,6 @@
 __all__ = ["DefaultMessagingService"]
 
 from types import SimpleNamespace
-from typing import Any
 
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
@@ -59,7 +58,7 @@ class DefaultMessagingService(IMessagingService):
         platform: str,
         room_id: str,
         sender: str,
-        message: Any,
+        message: dict,
     ) -> list[dict] | None:
         # Call message handlers.
         handler_responses: list[dict] = []
@@ -105,7 +104,7 @@ class DefaultMessagingService(IMessagingService):
         platform: str,
         room_id: str,
         sender: str,
-        message: Any,
+        message: dict,
     ) -> list[dict] | None:
         # Call message handlers.
         handler_responses: list[dict] = []
@@ -151,7 +150,7 @@ class DefaultMessagingService(IMessagingService):
         platform: str,
         room_id: str,
         sender: str,
-        message: Any,
+        message: dict,
     ) -> list[dict] | None:
         # Call message handlers.
         handler_responses: list[dict] = []
@@ -239,7 +238,7 @@ class DefaultMessagingService(IMessagingService):
         platform: str,
         room_id: str,
         sender: str,
-        message: Any,
+        message: dict,
     ) -> list[dict] | None:
         # Call message handlers.
         handler_responses: list[dict] = []
