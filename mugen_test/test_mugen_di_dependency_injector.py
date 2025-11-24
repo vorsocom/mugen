@@ -203,7 +203,54 @@ class TestDependencyInjector(unittest.TestCase):
                 pass
 
             @property
+            def cp_extensions(self):
+                pass
+
+            @property
+            def ct_extensions(self):
+                pass
+
+            @property
+            def ctx_extensions(self):
+                pass
+
+            @property
             def mh_extensions(self):
+                pass
+
+            @property
+            def rag_extensions(self):
+                pass
+
+            @property
+            def rpp_extensions(self):
+                pass
+
+            async def handle_audio_message(
+                self,
+                platform: str,
+                room_id: str,
+                sender: str,
+                message: dict,
+            ) -> list[dict] | None:
+                pass
+
+            async def handle_file_message(
+                self,
+                platform: str,
+                room_id: str,
+                sender: str,
+                message: dict,
+            ) -> list[dict] | None:
+                pass
+
+            async def handle_image_message(
+                self,
+                platform: str,
+                room_id: str,
+                sender: str,
+                message: dict,
+            ) -> list[dict] | None:
                 pass
 
             async def handle_text_message(
@@ -211,20 +258,21 @@ class TestDependencyInjector(unittest.TestCase):
                 platform: str,
                 room_id: str,
                 sender: str,
-                content: str,
+                message: str,
+                message_context: list[str] = None,
             ):
                 pass
 
-            def add_message_to_thread(self, message: str, role: str, room_id: str):
+            async def handle_video_message(
+                self,
+                platform: str,
+                room_id: str,
+                sender: str,
+                message: dict,
+            ) -> list[dict] | None:
                 pass
 
-            def clear_attention_thread(self, room_id: str, keep: int = 0):
-                pass
-
-            def load_attention_thread(self, room_id: str):
-                pass
-
-            def save_attention_thread(self, room_id: str, thread: dict):
+            def register_cp_extension(self, ext):
                 pass
 
             def register_ct_extension(self, ext):
@@ -240,9 +288,6 @@ class TestDependencyInjector(unittest.TestCase):
                 pass
 
             def register_rpp_extension(self, ext):
-                pass
-
-            def trigger_in_response(self, response: str, platform: str = None):
                 pass
 
         messaging_service = DummyMessagingServiceClass(
@@ -379,7 +424,7 @@ class TestDependencyInjector(unittest.TestCase):
             async def delete_media(self, media_id: str):
                 pass
 
-            async def download_media(self, media_url: str):
+            async def download_media(self, media_url: str, mimetype: str):
                 pass
 
             async def retrieve_media_url(self, media_id: str):

@@ -15,6 +15,7 @@ from mugen.core.api import api
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
+from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.fw import IFWExtension
@@ -119,13 +120,14 @@ async def register_extensions(
     """Register core plugins and third party extensions."""
 
     # Load extensions if specified. These include:
-    # 1. Conversational Trigger (CT) extensions.
-    # 2. Context (CTX) extensions.
-    # 3. Framework (FW) extensions.
-    # 4. Inter-Process Communication (IPC) extensions.
-    # 5. Message Handler (MH) extensions.
-    # 6. Retrieval Augmented Generation (RAG) extensions.
-    # 7. Response Pre-Processor (RPP) extensions.
+    # 1. Command Processor (CP) extensions.
+    # 2. Conversational Trigger (CT) extensions.
+    # 3. Context (CTX) extensions.
+    # 4. Framework (FW) extensions.
+    # 5. Inter-Process Communication (IPC) extensions.
+    # 6. Message Handler (MH) extensions.
+    # 7. Retrieval Augmented Generation (RAG) extensions.
+    # 8. Response Pre-Processor (RPP) extensions.
     extensions = []
 
     try:
@@ -164,7 +166,18 @@ async def register_extensions(
 
         try:
             try:
-                if ext.type == "ct":
+                if ext.type == "cp":
+                    cp_ext_class = [
+                        x
+                        for x in ICPExtension.__subclasses__()
+                        if x.__module__ == ext.path
+                    ][0]
+                    cp_ext = cp_ext_class()
+                    extension_supported = platform_service.extension_supported(cp_ext)
+                    if extension_supported:
+                        messaging_service.register_cp_extension(cp_ext)
+                        registered = True
+                elif ext.type == "ct":
                     ct_ext_class = [
                         x
                         for x in ICTExtension.__subclasses__()

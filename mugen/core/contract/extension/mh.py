@@ -3,6 +3,7 @@
 __all__ = ["IMHExtension"]
 
 from abc import abstractmethod
+from typing import Any
 
 from . import IExtensionBase
 
@@ -15,6 +16,15 @@ class IMHExtension(IExtensionBase):
     def message_types(self) -> list[str]:
         """Get the list of message types that the extension handles."""
 
+    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-positional-arguments
     @abstractmethod
-    async def handle_message(self, room_id: str, sender: str, message) -> None:
+    async def handle_message(
+        self,
+        platform: str,
+        room_id: str,
+        sender: str,
+        message: Any,
+        message_context: list[dict] = None,
+    ) -> list[dict] | None:
         """Handle a message."""

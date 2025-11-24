@@ -3,6 +3,7 @@
 __all__ = ["IWhatsAppClient"]
 
 from abc import ABC, abstractmethod
+from io import BytesIO
 
 
 class IWhatsAppClient(ABC):
@@ -21,7 +22,7 @@ class IWhatsAppClient(ABC):
         """Delete a media file from WhatsApp."""
 
     @abstractmethod
-    async def download_media(self, media_url: str) -> str | None:
+    async def download_media(self, media_url: str, mimetype: str) -> str | None:
         """Download a media file from WhatsApp."""
 
     @abstractmethod
@@ -143,7 +144,7 @@ class IWhatsAppClient(ABC):
     @abstractmethod
     async def upload_media(
         self,
-        file_path: str,
+        file_path: str | BytesIO,
         file_type: str,
     ) -> str | None:
         """Upload a media file to WhatsApp."""
