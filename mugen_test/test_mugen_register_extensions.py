@@ -702,7 +702,16 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             def message_types(self) -> list[str]:
                 """Get the list of message types that the extension handles."""
 
-            async def handle_message(self, room_id: str, sender: str, message) -> None:
+            # pylint: disable=too-many-arguments
+            # pylint: disable=too-many-positional-arguments
+            async def handle_message(
+                self,
+                platform: str,
+                room_id: str,
+                sender: str,
+                message: dict | str,
+                message_context: list[dict] = None,
+            ) -> None:
                 """Handle a message."""
 
         sc = unittest.mock.Mock
@@ -759,7 +768,16 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             def message_types(self) -> list[str]:
                 """Get the list of message types that the extension handles."""
 
-            async def handle_message(self, room_id: str, sender: str, message) -> None:
+            # pylint: disable=too-many-arguments
+            # pylint: disable=too-many-positional-arguments
+            async def handle_message(
+                self,
+                platform: str,
+                room_id: str,
+                sender: str,
+                message: dict | str,
+                message_context: list[dict] = None,
+            ) -> None:
                 """Handle a message."""
 
         sc = unittest.mock.Mock
@@ -820,7 +838,12 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             def cache_key(self) -> str:
                 """Get key used to access the provider cache."""
 
-            async def retrieve(self, sender: str, message: str, thread: dict) -> None:
+            async def retrieve(
+                self,
+                sender: str,
+                message: str,
+                chat_history: dict,
+            ) -> None:
                 """Perform knowledge retrieval."""
 
         sc = unittest.mock.Mock
@@ -880,7 +903,12 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             def cache_key(self) -> str:
                 """Get key used to access the provider cache."""
 
-            async def retrieve(self, sender: str, message: str, thread: dict) -> None:
+            async def retrieve(
+                self,
+                sender: str,
+                message: str,
+                chat_history: dict,
+            ) -> None:
                 """Perform knowledge retrieval."""
 
         sc = unittest.mock.Mock

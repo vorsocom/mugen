@@ -3,7 +3,6 @@
 __all__ = ["IMHExtension"]
 
 from abc import abstractmethod
-from typing import Any
 
 from . import IExtensionBase
 
@@ -24,7 +23,7 @@ class IMHExtension(IExtensionBase):
         platform: str,
         room_id: str,
         sender: str,
-        message: Any,
+        message: dict | str,
         message_context: list[dict] = None,
     ) -> list[dict] | None:
         """Handle a message."""

@@ -15,6 +15,6 @@ class IRAGExtension(IExtensionBase):
         self,
         sender: str,
         message: str,
-        thread: dict,
+        chat_history: dict,
     ) -> tuple[list[dict], list[dict]]:
         """Perform knowledge retrieval."""

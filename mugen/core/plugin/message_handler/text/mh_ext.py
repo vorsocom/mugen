@@ -6,7 +6,6 @@ import asyncio
 import json
 import pickle
 from types import SimpleNamespace
-from typing import Any
 
 from mugen.core import di
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -51,7 +50,7 @@ class DefaultTextMHExtension(IMHExtension):
         platform: str,
         room_id: str,
         sender: str,
-        message: Any,
+        message: dict | str,
         message_context: list[dict] = None,
     ) -> list[dict] | None:
         # Responses from extensions, for the user,
@@ -84,8 +83,6 @@ class DefaultTextMHExtension(IMHExtension):
 
         # Load previous history from storage if it exists.
         chat_history = self._load_chat_history(room_id)
-
-        # self._logging_gateway.debug(f"attention_thread: {attention_thread}")
 
         completion_context = []
 
