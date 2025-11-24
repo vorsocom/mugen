@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mugen"
-version = "0.42.0"
+version = "0.43.0"
 description = "Microframework for instant messaging AI assistants."
 authors = ["Vorso Computing, Inc. <brightideas@vorsocomputing.com>"]
 maintainers = ["Sando George <sando.csc@gmail.com>"]
@@ -24,6 +24,7 @@ tomlkit = "^0.13.2"
 python-olm = "^3.2.16"
 pycurl = "^7.45.3"
 aiofiles = "24.1.0"
+peewee = "^3.18.3"
 
 [build-system]
 requires = ["poetry-core"]

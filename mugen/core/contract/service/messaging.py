@@ -3,7 +3,6 @@
 __all__ = ["IMessagingService"]
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
@@ -65,7 +64,7 @@ class IMessagingService(ABC):
         platform: str,
         room_id: str,
         sender: str,
-        message: Any,
+        message: dict,
     ) -> list[dict] | None:
         """Handle an audio message from a chat."""
 
@@ -75,7 +74,7 @@ class IMessagingService(ABC):
         platform: str,
         room_id: str,
         sender: str,
-        message: Any,
+        message: dict,
     ) -> list[dict] | None:
         """Handle a file message from a chat."""
 
@@ -85,7 +84,7 @@ class IMessagingService(ABC):
         platform: str,
         room_id: str,
         sender: str,
-        message,
+        message: dict,
     ) -> list[dict] | None:
         """Handle an image message from a chat."""
 
@@ -108,7 +107,7 @@ class IMessagingService(ABC):
         platform: str,
         room_id: str,
         sender: str,
-        message: Any,
+        message: dict,
     ) -> list[dict] | None:
         """Handle a video message from a chat."""
 
