@@ -9,24 +9,22 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"
-aiodns = "^3.2.0"
+aiodns = "^3.5.0"
 async-timeout = "^5.0.1"
 atomicwrites = "^1.4.1"
-boto3 = "^1.35.23"
-brotli = "^1.1.0"
+boto3 = "^1.41.2"
+brotli = "^1.2.0"
 cachetools = "^6.2.2"
 groq = "^0.36.0"
 matrix-nio = "^0.25.2"
-qdrant-client = "^1.11.2"
+qdrant-client = "^1.16.0"
 quart = "^0.20.0"
 sentence-transformers = "^5.1.2"
-tomlkit = "^0.13.2"
+tomlkit = "^0.13.3"
 peewee = "^3.18.3"
 python-olm = "^3.2.16"
-pycurl = "^7.45.3"
+pycurl = "^7.45.7"
 aiofiles = "24.1.0"
-networkx = "^3.6"
-nvidia-cusparselt-cu12 = "^0.8.1"
 
 [build-system]
 requires = ["poetry-core"]
