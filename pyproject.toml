@@ -21,13 +21,9 @@ qdrant-client = "^1.11.2"
 quart = "^0.19.6"
 sentence-transformers = "^3.1.1"
 tomlkit = "^0.13.2"
-peewee = "^3.17.6"
 python-olm = "^3.2.16"
 pycurl = "^7.45.3"
-
-
-[tool.poetry.group.dev.dependencies]
-coverage = "^7.6.2"
+aiofiles = "24.1.0"
 
 [build-system]
 requires = ["poetry-core"]

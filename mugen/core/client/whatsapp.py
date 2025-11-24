@@ -5,9 +5,12 @@ __all__ = ["DefaultWhatsAppClient"]
 from http import HTTPMethod
 from io import BytesIO
 import json
+import mimetypes
+import tempfile
 from types import SimpleNamespace
 
 import aiohttp
+import aiofiles
 
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -66,8 +69,8 @@ class DefaultWhatsAppClient(IWhatsAppClient):
     async def delete_media(self, media_id: str) -> str | None:
         return await self._call_api(media_id, method=HTTPMethod.DELETE)
 
-    async def download_media(self, media_url: str) -> str | None:
-        return await self._call_api(media_url, method=HTTPMethod.GET)
+    async def download_media(self, media_url: str, mimetype: str) -> str | None:
+        return await self._download_file_http(media_url, mimetype)
 
     async def retrieve_media_url(self, media_id: str) -> str | None:
         return await self._call_api(media_id, method=HTTPMethod.GET)
@@ -355,6 +358,31 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                     pass
 
             return await response.text()
+        except aiohttp.ClientConnectionError as e:
+            self._logging_gateway.error(str(e))
+
+    async def _download_file_http(self, url: str, mimetype: str) -> str | None:
+        headers = {
+            "Authorization": f"Bearer {self._config.whatsapp.graphapi.access_token}",
+        }
+
+        kwargs = {
+            "headers": headers,
+        }
+
+        try:
+            response = await self._client_session.get(url, **kwargs)
+
+            if response.status == 200:
+                extension = mimetypes.guess_extension(mimetype.split(";")[0].strip())
+                if extension:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=extension,
+                        delete=False,
+                    ) as tf:
+                        async with aiofiles.open(tf.name, "wb") as af:
+                            await af.write(await response.read())
+                            return tf.name
         except aiohttp.ClientConnectionError as e:
             self._logging_gateway.error(str(e))
 
