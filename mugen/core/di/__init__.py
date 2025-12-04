@@ -17,6 +17,7 @@ from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.nlp import INLPService
@@ -250,6 +251,54 @@ def _build_keyval_storage_gateway_provider(
         # We'll get an IndexError if the imported module
         # doesn't provide a subclass of ILoggingGateway.
         logger.error("Valid subclass not found (keyval_storage_gateway).")
+
+
+def _build_relational_storage_gateway_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """Build relational database storage gateway provider for DI container."""
+    # Get logger.
+    try:
+        logger = injector.logging_gateway
+    except AttributeError:
+        # We'll get an AttributeError if injector
+        # is incorrectly typed.
+        logging.getLogger().error("Invalid injector (keyval_storage_gateway).")
+        return
+
+    if logger is None:
+        logger = logging.getLogger()
+        logger.warning("Using root logger (rdbms_storage_gateway).")
+
+    try:
+        try:
+            import_module(
+                name=config["mugen"]["modules"]["core"]["gateway"]["storage"][
+                    "relational"
+                ]
+            )
+        except KeyError:
+            logger.error("Invalid configuration (relational_storage_gateway).")
+            return
+    except ModuleNotFoundError:
+        # This could fail due to missing configuration values or
+        # invalid module paths. Either way, no need to continue
+        # if it fails.
+        logger.error("Could not import module (relational_storage_gateway).")
+        return
+
+    try:
+        injector.relational_storage_gateway = (
+            IRelationalStorageGateway.__subclasses__()[0](
+                config=injector.config,
+                logging_gateway=injector.logging_gateway,
+            )
+        )
+    except IndexError:
+        # We'll get an IndexError if the imported module
+        # doesn't provide a subclass of ILoggingGateway.
+        logger.error("Valid subclass not found (relational_storage_gateway).")
 
 
 def _build_nlp_service_provider(
@@ -661,6 +710,8 @@ def _build_container() -> DependencyInjector:
     _build_ipc_service_provider(config, injector)
 
     _build_keyval_storage_gateway_provider(config, injector)
+
+    _build_relational_storage_gateway_provider(config, injector)
 
     _build_nlp_service_provider(config, injector)
 

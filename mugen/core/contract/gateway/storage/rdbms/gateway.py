@@ -1,0 +1,152 @@
+"""Provides an abstract base class for creating relational database storage gateways."""
+
+__all__ = ["IRelationalStorageGateway"]
+
+from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Mapping, Sequence
+
+from mugen.core.contract.gateway.storage.rdbms.types import OrderBy, Record
+from mugen.core.contract.gateway.storage.rdbms.uow import IRelationalUnitOfWork
+
+
+class IRelationalStorageGateway(ABC):
+    """An abstract base class for creating relational database storage gateways.
+
+    Provides transactional access via IRelationalUnitOfWork, plus a few convenience
+    helpers for common one-shot operations.
+    """
+
+    @asynccontextmanager
+    @abstractmethod
+    async def unit_of_work(self) -> AsyncIterator[IRelationalUnitOfWork]:
+        """Yield a transactional unit of work.
+
+        Implementation should:
+            - open a connection/session.
+            - start a transaction.
+            - commit on a normal exit.
+            - rollback on exception.
+
+        Example
+        -------
+        uow: IRelationalUnitOfWork
+        async with gateway.unit_of_work() as uow:
+            await uow.insert("users", {"id": 1, "name": "Alice"})
+            await uow.insert("profiles", {"user_id": 1, "bio": "..."})
+        """
+
+    async def insert_one(
+        self,
+        table: str,
+        record: Mapping[str, Any],
+    ) -> Record:
+        """Insert a single row into `table` in its own transaction.
+
+        This is a convenience wrapper around `unit_of_work()`
+        + `IRelationalUnitOfWork.insert()` for the common case where you only need a
+        single insert and do not need explicit transaction control.
+
+        The exact semantics (e.g., whether the inserted row is fully populated with
+        defaults / triggers) depend on the underlying implementation, but the intent is:
+            - start the transaction.
+            - insert the row.
+            - commit.
+            - return the inserted row as a mapping (usually a dict).
+
+        For multiple related writes that must succeed or fail together, prefer using
+        `unit_of_work()` directly.
+
+        Parameters
+        ----------
+        table:
+            Logical table name understood by the gateway implementation.
+        record:
+            Mapping of column-name -> value for the new row.
+
+        Returns
+        -------
+        Record
+            A mapping representing the inserted row (usually a `dict`). The concrete
+            contents (e.g., whether defaults / triggers / database-generated values are
+            populated) depend on the underlying implementation.
+
+        """
+        uow: IRelationalUnitOfWork
+        async with self.unit_of_work() as uow:
+            return await uow.insert(table, record)
+
+    async def get_one(
+        self,
+        table: str,
+        pk: Mapping[str, Any],
+    ) -> Record | None:
+        """Fetch a single row by primary key in its own transaction.
+
+        This is a convenience wrapper around `unit_of_work()` +
+        `IRelationalUnitOfWork.get_by_pk()`.
+
+        Parameters
+        ----------
+        table:
+            Logical table name understood by the gateway implementation.
+        pk:
+            Mapping of primary-key column names to values. Composite keys are supported
+            by passing multiple entries.
+
+        Returns
+        -------
+        Record
+            A mapping representing the row (usually a `dict`) if found, or `None` if no
+            row exists for the given primary key.
+        """
+        uow: IRelationalUnitOfWork
+        async with self.unit_of_work() as uow:
+            return await uow.get_by_pk(table, pk)
+
+    async def find_many(  # pylint: disable=too-many-arguments
+        self,
+        table: str,
+        where: Mapping[str, Any] | None = None,
+        *,
+        order_by: Sequence[OrderBy] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> Sequence[Record]:
+        """Run a simple select query in its own transaction.
+
+
+        This is a convenience wrapper around `unit_of_work()` +
+        `IRelationalUnitOfWork.find()` for the common pattern of equality-based
+        filtering and basic pagination.
+
+        Parameters
+        ----------
+        table:
+            Logical table name understood by the gateway implementation.
+        where:
+            Optional mapping of column-name -> value. All conditions are combined with
+            logical AND, using equality comparison.
+        order_by:
+            Optional sequence of `OrderBy` descriptors, applied in order.
+        limit:
+            Optional maximum number of rows to return.
+        offset:
+            Optional number of rows to skip before returning results.
+
+        Returns
+        -------
+        Sequence[Record]
+            A sequence of row mappings (usually a list of dicts). The concrete type is
+            not guaranteed, only that each element behaves like a mutable mapping (see
+            `Record`).
+        """
+        uow: IRelationalUnitOfWork
+        async with self.unit_of_work() as uow:
+            return await uow.find(
+                table,
+                where,
+                order_by=order_by,
+                limit=limit,
+                offset=offset,
+            )
