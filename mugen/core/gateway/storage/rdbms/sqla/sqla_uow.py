@@ -77,15 +77,15 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         row = result.mappings().one()
         return dict(row)
 
-    async def get_by_pk(
+    async def get_one(
         self,
         table: str,
-        pk: Mapping[str, Any],
+        where: Mapping[str, Any],
     ) -> Record | None:
-        """See IRelationalUnitOfWork.get_by_pk for contract semantics."""
+        """See IRelationalUnitOfWork.get_one for contract semantics."""
         tbl = self._get_table(table)
         stmt = sa_select(tbl)
-        stmt = self._apply_where(tbl, stmt, pk)
+        stmt = self._apply_where(tbl, stmt, where)
 
         result: Result = await self._session.execute(stmt)
         row = result.mappings().one_or_none()
@@ -135,22 +135,22 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         rows = [dict(row) for row in result.mappings()]
         return rows
 
-    async def update(
+    async def update_one(
         self,
         table: str,
-        pk: Mapping[str, Any],
+        where: Mapping[str, Any],
         changes: Mapping[str, Any],
         *,
         returning: bool = True,
     ) -> Record | None:
-        """See IRelationalUnitOfWork.update for contract semantics."""
+        """See IRelationalUnitOfWork.update_one for contract semantics."""
         if not changes:
             # No changes. Obey contract semantics by just refetching when requested.
-            return await self.get_by_pk(table, pk) if returning else None
+            return await self.get_one(table, where) if returning else None
 
         tbl = self._get_table(table)
         stmt = sa_update(tbl).values(**changes)
-        stmt = self._apply_where(tbl, stmt, pk)
+        stmt = self._apply_where(tbl, stmt, where)
 
         if returning:
             stmt = stmt.returning(tbl)
@@ -163,16 +163,17 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         row = result.mappings().one_or_none()
         return dict(row) if row is not None else None
 
-    async def delete(
+    async def delete_one(
         self,
         table: str,
-        pk: Mapping[str, Any],
+        where: Mapping[str, Any],
     ) -> None:
-        """See IRelationalUnitOfWork.delete for contract semantics."""
+        """See IRelationalUnitOfWork.delete_one for contract semantics."""
         tbl = self._get_table(table)
-        stmt = sa_delete(tbl)
-        stmt = self._apply_where(tbl, stmt, pk)
-        await self._session.execute(stmt)
+        stmt = sa_delete(tbl).returning(tbl)
+        stmt = self._apply_where(tbl, stmt, where)
+        result: Result = await self._session.execute(stmt)
+        result.mappings().one_or_none()
 
     # pylint: disable=too-many-locals
     # pylint: disable=too-many-branches
@@ -182,7 +183,7 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         where: Mapping[str, Any] | None = None,
         text_filters: Sequence[TextFilter] | None = None,
         scalar_filters: Sequence[ScalarFilter] | None = None,
-    ) -> list:
+    ) -> list[Any]:
         """Translate contract-level filter arguments into SQLAlchemy predicates.
 
         This is the single canonical implementation of:
@@ -261,7 +262,7 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
 
         return clauses
 
-    def _predicates_for_group(self, table, group: FilterGroup):
+    def _predicates_for_group(self, table: Table, group: FilterGroup) -> Any | None:
         """Build a SQLAlchemy boolean expression for a single FilterGroup.
 
         All predicates in the group are combined with AND. If the group
@@ -288,7 +289,7 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         where: Mapping[str, Any] | None,
         text_filters: Sequence[TextFilter] | None = None,
         scalar_filters: Sequence[ScalarFilter] | None = None,
-    ):
+    ) -> Any:
         """Apply contract-level filters to a SQLAlchemy statement.
 
         This is a thin wrapper that uses ``_build_predicates`` and attaches a

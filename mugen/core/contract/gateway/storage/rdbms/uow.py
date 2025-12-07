@@ -116,26 +116,37 @@ class IRelationalUnitOfWork(ABC):
         """
 
     @abstractmethod
-    async def get_by_pk(
+    async def get_one(
         self,
         table: str,
-        pk: Mapping[str, Any],
+        where: Mapping[str, Any],
     ) -> Record | None:
-        """Fetch a single row by primary key (may be composite).
+        """Fetch a single row matching the given equality predicates.
 
         Parameters
         ----------
         table:
             Logical table name understood by the unit-of-work implementation.
-        pk:
-            Mapping of primary-key column names to values. Composite keys are supported
-            by passing multiple entries.
+        where:
+            Mapping of column names to values.
 
         Returns
         -------
         Record | None
-            A mapping representing the row (usually a `dict`) if found, or `None` if no
-            row exists for the given primary key.
+            A mapping representing the row (usually a `dict`) if exactly one row
+            matches `where`, or `None` if no row matches.
+
+        Raises
+        ------
+        MultipleResultsFound
+            If more than one row matches `where`, depending on the concrete
+            implementation.
+
+        Notes
+        -----
+            - Callers are expected to pass predicates that uniquely identify a single
+            row.
+            - All keys in `where` are combined with logical AND.
         """
 
     @abstractmethod
@@ -192,26 +203,24 @@ class IRelationalUnitOfWork(ABC):
         """
 
     @abstractmethod
-    async def update(
+    async def update_one(
         self,
         table: str,
-        pk: Mapping[str, Any],
+        where: Mapping[str, Any],
         changes: Mapping[str, Any],
         *,
         returning: bool = True,
     ) -> Record | None:
-        """Update a single row identified by `pk` with `changes`, optionally returning
-        the updated row.
+        """Update a single row with `changes`, optionally returning the updated row.
 
         Parameters
         ----------
         table:
             Logical table name understood by the unit-of-work implementation.
-        pk:
-            Mapping of primary-key column names to values. Composite keys are supported
-            by passing multiple entries.
+        where:
+            Mapping of column names to values.
         changes:
-            mapping of column-name -> new value. Implementations may treat an empty
+            Mapping of column-name -> new value. Implementations may treat an empty
             mapping as a no-op.
         returning:
             Whether to return the updated row. If `True`, implementations should
@@ -222,30 +231,52 @@ class IRelationalUnitOfWork(ABC):
         -------
         Record | None
             A mapping representing the row (usually a `dict`) if found, and `returning`
-            is `True`, or `None` if no row exists for the given primary key or
-            `returning` is `False`.
+            is `True`, or `None` if no row exists or `returning` is `False`.
+
+        Raises
+        ------
+        MultipleResultsFound
+            If more than one row matches `where`, depending on the concrete
+            implementation.
+
+        Notes
+        -----
+            - Callers are expected to pass predicates that uniquely identify a single
+            row.
+            - All keys in `where` are combined with logical AND.
         """
 
     @abstractmethod
-    async def delete(
+    async def delete_one(
         self,
         table: str,
-        pk: Mapping[str, Any],
+        where: Mapping[str, Any],
     ) -> None:
-        """Delete a single row by primary key.
+        """Delete a single row.
 
         Parameters
         ----------
         table:
             Logical table name understood by the unit-of-work implementation.
-        pk:
-            Mapping of primary-key column names to values. Composite keys are supported
-            by passing multiple entries.
+        where:
+            Mapping of column names to values.
 
         Returns
         -------
         None
             This method does not return the deleted row. If callers need the row
-            contents, they should fetch it via `get_by_pk` before invoking `delete`
-            within the same unit-of-work.
+            contents, they should fetch it before invoking `delete_one` within the same
+            unit-of-work.
+
+        Raises
+        ------
+        MultipleResultsFound
+            If more than one row matches `where`, depending on the concrete
+            implementation.
+
+        Notes
+        -----
+            - Callers are expected to pass predicates that uniquely identify a single
+            row.
+            - All keys in `where` are combined with logical AND.
         """
