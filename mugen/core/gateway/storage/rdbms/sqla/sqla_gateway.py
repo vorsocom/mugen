@@ -18,7 +18,7 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.uow import IRelationalUnitOfWork
 from mugen.core.gateway.storage.rdbms.sqla import build_table_registry_from_base
-from mugen.core.gateway.storage.rdbms.sqla.uow import (
+from mugen.core.gateway.storage.rdbms.sqla.sqla_uow import (
     SQLAlchemyRelationalUnitOfWork,
     TableRegistry,
 )
@@ -26,7 +26,7 @@ from mugen.core.rdbms.sqla.base import ModelBase
 
 
 class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
-    """An SQLAlchemy-backed implementation of IRelationalGateway.
+    """An SQLAlchemy-backed implementation of IRelationalStorageGateway.
 
     This gateway wires SQLAlchemy's async engine and session machinery into the
     relational gateway contracts used by muGen. It is responsible for:
@@ -98,7 +98,7 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
         Parameters
         ----------
         mapping:
-            Mapping of logical name -> SQlAlchemy `Table`.
+            Mapping of logical name -> SQLAlchemy `Table`.
 
         Raises
         ------

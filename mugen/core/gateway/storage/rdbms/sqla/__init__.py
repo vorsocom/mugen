@@ -3,19 +3,12 @@
 __all__ = [
     "build_table_registry_from_base",
     "build_table_registry_from_metadata",
-    "SQLAlchemyRelationalStorageGateway",
-    "SQLAlchemyRelationalUnitOfWork",
 ]
 
 from typing import Callable, Iterable, MutableMapping
 
 from sqlalchemy import MetaData, Table
 from sqlalchemy.orm import DeclarativeBase
-
-from mugen.core.gateway.storage.rdbms.sqla.gateway import (
-    SQLAlchemyRelationalStorageGateway,
-)
-from mugen.core.gateway.storage.rdbms.sqla.uow import SQLAlchemyRelationalUnitOfWork
 
 
 def build_table_registry_from_metadata(
