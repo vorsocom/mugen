@@ -27,10 +27,10 @@ class IRelationalStorageGateway(ABC):
         """Yield a transactional unit of work.
 
         Implementation should:
-            - open a connection/session.
-            - start a transaction.
-            - commit on a normal exit.
-            - rollback on exception.
+            - open a connection/session
+            - start a transaction
+            - commit on a normal exit
+            - rollback on exception
 
         Example
         -------
@@ -53,10 +53,10 @@ class IRelationalStorageGateway(ABC):
 
         The exact semantics (e.g., whether the inserted row is fully populated with
         defaults / triggers) depend on the underlying implementation, but the intent is:
-            - start the transaction.
-            - insert the row.
-            - commit.
-            - return the inserted row as a mapping (usually a dict).
+            - start the transaction
+            - insert the row
+            - commit
+            - return the inserted row as a mapping (usually a dict)
 
         For multiple related writes that must succeed or fail together, prefer using
         `unit_of_work()` directly.
@@ -100,8 +100,14 @@ class IRelationalStorageGateway(ABC):
         Returns
         -------
         Record | None
-            A mapping representing the row (usually a `dict`) if found, or `None` if no
-            row exists.
+            A mapping representing the row (usually a dict) if exactly one row matches
+            `where`, or `None` if no row matches.
+
+        Raises
+        ------
+        MultipleResultsFound
+            If more than one row matches `where`, depending on the concrete
+            IRelationalUnitOfWork implementation.
         """
         uow: IRelationalUnitOfWork
         async with self.unit_of_work() as uow:
@@ -134,6 +140,11 @@ class IRelationalStorageGateway(ABC):
             Optional maximum number of rows to return.
         offset:
             Optional number of rows to skip before returning results.
+
+        Returns
+        -------
+        Sequence[Record]
+            A sequence of mappings (usually dicts), one per matching row.
         """
         uow: IRelationalUnitOfWork
         async with self.unit_of_work() as uow:
@@ -144,3 +155,87 @@ class IRelationalStorageGateway(ABC):
                 limit=limit,
                 offset=offset,
             )
+
+    async def update_one(
+        self,
+        table: str,
+        where: Mapping[str, Any],
+        changes: Mapping[str, Any],
+    ) -> Record | None:
+        """Update a single row in `table` in its own transaction.
+
+        This is a convenience wrapper around `unit_of_work()` +
+        `IRelationalUnitOfWork.update_one()` for the common case where you only
+        need to update a single row and do not need explicit transaction control.
+
+        The typical intent is:
+            - start a transaction
+            - apply the changes to the row identified by `where`
+            - commit
+            - return the updated row as a mapping (usually a dict), or `None`
+              if no row matched `where`
+
+        For multi-step updates or cross-table changes that must succeed or fail
+        together, prefer using `unit_of_work()` directly.
+
+        Parameters
+        ----------
+        table:
+            Logical table name understood by the gateway implementation.
+        where:
+            Mapping of column names -> values used to identify the row to update.
+        changes:
+            Mapping of column names -> new values to apply to the row.
+
+        Returns
+        -------
+        Record | None
+            A mapping representing the updated row (usually a ``dict``) if a row
+            was updated, or ``None`` if no row matched `where`.
+
+        Raises
+        ------
+        MultipleResultsFound
+            If more than one row matches `where`, depending on the concrete
+            IRelationalUnitOfWork implementation.
+        """
+        uow: IRelationalUnitOfWork
+        async with self.unit_of_work() as uow:
+            # Gateway always requests the updated row back for convenience.
+            return await uow.update_one(table, where, changes, returning=True)
+
+    async def delete_one(
+        self,
+        table: str,
+        where: Mapping[str, Any],
+    ) -> None:
+        """Delete a single row from `table` in its own transaction.
+
+        This is a convenience wrapper around `unit_of_work()` +
+        `IRelationalUnitOfWork.delete_one()` for the common case where you only
+        need to delete a single row and do not need explicit transaction control.
+
+        The typical intent is:
+            - start a transaction
+            - delete the row identified by `where`
+            - commit
+
+        For multi-step operations or cross-table changes that must succeed or
+        fail together, prefer using `unit_of_work()` directly.
+
+        Parameters
+        ----------
+        table:
+            Logical table name understood by the gateway implementation.
+        where:
+            Mapping of column names -> values used to identify the row to delete.
+
+        Raises
+        ------
+        MultipleResultsFound
+            If more than one row matches `where`, depending on the concrete
+            IRelationalUnitOfWork implementation.
+        """
+        uow: IRelationalUnitOfWork
+        async with self.unit_of_work() as uow:
+            await uow.delete_one(table, where)
