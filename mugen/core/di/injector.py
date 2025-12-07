@@ -12,6 +12,7 @@ from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.nlp import INLPService
@@ -23,13 +24,16 @@ from mugen.core.contract.service.user import IUserService
 class DependencyInjector(IDependencyInjector):
     """An implementation of IDIContainer."""
 
-    def __init__(  # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-positional-arguments
+    def __init__(
         self,
         config: SimpleNamespace = None,
         logging_gateway: ILoggingGateway = None,
         completion_gateway: ICompletionGateway = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway = None,
         nlp_service: INLPService = None,
         platform_service: IPlatformService = None,
         user_service: IUserService = None,
@@ -44,6 +48,7 @@ class DependencyInjector(IDependencyInjector):
         self.__completion_gateway = completion_gateway
         self.__ipc_service = ipc_service
         self.__keyval_storage_gateway = keyval_storage_gateway
+        self.__relational_storage_gateway = relational_storage_gateway
         self.__nlp_service = nlp_service
         self.__platform_service = platform_service
         self.__user_service = user_service
@@ -92,6 +97,14 @@ class DependencyInjector(IDependencyInjector):
     @keyval_storage_gateway.setter
     def keyval_storage_gateway(self, value: IKeyValStorageGateway) -> None:
         self.__keyval_storage_gateway = value
+
+    @property
+    def relational_storage_gateway(self) -> IRelationalStorageGateway:
+        return self.__relational_storage_gateway
+
+    @relational_storage_gateway.setter
+    def relational_storage_gateway(self, value: IRelationalStorageGateway) -> None:
+        self.__relational_storage_gateway = value
 
     @property
     def nlp_service(self) -> INLPService:

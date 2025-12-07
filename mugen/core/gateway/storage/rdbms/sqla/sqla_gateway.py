@@ -1,0 +1,113 @@
+"""Provides an SQLAlchemy-backed implementation of IRelationalStorageGateway."""
+
+__all__ = ["SQLAlchemyRelationalStorageGateway"]
+
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from typing import AsyncIterator, Mapping
+
+from sqlalchemy import Table
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
+from mugen.core.contract.gateway.storage.rdbms.uow import IRelationalUnitOfWork
+from mugen.core.gateway.storage.rdbms.sqla import build_table_registry_from_base
+from mugen.core.gateway.storage.rdbms.sqla.sqla_uow import (
+    SQLAlchemyRelationalUnitOfWork,
+    TableRegistry,
+)
+from mugen.core.rdbms.sqla.base import ModelBase
+
+
+class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
+    """An SQLAlchemy-backed implementation of IRelationalStorageGateway.
+
+    This gateway wires SQLAlchemy's async engine and session machinery into the
+    relational gateway contracts used by muGen. It is responsible for:
+
+        - Creating `AsyncSession` instances.
+        - Starting and managing transactions.
+        - Constructing `SQLAlchemyRelationalUnitOfWork` instances bound to each
+        transaction.
+    """
+
+    def __init__(
+        self,
+        config: SimpleNamespace,
+        logging_gateway: ILoggingGateway,
+    ) -> None:
+        self._config = config
+        self._logging_gateway = logging_gateway
+
+        self._engine: AsyncEngine = create_async_engine(
+            self._config.rdbms.sqlalchemy.url,
+        )
+        self._tables: TableRegistry = build_table_registry_from_base(ModelBase)
+        self._session_maker = async_sessionmaker(
+            self._engine,
+            expire_on_commit=False,
+        )
+
+    @asynccontextmanager
+    async def unit_of_work(self) -> AsyncIterator[IRelationalUnitOfWork]:
+        """Yield a SQLAlchemyRelationalUnitOfWork bound to a transaction.
+
+        This method fulfills the `IRelationalStorageGateway.unit_of_work` contract by:
+            - Creating an `AsyncSession` from the configured session maker.
+            - Starting a transaction (`session.begin()`).
+            - Yielding a `SQLAlchemyRelationalUnitOfWork` bound to that session.
+            - Committing the transaction on normal exit.
+            - Rolling back the transaction if an exception is raised.
+        """
+        async with self._session_maker() as session:
+            async with session.begin():
+                uow = SQLAlchemyRelationalUnitOfWork(session, self._tables)
+                yield uow
+                # commit / rollback handled by session.begin()
+
+    @asynccontextmanager
+    async def raw_session(self) -> AsyncIterator[AsyncSession]:
+        """Yield a raw SQLAlchemy AsyncSession for non-portable operations.
+
+        This is an escape hatch for advanced use cases that require direct access to
+        SQLAlchemy's session API. Code that depends on `raw_session()` is tied to this
+        implementation and **not** portable across other relational gateway backends.
+
+        The transaction semantics are the same as for `unit_of_work`: a transaction is
+        started, committed on normal exit, and rolled back on exception.
+        """
+        async with self._session_maker() as session:
+            async with session.begin():
+                yield session
+
+    def register_tables(
+        self,
+        mapping: Mapping[str, Table],
+    ) -> None:
+        """Register multiple tables under their logical names.
+
+        This method lets core code and extensions add one or more tables to the
+        gateway's internal registry after the gateway has been created.
+
+        Parameters
+        ----------
+        mapping:
+            Mapping of logical name -> SQLAlchemy `Table`.
+
+        Raises
+        ------
+        ValueError
+            If any logical name in `mapping` is already registered.
+        """
+        collisions = [name for name in mapping if name in self._tables]
+        if collisions:
+            joined = ", ".join(repr(n) for n in collisions)
+            raise ValueError(f"Tables already registered for: {joined}")
+
+        self._tables.update(mapping)

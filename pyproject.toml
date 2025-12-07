@@ -25,6 +25,10 @@ peewee = "^3.18.3"
 python-olm = "^3.2.16"
 pycurl = "^7.45.7"
 aiofiles = "24.1.0"
+sqlalchemy = "^2.0.44"
+alembic = "^1.17.2"
+pyjwt = "^2.10.1"
+quart-cors = "^0.8.0"
 
 [build-system]
 requires = ["poetry-core"]
