@@ -3,6 +3,7 @@
 __all__ = ["AppConfig"]
 
 import os
+from types import SimpleNamespace
 
 from quart import Quart
 
@@ -19,12 +20,14 @@ class Config:  # pylint: disable=too-few-public-methods
     LOG_LEVEL: int = 10
 
     @staticmethod
-    def init_app(app: Quart):
+    def init_app(app: Quart, config: SimpleNamespace):
         """Configuration specific application initialisation."""
         try:
             app.logger.setLevel(app.config["LOG_LEVEL"])
         except KeyError:
             app.logger.error("LOG_LEVEL not configured.")
+
+        app.config["SECRET_KEY"] = config.quart.secret_key
 
 
 class DevelopmentConfig(Config):  # pylint: disable=too-few-public-methods

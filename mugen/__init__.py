@@ -55,7 +55,7 @@ def create_quart_app(
     app.config.from_object(AppConfig[environment])
 
     # Initialize application.
-    AppConfig[environment].init_app(app)
+    AppConfig[environment].init_app(app, config)
 
     # Return the built application object.
     return app
