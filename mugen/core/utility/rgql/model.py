@@ -62,6 +62,7 @@ class EdmProperty:
     nullable: bool = True
     filterable: bool = True
     sortable: bool = True
+    redact: bool = False
 
 
 @dataclass
@@ -131,6 +132,13 @@ class EdmType:
         if nav:
             return nav
         return None
+
+    def property_redacted(self, name: str) -> bool:
+        """Check if a field is redacted."""
+        prop = self.properties.get(name)
+        if prop:
+            return prop.redact
+        return False
 
 
 @dataclass

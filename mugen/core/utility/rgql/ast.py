@@ -276,10 +276,6 @@ def is_boolean_expr(expr: Expr) -> bool:  # pylint: disable=too-many-return-stat
       * many built-in functions (e.g. ``contains``) are known to be
         boolean and are whitelisted
       * everything else is considered "maybe not boolean"
-
-    This is intentionally conservative - it may return ``False`` for some
-    expressions that are in fact boolean once typed.  The semantic layer
-    performs the precise validation.
     """
     if isinstance(expr, Literal) and isinstance(expr.value, bool):
         return True
@@ -294,6 +290,11 @@ def is_boolean_expr(expr: Expr) -> bool:  # pylint: disable=too-many-return-stat
         if expr.op in {"and", "or", "eq", "ne", "gt", "ge", "lt", "le", "has", "in"}:
             return True
         return False
+
+    # NEW: boolean-valued function calls such as contains/startswith/endswith
+    if isinstance(expr, FunctionCall):
+        if expr.name.lower() in {"contains", "startswith", "endswith"}:
+            return True
 
     if isinstance(expr, Identifier):
         # Could be a boolean-valued property or alias

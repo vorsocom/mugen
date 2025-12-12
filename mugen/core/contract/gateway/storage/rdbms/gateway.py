@@ -40,6 +40,45 @@ class IRelationalStorageGateway(ABC):
             await uow.insert("profiles", {"user_id": 1, "bio": "..."})
         """
 
+    async def count_many(
+        self,
+        table: str,
+        *,
+        filter_groups: Sequence[FilterGroup] | None = None,
+    ) -> int:
+        """Count rows in `table` in their own transaction.
+
+        This is a convenience wrapper around :meth:`unit_of_work` and
+        :meth:`IRelationalUnitOfWork.count` for the common case where callers
+        only need a total and do not require explicit transaction control.
+
+        The semantics of ``filter_groups`` match those used by
+        :meth:`find_many`: each :class:`FilterGroup` represents a conjunction
+        (logical AND) of predicates, and the sequence of groups is combined
+        with logical OR. Conceptually, the overall predicate is::
+
+            (G1.where AND G1.text AND G1.scalar)
+         OR (G2.where AND G2.text AND G2.scalar)
+         OR ...
+
+        Parameters
+        ----------
+        table:
+            Logical table name understood by the gateway implementation.
+        filter_groups:
+            Optional sequence of :class:`FilterGroup` instances representing an
+            OR-of-AND filter over the table's rows.
+
+        Returns
+        -------
+        int
+            The number of rows in ``table`` that satisfy the constructed
+            predicate.
+        """
+        uow: IRelationalUnitOfWork
+        async with self.unit_of_work() as uow:
+            return await uow.count(table, filter_groups=filter_groups)
+
     async def insert_one(
         self,
         table: str,
@@ -84,6 +123,8 @@ class IRelationalStorageGateway(ABC):
         self,
         table: str,
         where: Mapping[str, Any],
+        *,
+        columns: Sequence[str] | None = None,
     ) -> Record | None:
         """Fetch a single row in its own transaction.
 
@@ -111,12 +152,13 @@ class IRelationalStorageGateway(ABC):
         """
         uow: IRelationalUnitOfWork
         async with self.unit_of_work() as uow:
-            return await uow.get_one(table, where)
+            return await uow.get_one(table, where, columns=columns)
 
     async def find_many(  # pylint: disable=too-many-arguments
         self,
         table: str,
         *,
+        columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
         order_by: Sequence[OrderBy] | None = None,
         limit: int | None = None,
@@ -150,6 +192,7 @@ class IRelationalStorageGateway(ABC):
         async with self.unit_of_work() as uow:
             return await uow.find(
                 table,
+                columns=columns,
                 filter_groups=filter_groups,
                 order_by=order_by,
                 limit=limit,
@@ -239,3 +282,33 @@ class IRelationalStorageGateway(ABC):
         uow: IRelationalUnitOfWork
         async with self.unit_of_work() as uow:
             await uow.delete_one(table, where)
+
+    async def delete_many(
+        self,
+        table: str,
+        where: Mapping[str, Any],
+    ) -> None:
+        """Delete multiple rows from `table` in its own transaction.
+
+        This is a convenience wrapper around `unit_of_work()` +
+        `IRelationalUnitOfWork.delete_many()` for the common case where you want to
+        delete multiple rows and do not need explicit transaction control.
+
+        The typical intent is:
+            - start a transaction
+            - delete the rows identified by `where`
+            - commit
+
+        For multi-step operations or cross-table changes that must succeed or
+        fail together, prefer using `unit_of_work()` directly.
+
+        Parameters
+        ----------
+        table:
+            Logical table name understood by the gateway implementation.
+        where:
+            Mapping of column names -> values used to identify the row to delete.
+        """
+        uow: IRelationalUnitOfWork
+        async with self.unit_of_work() as uow:
+            await uow.delete_many(table, where)

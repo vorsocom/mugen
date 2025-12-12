@@ -2,7 +2,8 @@
 
 __all__ = ["DependencyInjector"]
 
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
+from typing import Any, Mapping
 
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telnet import ITelnetClient
@@ -57,6 +58,8 @@ class DependencyInjector(IDependencyInjector):
         self.__matrix_client = matrix_client
         self.__telnet_client = telnet_client
         self.__whatsapp_client = whatsapp_client
+
+        self.__ext_services: dict[str, Any] = {}
 
     @property
     def config(self) -> SimpleNamespace:
@@ -169,3 +172,27 @@ class DependencyInjector(IDependencyInjector):
     @whatsapp_client.setter
     def whatsapp_client(self, value: IWhatsAppClient) -> None:
         self.__whatsapp_client = value
+
+    def register_ext_service(
+        self, name: str, service: Any, *, override: bool = False
+    ) -> None:
+        if not name:
+            raise ValueError("Service name must be a non-empty string.")
+
+        if not override and name in self.__ext_services:
+            raise KeyError(f"Extension service '{name}' already registered.")
+
+        self.__ext_services[name] = service
+
+    def get_ext_service(self, name: str, default: Any | None = None) -> Any:
+        try:
+            return self.__ext_services[name]
+        except KeyError:
+            if default is not None:
+                return default
+            raise KeyError(f"Extension service '{name}' not found.") from None
+
+    @property
+    def ext_services(self) -> Mapping[str, Any]:
+        # Expose a read-only view to avoid accidental mutation.
+        return MappingProxyType(self.__ext_services)

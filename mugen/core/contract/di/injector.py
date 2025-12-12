@@ -4,6 +4,7 @@ __all__ = ["IDependencyInjector"]
 
 from abc import ABC, abstractmethod
 from types import SimpleNamespace
+from typing import Any, Mapping
 
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telnet import ITelnetClient
@@ -92,3 +93,22 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def whatsapp_client(self) -> IWhatsAppClient:
         """Get the global WhatsApp client."""
+
+    @abstractmethod
+    def register_ext_service(
+        self,
+        name: str,
+        service: Any,
+        *,
+        override: bool = False,
+    ) -> None:
+        """Register an extension-provided service under a given name."""
+
+    @abstractmethod
+    def get_ext_service(self, name: str, default: Any | None = None) -> Any:
+        """Retrieve a previously registered extension service."""
+
+    @property
+    @abstractmethod
+    def ext_services(self) -> Mapping[str, Any]:
+        """Read-only view over all registered extension services."""

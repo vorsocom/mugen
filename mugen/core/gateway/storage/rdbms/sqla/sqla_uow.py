@@ -31,6 +31,8 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
 )
 from mugen.core.contract.gateway.storage.rdbms.uow import IRelationalUnitOfWork
 
+func: callable
+
 TableRegistry = MutableMapping[str, Table]
 
 
@@ -54,6 +56,46 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
     def __init__(self, session: AsyncSession, tables: TableRegistry) -> None:
         self._session = session
         self._tables = tables
+
+    async def count(
+        self,
+        table: str,
+        *,
+        filter_groups: Sequence[FilterGroup] | None = None,
+    ) -> int:
+        """Count records that match the given filter groups.
+
+        The ``table`` argument identifies the logical table to query. The
+        optional ``filter_groups`` argument uses the same OR-of-AND semantics
+        as :meth:`find`:
+
+        * each :class:`FilterGroup` represents a conjunction of predicates
+          (equality, scalar filters, and text filters) combined with AND;
+        * the sequence of groups is combined with OR to form the final WHERE
+          predicate.
+
+        Projection, ordering, limit, and offset are not applied. The return
+        value is the total number of rows in ``table`` that satisfy the
+        constructed predicate.
+        """
+        tbl = self._get_table(table)
+        stmt = sa_select(func.count()).select_from(tbl)
+
+        if filter_groups:
+            group_exprs = [
+                self._predicates_for_group(tbl, group) for group in filter_groups
+            ]
+            group_exprs = [g for g in group_exprs if g is not None]
+
+            if group_exprs:
+                if len(group_exprs) == 1:
+                    stmt = stmt.where(group_exprs[0])
+                else:
+                    stmt = stmt.where(or_(*group_exprs))
+
+        result = await self._session.execute(stmt)
+        # scalar() / scalar_one() depending on your SA version/preferences
+        return int(result.scalar() or 0)
 
     async def insert(
         self,
@@ -81,27 +123,51 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         self,
         table: str,
         where: Mapping[str, Any],
+        *,
+        columns: Sequence[str] | None = None,
     ) -> Record | None:
         """See IRelationalUnitOfWork.get_one for contract semantics."""
         tbl = self._get_table(table)
-        stmt = sa_select(tbl)
+
+        if columns:
+            try:
+                sel_cols = [getattr(tbl.c, col_name) for col_name in columns]
+            except AttributeError as exc:
+                raise ValueError(
+                    f"Unknown column in 'columns' argument for table {table!r}: {exc}"
+                ) from exc
+            stmt = sa_select(*sel_cols)
+        else:
+            stmt = sa_select(tbl)
+
         stmt = self._apply_where(tbl, stmt, where)
 
         result: Result = await self._session.execute(stmt)
         row = result.mappings().one_or_none()
         return dict(row) if row is not None else None
 
-    async def find(  # pylint: disable=too-many-arguments
+    async def find(  # pylint: disable=too-many-arguments, too-many-locals
         self,
         table: str,
         *,
+        columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
         order_by: Sequence[OrderBy] | None = None,
         limit: int | None = None,
         offset: int | None = None,
     ) -> Sequence[Record]:
         tbl = self._get_table(table)
-        stmt = sa_select(tbl)
+
+        if columns:
+            try:
+                sel_cols = [getattr(tbl.c, col_name) for col_name in columns]
+            except AttributeError as exc:
+                raise ValueError(
+                    f"Unknown column in 'columns' argument for table {table!r}: {exc}"
+                ) from exc
+            stmt = sa_select(*sel_cols)
+        else:
+            stmt = sa_select(tbl)
 
         # Build the overall WHERE predicate from filter_groups
         if filter_groups:
@@ -174,6 +240,17 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         stmt = self._apply_where(tbl, stmt, where)
         result: Result = await self._session.execute(stmt)
         result.mappings().one_or_none()
+
+    async def delete_many(
+        self,
+        table: str,
+        where: Mapping[str, Any],
+    ) -> None:
+        """See IRelationalUnitOfWork.delete_many for contract semantics."""
+        tbl = self._get_table(table)
+        stmt = sa_delete(tbl)
+        stmt = self._apply_where(tbl, stmt, where)
+        await self._session.execute(stmt)
 
     # pylint: disable=too-many-locals
     # pylint: disable=too-many-branches

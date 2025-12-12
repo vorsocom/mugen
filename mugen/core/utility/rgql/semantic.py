@@ -16,6 +16,7 @@ before executing a query.
 """
 
 from dataclasses import dataclass
+import datetime
 import decimal
 from typing import Any, Dict, List, Optional
 import uuid
@@ -741,16 +742,40 @@ class SemanticChecker:  # pylint: disable=too-few-public-methods
                 return ValueType("Json.Array")
             if v is None:
                 return ValueType("Edm.Null")
+
+            # Boolean.
             if isinstance(v, bool):
                 return ValueType("Edm.Boolean")
+
+            # Numeric.
             if isinstance(v, int):
                 return ValueType("Edm.Int64")
             if isinstance(v, float):
                 return ValueType("Edm.Double")
+            if isinstance(v, decimal.Decimal):
+                return ValueType("Edm.Decimal")
+
+            # String.
             if isinstance(v, str):
                 return ValueType("Edm.String")
             if isinstance(v, uuid.UUID):
                 return ValueType("Edm.Guid")
+
+            # Binary.
+            if isinstance(v, (bytes, bytearray, memoryview)):
+                return ValueType("Edm.Binary")
+
+            # Temporal.
+            if isinstance(v, datetime.datetime):
+                return ValueType("Edm.DateTimeOffset")
+            if isinstance(v, datetime.date):
+                return ValueType("Edm.Date")
+            if isinstance(v, datetime.time):
+                return ValueType("Edm.TimeOfDay")
+            if isinstance(v, datetime.timedelta):
+                return ValueType("Edm.Duration")
+
+            # Fallback.
             tname = type(v).__name__
             return ValueType(f"Python.{tname}")
 
@@ -955,17 +980,24 @@ class SemanticChecker:  # pylint: disable=too-few-public-methods
         """
         v = lit_expr.value
 
-        # JSON -> complex/collection
+        # JSON -> complex/collection, except for Edm.Untyped
         if isinstance(v, (dict, list)):
+            if expected.type_name == "Edm.Untyped":
+                # Edm.Untyped is allowed to take arbitrary JSON without shape checks
+                return
             self._check_json_literal_against_type(v, expected)
             return
 
-        # String -> enum or Edm.String
+        # String -> enum or Edm.String (otherwise fall through to primitive checks)
         if isinstance(v, str):
             t = self.model.try_get_type(expected.type_name)
             if t and t.kind == "enum":
                 self._check_enum_literal(v, t)
-            return
+                return
+            if expected.type_name == "Edm.String":
+                # Any string is fine for Edm.String
+                return
+            # else: e.g. Edm.Guid, Edm.Int32, etc.; fall through to primitive checks
 
         # Primitive sanity: check a few key EDM primitives
         self._check_primitive_literal_against_type(v, expected)
@@ -981,35 +1013,134 @@ class SemanticChecker:  # pylint: disable=too-few-public-methods
         """
         name = expected.type_name
 
-        if name.startswith("Edm."):
-            if name == "Edm.Boolean":
-                if not isinstance(value, bool):
-                    if value is not None:
-                        raise SemanticError(
-                            "Boolean comparison must use boolean literals"
-                        )
+        if not name.startswith("Edm."):
+            return
 
-            if name == "Edm.Guid":
-                # Allow null; nullability is handled elsewhere.
-                if value is not None and not isinstance(value, uuid.UUID):
-                    raise SemanticError("Guid comparison must use guid'...' literals")
+        # Null literal is always allowed at this level; nullability is checked elsewhere.
+        if value is None:
+            return
 
-            numeric_types = {
-                "Edm.Byte",
-                "Edm.SByte",
-                "Edm.Int16",
-                "Edm.Int32",
-                "Edm.Int64",
-                "Edm.Decimal",
-                "Edm.Single",
-                "Edm.Double",
-            }
-            if name in numeric_types:
-                if not isinstance(value, (int, float, bool, decimal.Decimal)):
-                    raise SemanticError(
-                        f"Numeric comparison with {name} expects numeric literal, "
-                        f"got {type(value).__name__}"
-                    )
+        if name == "Edm.Boolean":
+            if not isinstance(value, bool):
+                raise SemanticError("Boolean comparison must use boolean literals")
+
+        # String --------------------------------------------------------
+        if name == "Edm.String":
+            if not isinstance(value, str):
+                raise SemanticError("String comparison must use string literals")
+
+        # Binary --------------------------------------------------------
+        if name == "Edm.Binary":
+            if not isinstance(value, (bytes, bytearray, memoryview)):
+                raise SemanticError(
+                    "Binary comparison must use binary'...' or x'...' literals"
+                )
+
+        # Guid --------------------------------------------------------
+        if name == "Edm.Guid":
+            # Allow null; nullability is handled elsewhere.
+            if not isinstance(value, uuid.UUID):
+                raise SemanticError("Guid comparison must use guid'...' literals")
+
+        # Stream --------------------------------------------------------
+        if name == "Edm.Stream":
+            # No literal form; any attempt to use a stream literal is invalid.
+            raise SemanticError("Edm.Stream values cannot be used as literals")
+
+        # Temporal primitives -------------------------------------------
+        if name == "Edm.DateTimeOffset":
+            if not isinstance(value, datetime.datetime):
+                raise SemanticError(
+                    "DateTimeOffset comparison must use datetimeoffset'...' literals"
+                )
+
+        if name == "Edm.Date":
+            # Allow date but reject datetime (even though it's a subclass of date)
+            if not isinstance(value, datetime.date) or isinstance(
+                value, datetime.datetime
+            ):
+                raise SemanticError("Date comparison must use date'...' literals")
+
+        if name == "Edm.TimeOfDay":
+            if not isinstance(value, datetime.time):
+                raise SemanticError(
+                    "TimeOfDay comparison must use timeofday'...' literals"
+                )
+
+        if name == "Edm.Duration":
+            if not isinstance(value, datetime.timedelta):
+                raise SemanticError(
+                    "Duration comparison must use duration'...' or ISO 8601 "
+                    "duration literals"
+                )
+
+        # Numeric primitives -------------------------------------------
+        numeric_types = {
+            "Edm.Byte",
+            "Edm.SByte",
+            "Edm.Int16",
+            "Edm.Int32",
+            "Edm.Int64",
+            "Edm.Decimal",
+            "Edm.Single",
+            "Edm.Double",
+        }
+        if name in numeric_types:
+            if not isinstance(value, (int, float, bool, decimal.Decimal)):
+                raise SemanticError(
+                    f"Numeric comparison with {name} expects numeric literal, "
+                    f"got {type(value).__name__}"
+                )
+
+            # Range checks for integer types
+            if isinstance(value, bool):
+                # Treat True/False as 1/0 if you want to allow bools here;
+                # alternatively, forbid them.
+                int_value = int(value)
+            else:
+                int_value = value if isinstance(value, int) else None
+
+            if name == "Edm.Byte" and int_value is not None:
+                if not 0 <= int_value <= 255:
+                    raise SemanticError("Edm.Byte literal out of range [0, 255]")
+
+            if name == "Edm.SByte" and int_value is not None:
+                if not -128 <= int_value <= 127:
+                    raise SemanticError("Edm.SByte literal out of range [-128, 127]")
+
+            if name == "Edm.Int16" and int_value is not None:
+                if not -32768 <= int_value <= 32767:
+                    raise SemanticError("Edm.Int16 literal out of range")
+
+            if name == "Edm.Int32" and int_value is not None:
+                if not -(2**31) <= int_value <= 2**31 - 1:
+                    raise SemanticError("Edm.Int32 literal out of range")
+
+            if name == "Edm.Int64" and int_value is not None:
+                if not -(2**63) <= int_value <= 2**63 - 1:
+                    raise SemanticError("Edm.Int64 literal out of range")
+
+            # Edm.Decimal, Edm.Single, Edm.Double are constrained primarily
+            # by facets and backend; you can treat any finite number as ok
+            # here and let the backend enforce precision/scale.
+
+        # Spatial primitives --------------------------------------------
+        spatial_roots = {"Edm.Geography", "Edm.Geometry"}
+        if (
+            name in spatial_roots
+            or name.startswith("Edm.Geography")
+            or name.startswith("Edm.Geometry")
+        ):
+            # At this layer, your Literal is a SpatialLiteral, not a Python
+            # primitive. _maybe_coerce_literal only receives primitive
+            # values, so value should not be a SpatialLiteral. If it is,
+            # that's a bug in the caller.
+            return
+
+        # Untyped --------------------------------------------------------
+        if name == "Edm.Untyped":
+            # By definition, any JSON value is allowed; no checks here.
+            return
 
         # For other primitives, we rely on the literal parser.
 

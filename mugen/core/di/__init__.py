@@ -264,12 +264,12 @@ def _build_relational_storage_gateway_provider(
     except AttributeError:
         # We'll get an AttributeError if injector
         # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (keyval_storage_gateway).")
+        logging.getLogger().error("Invalid injector (relational_storage_gateway).")
         return
 
     if logger is None:
         logger = logging.getLogger()
-        logger.warning("Using root logger (rdbms_storage_gateway).")
+        logger.warning("Using root logger (relational_storage_gateway).")
 
     try:
         try:

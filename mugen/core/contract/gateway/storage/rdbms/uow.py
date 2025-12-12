@@ -88,6 +88,29 @@ class IRelationalUnitOfWork(ABC):
     """
 
     @abstractmethod
+    async def count(
+        self,
+        table: str,
+        *,
+        filter_groups: Sequence[FilterGroup] | None = None,
+    ) -> int:
+        """Count records that match the given filter groups.
+
+        The ``table`` argument identifies the logical table to query. The
+        optional ``filter_groups`` argument uses the same OR-of-AND semantics
+        as :meth:`find`:
+
+        * each :class:`FilterGroup` represents a conjunction of predicates
+          (equality, scalar filters, and text filters) combined with AND;
+        * the sequence of groups is combined with OR to form the final WHERE
+          predicate.
+
+        Projection, ordering, limit, and offset are not applied. The return
+        value is the total number of rows in ``table`` that satisfy the
+        constructed predicate.
+        """
+
+    @abstractmethod
     async def insert(
         self,
         table: str,
@@ -120,6 +143,8 @@ class IRelationalUnitOfWork(ABC):
         self,
         table: str,
         where: Mapping[str, Any],
+        *,
+        columns: Sequence[str] | None = None,
     ) -> Record | None:
         """Fetch a single row matching the given equality predicates.
 
@@ -154,6 +179,7 @@ class IRelationalUnitOfWork(ABC):
         self,
         table: str,
         *,
+        columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
         order_by: Sequence[OrderBy] | None = None,
         limit: int | None = None,
@@ -278,5 +304,32 @@ class IRelationalUnitOfWork(ABC):
         -----
             - Callers are expected to pass predicates that uniquely identify a single
             row.
+            - All keys in `where` are combined with logical AND.
+        """
+
+    @abstractmethod
+    async def delete_many(
+        self,
+        table: str,
+        where: Mapping[str, Any],
+    ) -> None:
+        """Delete multiple rows.
+
+        Parameters
+        ----------
+        table:
+            Logical table name understood by the unit-of-work implementation.
+        where:
+            Mapping of column names to values.
+
+        Returns
+        -------
+        None
+            This method does not return the deleted rows. If callers need the row
+            contents, they should fetch it before invoking `delete_many` within the same
+            unit-of-work.
+
+        Notes
+        -----
             - All keys in `where` are combined with logical AND.
         """
