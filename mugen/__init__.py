@@ -84,7 +84,7 @@ async def run_clients(
 
     # Discover and register core plugins and
     # third-party extensions.
-    await register_extensions(app)
+    await register_extensions(app, config_provider=config_provider)
 
     # Register blueprints after extensions have been loaded.
     # This allows extensions to hack the api.

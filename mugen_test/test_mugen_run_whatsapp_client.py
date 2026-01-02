@@ -26,7 +26,8 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
 
         with (self.assertLogs(logger="test_app", level="DEBUG") as logger,):
             await run_whatsapp_client(
-                logger=app.logger, whatsapp_client=DummyWhatsAppClient()
+                logger_provider=lambda: app.logger,
+                whatsapp_provider=DummyWhatsAppClient,
             )
             self.assertEqual(
                 logger.output[0],

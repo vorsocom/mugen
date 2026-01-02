@@ -31,7 +31,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(mugen=SimpleNamespace())
 
         with self.assertLogs(logger="test_app", level="ERROR") as logger:
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[0],
                 "ERROR:test_app:Plugin configuration attribute error.",
@@ -54,7 +58,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertLogs(logger="test_app", level="DEBUG") as logger:
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[0],
                 "DEBUG:test_app:Adding plugins for loading.",
@@ -69,7 +77,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(mugen=SimpleNamespace())
 
         with self.assertLogs(logger="test_app", level="ERROR") as logger:
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[1],
                 "ERROR:test_app:Extension configuration attribute error.",
@@ -90,7 +102,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertLogs(logger="test_app", level="DEBUG") as logger:
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[1],
                 "DEBUG:test_app:Adding extensions for loading.",
@@ -119,7 +135,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             self.assertLogs(logger="test_app"),
             self.assertRaises(SystemExit),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
 
     async def test_missing_subclass(self) -> None:
         """Test effects of missing subclass of the relevant extension type."""
@@ -157,7 +177,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             self.assertRaises(SystemExit),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
 
     async def test_incomplete_subclass_implmentation(self) -> None:
         """Test effects of incomplete subclass implementation."""
@@ -200,7 +224,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             self.assertRaises(SystemExit),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
 
     async def test_register_unsupported_conversational_trigger_extension(self) -> None:
         """Test registration of unsupported conversational trigger extension."""
@@ -261,7 +289,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms: ct_ext.",
@@ -324,7 +356,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "DEBUG:test_app:Registered CT extension: ct_ext.",
@@ -379,7 +415,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms:"
@@ -433,7 +473,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "DEBUG:test_app:Registered CTX extension: ctx_ext.",
@@ -469,7 +513,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 """Get the platform that the extension is targeting."""
                 return ["unsupported_platform"]
 
-            async def setup(self) -> None:
+            async def setup(self, app: Quart) -> None:
                 """Perform extension setup."""
 
         sc = unittest.mock.Mock
@@ -488,7 +532,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms: fw_ext.",
@@ -522,7 +570,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             def platforms(self) -> list[str]:
                 """Get the platform that the extension is targeting."""
 
-            async def setup(self) -> None:
+            async def setup(self, app: Quart) -> None:
                 """Perform extension setup."""
 
         sc = unittest.mock.Mock
@@ -541,7 +589,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "DEBUG:test_app:Registered FW extension: fw_ext.",
@@ -602,7 +654,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms:"
@@ -662,7 +718,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "DEBUG:test_app:Registered IPC extension: ipc_ext.",
@@ -730,7 +790,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms: mh_ext.",
@@ -796,7 +860,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "DEBUG:test_app:Registered MH extension: mh_ext.",
@@ -862,7 +930,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms:"
@@ -927,7 +999,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "DEBUG:test_app:Registered RAG extension: rag_ext.",
@@ -986,7 +1062,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms:"
@@ -1044,7 +1124,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 new_callable=sc,
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "DEBUG:test_app:Registered RPP extension: rpp_ext.",
@@ -1087,7 +1171,11 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 },
             ),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Unknown extension type: xxx.",

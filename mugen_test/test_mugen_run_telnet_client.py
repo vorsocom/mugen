@@ -38,7 +38,8 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
 
         with (self.assertLogs(logger="test_app", level="DEBUG") as logger,):
             await run_telnet_client(
-                logger=app.logger, telnet_client=DummyTelnetClient()
+                logger_provider=lambda: app.logger,
+                telnet_provider=DummyTelnetClient,
             )
             self.assertEqual(
                 logger.output[0],
@@ -71,7 +72,8 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
 
         with (self.assertLogs(logger="test_app", level="DEBUG") as logger,):
             await run_telnet_client(
-                logger=app.logger, telnet_client=DummyTelnetClient()
+                logger_provider=lambda: app.logger,
+                telnet_provider=DummyTelnetClient,
             )
             self.assertEqual(
                 logger.output[0],

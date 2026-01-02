@@ -19,7 +19,7 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
             dummy_config = SimpleNamespace()
 
             with self.assertRaises(SystemExit):
-                create_quart_app(config=dummy_config)
+                create_quart_app(config_provider=lambda: dummy_config)
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.
@@ -36,7 +36,7 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
             )
 
             with self.assertRaises(SystemExit):
-                create_quart_app(dummy_config)
+                create_quart_app(config_provider=lambda: dummy_config)
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.
@@ -50,9 +50,10 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="default",
                 ),
+                quart=SimpleNamespace(secret_key="secret_key"),
             )
 
-            app = create_quart_app(dummy_config)
+            app = create_quart_app(config_provider=lambda: dummy_config)
             self.assertIsInstance(app, Quart)
             self.assertEqual(app.config["DEBUG"], True)
             self.assertEqual(app.config["LOG_LEVEL"], 10)
@@ -69,9 +70,10 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="development",
                 ),
+                quart=SimpleNamespace(secret_key="secret_key"),
             )
 
-            app = create_quart_app(dummy_config)
+            app = create_quart_app(config_provider=lambda: dummy_config)
             self.assertIsInstance(app, Quart)
             self.assertEqual(app.config["DEBUG"], True)
             self.assertEqual(app.config["LOG_LEVEL"], 10)
@@ -88,9 +90,10 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="testing",
                 ),
+                quart=SimpleNamespace(secret_key="secret_key"),
             )
 
-            app = create_quart_app(dummy_config)
+            app = create_quart_app(config_provider=lambda: dummy_config)
             self.assertIsInstance(app, Quart)
             self.assertEqual(app.config["DEBUG"], True)
             self.assertEqual(app.config["TESTING"], True)
@@ -108,9 +111,10 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="production",
                 ),
+                quart=SimpleNamespace(secret_key="secret_key"),
             )
 
-            app = create_quart_app(dummy_config)
+            app = create_quart_app(config_provider=lambda: dummy_config)
             self.assertIsInstance(app, Quart)
             self.assertEqual(app.config["DEBUG"], False)
             self.assertEqual(app.config["LOG_LEVEL"], 30)

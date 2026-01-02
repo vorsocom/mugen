@@ -25,7 +25,11 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
             self.assertLogs(logger="test_app", level="ERROR"),
             self.assertRaises(SystemExit),
         ):
-            await run_clients(app, config=config, logger=app.logger)
+            await run_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
 
     async def test_matrix_platform_enabled(self) -> None:
         """Test running matrix platform."""
@@ -47,7 +51,11 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 target="mugen.run_matrix_client", new=_run_matrix_client
             ),
         ):
-            await run_clients(app, config=config, logger=app.logger)
+            await run_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[0],
                 "DEBUG:test_app:Running matrix client.",
@@ -73,7 +81,11 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 target="mugen.run_telnet_client", new=_run_telnet_client
             ),
         ):
-            await run_clients(app, config=config, logger=app.logger)
+            await run_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[0],
                 "DEBUG:test_app:Running telnet client.",
@@ -99,7 +111,11 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 target="mugen.run_whatsapp_client", new=_run_whatsapp_client
             ),
         ):
-            await run_clients(app, config=config, logger=app.logger)
+            await run_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
             self.assertEqual(
                 logger.output[0],
                 "DEBUG:test_app:Running whatsapp client.",
@@ -128,7 +144,10 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             await run_clients(
-                app, config=config, logger=app.logger, whatsapp_client=None
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                whatsapp_provider=lambda: None,
             )
             self.assertEqual(
                 logger.output[0],
@@ -168,7 +187,10 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             await run_clients(
-                app, config=config, logger=app.logger, whatsapp_client=whatsapp_client
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                whatsapp_provider=lambda: whatsapp_client,
             )
             self.assertEqual(
                 logger.output[0],

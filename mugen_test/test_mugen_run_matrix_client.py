@@ -53,9 +53,9 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
         with self.assertLogs(logger="test_app", level="DEBUG") as logger:
             await run_matrix_client(
-                config=config,
-                logger=app.logger,
-                matrix_client=DummyMatrixClientNormal(),
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClientNormal,
             )
             self.assertEqual(logger.output[0], "DEBUG:test_app:Matrix client started.")
 
@@ -100,9 +100,9 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
         with self.assertLogs(logger="test_app", level="DEBUG") as logger:
             await run_matrix_client(
-                config=config,
-                logger=app.logger,
-                matrix_client=DummyMatrixClientNormal(),
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClientNormal,
             )
             self.assertEqual(logger.output[0], "DEBUG:test_app:Matrix client started.")
 
@@ -148,9 +148,9 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
         with self.assertLogs(logger="test_app", level="DEBUG") as logger:
             await run_matrix_client(
-                config=config,
-                logger=app.logger,
-                matrix_client=DummyMatrixClient(),
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
             )
             self.assertEqual(
                 logger.output[0], "ERROR:test_app:Matrix client shutting down."
