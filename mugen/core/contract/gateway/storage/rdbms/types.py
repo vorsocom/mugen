@@ -8,11 +8,49 @@ __all__ = [
     "ScalarFilterOp",
     "ScalarFilter",
     "FilterGroup",
+    "RowVersionConflict",
 ]
 
 from dataclasses import dataclass, field
 from enum import auto, Enum
 from typing import Any, Mapping, MutableMapping, Sequence
+
+
+class RowVersionConflict(RuntimeError):
+    """Raised when an optimistic concurrency check based on ``row_version`` fails.
+
+    This exception supports *optimistic concurrency control* for relational updates and
+    deletes when tables expose an integer ``row_version`` column.
+
+    Typical usage
+    -------------
+    Callers include the expected version in the equality predicates, e.g.::
+
+        await gateway.update_one(
+            "orders",
+            where={"id": order_id, "row_version": expected_version},
+            changes={"status": "paid"},
+        )
+
+    If the row exists but its current ``row_version`` differs from the provided expected
+    value, the underlying implementation may raise this exception.
+
+    Attributes
+    ----------
+    table:
+        Logical table name.
+    where:
+        The WHERE predicate mapping supplied by the caller (often includes ``row_version``).
+    """
+
+    def __init__(self, table: str, where: Mapping[str, Any] | None = None) -> None:
+        self.table = table
+        self.where = dict(where) if where is not None else {}
+        super().__init__(
+            f"RowVersion conflict for table={table!r} where={self.where!r} "
+            "(row was updated or deleted by another transaction)"
+        )
+
 
 #: Represents a single database row as a mutable mapping of column-name -> value.
 #:

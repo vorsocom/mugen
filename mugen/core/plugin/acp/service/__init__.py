@@ -1,0 +1,62 @@
+"""Public API for the admin.service package."""
+
+__all__ = [
+    "GlobalPermissionEntryService",
+    "GlobalRoleMembershipService",
+    "GlobalRoleService",
+    "PermissionEntryService",
+    "PermissionObjectService",
+    "PermissionTypeService",
+    "PersonService",
+    "RefreshTokenService",
+    "RoleService",
+    "RoleMembershipService",
+    "SystemFlagService",
+    "TenantService",
+    "TenantDomainService",
+    "TenantInvitationService",
+    "TenantMembershipService",
+    "UserService",
+    "REGISTRATIONS",
+]
+
+from mugen.core.plugin.acp import model as admin_model
+from mugen.core.plugin.acp.service.global_permission_entry import (
+    GlobalPermissionEntryService,
+)
+from mugen.core.plugin.acp.service.global_role import GlobalRoleService
+from mugen.core.plugin.acp.service.global_role_membership import (
+    GlobalRoleMembershipService,
+)
+from mugen.core.plugin.acp.service.permission_entry import PermissionEntryService
+from mugen.core.plugin.acp.service.permission_object import PermissionObjectService
+from mugen.core.plugin.acp.service.permission_type import PermissionTypeService
+from mugen.core.plugin.acp.service.person import PersonService
+from mugen.core.plugin.acp.service.refresh_token import RefreshTokenService
+from mugen.core.plugin.acp.service.role import RoleService
+from mugen.core.plugin.acp.service.role_membership import RoleMembershipService
+from mugen.core.plugin.acp.service.system_flag import SystemFlagService
+from mugen.core.plugin.acp.service.tenant import TenantService
+from mugen.core.plugin.acp.service.tenant_domain import TenantDomainService
+from mugen.core.plugin.acp.service.tenant_invitation import TenantInvitationService
+from mugen.core.plugin.acp.service.tenant_membership import TenantMembershipService
+from mugen.core.plugin.acp.service.user import UserService
+
+REGISTRATIONS = [
+    (GlobalPermissionEntryService, admin_model.GlobalPermissionEntry),
+    (GlobalRoleService, admin_model.GlobalRole),
+    (GlobalRoleMembershipService, admin_model.GlobalRoleMembership),
+    (PermissionEntryService, admin_model.PermissionEntry),
+    (PermissionObjectService, admin_model.PermissionObject),
+    (PermissionTypeService, admin_model.PermissionType),
+    (PersonService, admin_model.Person),
+    (RefreshTokenService, admin_model.RefreshToken),
+    (RoleService, admin_model.Role),
+    (RoleMembershipService, admin_model.RoleMembership),
+    (SystemFlagService, admin_model.SystemFlag),
+    (TenantService, admin_model.Tenant),
+    (TenantDomainService, admin_model.TenantDomain),
+    (TenantInvitationService, admin_model.TenantInvitation),
+    (TenantMembershipService, admin_model.TenantMembership),
+    (UserService, admin_model.User),
+]

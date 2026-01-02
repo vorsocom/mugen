@@ -13,8 +13,9 @@ from sqlalchemy import (
     insert as sa_insert,
     select as sa_select,
     update as sa_update,
+    Select,
     Table,
-    func,
+    func as sa_func,
 )
 
 from sqlalchemy.engine import Result
@@ -29,9 +30,8 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
     ScalarFilter,
     ScalarFilterOp,
 )
+from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
 from mugen.core.contract.gateway.storage.rdbms.uow import IRelationalUnitOfWork
-
-func: callable
 
 TableRegistry = MutableMapping[str, Table]
 
@@ -39,7 +39,7 @@ TableRegistry = MutableMapping[str, Table]
 class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
     """An SQLAlchemy-backed implementation of IRelationalUnitOfWork.
 
-    This unit of work wraps an SQLAlchemy `AsyncSession` and a registry SQLAlchemy
+    This unit of work wraps an SQLAlchemy `AsyncSession` and a registry of SQLAlchemy
     `Table` objects. It translates the contract methods into SQLAlchemy Core statements
     and executes them within a single transaction.
 
@@ -51,6 +51,18 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         Mapping of logical table name -> SQLAlchemy `Table` object. The logical names
         must match those used by higher-level code and by the configured relational
         gateway.
+
+    Optimistic concurrency via row_version
+    --------------------------------------
+    If a table has a ``row_version`` column and callers include ``row_version`` in the
+    `where` mapping for update/delete, this implementation enforces optimistic
+    concurrency:
+
+    - UPDATE/DELETE includes ``row_version == expected`` in its WHERE clause.
+    - UPDATE automatically increments the stored row_version on success (unless the
+      caller explicitly sets row_version in `changes`).
+    - If no row is affected and the base identity row exists (same `where` without
+      row_version), a RowVersionConflict is raised.
     """
 
     def __init__(self, session: AsyncSession, tables: TableRegistry) -> None:
@@ -63,23 +75,11 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         *,
         filter_groups: Sequence[FilterGroup] | None = None,
     ) -> int:
-        """Count records that match the given filter groups.
-
-        The ``table`` argument identifies the logical table to query. The
-        optional ``filter_groups`` argument uses the same OR-of-AND semantics
-        as :meth:`find`:
-
-        * each :class:`FilterGroup` represents a conjunction of predicates
-          (equality, scalar filters, and text filters) combined with AND;
-        * the sequence of groups is combined with OR to form the final WHERE
-          predicate.
-
-        Projection, ordering, limit, and offset are not applied. The return
-        value is the total number of rows in ``table`` that satisfy the
-        constructed predicate.
-        """
+        """Count records that match the given filter groups."""
         tbl = self._get_table(table)
-        stmt = sa_select(func.count()).select_from(tbl)
+        stmt = sa_select(sa_func.count()).select_from(  # pylint: disable=not-callable
+            tbl
+        )
 
         if filter_groups:
             group_exprs = [
@@ -94,7 +94,6 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
                     stmt = stmt.where(or_(*group_exprs))
 
         result = await self._session.execute(stmt)
-        # scalar() / scalar_one() depending on your SA version/preferences
         return int(result.scalar() or 0)
 
     async def insert(
@@ -146,7 +145,10 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         row = result.mappings().one_or_none()
         return dict(row) if row is not None else None
 
-    async def find(  # pylint: disable=too-many-arguments, too-many-locals
+    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-locals
+    # pylint: disable=too-many-branches
+    async def find(
         self,
         table: str,
         *,
@@ -156,6 +158,7 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         limit: int | None = None,
         offset: int | None = None,
     ) -> Sequence[Record]:
+        """See IRelationalUnitOfWork.find for contract semantics."""
         tbl = self._get_table(table)
 
         if columns:
@@ -171,10 +174,7 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
 
         # Build the overall WHERE predicate from filter_groups
         if filter_groups:
-            group_exprs = [
-                self._predicates_for_group(tbl, group) for group in filter_groups
-            ]
-            # Drop empty groups (no predicates)
+            group_exprs = [self._predicates_for_group(tbl, g) for g in filter_groups]
             group_exprs = [g for g in group_exprs if g is not None]
 
             if group_exprs:
@@ -198,8 +198,126 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
             stmt = stmt.offset(offset)
 
         result = await self._session.execute(stmt)
-        rows = [dict(row) for row in result.mappings()]
-        return rows
+        return [dict(row) for row in result.mappings()]
+
+    async def find_partitioned_by_fk(
+        self,
+        table: str,
+        *,
+        fk_field: str,
+        fk_values: Sequence[Any],
+        columns: Sequence[str] | None = None,
+        filter_groups: Sequence[FilterGroup] | None = None,
+        order_by: Sequence[OrderBy] | None = None,
+        per_fk_limit: int | None = None,
+        per_fk_offset: int | None = None,
+        tie_breaker_field: str = "id",
+    ) -> Sequence[Record]:
+        """See IRelationalUnitOfWork.find_partitioned_by_fk for contract semantics."""
+        if not fk_values:
+            return []
+
+        # Normalize / dedupe FK values to reduce IN(...) size and improve plan stability.
+        # Preserve order when values are hashable; fall back to raw list if not.
+        try:
+            fk_values_list = list(dict.fromkeys(fk_values))
+        except TypeError:
+            fk_values_list = list(fk_values)
+
+        if not fk_values_list:
+            return []
+
+        tbl = self._get_table(table)
+
+        offset = int(per_fk_offset or 0)
+        if offset < 0:
+            raise ValueError("per_fk_offset must be >= 0")
+
+        limit = per_fk_limit
+        if limit is not None and limit < 0:
+            raise ValueError("per_fk_limit must be >= 0")
+
+        # Build base SELECT projection.
+        projected_cols: list[Any] = []
+        if columns:
+            try:
+                col_names = list(dict.fromkeys([*columns, fk_field]))
+                projected_cols = [getattr(tbl.c, c) for c in col_names]
+            except AttributeError as exc:
+                raise ValueError(
+                    f"Unknown column in `columns` argument for table {table!r}: {exc}"
+                ) from exc
+
+        fk_col = getattr(tbl.c, fk_field)
+
+        # --- base statement ---
+        base: Select
+        if projected_cols:
+            base = sa_select(*projected_cols).select_from(tbl)
+        else:
+            base = sa_select(tbl).select_from(tbl)
+
+        # Apply fk predicate (use equality when there is a single FK for simpler plans).
+        if len(fk_values_list) == 1:
+            base = base.where(fk_col == fk_values_list[0])
+        else:
+            base = base.where(fk_col.in_(fk_values_list))
+
+        # Apply filter_groups exactly like find(): OR across groups.
+        if filter_groups:
+            group_exprs = [self._predicates_for_group(tbl, g) for g in filter_groups]
+            group_exprs = [g for g in group_exprs if g is not None]
+            if group_exprs:
+                if len(group_exprs) == 1:
+                    base = base.where(group_exprs[0])
+                else:
+                    base = base.where(or_(*group_exprs))
+
+        # --- order expressions for the window ---
+        order_exprs = []
+        order_fields: set[str] = set()
+        if order_by:
+            for ob in order_by:
+                col = getattr(tbl.c, ob.field)
+                order_exprs.append(col.desc() if ob.descending else col.asc())
+                order_fields.add(ob.field)
+
+        # Always add a deterministic tie-breaker for stable row_number ordering.
+        if tie_breaker_field in tbl.c and tie_breaker_field not in order_fields:
+            order_exprs.append(getattr(tbl.c, tie_breaker_field).asc())
+
+        # row_number() over (partition by fk ORDER BY ...)
+        rn = (
+            sa_func.row_number()
+            .over(
+                partition_by=fk_col,
+                order_by=order_exprs if order_exprs else None,
+            )
+            .label("__rn")
+        )
+
+        ranked = base.add_columns(rn).subquery("ranked")
+
+        # Outer query: select original projected columns (not rn), filter by rn range.
+        # For "tbl" selection, ranked.c will contain all table columns plus __rn.
+        if columns:
+            out_cols = [ranked.c[c] for c in [*dict.fromkeys([*columns, fk_field])]]
+        else:
+            # selecting tbl means ranked.c has all columns; easiest is to select all
+            # ranked columns except rn.
+            out_cols = [c for c in ranked.c if c.key != "__rn"]
+
+        stmt = sa_select(*out_cols)
+
+        if limit is not None:
+            low = offset + 1
+            high = offset + limit
+            stmt = stmt.where(ranked.c["__rn"].between(low, high))
+        elif offset:
+            stmt = stmt.where(ranked.c["__rn"] >= (offset + 1))
+
+        result = await self._session.execute(stmt)
+        return [dict(row) for row in result.mappings()]
 
     async def update_one(
         self,
@@ -211,35 +329,66 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
     ) -> Record | None:
         """See IRelationalUnitOfWork.update_one for contract semantics."""
         if not changes:
-            # No changes. Obey contract semantics by just refetching when requested.
             return await self.get_one(table, where) if returning else None
 
         tbl = self._get_table(table)
-        stmt = sa_update(tbl).values(**changes)
+
+        values: dict[str, Any] = dict(changes)
+
+        # If the table supports row_version and caller isn't explicitly setting it,
+        # increment it on successful update.
+        if "row_version" in tbl.c and "row_version" not in values:
+            values["row_version"] = tbl.c.row_version + 1
+
+        stmt = sa_update(tbl).values(**values)
         stmt = self._apply_where(tbl, stmt, where)
 
+        # If we want the updated row, RETURNING is the cleanest way to both fetch it
+        # and detect "no rows affected" reliably.
         if returning:
             stmt = stmt.returning(tbl)
 
         result: Result = await self._session.execute(stmt)
 
         if not returning:
+            # If optimistic concurrency is requested (row_version in where) and no rows
+            # were updated, decide whether to raise RowVersionConflict vs "not found".
+            if "row_version" in where:
+                if (result.rowcount or 0) == 0:
+                    await self._raise_if_row_version_conflict(table, tbl, where)
             return None
 
         row = result.mappings().one_or_none()
-        return dict(row) if row is not None else None
+        if row is not None:
+            return dict(row)
+
+        # No row updated.
+        if "row_version" in where:
+            await self._raise_if_row_version_conflict(table, tbl, where)
+        return None
 
     async def delete_one(
         self,
         table: str,
         where: Mapping[str, Any],
-    ) -> None:
+    ) -> Record | None:
         """See IRelationalUnitOfWork.delete_one for contract semantics."""
         tbl = self._get_table(table)
+
+        # Use RETURNING so we can reliably detect "no rows deleted" without relying
+        # purely on rowcount.
         stmt = sa_delete(tbl).returning(tbl)
         stmt = self._apply_where(tbl, stmt, where)
+
         result: Result = await self._session.execute(stmt)
-        result.mappings().one_or_none()
+        deleted = result.mappings().one_or_none()
+
+        if deleted is not None:
+            return dict(deleted)
+
+        # No row deleted.
+        if "row_version" in where:
+            await self._raise_if_row_version_conflict(table, tbl, where)
 
     async def delete_many(
         self,
@@ -251,6 +400,51 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         stmt = sa_delete(tbl)
         stmt = self._apply_where(tbl, stmt, where)
         await self._session.execute(stmt)
+
+    # ----------------------------
+    # Concurrency helpers
+    # ----------------------------
+
+    def _where_without_row_version(self, where: Mapping[str, Any]) -> dict[str, Any]:
+        """Return a copy of `where` with any row_version predicate removed."""
+        base = dict(where)
+        base.pop("row_version", None)
+        return base
+
+    async def _raise_if_row_version_conflict(
+        self,
+        table: str,
+        tbl: Table,
+        where: Mapping[str, Any],
+    ) -> None:
+        """Raise RowVersionConflict if the row exists but the row_version predicate failed.
+
+        If the base row (identified by predicates excluding row_version) does not exist,
+        treat the condition as "not found" and do not raise.
+        """
+        # If we cannot form an identity predicate, we cannot distinguish "not found"
+        # from "conflict". In that case, treat as conflict when the caller requested it.
+        identity_where = self._where_without_row_version(where)
+        if not identity_where:
+            raise RowVersionConflict(table, where)
+
+        stmt = sa_select(tbl.c.row_version).select_from(tbl)
+        stmt = self._apply_where(tbl, stmt, identity_where)
+        stmt = stmt.limit(1)
+
+        res = await self._session.execute(stmt)
+        existing_version = res.scalar_one_or_none()
+
+        if existing_version is None:
+            # Row doesn't exist -> no conflict, it's "not found".
+            return
+
+        # Row exists but (id + row_version) predicate matched nothing -> conflict.
+        raise RowVersionConflict(table, where)
+
+    # ----------------------------
+    # Predicate building
+    # ----------------------------
 
     # pylint: disable=too-many-locals
     # pylint: disable=too-many-branches
@@ -287,7 +481,7 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
                     col_expr = col
                     pattern_value = str(tf.value)
                 else:
-                    col_expr = func.lower(col)
+                    col_expr = sa_func.lower(col)
                     pattern_value = str(tf.value).lower()
 
                 if tf.op is TextFilterOp.CONTAINS:
@@ -358,7 +552,7 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         return and_(*predicates)
 
     # pylint: disable=too-many-arguments
-    # pylint: disable=too-many-positional-arguments
+    # ylint: disable=too-many-positional-arguments
     def _apply_where(
         self,
         table: Table,

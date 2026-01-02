@@ -13,6 +13,8 @@ tailored for RGQL.
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set, Tuple
 
+# pylint: disable=too-many-instance-attributes
+
 
 @dataclass(frozen=True)
 class TypeRef:
@@ -67,16 +69,33 @@ class EdmProperty:
 
 @dataclass
 class EdmNavigationProperty:
-    """Navigation property linking one type to another.
+    """Navigation property linking one EDM entity type to another.
 
-    ``target_type`` is a :class:`TypeRef` describing the entity type at
-    the other end of the relationship.  ``nullable`` indicates whether
-    the navigation can be missing (for single-valued navigations).
+    target_type:
+      - TypeRef describing the entity type at the other end of the relationship.
+      - If target_type.is_collection is True, this is a *collection* navigation.
+      - Otherwise it is a *single-valued* navigation.
+
+    nullable:
+      - Only meaningful for single-valued navigations.
+      - True means the relationship may be missing.
+
+    source_fk:
+      - Required for *single-valued* navigations (target_type.is_collection == False).
+      - TitleCase EDM property name on the *source* type holding the target's key
+        (e.g., "PersonId").
+
+    target_fk:
+      - Required for *collection* navigations (target_type.is_collection == True).
+      - TitleCase EDM property name on the *target* type holding the source's key
+        (e.g., "UserId").
     """
 
     name: str
     target_type: TypeRef
     nullable: bool = True
+    source_fk: Optional[str] = None
+    target_fk: Optional[str] = None
 
 
 @dataclass
@@ -109,6 +128,7 @@ class EdmType:
 
     # Only meaningful when kind == "entity"
     key_properties: Optional[Tuple[str, ...]] = None
+    entity_set_name: Optional[str] = None
 
     def find_property(self, name: str) -> Optional[EdmProperty]:
         """Look up a structural property by name on this type.

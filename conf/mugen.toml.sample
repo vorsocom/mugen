@@ -22,6 +22,10 @@ platforms = [
 #
 storage.keyval.dbm.path = "/absolute/path/to/data/storage.db"
 #
+[mugen.commands]
+clear = "..."
+#
+#
 [mugen.modules.core]
 #
 client.telnet = "mugen.core.client.telnet"
@@ -46,23 +50,36 @@ service.nlp = "mugen.core.service.nlp"
 #
 service.user = "mugen.core.service.user"
 #
+### Core Plugins
 #
-# Core Plugins
+# Framework.
+#
+[[mugen.modules.core.plugins]]
+type = "fw"
+path = "mugen.core.plugin.acp.fw_ext"
+enabled = true
+name = "com.vorsocomputing.mugen.acp"
+namespace = "com.vorsocomputing.mugen.acp"
+models = "mugen.core.plugin.acp.model"
+contrib = "mugen.core.plugin.acp.contrib"
 #
 # Context.
-# [[mugen.modules.core.plugins]]
-# type = "ctx"
-# path = "mugen.plugin.context.persona.ctx_ext"
+#
+[[mugen.modules.core.plugins]]
+type = "ctx"
+path = "mugen.core.plugin.context.persona.ctx_ext"
 #
 # Commands.
-# [[mugen.modules.core.plugins]]
-# type = "cp"
-# path = "mugen.plugin.command.clear_history.cp_ext"
+#
+[[mugen.modules.core.plugins]]
+type = "cp"
+path = "mugen.core.plugin.command.clear_history.cp_ext"
 #
 # Message Handler.
-# [[mugen.modules.core.plugins]]
-# type = "mh"
-# path = "mugen.plugin.message_handler.text.mh_ext"
+#
+[[mugen.modules.core.plugins]]
+type = "mh"
+path = "mugen.core.plugin.message_handler.text.mh_ext"
 #
 # WACAPI.
 # [[mugen.modules.core.plugins]]
@@ -74,58 +91,79 @@ service.user = "mugen.core.service.user"
 # type = ""
 # path = ""
 #
-#===MATRIX===
-[matrix]
+#===ACP PLUGIN===
+[acp]
 #
-assistant.name = ""
+plugin_name = "com.vorsocomputing.mugen.acp"
 #
-beta.users = []
+namespace = "com.vorsocomputing.mugen.acp"
 #
-client.device = "vorsocom-mugen"
+admin_login_email = ""
 #
-client.password = ""
+admin_password = ""
 #
-client.user = ""
+admin_password_hash = ""
 #
-domain = ""
+admin_username = ""
 #
-domains.allowed = []
+cors_origins = ["*"]
 #
-domains.denied = []
+enforce_password_policy = true
 #
-homeserver = ""
+login_access_expiry = 300 # 5 minutes
 #
-storage.olm.path = "/absolute/path/to/data/.olmstore"
+login_dummy_hash = ""
 #
-#===TELNET===
-[telnet]
+login_refresh_expiry = 604800 # 7 days
 #
-socket.host = "localhost"
+password_policy = "^(?=.*[A-Z])(?=.*[a-z])(?=.*\\d)(?=.*[!@#\\$&*~,]).{8,}$"
 #
-socket.port = 8888
+refresh_token_pepper = ""
 #
-#===WHATSAPP===
-[whatsapp]
+rgql_allow_exapnd_wildcard = true
 #
-app.id = ""
+rgql_default_top = 100
 #
-app.secret = ""
+rgql_max_expand_depth = 4
 #
-beta.users = []
+rgql_max_expand_paths = 10
 #
-business.phone_number_id = ""
+rgql_max_filter_terms = 25
 #
-graphapi.access_token = ""
+rgql_max_orderby = 5
 #
-graphapi.base_url = ""
+rgql_max_select = 50
 #
-graphapi.version = ""
+rgql_max_skip = 10_000
 #
-servers.allowed = ""
+rgql_max_top = 500
 #
-servers.verify_ip = false
+secret_key = ""
 #
-webhook.verification_token = ""
+seed_acp = true
+#
+[acp.argon2]
+#
+time_cost = 2
+#
+memory_cost = 65536 # 64 * 1024
+#
+parallelism = 2
+#
+hash_len = 32
+[acp.jwt]
+#
+active_kid = "2025-12-31-xx"
+#
+audience = ""
+#
+issuer = ""
+#
+[[acp.jwt.keys]]
+kid = "2025-12-31-xx"
+alg = "EdDSA"
+pem = "-----BEGIN PRIVATE KEY ..."
+#
 #===AWS BEDROCK===
 [aws.bedrock]
 #
@@ -150,6 +188,7 @@ api.completion.top_p = 0.9
 api.region = ""
 #
 api.secret_access_key = ""
+#
 #===GROQ===
 [groq]
 #
@@ -162,6 +201,51 @@ api.completion.model = ""
 api.completion.temp = 0.0
 #
 api.key = ""
+#
+#===MATRIX===
+[matrix]
+#
+assistant.name = ""
+#
+beta.users = []
+#
+client.device = "vorsocom-mugen"
+#
+client.password = ""
+#
+client.user = ""
+#
+domain = ""
+#
+domains.allowed = []
+#
+domains.denied = []
+#
+homeserver = ""
+#
+storage.olm.path = "/absolute/path/to/data/.olmstore"
+#
+#===QDRANT===
+[qdrant]
+#
+api.key = ""
+#
+api.url = ""
+#
+#===QUART===
+[quart]
+#
+secret_key = ""
+#
+#===RDBMS====
+[rdbms.alembic]
+# Alembic requires a synchronous driver.
+url = "postgresql+psycopg://user:password@server/database"
+#
+[rdbms.sqlalchemy]
+# SQLAlchemy requires an asynchronous driver.
+url = "postgresql+psycopg://user:password@server/database"
+#
 #===SAMBANOVA===
 [sambanova]
 #
@@ -176,13 +260,39 @@ api.completion.temp = 0.0
 api.endpoint = ""
 #
 api.key = ""
-#===QDRANT===
-[qdrant]
 #
-api.key = ""
+#===TELNET===
+[telnet]
 #
-api.url = ""
+socket.host = "localhost"
+#
+socket.port = 8888
+#
 #===TRANSFORMERS===
 [transformers]
 #
 hf.home = ""
+#
+#===WHATSAPP===
+[whatsapp]
+#
+app.id = ""
+#
+app.secret = ""
+#
+beta.users = []
+#
+business.phone_number_id = ""
+#
+graphapi.access_token = ""
+#
+graphapi.base_url = ""
+#
+graphapi.version = ""
+#
+servers.allowed = ""
+#
+servers.verify_ip = false
+#
+webhook.verification_token = ""
+#

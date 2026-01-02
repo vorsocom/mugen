@@ -24,13 +24,19 @@ from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.service.ipc import IIPCService
+from mugen.core.contract.service.messaging import IMessagingService
+from mugen.core.contract.service.platform import IPlatformService
 
 
 def create_quart_app(
-    config: SimpleNamespace = di.container.config,
-    logger: ILoggingGateway = di.container.logging_gateway,
+    config_provider=lambda: di.container.config,
+    logger_provider=lambda: di.container.logging_gateway,
 ) -> Quart:
     """Application factory."""
+    config: SimpleNamespace = config_provider()
+    logger: ILoggingGateway = logger_provider()
+
     # Create new Quart application.
     app = Quart(__name__)
 
@@ -67,14 +73,18 @@ def create_quart_app(
 # pylint: disable=too-many-statements
 async def run_clients(
     app: Quart,
-    config: SimpleNamespace = di.container.config,
-    logger=di.container.logging_gateway,
-    whatsapp_client: IWhatsAppClient = di.container.whatsapp_client,
+    config_provider=lambda: di.container.config,
+    logger_provider=lambda: di.container.logging_gateway,
+    whatsapp_provider=lambda: di.container.whatsapp_client,
 ) -> None:
     """Entrypoint for assistants."""
+    config: SimpleNamespace = config_provider()
+    logger: ILoggingGateway = logger_provider()
+    whatsapp_client: IWhatsAppClient = whatsapp_provider()
+
     # Discover and register core plugins and
     # third-party extensions.
-    await register_extensions()
+    await register_extensions(app)
 
     # Register blueprints after extensions have been loaded.
     # This allows extensions to hack the api.
@@ -110,14 +120,20 @@ async def run_clients(
             await whatsapp_client.close()
 
 
-async def register_extensions(
-    config: SimpleNamespace = di.container.config,
-    ipc_service=di.container.ipc_service,
-    logger=di.container.logging_gateway,
-    messaging_service=di.container.messaging_service,
-    platform_service=di.container.platform_service,
+async def register_extensions(  # pylint: disable=too-many-positional-arguments
+    app: Quart,
+    config_provider=lambda: di.container.config,
+    ipc_provider=lambda: di.container.ipc_service,
+    logger_provider=lambda: di.container.logging_gateway,
+    messaging_provider=lambda: di.container.messaging_service,
+    platform_provider=lambda: di.container.platform_service,
 ) -> None:
     """Register core plugins and third party extensions."""
+    config: SimpleNamespace = config_provider()
+    ipc_service: IIPCService = ipc_provider()
+    logger: ILoggingGateway = logger_provider()
+    messaging_service: IMessagingService = messaging_provider()
+    platform_service: IPlatformService = platform_provider()
 
     # Load extensions if specified. These include:
     # 1. Command Processor (CP) extensions.
@@ -208,7 +224,7 @@ async def register_extensions(
                     fw_ext = fw_ext_class()
                     extension_supported = platform_service.extension_supported(fw_ext)
                     if extension_supported:
-                        await fw_ext.setup()
+                        await fw_ext.setup(app)
                         registered = True
                 elif ext.type == "ipc":
                     ipc_ext_class = [
@@ -273,10 +289,12 @@ async def register_extensions(
 
 
 async def run_telnet_client(
-    logger=di.container.logging_gateway,
-    telnet_client: ITelnetClient = di.container.telnet_client,
+    logger_provider=lambda: di.container.logging_gateway,
+    telnet_provider=lambda: di.container.telnet_client,
 ) -> None:
     """Run assistant for Telnet server."""
+    logger: ILoggingGateway = logger_provider()
+    telnet_client: ITelnetClient = telnet_provider()
 
     async with telnet_client as client:
         try:
@@ -287,11 +305,14 @@ async def run_telnet_client(
 
 
 async def run_matrix_client(
-    config: SimpleNamespace = di.container.config,
-    logger=di.container.logging_gateway,
-    matrix_client: IMatrixClient = di.container.matrix_client,
+    config_provider=lambda: di.container.config,
+    logger_provider=lambda: di.container.logging_gateway,
+    matrix_provider=lambda: di.container.matrix_client,
 ) -> None:
     """Run assistant for the Matrix platform."""
+    config: SimpleNamespace = config_provider()
+    logger: ILoggingGateway = logger_provider()
+    matrix_client: IMatrixClient = matrix_provider()
 
     # Initialise matrix client.
     async with matrix_client as client:
@@ -334,9 +355,12 @@ async def run_matrix_client(
 
 
 async def run_whatsapp_client(
-    logger=di.container.logging_gateway,
-    whatsapp_client: IWhatsAppClient = di.container.whatsapp_client,
+    logger_provider=lambda: di.container.logging_gateway,
+    whatsapp_provider=lambda: di.container.whatsapp_client,
 ) -> None:
     """Run assistant for the whatsapp platform."""
+    logger: ILoggingGateway = logger_provider()
+    whatsapp_client: IWhatsAppClient = whatsapp_provider()
+
     await asyncio.gather(asyncio.create_task(whatsapp_client.init()))
     logger.debug("WhatsApp client started.")

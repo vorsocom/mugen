@@ -22,7 +22,7 @@ from mugen.core.gateway.storage.rdbms.sqla.sqla_uow import (
     SQLAlchemyRelationalUnitOfWork,
     TableRegistry,
 )
-from mugen.core.rdbms.sqla.base import ModelBase
+from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 
 
 class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):

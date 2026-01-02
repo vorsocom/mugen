@@ -18,50 +18,6 @@ Disjunctive Normal Form (DNF):
 
 Implementations are free to map these groups to a single statement with
 OR, or to multiple statements whose results are unioned.
-
-Example
--------
-A typical call that combines equality filters with text and scalar
-filters might look like::
-
-    async with uow_factory() as uow:
-        rows = await uow.find(
-            table="orders",
-            filter_groups=[
-                FilterGroup(
-                    where={"status": "paid"},
-                    text_filters=[
-                        TextFilter(
-                            field="customer_name",
-                            op=TextFilterOp.CONTAINS,
-                            value="smith",
-                        ),
-                    ],
-                    scalar_filters=[
-                        ScalarFilter(
-                            field="total_cents",
-                            op=ScalarFilterOp.GTE,
-                            value=10_00,
-                        ),
-                        ScalarFilter(
-                            field="created_at",
-                            op=ScalarFilterOp.BETWEEN,
-                            value=(start_dt, end_dt),
-                        ),
-                    ],
-                )
-            ],
-            order_by=[OrderBy(field="created_at", descending=True)],
-            limit=50,
-        )
-
-In this example:
-
-* ``where`` enforces equality on the ``status`` column.
-* ``text_filters`` applies a simple substring match on ``customer_name``.
-* ``scalar_filters`` constrains the numeric ``total_cents`` column and
-  limits ``created_at`` to a time range.
-* All predicates within a group are combined with AND; groups are combined with OR.
 """
 
 __all__ = ["IRelationalUnitOfWork"]
@@ -69,22 +25,32 @@ __all__ = ["IRelationalUnitOfWork"]
 from abc import ABC, abstractmethod
 from typing import Any, Mapping, Sequence
 
-from mugen.core.contract.gateway.storage.rdbms.types import (
+from mugen.core.contract.gateway.storage.rdbms.types import (  # pylint: disable=unused-import
     OrderBy,
     Record,
     FilterGroup,
+    RowVersionConflict,
 )
 
 
 class IRelationalUnitOfWork(ABC):
     """A transactional context for simple CRUD operations on flat tables.
 
-    An `IRelationalUnitOfWork` represents a single database transaction. Implementations
-    are responsible for executing statements against a concrete backend while conforming
-    to this minimal, tool-agnostic interface.
-
     All methods operate on "logical" table names and rows represented as mapping objects
     (usually plain dicts).
+
+    Optimistic concurrency via ``row_version``
+    -----------------------------------------
+    Implementations may support optimistic concurrency checks for updates and deletes
+    when the caller supplies an expected version in the equality predicates::
+
+        where={"id": ..., "row_version": expected_version}
+
+    In that mode:
+      - the UPDATE/DELETE should only succeed if the stored ``row_version`` matches
+        the expected value,
+      - implementations typically increment ``row_version`` on successful updates, and
+      - if the write affects zero rows, :class:`RowVersionConflict` may be raised.
     """
 
     @abstractmethod
@@ -94,21 +60,7 @@ class IRelationalUnitOfWork(ABC):
         *,
         filter_groups: Sequence[FilterGroup] | None = None,
     ) -> int:
-        """Count records that match the given filter groups.
-
-        The ``table`` argument identifies the logical table to query. The
-        optional ``filter_groups`` argument uses the same OR-of-AND semantics
-        as :meth:`find`:
-
-        * each :class:`FilterGroup` represents a conjunction of predicates
-          (equality, scalar filters, and text filters) combined with AND;
-        * the sequence of groups is combined with OR to form the final WHERE
-          predicate.
-
-        Projection, ordering, limit, and offset are not applied. The return
-        value is the total number of rows in ``table`` that satisfy the
-        constructed predicate.
-        """
+        """Count records that match the given filter groups."""
 
     @abstractmethod
     async def insert(
@@ -118,25 +70,7 @@ class IRelationalUnitOfWork(ABC):
         *,
         returning: bool = True,
     ) -> Record | None:
-        """Insert a single record into `table`.
-
-        Parameters
-        ----------
-        table:
-            Logical table name understood by the unit-of-work implementation.
-        record:
-            Mapping of column-name -> value for the new row.
-        returning:
-            Whether to return the inserted row. If `True`, implementations should
-            attempt to return a mapping containing the row values after insertion
-            (including any database-generated values, where supported).
-
-        Returns
-        -------
-        Record
-            A mapping representing the inserted row (usually a `dict`) if
-            `returning` is True; otherwise `None`.
-        """
+        """Insert a single record into `table`."""
 
     @abstractmethod
     async def get_one(
@@ -146,33 +80,7 @@ class IRelationalUnitOfWork(ABC):
         *,
         columns: Sequence[str] | None = None,
     ) -> Record | None:
-        """Fetch a single row matching the given equality predicates.
-
-        Parameters
-        ----------
-        table:
-            Logical table name understood by the unit-of-work implementation.
-        where:
-            Mapping of column names to values.
-
-        Returns
-        -------
-        Record | None
-            A mapping representing the row (usually a `dict`) if exactly one row
-            matches `where`, or `None` if no row matches.
-
-        Raises
-        ------
-        MultipleResultsFound
-            If more than one row matches `where`, depending on the concrete
-            implementation.
-
-        Notes
-        -----
-            - Callers are expected to pass predicates that uniquely identify a single
-            row.
-            - All keys in `where` are combined with logical AND.
-        """
+        """Fetch a single row matching the given equality predicates."""
 
     @abstractmethod
     async def find(  # pylint: disable=too-many-arguments
@@ -185,47 +93,30 @@ class IRelationalUnitOfWork(ABC):
         limit: int | None = None,
         offset: int | None = None,
     ) -> Sequence[Record]:
-        """Run a select query with OR-of-AND filter semantics.
+        """Run a select query with OR-of-AND filter semantics."""
 
-        This method is intended for the common pattern of applying simple
-        predicates to a single logical table, optionally combined with ordering
-        and pagination.
+    @abstractmethod
+    async def find_partitioned_by_fk(  # pylint: disable=too-many-arguments
+        self,
+        table: str,
+        *,
+        fk_field: str,
+        fk_values: Sequence[Any],
+        columns: Sequence[str] | None = None,
+        filter_groups: Sequence[FilterGroup] | None = None,
+        order_by: Sequence[OrderBy] | None = None,
+        per_fk_limit: int | None = None,
+        per_fk_offset: int | None = None,
+        tie_breaker_field: str = "id",
+    ) -> Sequence[Record]:
+        """Fetch rows for multiple foreign-key owners with per-owner paging.
 
-        Filters are supplied as a sequence of :class:`FilterGroup` instances.
-        Each FilterGroup represents a conjunction (logical AND) of simple
-        predicates. The full set of groups is combined with logical OR.
+        Equivalent semantics to running N independent queries:
+            WHERE fk_field = <one fk>
+            ORDER BY ...
+            OFFSET per_fk_offset LIMIT per_fk_limit
 
-        Conceptually this corresponds to a statement of the form::
-
-            SELECT * FROM table
-            WHERE (G1.where AND G1.text AND G1.scalar)
-               OR (G2.where AND G2.text AND G2.scalar)
-               OR ...
-
-        If ``filter_groups`` is None or empty, no filter is applied and all rows
-        are eligible for selection.
-
-        Parameters
-        ----------
-        table:
-            Logical table name understood by the gateway implementation.
-        filter_groups:
-            Optional sequence of :class:`FilterGroup` instances. Each group
-            describes a set of equality, text and scalar predicates that are
-            combined with AND; the full set of groups is combined with OR.
-        order_by:
-            Optional sequence of :class:`OrderBy` descriptors, applied in order.
-        limit:
-            Optional maximum number of rows to return.
-        offset:
-            Optional number of rows to skip before returning results.
-
-        Returns
-        -------
-        Sequence[Record]
-            A sequence of row mappings (usually a list of dicts). The concrete
-            type is not guaranteed, only that each element behaves like a
-            mutable mapping (see :data:`Record`).
+        But does it in one query using window functions.
         """
 
     @abstractmethod
@@ -237,39 +128,16 @@ class IRelationalUnitOfWork(ABC):
         *,
         returning: bool = True,
     ) -> Record | None:
-        """Update a single row with `changes`, optionally returning the updated row.
+        """Update a single row with `changes`.
 
-        Parameters
-        ----------
-        table:
-            Logical table name understood by the unit-of-work implementation.
-        where:
-            Mapping of column names to values.
-        changes:
-            Mapping of column-name -> new value. Implementations may treat an empty
-            mapping as a no-op.
-        returning:
-            Whether to return the updated row. If `True`, implementations should
-            attempt to return a mapping containing the row values after update
-            (including any database-generated values, where supported).
-
-        Returns
-        -------
-        Record | None
-            A mapping representing the row (usually a `dict`) if found, and `returning`
-            is `True`, or `None` if no row exists or `returning` is `False`.
+        If `where` includes a ``row_version`` key, implementations may treat it as an
+        optimistic concurrency token.
 
         Raises
         ------
-        MultipleResultsFound
-            If more than one row matches `where`, depending on the concrete
-            implementation.
-
-        Notes
-        -----
-            - Callers are expected to pass predicates that uniquely identify a single
-            row.
-            - All keys in `where` are combined with logical AND.
+        RowVersionConflict
+            If an optimistic concurrency check fails (most commonly when ``where``
+            includes ``row_version`` and the UPDATE affects zero rows).
         """
 
     @abstractmethod
@@ -277,34 +145,17 @@ class IRelationalUnitOfWork(ABC):
         self,
         table: str,
         where: Mapping[str, Any],
-    ) -> None:
+    ) -> Record | None:
         """Delete a single row.
 
-        Parameters
-        ----------
-        table:
-            Logical table name understood by the unit-of-work implementation.
-        where:
-            Mapping of column names to values.
-
-        Returns
-        -------
-        None
-            This method does not return the deleted row. If callers need the row
-            contents, they should fetch it before invoking `delete_one` within the same
-            unit-of-work.
+        If `where` includes a ``row_version`` key, implementations may treat it as an
+        optimistic concurrency token.
 
         Raises
         ------
-        MultipleResultsFound
-            If more than one row matches `where`, depending on the concrete
-            implementation.
-
-        Notes
-        -----
-            - Callers are expected to pass predicates that uniquely identify a single
-            row.
-            - All keys in `where` are combined with logical AND.
+        RowVersionConflict
+            If an optimistic concurrency check fails (most commonly when ``where``
+            includes ``row_version`` and the DELETE affects zero rows).
         """
 
     @abstractmethod
@@ -313,23 +164,4 @@ class IRelationalUnitOfWork(ABC):
         table: str,
         where: Mapping[str, Any],
     ) -> None:
-        """Delete multiple rows.
-
-        Parameters
-        ----------
-        table:
-            Logical table name understood by the unit-of-work implementation.
-        where:
-            Mapping of column names to values.
-
-        Returns
-        -------
-        None
-            This method does not return the deleted rows. If callers need the row
-            contents, they should fetch it before invoking `delete_many` within the same
-            unit-of-work.
-
-        Notes
-        -----
-            - All keys in `where` are combined with logical AND.
-        """
+        """Delete multiple rows from `table`."""
