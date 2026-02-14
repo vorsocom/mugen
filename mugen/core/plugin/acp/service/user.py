@@ -47,7 +47,7 @@ class UserService(
         rsg: IRelationalStorageGateway,
         config_provider=lambda: di.container.config,
         logger_provider=lambda: di.container.logging_gateway,
-        registry_provider=lambda: di.container.get_ext_service(
+        registry_provider=lambda: di.container.get_required_ext_service(
             di.EXT_SERVICE_ADMIN_REGISTRY
         ),
         **kwargs,

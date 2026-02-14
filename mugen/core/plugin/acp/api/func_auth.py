@@ -23,7 +23,9 @@ from mugen.core.plugin.acp.contract.service.jwt import (
 
 @api.get("core/acp/v1/auth/.well-known/jwks.json")
 async def jwks(
-    jwt_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT),
+    jwt_provider=lambda: di.container.get_required_ext_service(
+        di.EXT_SERVICE_ADMIN_SVC_JWT
+    ),
 ):
     """Publish JWKS."""
     jwt_svc: IJwtService = jwt_provider()
@@ -34,8 +36,10 @@ async def jwks(
 async def user_login(  # pylint: disable=too-many-locals
     config_provider=lambda: di.container.config,
     logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT),
-    registry_provider=lambda: di.container.get_ext_service(
+    jwt_provider=lambda: di.container.get_required_ext_service(
+        di.EXT_SERVICE_ADMIN_SVC_JWT
+    ),
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
 ):
@@ -166,8 +170,10 @@ async def user_logout(
     auth_user: str,
     config_provider=lambda: di.container.config,
     logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT),
-    registry_provider=lambda: di.container.get_ext_service(
+    jwt_provider=lambda: di.container.get_required_ext_service(
+        di.EXT_SERVICE_ADMIN_SVC_JWT
+    ),
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -232,8 +238,10 @@ async def user_logout(
 async def user_refresh_login(
     config_provider=lambda: di.container.config,
     logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT),
-    registry_provider=lambda: di.container.get_ext_service(
+    jwt_provider=lambda: di.container.get_required_ext_service(
+        di.EXT_SERVICE_ADMIN_SVC_JWT
+    ),
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
 ):

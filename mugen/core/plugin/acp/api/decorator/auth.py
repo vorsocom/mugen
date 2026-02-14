@@ -83,10 +83,12 @@ def permission_required(  # pylint: disable=too-many-arguments
     action_kw: str | None = None,
     tenant_kw: str | None = None,
     allow_global_admin: bool = False,
-    auth_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_AUTH),
+    auth_provider=lambda: di.container.get_required_ext_service(
+        di.EXT_SERVICE_ADMIN_SVC_AUTH
+    ),
     config_provider=lambda: di.container.config,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
 ):
@@ -203,7 +205,9 @@ def _get_bearer_token_from_header(
 
 def _decode_access_token(
     logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT),
+    jwt_provider=lambda: di.container.get_required_ext_service(
+        di.EXT_SERVICE_ADMIN_SVC_JWT
+    ),
 ) -> dict:
     logger: ILoggingGateway = logger_provider()
     jwt_svc: IJwtService = jwt_provider()
@@ -242,7 +246,7 @@ async def _require_user_from_token(
     expanded: bool = False,
     config_provider=lambda: di.container.config,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
 ):

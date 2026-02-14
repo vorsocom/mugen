@@ -33,6 +33,7 @@ def _bootstrap_namespace_packages() -> None:
                 error=lambda *_: None,
             ),
             get_ext_service=lambda *_: None,
+            get_required_ext_service=lambda *_: None,
         )
         sys.modules["mugen.core.di"] = di_mod
         setattr(sys.modules["mugen.core"], "di", di_mod)

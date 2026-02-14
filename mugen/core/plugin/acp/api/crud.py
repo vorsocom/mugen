@@ -136,7 +136,7 @@ async def get_entities_tenant(
     edm_type_name: str,
     rgql: SimpleNamespace,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -179,7 +179,7 @@ async def create_entity(
     entity_set: str,
     auth_user: str | None = None,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -248,7 +248,7 @@ async def create_entity_tenant(
     entity_set: str,
     auth_user: str | None = None,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -345,7 +345,7 @@ async def update_entity(
     entity_id: str,
     auth_user: str | None = None,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -474,7 +474,7 @@ async def update_entity_tenant(
     entity_id: str,
     auth_user: str | None = None,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -627,7 +627,7 @@ async def delete_entity(
     entity_id: str,
     auth_user: str | None = None,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -736,7 +736,7 @@ async def delete_entity_tenant(
     entity_id: str,
     auth_user: str | None = None,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -863,7 +863,7 @@ async def restore_entity(
     entity_id: str,
     auth_user: str | None = None,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -1072,7 +1072,7 @@ async def restore_entity_tenant(
     entity_id: str,
     auth_user: str | None = None,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,

@@ -43,7 +43,7 @@ async def dispatch_entity_set_action(
     action: str,
     auth_user: str,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -140,7 +140,7 @@ async def dispatch_entity_set_action_tenant(
     action: str,
     auth_user: str,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -250,7 +250,7 @@ async def dispatch_entity_action(
     action: str,
     auth_user: str,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
@@ -357,7 +357,7 @@ async def dispatch_entity_action_tenant(
     action: str,
     auth_user: str,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service(
+    registry_provider=lambda: di.container.get_required_ext_service(
         di.EXT_SERVICE_ADMIN_REGISTRY
     ),
     **_,
