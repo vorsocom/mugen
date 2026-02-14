@@ -18,12 +18,24 @@ from mugen.core.plugin.whatsapp.wacapi.api.decorator import (
 )
 
 
+def _config_provider():
+    return di.container.config
+
+
+def _ipc_provider():
+    return di.container.ipc_service
+
+
+def _logger_provider():
+    return di.container.logging_gateway
+
+
 @api.get("/whatsapp/wacapi/webhook")
 @whatsapp_platform_required
 @whatsapp_server_ip_allow_list_required
 async def whatsapp_wacapi_subscription(
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
 ):
     """Whatsapp Cloud API verification."""
     config: SimpleNamespace = config_provider()
@@ -60,8 +72,8 @@ async def whatsapp_wacapi_subscription(
 @whatsapp_server_ip_allow_list_required
 @whatsapp_request_signature_verification_required
 async def whatsapp_wacapi_event(
-    ipc_provider=lambda: di.container.ipc_service,
-    logger_provider=lambda: di.container.logging_gateway,
+    ipc_provider=_ipc_provider,
+    logger_provider=_logger_provider,
 ):
     """Respond to Whatsapp Cloud API events."""
     # Get request data.

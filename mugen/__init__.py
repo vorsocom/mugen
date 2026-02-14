@@ -29,9 +29,41 @@ from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
 
 
+def _config_provider():
+    return di.container.config
+
+
+def _logger_provider():
+    return di.container.logging_gateway
+
+
+def _whatsapp_provider():
+    return di.container.whatsapp_client
+
+
+def _ipc_provider():
+    return di.container.ipc_service
+
+
+def _messaging_provider():
+    return di.container.messaging_service
+
+
+def _platform_provider():
+    return di.container.platform_service
+
+
+def _telnet_provider():
+    return di.container.telnet_client
+
+
+def _matrix_provider():
+    return di.container.matrix_client
+
+
 def create_quart_app(
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
 ) -> Quart:
     """Application factory."""
     config: SimpleNamespace = config_provider()
@@ -73,9 +105,9 @@ def create_quart_app(
 # pylint: disable=too-many-statements
 async def run_clients(
     app: Quart,
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
-    whatsapp_provider=lambda: di.container.whatsapp_client,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    whatsapp_provider=_whatsapp_provider,
 ) -> None:
     """Entrypoint for assistants."""
     config: SimpleNamespace = config_provider()
@@ -122,11 +154,11 @@ async def run_clients(
 
 async def register_extensions(  # pylint: disable=too-many-positional-arguments
     app: Quart,
-    config_provider=lambda: di.container.config,
-    ipc_provider=lambda: di.container.ipc_service,
-    logger_provider=lambda: di.container.logging_gateway,
-    messaging_provider=lambda: di.container.messaging_service,
-    platform_provider=lambda: di.container.platform_service,
+    config_provider=_config_provider,
+    ipc_provider=_ipc_provider,
+    logger_provider=_logger_provider,
+    messaging_provider=_messaging_provider,
+    platform_provider=_platform_provider,
 ) -> None:
     """Register core plugins and third party extensions."""
     config: SimpleNamespace = config_provider()
@@ -289,8 +321,8 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
 
 
 async def run_telnet_client(
-    logger_provider=lambda: di.container.logging_gateway,
-    telnet_provider=lambda: di.container.telnet_client,
+    logger_provider=_logger_provider,
+    telnet_provider=_telnet_provider,
 ) -> None:
     """Run assistant for Telnet server."""
     logger: ILoggingGateway = logger_provider()
@@ -305,9 +337,9 @@ async def run_telnet_client(
 
 
 async def run_matrix_client(
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
-    matrix_provider=lambda: di.container.matrix_client,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    matrix_provider=_matrix_provider,
 ) -> None:
     """Run assistant for the Matrix platform."""
     config: SimpleNamespace = config_provider()
@@ -355,8 +387,8 @@ async def run_matrix_client(
 
 
 async def run_whatsapp_client(
-    logger_provider=lambda: di.container.logging_gateway,
-    whatsapp_provider=lambda: di.container.whatsapp_client,
+    logger_provider=_logger_provider,
+    whatsapp_provider=_whatsapp_provider,
 ) -> None:
     """Run assistant for the whatsapp platform."""
     logger: ILoggingGateway = logger_provider()

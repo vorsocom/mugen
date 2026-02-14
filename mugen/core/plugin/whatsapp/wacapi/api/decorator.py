@@ -16,11 +16,19 @@ from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
 
 
+def _config_provider():
+    return di.container.config
+
+
+def _logger_provider():
+    return di.container.logging_gateway
+
+
 def whatsapp_platform_required(
     _fn=None,
     *,
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
 ):
     """Check that the WhatsApp platform is enabled."""
 
@@ -51,8 +59,8 @@ def whatsapp_platform_required(
 def whatsapp_request_signature_verification_required(
     _fn=None,
     *,
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
 ):
     """Authenticate requests to the webhook using app secret."""
 
@@ -99,8 +107,8 @@ def whatsapp_request_signature_verification_required(
 def whatsapp_server_ip_allow_list_required(
     _fn=None,
     *,
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
 ):
     """Authenticate requests to the webhook using app secret."""
 

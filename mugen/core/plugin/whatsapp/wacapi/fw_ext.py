@@ -11,13 +11,21 @@ from mugen.core.contract.extension.fw import IFWExtension
 from mugen.core.contract.gateway.storage.rdbms import IRelationalStorageGateway
 
 
+def _config_provider():
+    return di.container.config
+
+
+def _rsg_provider():
+    return di.container.relational_storage_gateway
+
+
 class WACAPIFWExtension(IFWExtension):  # pylint: disable=too-few-public-methods
     """An implementation of IFWFramework for the wacapi plugin."""
 
     def __init__(
         self,
-        config_provider=lambda: di.container.config,
-        rsg_provider=lambda: di.container.relational_storage_gateway,
+        config_provider=_config_provider,
+        rsg_provider=_rsg_provider,
     ) -> None:
         self._config: SimpleNamespace = config_provider()
         self._rsg: IRelationalStorageGateway = rsg_provider()
