@@ -13,6 +13,7 @@ from importlib import import_module
 import logging
 import os
 import sys
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import tomlkit
@@ -103,8 +104,7 @@ def _get_provider_class(
     provider_name: str,
     logger: ILoggingGateway | logging.Logger,
 ) -> type | None:
-    """Resolve a provider implementation class for the configured module.
-    """
+    """Resolve a provider implementation class for the configured module."""
     subclasses = interface.__subclasses__()
     module_matches = [x for x in subclasses if x.__module__ == module_name]
 
@@ -215,47 +215,256 @@ def _import_provider_module(
     return module_name
 
 
-def _build_logging_gateway_provider(
+@dataclass(frozen=True)
+class _ProviderSpec:
+    """Declarative instructions for a single provider build."""
+
+    provider_name: str
+    injector_attr: str
+    interface: type
+    module_path: tuple[str, ...]
+    constructor_bindings: tuple[tuple[str, str], ...]
+    invalid_config_exceptions: tuple[type[Exception], ...] = (KeyError,)
+    required_platform: str | None = None
+    inactive_platform_warning: str | None = None
+
+
+_PROVIDER_SPECS = {
+    "logging_gateway": _ProviderSpec(
+        provider_name="logging_gateway",
+        injector_attr="logging_gateway",
+        interface=ILoggingGateway,
+        module_path=("mugen", "modules", "core", "gateway", "logging"),
+        constructor_bindings=(("config", "config"),),
+    ),
+    "completion_gateway": _ProviderSpec(
+        provider_name="completion_gateway",
+        injector_attr="completion_gateway",
+        interface=ICompletionGateway,
+        module_path=("mugen", "modules", "core", "gateway", "completion"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+    ),
+    "ipc_service": _ProviderSpec(
+        provider_name="ipc_service",
+        injector_attr="ipc_service",
+        interface=IIPCService,
+        module_path=("mugen", "modules", "core", "service", "ipc"),
+        constructor_bindings=(("logging_gateway", "logging_gateway"),),
+    ),
+    "keyval_storage_gateway": _ProviderSpec(
+        provider_name="keyval_storage_gateway",
+        injector_attr="keyval_storage_gateway",
+        interface=IKeyValStorageGateway,
+        module_path=("mugen", "modules", "core", "gateway", "storage", "keyval"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+    ),
+    "relational_storage_gateway": _ProviderSpec(
+        provider_name="relational_storage_gateway",
+        injector_attr="relational_storage_gateway",
+        interface=IRelationalStorageGateway,
+        module_path=("mugen", "modules", "core", "gateway", "storage", "relational"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+    ),
+    "nlp_service": _ProviderSpec(
+        provider_name="nlp_service",
+        injector_attr="nlp_service",
+        interface=INLPService,
+        module_path=("mugen", "modules", "core", "service", "nlp"),
+        constructor_bindings=(("logging_gateway", "logging_gateway"),),
+    ),
+    "platform_service": _ProviderSpec(
+        provider_name="platform_service",
+        injector_attr="platform_service",
+        interface=IPlatformService,
+        module_path=("mugen", "modules", "core", "service", "platform"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+    ),
+    "user_service": _ProviderSpec(
+        provider_name="user_service",
+        injector_attr="user_service",
+        interface=IUserService,
+        module_path=("mugen", "modules", "core", "service", "user"),
+        constructor_bindings=(
+            ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+    ),
+    "messaging_service": _ProviderSpec(
+        provider_name="messaging_service",
+        injector_attr="messaging_service",
+        interface=IMessagingService,
+        module_path=("mugen", "modules", "core", "service", "messaging"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("completion_gateway", "completion_gateway"),
+            ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("logging_gateway", "logging_gateway"),
+            ("user_service", "user_service"),
+        ),
+    ),
+    "knowledge_gateway": _ProviderSpec(
+        provider_name="knowledge_gateway",
+        injector_attr="knowledge_gateway",
+        interface=IKnowledgeGateway,
+        module_path=("mugen", "modules", "core", "gateway", "knowledge"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+    ),
+    "matrix_client": _ProviderSpec(
+        provider_name="matrix_client",
+        injector_attr="matrix_client",
+        interface=IMatrixClient,
+        module_path=("mugen", "modules", "core", "client", "matrix"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("ipc_service", "ipc_service"),
+            ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("logging_gateway", "logging_gateway"),
+            ("messaging_service", "messaging_service"),
+            ("user_service", "user_service"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required_platform="matrix",
+        inactive_platform_warning="Matrix platform not active. Client not loaded.",
+    ),
+    "telnet_client": _ProviderSpec(
+        provider_name="telnet_client",
+        injector_attr="telnet_client",
+        interface=ITelnetClient,
+        module_path=("mugen", "modules", "core", "client", "telnet"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("ipc_service", "ipc_service"),
+            ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("logging_gateway", "logging_gateway"),
+            ("messaging_service", "messaging_service"),
+            ("user_service", "user_service"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required_platform="telnet",
+        inactive_platform_warning="Telnet platform not active. Client not loaded.",
+    ),
+    "whatsapp_client": _ProviderSpec(
+        provider_name="whatsapp_client",
+        injector_attr="whatsapp_client",
+        interface=IWhatsAppClient,
+        module_path=("mugen", "modules", "core", "client", "whatsapp"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("ipc_service", "ipc_service"),
+            ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("logging_gateway", "logging_gateway"),
+            ("messaging_service", "messaging_service"),
+            ("user_service", "user_service"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required_platform="whatsapp",
+        inactive_platform_warning="WhatsApp platform not active. Client not loaded.",
+    ),
+}
+
+_PROVIDER_BUILD_ORDER = (
+    "completion_gateway",
+    "ipc_service",
+    "keyval_storage_gateway",
+    "relational_storage_gateway",
+    "nlp_service",
+    "platform_service",
+    "user_service",
+    "messaging_service",
+    "knowledge_gateway",
+    "matrix_client",
+    "telnet_client",
+    "whatsapp_client",
+)
+
+
+def _get_bootstrap_provider_logger(config: dict) -> logging.Logger:
+    """Resolve a logger before a logging provider is available."""
+    try:
+        return logging.getLogger(config.mugen.logger.name)
+    except AttributeError:
+        return logging.getLogger()
+
+
+def _build_provider_from_spec(
     config: dict,
     injector: DependencyInjector,
+    *,
+    spec: _ProviderSpec,
+    logger: ILoggingGateway | logging.Logger,
+    validate_injector_config: bool = False,
 ) -> None:
-    """Build logging gateway provider for DI container."""
-    try:
-        logger = logging.getLogger(config.mugen.logger.name)
-    except AttributeError:
-        logger = logging.getLogger()
+    """Build a provider using declarative spec metadata."""
+    if spec.required_platform is not None:
+        if spec.required_platform not in config["mugen"]["platforms"]:
+            if spec.inactive_platform_warning is not None:
+                logger.warning(spec.inactive_platform_warning)
+            return
 
     module_name = _import_provider_module(
         config=config,
-        provider_name="logging_gateway",
-        module_path=("mugen", "modules", "core", "gateway", "logging"),
+        provider_name=spec.provider_name,
+        module_path=spec.module_path,
         logger=logger,
+        invalid_config_exceptions=spec.invalid_config_exceptions,
     )
     if module_name is None:
         return
 
-    if injector is None or not hasattr(injector, "config"):
-        logger.error("Invalid injector (logging_gateway).")
+    if validate_injector_config and (
+        injector is None or not hasattr(injector, "config")
+    ):
+        logger.error(f"Invalid injector ({spec.provider_name}).")
         return
 
     provider_class = _get_provider_class(
-        interface=ILoggingGateway,
+        interface=spec.interface,
         module_name=module_name,
-        provider_name="logging_gateway",
+        provider_name=spec.provider_name,
         logger=logger,
     )
     if provider_class is None:
         return
 
     try:
-        injector.logging_gateway = provider_class(
-            config=injector.config,
-        )
+        provider_kwargs = {
+            arg_name: getattr(injector, injector_attr)
+            for arg_name, injector_attr in spec.constructor_bindings
+        }
+        setattr(injector, spec.injector_attr, provider_class(**provider_kwargs))
     except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logger.error("Invalid injector (logging_gateway).")
-        return
+        logger.error(f"Invalid injector ({spec.provider_name}).")
+
+
+def _build_logging_gateway_provider(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """Build logging gateway provider for DI container."""
+    logger = _get_bootstrap_provider_logger(config)
+    _build_provider_from_spec(
+        config,
+        injector,
+        spec=_PROVIDER_SPECS["logging_gateway"],
+        logger=logger,
+        validate_injector_config=True,
+    )
 
 
 def _build_completion_gateway_provider(
@@ -264,31 +473,13 @@ def _build_completion_gateway_provider(
 ) -> None:
     """Build completion gateway provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="completion_gateway")
-    if logger is None:
-        return
-
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="completion_gateway",
-        module_path=("mugen", "modules", "core", "gateway", "completion"),
-        logger=logger,
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=ICompletionGateway,
-        module_name=module_name,
-        provider_name="completion_gateway",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.completion_gateway = provider_class(
-        config=injector.config,
-        logging_gateway=injector.logging_gateway,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["completion_gateway"],
+            logger=logger,
+        )
 
 
 def _build_ipc_service_provider(
@@ -297,30 +488,13 @@ def _build_ipc_service_provider(
 ) -> None:
     """Build IPC service provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="ipc_service")
-    if logger is None:
-        return
-
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="ipc_service",
-        module_path=("mugen", "modules", "core", "service", "ipc"),
-        logger=logger,
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=IIPCService,
-        module_name=module_name,
-        provider_name="ipc_service",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.ipc_service = provider_class(
-        logging_gateway=injector.logging_gateway,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["ipc_service"],
+            logger=logger,
+        )
 
 
 def _build_keyval_storage_gateway_provider(
@@ -329,31 +503,13 @@ def _build_keyval_storage_gateway_provider(
 ) -> None:
     """Build key-value storage gateway provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="keyval_storage_gateway")
-    if logger is None:
-        return
-
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="keyval_storage_gateway",
-        module_path=("mugen", "modules", "core", "gateway", "storage", "keyval"),
-        logger=logger,
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=IKeyValStorageGateway,
-        module_name=module_name,
-        provider_name="keyval_storage_gateway",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.keyval_storage_gateway = provider_class(
-        config=injector.config,
-        logging_gateway=injector.logging_gateway,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["keyval_storage_gateway"],
+            logger=logger,
+        )
 
 
 def _build_relational_storage_gateway_provider(
@@ -362,31 +518,13 @@ def _build_relational_storage_gateway_provider(
 ) -> None:
     """Build relational database storage gateway provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="relational_storage_gateway")
-    if logger is None:
-        return
-
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="relational_storage_gateway",
-        module_path=("mugen", "modules", "core", "gateway", "storage", "relational"),
-        logger=logger,
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=IRelationalStorageGateway,
-        module_name=module_name,
-        provider_name="relational_storage_gateway",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.relational_storage_gateway = provider_class(
-        config=injector.config,
-        logging_gateway=injector.logging_gateway,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["relational_storage_gateway"],
+            logger=logger,
+        )
 
 
 def _build_nlp_service_provider(
@@ -395,30 +533,13 @@ def _build_nlp_service_provider(
 ) -> None:
     """Build NLP service provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="nlp_service")
-    if logger is None:
-        return
-
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="nlp_service",
-        module_path=("mugen", "modules", "core", "service", "nlp"),
-        logger=logger,
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=INLPService,
-        module_name=module_name,
-        provider_name="nlp_service",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.nlp_service = provider_class(
-        logging_gateway=injector.logging_gateway,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["nlp_service"],
+            logger=logger,
+        )
 
 
 def _build_platform_service_provider(
@@ -427,31 +548,13 @@ def _build_platform_service_provider(
 ) -> None:
     """Build platform service provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="platform_service")
-    if logger is None:
-        return
-
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="platform_service",
-        module_path=("mugen", "modules", "core", "service", "platform"),
-        logger=logger,
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=IPlatformService,
-        module_name=module_name,
-        provider_name="platform_service",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.platform_service = provider_class(
-        config=injector.config,
-        logging_gateway=injector.logging_gateway,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["platform_service"],
+            logger=logger,
+        )
 
 
 def _build_user_service_provider(
@@ -460,31 +563,13 @@ def _build_user_service_provider(
 ) -> None:
     """Build user service provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="user_service")
-    if logger is None:
-        return
-
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="user_service",
-        module_path=("mugen", "modules", "core", "service", "user"),
-        logger=logger,
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=IUserService,
-        module_name=module_name,
-        provider_name="user_service",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.user_service = provider_class(
-        keyval_storage_gateway=injector.keyval_storage_gateway,
-        logging_gateway=injector.logging_gateway,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["user_service"],
+            logger=logger,
+        )
 
 
 def _build_messaging_service_provider(
@@ -493,34 +578,13 @@ def _build_messaging_service_provider(
 ) -> None:
     """Build messaging service provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="messaging_service")
-    if logger is None:
-        return
-
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="messaging_service",
-        module_path=("mugen", "modules", "core", "service", "messaging"),
-        logger=logger,
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=IMessagingService,
-        module_name=module_name,
-        provider_name="messaging_service",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.messaging_service = provider_class(
-        config=injector.config,
-        completion_gateway=injector.completion_gateway,
-        keyval_storage_gateway=injector.keyval_storage_gateway,
-        logging_gateway=injector.logging_gateway,
-        user_service=injector.user_service,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["messaging_service"],
+            logger=logger,
+        )
 
 
 def _build_knowledge_gateway_provider(
@@ -529,32 +593,13 @@ def _build_knowledge_gateway_provider(
 ) -> None:
     """Build knowledge gateway provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="knowledge_gateway")
-    if logger is None:
-        return
-
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="knowledge_gateway",
-        module_path=("mugen", "modules", "core", "gateway", "knowledge"),
-        logger=logger,
-        invalid_config_exceptions=(KeyError, ValueError),
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=IKnowledgeGateway,
-        module_name=module_name,
-        provider_name="knowledge_gateway",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.knowledge_gateway = provider_class(
-        config=injector.config,
-        logging_gateway=injector.logging_gateway,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["knowledge_gateway"],
+            logger=logger,
+        )
 
 
 def _build_matrix_client_provider(
@@ -563,43 +608,13 @@ def _build_matrix_client_provider(
 ) -> None:
     """Build Matrix platform client provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="matrix_client")
-    if logger is None:
-        return
-
-    # Don't load the client if the platform is not enabled.
-    if "matrix" not in config["mugen"]["platforms"]:
-        logger.warning("Matrix platform not active. Client not loaded.")
-        return
-
-    # Attempt to import the client module.
-
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="matrix_client",
-        module_path=("mugen", "modules", "core", "client", "matrix"),
-        logger=logger,
-        invalid_config_exceptions=(KeyError, ValueError),
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=IMatrixClient,
-        module_name=module_name,
-        provider_name="matrix_client",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.matrix_client = provider_class(
-        config=injector.config,
-        ipc_service=injector.ipc_service,
-        keyval_storage_gateway=injector.keyval_storage_gateway,
-        logging_gateway=injector.logging_gateway,
-        messaging_service=injector.messaging_service,
-        user_service=injector.user_service,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["matrix_client"],
+            logger=logger,
+        )
 
 
 def _build_telnet_client_provider(
@@ -608,42 +623,13 @@ def _build_telnet_client_provider(
 ) -> None:
     """Build telnet platform client provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="telnet_client")
-    if logger is None:
-        return
-
-    # Don't load the client if the platform is not enabled.
-    if "telnet" not in config["mugen"]["platforms"]:
-        logger.warning("Telnet platform not active. Client not loaded.")
-        return
-
-    # Attempt to import the client module.
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="telnet_client",
-        module_path=("mugen", "modules", "core", "client", "telnet"),
-        logger=logger,
-        invalid_config_exceptions=(KeyError, ValueError),
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=ITelnetClient,
-        module_name=module_name,
-        provider_name="telnet_client",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.telnet_client = provider_class(
-        config=injector.config,
-        ipc_service=injector.ipc_service,
-        keyval_storage_gateway=injector.keyval_storage_gateway,
-        logging_gateway=injector.logging_gateway,
-        messaging_service=injector.messaging_service,
-        user_service=injector.user_service,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["telnet_client"],
+            logger=logger,
+        )
 
 
 def _build_whatsapp_client_provider(
@@ -652,42 +638,13 @@ def _build_whatsapp_client_provider(
 ) -> None:
     """Build WhatsApp platform client provider for DI container."""
     logger = _get_provider_logger(injector, provider_name="whatsapp_client")
-    if logger is None:
-        return
-
-    # Don't load the client if the platform is not enabled.
-    if "whatsapp" not in config["mugen"]["platforms"]:
-        logger.warning("WhatsApp platform not active. Client not loaded.")
-        return
-
-    # Attempt to import the client module.
-    module_name = _import_provider_module(
-        config=config,
-        provider_name="whatsapp_client",
-        module_path=("mugen", "modules", "core", "client", "whatsapp"),
-        logger=logger,
-        invalid_config_exceptions=(KeyError, ValueError),
-    )
-    if module_name is None:
-        return
-
-    provider_class = _get_provider_class(
-        interface=IWhatsAppClient,
-        module_name=module_name,
-        provider_name="whatsapp_client",
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
-    injector.whatsapp_client = provider_class(
-        config=injector.config,
-        ipc_service=injector.ipc_service,
-        keyval_storage_gateway=injector.keyval_storage_gateway,
-        logging_gateway=injector.logging_gateway,
-        messaging_service=injector.messaging_service,
-        user_service=injector.user_service,
-    )
+    if logger is not None:
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS["whatsapp_client"],
+            logger=logger,
+        )
 
 
 def _load_config(config_file: str) -> dict:
@@ -719,29 +676,16 @@ def _build_container() -> DependencyInjector:
 
     _build_logging_gateway_provider(config, injector)
 
-    _build_completion_gateway_provider(config, injector)
-
-    _build_ipc_service_provider(config, injector)
-
-    _build_keyval_storage_gateway_provider(config, injector)
-
-    _build_relational_storage_gateway_provider(config, injector)
-
-    _build_nlp_service_provider(config, injector)
-
-    _build_platform_service_provider(config, injector)
-
-    _build_user_service_provider(config, injector)
-
-    _build_messaging_service_provider(config, injector)
-
-    _build_knowledge_gateway_provider(config, injector)
-
-    _build_matrix_client_provider(config, injector)
-
-    _build_telnet_client_provider(config, injector)
-
-    _build_whatsapp_client_provider(config, injector)
+    for provider_name in _PROVIDER_BUILD_ORDER:
+        logger = _get_provider_logger(injector, provider_name=provider_name)
+        if logger is None:
+            continue
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=_PROVIDER_SPECS[provider_name],
+            logger=logger,
+        )
 
     _validate_container(config, injector)
 
