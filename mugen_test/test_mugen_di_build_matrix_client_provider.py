@@ -96,6 +96,39 @@ class TestDIBuildMatrixClient(unittest.TestCase):
             # should be handled in the called function.
             self.fail("Exception raised unexpectedly.")
 
+    def test_platform_configuration_unavailable(self):
+        """Test effects of missing platform configuration."""
+        try:
+            # Replacement config loader that does
+            # not load the application config file.
+            _load_config = unittest.mock.Mock()
+            _load_config.return_value = {}
+
+            with (
+                self.assertLogs("root", level="ERROR") as logger,
+                unittest.mock.patch(
+                    target="mugen.core.di._load_config",
+                    new_callable=_load_config,
+                ),
+            ):
+                config = {
+                    "mugen": {},
+                }
+
+                injector = di.injector.DependencyInjector()
+
+                di._build_provider(config, injector, provider_name="matrix_client")
+
+                self.assertEqual(logger.records[0].name, "root")
+                self.assertEqual(
+                    logger.output[0],
+                    "ERROR:root:Invalid configuration (matrix_client).",
+                )
+        except:  # pylint: disable=bare-except
+            # We should not get here because all exceptions
+            # should be handled in the called function.
+            self.fail("Exception raised unexpectedly.")
+
     def test_module_configuration_unavailable(self):
         """Test effects of missing module configuration."""
         try:

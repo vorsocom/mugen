@@ -18,10 +18,16 @@ Keep `logging_gateway` as the bootstrap provider and keep the remaining provider
   - `EXT_SERVICE_ADMIN_SVC_AUTH`
 - Injector helpers in `mugen/core/di/injector.py`:
   - `register_ext_service(...)`
-  - `register_ext_services(...)`
+  - `register_ext_services(..., atomic=False)`
   - `get_ext_service(...)`
   - `get_required_ext_service(...)`
   - `has_ext_service(...)`
+
+`register_ext_services(..., atomic=True)` applies all-or-nothing semantics for
+bulk extension registration.
+
+`get_ext_service(...)` supports an explicit default value. Passing `None` as the
+default now returns `None` when the key is missing.
 
 ## Required Validation Gates
 

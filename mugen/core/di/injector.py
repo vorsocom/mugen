@@ -20,6 +20,8 @@ from mugen.core.contract.service.nlp import INLPService
 from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.contract.service.user import IUserService
 
+_UNSET = object()
+
 
 # pylint: disable=too-many-instance-attributes
 class DependencyInjector(IDependencyInjector):
@@ -195,20 +197,34 @@ class DependencyInjector(IDependencyInjector):
         services: Mapping[str, Any],
         *,
         override: bool = False,
+        atomic: bool = False,
     ) -> None:
         if not isinstance(services, Mapping):
             raise TypeError("Services must be provided as a mapping.")
 
-        for name, service in services.items():
-            self.register_ext_service(name, service, override=override)
+        if not atomic:
+            for name, service in services.items():
+                self.register_ext_service(name, service, override=override)
+            return
 
-    def get_ext_service(self, name: str, default: Any | None = None) -> Any:
+        next_services = dict(self.__ext_services)
+        for name, service in services.items():
+            name = self._normalise_ext_service_name(name)
+
+            if not override and name in next_services:
+                raise KeyError(f"Extension service '{name}' already registered.")
+
+            next_services[name] = service
+
+        self.__ext_services = next_services
+
+    def get_ext_service(self, name: str, default: Any = _UNSET) -> Any:
         name = self._normalise_ext_service_name(name)
 
         try:
             return self.__ext_services[name]
         except KeyError:
-            if default is not None:
+            if default is not _UNSET:
                 return default
             raise KeyError(f"Extension service '{name}' not found.") from None
 

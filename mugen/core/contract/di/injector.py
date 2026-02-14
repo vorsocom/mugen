@@ -110,11 +110,12 @@ class IDependencyInjector(ABC):
         services: Mapping[str, Any],
         *,
         override: bool = False,
+        atomic: bool = False,
     ) -> None:
         """Register multiple extension-provided services."""
 
     @abstractmethod
-    def get_ext_service(self, name: str, default: Any | None = None) -> Any:
+    def get_ext_service(self, name: str, default: Any = ...) -> Any:
         """Retrieve a previously registered extension service."""
 
     @abstractmethod

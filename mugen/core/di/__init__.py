@@ -131,6 +131,19 @@ def _config_path_exists(config: dict, *path: str) -> bool:
     return True
 
 
+def _get_active_platforms(config: dict) -> list[str] | None:
+    """Get configured platform list from app configuration."""
+    try:
+        platforms = config["mugen"]["platforms"]
+    except (KeyError, TypeError):
+        return None
+
+    if not isinstance(platforms, list):
+        return None
+
+    return platforms
+
+
 def _validate_container(config: dict, injector: DependencyInjector) -> None:
     """Validate that required providers were built for active configuration."""
     required = [
@@ -412,7 +425,12 @@ def _build_provider_from_spec(
 ) -> None:
     """Build a provider using declarative spec metadata."""
     if spec.required_platform is not None:
-        if spec.required_platform not in config["mugen"]["platforms"]:
+        active_platforms = _get_active_platforms(config)
+        if active_platforms is None:
+            logger.error(f"Invalid configuration ({spec.provider_name}).")
+            return
+
+        if spec.required_platform not in active_platforms:
             if spec.inactive_platform_warning is not None:
                 logger.warning(spec.inactive_platform_warning)
             return

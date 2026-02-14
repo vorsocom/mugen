@@ -602,6 +602,37 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIs(injector.get_ext_service("one"), first)
         self.assertIs(injector.get_ext_service("two"), second)
 
+    def test_register_ext_services_non_atomic_is_partial_on_failure(self):
+        """Test non-atomic bulk registration can partially apply before failure."""
+        injector = di.injector.DependencyInjector()
+        injector.register_ext_service("existing", object())
+
+        with self.assertRaises(KeyError):
+            injector.register_ext_services(
+                {
+                    "new": object(),
+                    "existing": object(),
+                }
+            )
+
+        self.assertTrue(injector.has_ext_service("new"))
+
+    def test_register_ext_services_atomic_rolls_back_on_failure(self):
+        """Test atomic bulk registration does not partially apply on failure."""
+        injector = di.injector.DependencyInjector()
+        injector.register_ext_service("existing", object())
+
+        with self.assertRaises(KeyError):
+            injector.register_ext_services(
+                {
+                    "new": object(),
+                    "existing": object(),
+                },
+                atomic=True,
+            )
+
+        self.assertFalse(injector.has_ext_service("new"))
+
     def test_register_ext_services_duplicate_without_override(self):
         """Test bulk registration duplicate behavior without override."""
         injector = di.injector.DependencyInjector()
@@ -634,6 +665,12 @@ class TestDependencyInjector(unittest.TestCase):
         fallback = object()
 
         self.assertIs(injector.get_ext_service("missing", fallback), fallback)
+
+    def test_get_ext_service_missing_with_none_default(self):
+        """Test retrieving missing extension service with explicit None default."""
+        injector = di.injector.DependencyInjector()
+
+        self.assertIsNone(injector.get_ext_service("missing", None))
 
     def test_get_ext_service_missing_without_default(self):
         """Test retrieving missing extension service without default."""
