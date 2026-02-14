@@ -421,6 +421,8 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                     ):
                         pass
 
+                DummyWhatsAppClientClass.__module__ = "valid_whatsapp_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyWhatsAppClientClass]
 

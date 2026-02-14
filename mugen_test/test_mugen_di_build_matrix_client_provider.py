@@ -327,6 +327,8 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                     def verify_user_devices(self, user_id):
                         pass
 
+                DummyMatrixClientClass.__module__ = "valid_matrix_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyMatrixClientClass]
 

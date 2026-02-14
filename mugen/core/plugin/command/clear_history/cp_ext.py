@@ -16,11 +16,15 @@ class ClearChatHistoryICPExtension(ICPExtension):
 
     def __init__(  # pylint: disable=too-many-arguments
         self,
-        config: SimpleNamespace = di.container.config,
-        keyval_storage_gateway: IKeyValStorageGateway = di.container.keyval_storage_gateway,
+        config: SimpleNamespace | None = None,
+        keyval_storage_gateway: IKeyValStorageGateway | None = None,
     ) -> None:
-        self._config = config
-        self._keyval_storage_gateway = keyval_storage_gateway
+        self._config = config if config is not None else di.container.config
+        self._keyval_storage_gateway = (
+            keyval_storage_gateway
+            if keyval_storage_gateway is not None
+            else di.container.keyval_storage_gateway
+        )
 
     @property
     def platforms(self) -> list[str]:

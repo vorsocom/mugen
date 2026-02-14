@@ -22,17 +22,33 @@ class DefaultTextMHExtension(IMHExtension):
     # pylint: disable=too-many-positional-arguments
     def __init__(
         self,
-        completion_gateway: ICompletionGateway = di.container.completion_gateway,
-        config: SimpleNamespace = di.container.config,
-        keyval_storage_gateway: IKeyValStorageGateway = di.container.keyval_storage_gateway,
-        logging_gateway: ILoggingGateway = di.container.logging_gateway,
-        messaging_service: IMessagingService = di.container.messaging_service,
+        completion_gateway: ICompletionGateway | None = None,
+        config: SimpleNamespace | None = None,
+        keyval_storage_gateway: IKeyValStorageGateway | None = None,
+        logging_gateway: ILoggingGateway | None = None,
+        messaging_service: IMessagingService | None = None,
     ) -> None:
-        self._completion_gateway = completion_gateway
-        self._config = config
-        self._keyval_storage_gateway = keyval_storage_gateway
-        self._logging_gateway = logging_gateway
-        self._messaging_service = messaging_service
+        self._completion_gateway = (
+            completion_gateway
+            if completion_gateway is not None
+            else di.container.completion_gateway
+        )
+        self._config = config if config is not None else di.container.config
+        self._keyval_storage_gateway = (
+            keyval_storage_gateway
+            if keyval_storage_gateway is not None
+            else di.container.keyval_storage_gateway
+        )
+        self._logging_gateway = (
+            logging_gateway
+            if logging_gateway is not None
+            else di.container.logging_gateway
+        )
+        self._messaging_service = (
+            messaging_service
+            if messaging_service is not None
+            else di.container.messaging_service
+        )
 
     @property
     def message_types(self) -> list[str]:

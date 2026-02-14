@@ -10,7 +10,8 @@ from mugen.core import di
 class SystemPersonaCTXExtension(ICTXExtension):
     """An implementation of ICTXExtension to provide system persona."""
 
-    _config = di.container.config
+    def __init__(self, config=None) -> None:
+        self._config = config if config is not None else di.container.config
 
     @property
     def platforms(self) -> list[str]:

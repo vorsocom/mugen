@@ -254,6 +254,8 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                     ):
                         pass
 
+                DummyKnowledgeGatewayClass.__module__ = "valid_knowledge_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyKnowledgeGatewayClass]
 

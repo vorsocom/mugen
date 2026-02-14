@@ -256,6 +256,8 @@ class TestDIBuildIPCService(unittest.TestCase):
                     async def handle_ipc_request(self, platform, ipc_payload):
                         pass
 
+                DummyIPCServiceClass.__module__ = "valid_ipc_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyIPCServiceClass]
 

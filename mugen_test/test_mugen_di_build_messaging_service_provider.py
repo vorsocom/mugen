@@ -344,6 +344,8 @@ class TestDIBuildMessagingService(unittest.TestCase):
                     def register_rpp_extension(self, ext):
                         pass
 
+                DummyMessagingServiceClass.__module__ = "valid_messaging_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyMessagingServiceClass]
 

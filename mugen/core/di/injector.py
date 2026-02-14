@@ -176,8 +176,10 @@ class DependencyInjector(IDependencyInjector):
     def register_ext_service(
         self, name: str, service: Any, *, override: bool = False
     ) -> None:
-        if not name:
+        if not isinstance(name, str) or not name.strip():
             raise ValueError("Service name must be a non-empty string.")
+
+        name = name.strip()
 
         if not override and name in self.__ext_services:
             raise KeyError(f"Extension service '{name}' already registered.")
@@ -185,6 +187,11 @@ class DependencyInjector(IDependencyInjector):
         self.__ext_services[name] = service
 
     def get_ext_service(self, name: str, default: Any | None = None) -> Any:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("Service name must be a non-empty string.")
+
+        name = name.strip()
+
         try:
             return self.__ext_services[name]
         except KeyError:

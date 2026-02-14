@@ -256,6 +256,8 @@ class TestDIBuildPlatformService(unittest.TestCase):
                     def extension_supported(self, ext):
                         pass
 
+                DummyPlatformServiceClass.__module__ = "valid_platform_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyPlatformServiceClass]
 

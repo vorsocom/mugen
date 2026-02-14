@@ -22,17 +22,29 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
     # # pylint: disable=too-many-positional-arguments
     def __init__(
         self,
-        config: SimpleNamespace = di.container.config,
-        logging_gateway: ILoggingGateway = di.container.logging_gateway,
-        messaging_service: IMessagingService = di.container.messaging_service,
-        user_service: IUserService = di.container.user_service,
-        whatsapp_client: IWhatsAppClient = di.container.whatsapp_client,
+        config: SimpleNamespace | None = None,
+        logging_gateway: ILoggingGateway | None = None,
+        messaging_service: IMessagingService | None = None,
+        user_service: IUserService | None = None,
+        whatsapp_client: IWhatsAppClient | None = None,
     ) -> None:
-        self._client = whatsapp_client
-        self._config = config
-        self._logging_gateway = logging_gateway
-        self._messaging_service = messaging_service
-        self._user_service = user_service
+        self._client = (
+            whatsapp_client if whatsapp_client is not None else di.container.whatsapp_client
+        )
+        self._config = config if config is not None else di.container.config
+        self._logging_gateway = (
+            logging_gateway
+            if logging_gateway is not None
+            else di.container.logging_gateway
+        )
+        self._messaging_service = (
+            messaging_service
+            if messaging_service is not None
+            else di.container.messaging_service
+        )
+        self._user_service = (
+            user_service if user_service is not None else di.container.user_service
+        )
 
     @property
     def ipc_commands(self) -> list[str]:

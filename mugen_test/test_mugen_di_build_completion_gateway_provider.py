@@ -251,6 +251,8 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     async def get_completion(self, context, operation="completion"):
                         pass
 
+                DummyCompletionGatewayClass.__module__ = "valid_completion_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyCompletionGatewayClass]
 

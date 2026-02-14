@@ -562,3 +562,66 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.matrix_client, matrix_client)
         self.assertEqual(injector.telnet_client, telnet_client)
         self.assertEqual(injector.whatsapp_client, whatsapp_client)
+
+    def test_register_get_ext_service_round_trip(self):
+        """Test extension service registration and retrieval."""
+        injector = di.injector.DependencyInjector()
+
+        service = object()
+        injector.register_ext_service("demo", service)
+
+        self.assertIs(injector.get_ext_service("demo"), service)
+
+    def test_register_ext_service_duplicate_without_override(self):
+        """Test duplicate extension registration without override."""
+        injector = di.injector.DependencyInjector()
+        injector.register_ext_service("demo", object())
+
+        with self.assertRaises(KeyError):
+            injector.register_ext_service("demo", object())
+
+    def test_register_ext_service_duplicate_with_override(self):
+        """Test duplicate extension registration with override."""
+        injector = di.injector.DependencyInjector()
+        first = object()
+        second = object()
+
+        injector.register_ext_service("demo", first)
+        injector.register_ext_service("demo", second, override=True)
+
+        self.assertIs(injector.get_ext_service("demo"), second)
+
+    def test_get_ext_service_missing_with_default(self):
+        """Test retrieving missing extension service with a default."""
+        injector = di.injector.DependencyInjector()
+        fallback = object()
+
+        self.assertIs(injector.get_ext_service("missing", fallback), fallback)
+
+    def test_get_ext_service_missing_without_default(self):
+        """Test retrieving missing extension service without default."""
+        injector = di.injector.DependencyInjector()
+
+        with self.assertRaises(KeyError):
+            injector.get_ext_service("missing")
+
+    def test_ext_services_is_read_only_mapping(self):
+        """Test extension services mapping is read-only."""
+        injector = di.injector.DependencyInjector()
+        injector.register_ext_service("demo", object())
+
+        with self.assertRaises(TypeError):
+            injector.ext_services["x"] = object()
+
+    def test_ext_service_name_validation(self):
+        """Test extension service name validation."""
+        injector = di.injector.DependencyInjector()
+
+        with self.assertRaises(ValueError):
+            injector.register_ext_service("", object())
+
+        with self.assertRaises(ValueError):
+            injector.register_ext_service("   ", object())
+
+        with self.assertRaises(ValueError):
+            injector.get_ext_service("")

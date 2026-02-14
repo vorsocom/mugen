@@ -271,6 +271,10 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     def remove(self, key):
                         pass
 
+                DummyKeyValStorageGatewayClass.__module__ = (
+                    "valid_keyval_storage_module"
+                )
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyKeyValStorageGatewayClass]
 

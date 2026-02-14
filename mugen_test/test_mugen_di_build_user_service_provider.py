@@ -261,6 +261,8 @@ class TestDIBuildUserService(unittest.TestCase):
                     def save_known_users_list(self, known_users):
                         pass
 
+                DummyUserServiceClass.__module__ = "valid_user_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyUserServiceClass]
 

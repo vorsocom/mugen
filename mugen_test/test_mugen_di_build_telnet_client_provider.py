@@ -317,6 +317,8 @@ class TestDIBuildTelnetClient(unittest.TestCase):
                     async def start_server(self):
                         pass
 
+                DummyTelnetClientClass.__module__ = "valid_telnet_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyTelnetClientClass]
 

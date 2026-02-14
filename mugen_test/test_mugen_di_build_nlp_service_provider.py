@@ -253,6 +253,8 @@ class TestDIBuildNLPService(unittest.TestCase):
                     def get_keywords(self, text):
                         pass
 
+                DummyNLPServiceClass.__module__ = "valid_nlp_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyNLPServiceClass]
 

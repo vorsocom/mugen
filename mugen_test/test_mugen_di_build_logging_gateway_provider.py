@@ -223,6 +223,8 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     def warning(self, message):
                         pass
 
+                DummyLoggingGatewayClass.__module__ = "valid_logging_module"
+
                 sc = unittest.mock.Mock
                 sc.return_value = [DummyLoggingGatewayClass]
 
