@@ -11,11 +11,19 @@ from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.plugin.acp.api.decorator.auth import global_auth_required
 
 
+def _ipc_provider():
+    return di.container.ipc_service
+
+
+def _logger_provider():
+    return di.container.logging_gateway
+
+
 @api.post("/core/acp/v1/ipc")
 @global_auth_required
 async def ipc_webhook(
-    ipc_provider=lambda: di.container.ipc_service,
-    logger_provider=lambda: di.container.logging_gateway,
+    ipc_provider=_ipc_provider,
+    logger_provider=_logger_provider,
     **_,
 ) -> dict:
     """Handle IPC calls."""

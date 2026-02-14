@@ -28,6 +28,14 @@ from mugen.core.utility.string.case_conversion_helper import title_to_snake
 # pylint: disable=too-many-locals
 
 
+def _logger_provider():
+    return di.container.logging_gateway
+
+
+def _registry_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
+
+
 def _parse_uuid_or_none(value: str | None) -> uuid.UUID | None:
     if value is None:
         return None
@@ -98,7 +106,7 @@ async def get_entities(
     entity_id: str | None,
     edm_type_name: str,
     rgql: SimpleNamespace,
-    logger_provider=lambda: di.container.logging_gateway,
+    logger_provider=_logger_provider,
     **_,
 ) -> dict:
     """Get EDM entities from the given entity set."""
@@ -135,10 +143,8 @@ async def get_entities_tenant(
     entity_id: str | None,
     edm_type_name: str,
     rgql: SimpleNamespace,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> dict:
     """Get EDM entities scoped to the given tenant."""
@@ -178,10 +184,8 @@ async def get_entities_tenant(
 async def create_entity(
     entity_set: str,
     auth_user: str | None = None,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> tuple[str, int]:
     """Create an EDM entity in the given entity set."""
@@ -247,10 +251,8 @@ async def create_entity_tenant(
     tenant_id: str,
     entity_set: str,
     auth_user: str | None = None,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> tuple[str, int]:
     """Create an EDM entity in the given entity set, scoped to the tenant."""
@@ -344,10 +346,8 @@ async def update_entity(
     entity_set: str,
     entity_id: str,
     auth_user: str | None = None,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> tuple[str, int]:
     """Update an EDM entity in the given entity set."""
@@ -473,10 +473,8 @@ async def update_entity_tenant(
     entity_set: str,
     entity_id: str,
     auth_user: str | None = None,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> tuple[str, int]:
     """Update an EDM entity scoped to the tenant."""
@@ -626,10 +624,8 @@ async def delete_entity(
     entity_set: str,
     entity_id: str,
     auth_user: str | None = None,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> tuple[str, int]:
     """Hard delete an EDM entity from the given entity set."""
@@ -735,10 +731,8 @@ async def delete_entity_tenant(
     entity_set: str,
     entity_id: str,
     auth_user: str | None = None,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> tuple[str, int]:
     """Hard delete an EDM entity scoped to the tenant."""
@@ -862,10 +856,8 @@ async def restore_entity(
     entity_set: str,
     entity_id: str,
     auth_user: str | None = None,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> tuple[str, int]:
     """Restore a soft-deleted EDM entity."""
@@ -1071,10 +1063,8 @@ async def restore_entity_tenant(
     entity_set: str,
     entity_id: str,
     auth_user: str | None = None,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> tuple[str, int]:
     """Restore a tenant-scoped soft-deleted EDM entity."""

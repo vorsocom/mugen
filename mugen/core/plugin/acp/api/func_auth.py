@@ -19,13 +19,31 @@ from mugen.core.plugin.acp.contract.service.jwt import (
     JwtVerifyParams,
     JwtVerifyProfile,
 )
+from mugen.core.plugin.acp.utility.ns import AdminNs
+
+_EDM_REFRESH_TOKEN = "ACP.RefreshToken"
+_EDM_USER = "ACP.User"
+
+
+def _config_provider():
+    return di.container.config
+
+
+def _logger_provider():
+    return di.container.logging_gateway
+
+
+def _jwt_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT)
+
+
+def _registry_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
 
 
 @api.get("core/acp/v1/auth/.well-known/jwks.json")
 async def jwks(
-    jwt_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_SVC_JWT
-    ),
+    jwt_provider=_jwt_provider,
 ):
     """Publish JWKS."""
     jwt_svc: IJwtService = jwt_provider()
@@ -34,14 +52,10 @@ async def jwks(
 
 @api.post("core/acp/v1/auth/login")
 async def user_login(  # pylint: disable=too-many-locals
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_SVC_JWT
-    ),
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    jwt_provider=_jwt_provider,
+    registry_provider=_registry_provider,
 ):
     """User login."""
     config: SimpleNamespace = config_provider()
@@ -49,12 +63,11 @@ async def user_login(  # pylint: disable=too-many-locals
     jwt_svc: IJwtService = jwt_provider()
     registry: IAdminRegistry = registry_provider()
 
+    admin_ns = AdminNs(config.acp.namespace)
     rtoken_svc: IRefreshTokenService = registry.get_edm_service(
-        f"{config.acp.namespace}:ACP.RefreshToken"
+        admin_ns.key(_EDM_REFRESH_TOKEN)
     )
-    user_svc: IUserService = registry.get_edm_service(
-        f"{config.acp.namespace}:ACP.User"
-    )
+    user_svc: IUserService = registry.get_edm_service(admin_ns.key(_EDM_USER))
 
     data = await request.get_json()
     if not isinstance(data, dict):
@@ -168,14 +181,10 @@ async def user_login(  # pylint: disable=too-many-locals
 @global_auth_required
 async def user_logout(
     auth_user: str,
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_SVC_JWT
-    ),
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    jwt_provider=_jwt_provider,
+    registry_provider=_registry_provider,
     **_,
 ):
     """User logout."""
@@ -184,8 +193,9 @@ async def user_logout(
     jwt_svc: IJwtService = jwt_provider()
     registry: IAdminRegistry = registry_provider()
 
+    admin_ns = AdminNs(config.acp.namespace)
     rtoken_svc: IRefreshTokenService = registry.get_edm_service(
-        f"{config.acp.namespace}:ACP.RefreshToken"
+        admin_ns.key(_EDM_REFRESH_TOKEN)
     )
 
     data = await request.get_json()
@@ -236,14 +246,10 @@ async def user_logout(
 # pylint: disable=too-many-statements
 @api.post("core/acp/v1/auth/refresh")
 async def user_refresh_login(
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_SVC_JWT
-    ),
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    jwt_provider=_jwt_provider,
+    registry_provider=_registry_provider,
 ):
     """Refresh access token."""
     config: SimpleNamespace = config_provider()
@@ -251,12 +257,11 @@ async def user_refresh_login(
     jwt_svc: IJwtService = jwt_provider()
     registry: IAdminRegistry = registry_provider()
 
+    admin_ns = AdminNs(config.acp.namespace)
     rtoken_svc: IRefreshTokenService = registry.get_edm_service(
-        f"{config.acp.namespace}:ACP.RefreshToken"
+        admin_ns.key(_EDM_REFRESH_TOKEN)
     )
-    user_svc: IUserService = registry.get_edm_service(
-        f"{config.acp.namespace}:ACP.User"
-    )
+    user_svc: IUserService = registry.get_edm_service(admin_ns.key(_EDM_USER))
 
     data = await request.get_json()
     if not isinstance(data, dict):

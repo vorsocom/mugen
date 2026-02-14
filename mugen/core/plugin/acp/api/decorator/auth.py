@@ -19,13 +19,37 @@ from mugen.core.plugin.acp.contract.service.jwt import (
     JwtVerifyParams,
     JwtVerifyProfile,
 )
+from mugen.core.plugin.acp.utility.ns import AdminNs
+
+_ROLE_ADMINISTRATOR = "administrator"
+_EDM_USER = "ACP.User"
+
+
+def _config_provider():
+    return di.container.config
+
+
+def _logger_provider():
+    return di.container.logging_gateway
+
+
+def _auth_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_SVC_AUTH)
+
+
+def _registry_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
+
+
+def _jwt_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT)
 
 
 def global_admin_required(
     _fn=None,
     *,
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
 ):
     """Check that the client has administrator privilege."""
 
@@ -34,6 +58,7 @@ def global_admin_required(
         async def wrapper(*args, **kwargs):
             config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
+            admin_ns = AdminNs(config.acp.namespace)
 
             token = _decode_access_token()
             user = await _require_user_from_token(token, expanded=True)
@@ -42,7 +67,7 @@ def global_admin_required(
                 f"{r.namespace}:{r.name}" for r in (user.global_roles or [])
             ]
 
-            if f"{config.acp.namespace}:administrator" not in global_roles:
+            if admin_ns.key(_ROLE_ADMINISTRATOR) not in global_roles:
                 logger.debug("Unauthorized request. User is not an administrator.")
                 abort(403)
 
@@ -83,14 +108,10 @@ def permission_required(  # pylint: disable=too-many-arguments
     action_kw: str | None = None,
     tenant_kw: str | None = None,
     allow_global_admin: bool = False,
-    auth_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_SVC_AUTH
-    ),
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    auth_provider=_auth_provider,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
 ):
     """Check that the client has the required permission."""
 
@@ -100,6 +121,7 @@ def permission_required(  # pylint: disable=too-many-arguments
             config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
             registry: IAdminRegistry = registry_provider()
+            admin_ns = AdminNs(config.acp.namespace)
 
             entity_set: str = kwargs.get("entity_set")
 
@@ -117,7 +139,7 @@ def permission_required(  # pylint: disable=too-many-arguments
                 f"{r.namespace}:{r.name}" for r in (user.global_roles or [])
             ]
 
-            is_admin = f"{config.acp.namespace}:administrator" in global_roles
+            is_admin = admin_ns.key(_ROLE_ADMINISTRATOR) in global_roles
 
             resource = registry.get_resource(entity_set)
 
@@ -184,7 +206,7 @@ def permission_required(  # pylint: disable=too-many-arguments
 
 
 def _get_bearer_token_from_header(
-    logger_provider=lambda: di.container.logging_gateway,
+    logger_provider=_logger_provider,
 ) -> str:
     """Extract the bearer token from the Authorization header."""
     logger: ILoggingGateway = logger_provider()
@@ -204,10 +226,8 @@ def _get_bearer_token_from_header(
 
 
 def _decode_access_token(
-    logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_SVC_JWT
-    ),
+    logger_provider=_logger_provider,
+    jwt_provider=_jwt_provider,
 ) -> dict:
     logger: ILoggingGateway = logger_provider()
     jwt_svc: IJwtService = jwt_provider()
@@ -244,19 +264,16 @@ async def _require_user_from_token(
     token: dict,
     *,
     expanded: bool = False,
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
 ):
     config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
     registry: IAdminRegistry = registry_provider()
 
-    user_svc: IUserService = registry.get_edm_service(
-        f"{config.acp.namespace}:ACP.User"
-    )
+    admin_ns = AdminNs(config.acp.namespace)
+    user_svc: IUserService = registry.get_edm_service(admin_ns.key(_EDM_USER))
 
     user_id = token["sub"]
     try:

@@ -23,6 +23,10 @@ from mugen.core.plugin.acp.utility.jwt.keystore import (
 )
 
 
+def _config_provider():
+    return di.container.config
+
+
 class _EdDsaPublicKeyStore(IJwtKeyStore):
     """
     Public keystore view for EdDSA-backed JWT service.
@@ -116,7 +120,7 @@ class EdDsaJwtService(IJwtService):
     - Publishes JWKS from the cached keystore.
     """
 
-    def __init__(self, config_provider=lambda: di.container.config):
+    def __init__(self, config_provider=_config_provider):
         self._config = config_provider()
         self._keystore: Optional[EdDsaKeyStore] = load_eddsa_keystore_from_config(
             cfg=self._config,

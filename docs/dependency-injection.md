@@ -16,6 +16,10 @@ Keep `logging_gateway` as the bootstrap provider and keep the remaining provider
   - `EXT_SERVICE_ADMIN_REGISTRY`
   - `EXT_SERVICE_ADMIN_SVC_JWT`
   - `EXT_SERVICE_ADMIN_SVC_AUTH`
+- ACP modules should keep DI defaults as module-level callables that resolve from
+  `di.container` at call time (not import time).
+- ACP modules should build namespaced ACP keys via `AdminNs` instead of inline
+  `f"{namespace}:..."` concatenation.
 - Injector helpers in `mugen/core/di/injector.py`:
   - `register_ext_service(...)`
   - `register_ext_services(..., atomic=False)`

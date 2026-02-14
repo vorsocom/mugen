@@ -33,6 +33,18 @@ from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.domain import UserDE
 
 
+def _config_provider():
+    return di.container.config
+
+
+def _logger_provider():
+    return di.container.logging_gateway
+
+
+def _registry_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
+
+
 class UserService(
     IRelationalService[UserDE],
     IUserService,
@@ -45,11 +57,9 @@ class UserService(
         self,
         table: str,
         rsg: IRelationalStorageGateway,
-        config_provider=lambda: di.container.config,
-        logger_provider=lambda: di.container.logging_gateway,
-        registry_provider=lambda: di.container.get_required_ext_service(
-            di.EXT_SERVICE_ADMIN_REGISTRY
-        ),
+        config_provider=_config_provider,
+        logger_provider=_logger_provider,
+        registry_provider=_registry_provider,
         **kwargs,
     ):
         super().__init__(

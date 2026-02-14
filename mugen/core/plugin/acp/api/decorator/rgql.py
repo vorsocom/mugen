@@ -42,18 +42,30 @@ from mugen.core.utility.rgql_helper.rgql_to_relational import (
 # pylint: disable=too-many-arguments
 
 
+def _config_provider():
+    return di.container.config
+
+
+def _logger_provider():
+    return di.container.logging_gateway
+
+
+def _auth_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_SVC_AUTH)
+
+
+def _registry_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
+
+
 def rgql_enabled(
     _fn=None,
     *,
     tenant_kw: str | None = None,
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
-    auth_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_SVC_AUTH
-    ),
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    auth_provider=_auth_provider,
+    registry_provider=_registry_provider,
 ):
     """
     Enable RGQL/OData-style query options ($filter/$orderby/$top/$skip/$select/$expand

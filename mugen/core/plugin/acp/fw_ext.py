@@ -21,13 +21,21 @@ from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 from mugen.core.plugin.acp.sdk.runtime_binder import AdminRuntimeBinder
 
 
+def _config_provider():
+    return di.container.config
+
+
+def _rsg_provider():
+    return di.container.relational_storage_gateway
+
+
 class AdminFWExtension(IFWExtension):  # pylint: disable=too-few-public-methods
     """An implementation of IFWFramework for the admin plugin."""
 
     def __init__(
         self,
-        config_provider=lambda: di.container.config,
-        rsg_provider=lambda: di.container.relational_storage_gateway,
+        config_provider=_config_provider,
+        rsg_provider=_rsg_provider,
     ) -> None:
         self._config: SimpleNamespace = config_provider()
         self._rsg: IRelationalStorageGateway = rsg_provider()

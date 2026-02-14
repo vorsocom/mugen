@@ -20,6 +20,14 @@ from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 # pylint: disable=too-many-locals
 
 
+def _logger_provider():
+    return di.container.logging_gateway
+
+
+def _registry_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
+
+
 def _entity_name(edm_type_name: str) -> str:
     if "." in edm_type_name:
         return edm_type_name.split(".", 1)[1]
@@ -42,10 +50,8 @@ async def dispatch_entity_set_action(
     entity_set: str,
     action: str,
     auth_user: str,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> Any:
     """Dispatch an action for an EDM entity set."""
@@ -139,10 +145,8 @@ async def dispatch_entity_set_action_tenant(
     entity_set: str,
     action: str,
     auth_user: str,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> Any:
     """Dispatch a tenant-scoped action for an EDM entity."""
@@ -249,10 +253,8 @@ async def dispatch_entity_action(
     entity_id: str,
     action: str,
     auth_user: str,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> Any:
     """Dispatch an action for an EDM entity."""
@@ -356,10 +358,8 @@ async def dispatch_entity_action_tenant(
     entity_id: str,
     action: str,
     auth_user: str,
-    logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_required_ext_service(
-        di.EXT_SERVICE_ADMIN_REGISTRY
-    ),
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
     **_,
 ) -> Any:
     """Dispatch a tenant-scoped action for an EDM entity."""

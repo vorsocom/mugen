@@ -16,6 +16,14 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 
 
+def _config_provider():
+    return di.container.config
+
+
+def _logger_provider():
+    return di.container.logging_gateway
+
+
 def _json_safe(value: Any) -> Any:
     if value is None:
         return None
@@ -124,8 +132,8 @@ async def emit_audit_event(
     meta: Mapping[str, Any] | None = None,
     request_id: str | None = None,
     correlation_id: str | None = None,
-    config_provider=lambda: di.container.config,
-    logger_provider=lambda: di.container.logging_gateway,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
 ) -> None:
     """Best-effort append-only audit writer."""
     logger: ILoggingGateway = logger_provider()

@@ -21,6 +21,26 @@ from mugen.core.plugin.acp.contract.service import (
     IRoleMembershipService,
     IUserService,
 )
+from mugen.core.plugin.acp.utility.ns import AdminNs
+
+
+_ROLE_ADMINISTRATOR = "administrator"
+
+_EDM_GLOBAL_PERMISSION_ENTRY = "ACP.GlobalPermissionEntry"
+_EDM_GLOBAL_ROLE_MEMBERSHIP = "ACP.GlobalRoleMembership"
+_EDM_PERMISSION_ENTRY = "ACP.PermissionEntry"
+_EDM_PERMISSION_OBJECT = "ACP.PermissionObject"
+_EDM_PERMISSION_TYPE = "ACP.PermissionType"
+_EDM_ROLE_MEMBERSHIP = "ACP.RoleMembership"
+_EDM_USER = "ACP.User"
+
+
+def _config_provider():
+    return di.container.config
+
+
+def _registry_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
 
 
 # pylint: disable=too-many-instance-attributes
@@ -33,10 +53,8 @@ class AuthorizationService(IAuthorizationService):
 
     def __init__(
         self,
-        config_provider=lambda: di.container.config,
-        registry_provider=lambda: di.container.get_required_ext_service(
-            di.EXT_SERVICE_ADMIN_REGISTRY
-        ),
+        config_provider=_config_provider,
+        registry_provider=_registry_provider,
     ) -> None:
         self._config = config_provider()
         self._registry: IAdminRegistry = registry_provider()
@@ -44,32 +62,33 @@ class AuthorizationService(IAuthorizationService):
         self._perm_obj_id_cache = {}
         self._perm_type_id_cache = {}
 
-        self._admin_fqn = f"{self._config.acp.namespace}:administrator"
+        admin_ns = AdminNs(self._config.acp.namespace)
+        self._admin_fqn = admin_ns.key(_ROLE_ADMINISTRATOR)
 
         self._gperm_entry_svc: IGlobalPermissionEntryService = (
             self._registry.get_edm_service(
-                f"{self._config.acp.namespace}:ACP.GlobalPermissionEntry",
+                admin_ns.key(_EDM_GLOBAL_PERMISSION_ENTRY),
             )
         )
         self._grole_mship_svc: IGlobalRoleMembershipService = (
             self._registry.get_edm_service(
-                f"{self._config.acp.namespace}:ACP.GlobalRoleMembership",
+                admin_ns.key(_EDM_GLOBAL_ROLE_MEMBERSHIP),
             )
         )
         self._perm_entry_svc: IPermissionEntryService = self._registry.get_edm_service(
-            f"{self._config.acp.namespace}:ACP.PermissionEntry",
+            admin_ns.key(_EDM_PERMISSION_ENTRY),
         )
         self._perm_obj_svc: IPermissionObjectService = self._registry.get_edm_service(
-            f"{self._config.acp.namespace}:ACP.PermissionObject",
+            admin_ns.key(_EDM_PERMISSION_OBJECT),
         )
         self._perm_type_svc: IPermissionTypeService = self._registry.get_edm_service(
-            f"{self._config.acp.namespace}:ACP.PermissionType",
+            admin_ns.key(_EDM_PERMISSION_TYPE),
         )
         self._role_mship_svc: IRoleMembershipService = self._registry.get_edm_service(
-            f"{self._config.acp.namespace}:ACP.RoleMembership",
+            admin_ns.key(_EDM_ROLE_MEMBERSHIP),
         )
         self._user_svc: IUserService = self._registry.get_edm_service(
-            f"{self._config.acp.namespace}:ACP.User",
+            admin_ns.key(_EDM_USER),
         )
 
     async def _get_perm_obj_id(self, ns: str, name: str) -> uuid.UUID | None:

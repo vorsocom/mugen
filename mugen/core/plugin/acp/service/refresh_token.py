@@ -9,13 +9,20 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from sqlalchemy.exc import SQLAlchemyError
 
-
 from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
 from mugen.core.plugin.acp.contract.service import IRefreshTokenService
 from mugen.core.plugin.acp.domain import RefreshTokenDE
+
+
+def _config_provider():
+    return di.container.config
+
+
+def _logger_provider():
+    return di.container.logging_gateway
 
 
 class RefreshTokenService(
@@ -28,9 +35,9 @@ class RefreshTokenService(
         self,
         table: str,
         rsg: IRelationalStorageGateway,
-        config_provider=lambda: di.container.config,
-        logger_provider=lambda: di.container.logging_gateway,
-        **kwargs
+        config_provider=_config_provider,
+        logger_provider=_logger_provider,
+        **kwargs,
     ):
         super().__init__(
             de_type=RefreshTokenDE,
