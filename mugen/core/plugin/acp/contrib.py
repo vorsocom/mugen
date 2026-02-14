@@ -142,7 +142,8 @@ def contribute(
         - permissions: generated via `AdminNs.perms(<object_name>)`
         - capabilities: allow_* flags and action permission types
         - behavior: soft_delete and rgql_enabled
-    - Registers permission objects (nouns) for each catalog entry under the admin namespace.
+    - Registers permission objects (nouns) for each catalog entry under the
+      admin namespace.
     - Registers default global grants:
         administrator gets read/create/update/delete for all admin-owned objects.
     - Registers baseline system flags under the admin namespace (e.g., installed).
@@ -345,6 +346,10 @@ def contribute(
                     "schema": NoValidationSchema,
                 },
             },
+            "crud": CrudPolicy(
+                create_schema=("Name", "Slug"),
+                update_schema=("Name", "Slug", "Status"),
+            ),
         },
         {
             "set": "TenantDomains",
@@ -482,7 +487,8 @@ def contribute(
     # -------------------------------------------------------------------------
     # 5) Default grants (bootstrap policy)
     # -------------------------------------------------------------------------
-    # Administrator gets broad access (read/create/update/delete) to admin-owned objects.
+    # Administrator gets broad access (read/create/update/delete) to
+    # admin-owned objects.
     admin_obj_keys = [o.key for o in admin_objects]
     admin_verb_keys = [
         admin_ns.verb(v) for v in ("read", "create", "update", "delete", "manage")

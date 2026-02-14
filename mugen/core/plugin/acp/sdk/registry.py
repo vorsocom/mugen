@@ -213,7 +213,8 @@ class AdminRegistry(IAdminRegistry):
                         )
 
                 # Actions: require every action permission type to be registered.
-                # If you want to support "" meaning "use manage", replace this check accordingly.
+                # If you want to support "" meaning "use manage", replace this
+                # check accordingly.
                 for action_name, action_decl in r.capabilities.actions.items():
                     if not isinstance(action_decl, dict):
                         errors.append(

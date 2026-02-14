@@ -1,0 +1,69 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "PYTHONPATH=/home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/lib/python3.12/site-packages /home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/bin/python -m hypercorn -c hypercorn.e2e.toml quartman",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsMeterDefinitions",
+  "create_payload": {
+    "Code": "__METER_CODE__",
+    "Unit": "minute",
+    "AggregationMode": "sum",
+    "Description": "Meter definition e2e __METER_CODE__"
+  },
+  "lookup": {
+    "field": "Code",
+    "value": "__METER_CODE__"
+  },
+  "status_field": "Code",
+  "actions": [],
+  "assertions": {
+    "final_status": null,
+    "event_entity_set": "OpsUsageRecords",
+    "event_entity_id_field": "MeterDefinitionId",
+    "event_type_field": "Status",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [
+    {
+      "name": "usage_record_missing_measure",
+      "entity_set": "OpsUsageRecords",
+      "expect_code": 400,
+      "payload": {
+        "MeterDefinitionId": "__ENTITY_ID__",
+        "MeasuredMinutes": 0,
+        "MeasuredUnits": 0,
+        "MeasuredTasks": 0
+      }
+    }
+  ],
+  "positive_creates": [
+    {
+      "name": "meter_policy_for_definition",
+      "entity_set": "OpsMeterPolicies",
+      "expect_code": 201,
+      "payload": {
+        "MeterDefinitionId": "__ENTITY_ID__",
+        "Code": "policy-__METER_CODE__",
+        "Name": "Policy __METER_CODE__"
+      }
+    },
+    {
+      "name": "usage_session_for_definition",
+      "entity_set": "OpsUsageSessions",
+      "expect_code": 201,
+      "payload": {
+        "MeterDefinitionId": "__ENTITY_ID__",
+        "TrackedNamespace": "ops_case",
+        "TrackedRef": "tracked-__METER_CODE__"
+      }
+    }
+  ]
+}

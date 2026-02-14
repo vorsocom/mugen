@@ -1,0 +1,42 @@
+{
+  "runtime": {
+    "spawn_hypercorn": false,
+    "hypercorn_cmd": "PYTHONPATH=/path/to/venv/lib/python3.12/site-packages /path/to/venv/bin/python -m hypercorn -c hypercorn.e2e.toml quartman",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "__ACP_USERNAME__",
+    "password": "__ACP_PASSWORD__"
+  },
+  "tenant_id": null,
+  "entity_set": "YourEntitySet",
+  "create_payload": {
+    "Title": "Unique test title"
+  },
+  "lookup": {
+    "field": "Title",
+    "value": "Unique test title"
+  },
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "first_action",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": null,
+    "event_entity_set": "YourEventEntitySet",
+    "event_entity_id_field": "CaseId",
+    "event_type_field": "EventType",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [],
+  "positive_creates": []
+}

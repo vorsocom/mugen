@@ -1,0 +1,4 @@
+interface:
+  display_name: "Alembic Migration Checker"
+  short_description: "Run migration integrity and roundtrip checks"
+  default_prompt: "Use $alembic-migration-checker to assess all Alembic migrations before we run them."

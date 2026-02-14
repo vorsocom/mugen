@@ -18,7 +18,7 @@ Plugin discovery for contributions still uses the muGen core module system under
 Operational notes
 -----------------
 - Seeding is idempotent and safe to re-run.
-- This migration does not delete seeded rows on downgrade (no-op).
+- Downgrade removes ACP rows represented by the generated seed manifest.
 
 Revision ID: 2e72f21209c3
 Revises: a93a6eca4b3a
@@ -31,10 +31,6 @@ import logging
 
 from alembic import context
 from alembic import op
-
-from mugen.core.plugin.acp.migration.apply_manifest import apply_manifest
-from mugen.core.plugin.acp.migration.loader import contribute_all
-from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 
 # Set up a logger for this specific script
 log = logging.getLogger(__name__)
@@ -52,6 +48,9 @@ _SCHEMA = "mugen"
 # pylint: disable=no-member
 def upgrade() -> None:
     """Seed ACP control-plane data if enabled by configuration."""
+    if context.is_offline_mode():
+        log.warning("Skipping ACP seeding in offline mode.")
+        return
 
     mugen_cfg = context.config.attributes.get("mugen_cfg")
 
@@ -70,6 +69,11 @@ def upgrade() -> None:
         log.warning("ACP seeding skipped by config.")
         return
 
+    # Import locally to keep revision loading lightweight.
+    from mugen.core.plugin.acp.migration.apply_manifest import apply_manifest
+    from mugen.core.plugin.acp.migration.loader import contribute_all
+    from mugen.core.plugin.acp.sdk.registry import AdminRegistry
+
     conn = op.get_bind()
 
     reg = AdminRegistry(strict_permission_decls=True)
@@ -80,4 +84,27 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """No-op: ACP seed data is not removed on downgrade."""
+    """Remove ACP control-plane seed data."""
+    if context.is_offline_mode():
+        log.warning("Skipping ACP unseeding in offline mode.")
+        return
+
+    mugen_cfg = context.config.attributes.get("mugen_cfg")
+
+    if not mugen_cfg:
+        raise RuntimeError(
+            "mugen_cfg was not provided to Alembic env; cannot unseed ACP."
+        )
+
+    # Import locally to keep revision loading lightweight.
+    from mugen.core.plugin.acp.migration.apply_manifest import unapply_manifest
+    from mugen.core.plugin.acp.migration.loader import contribute_all
+    from mugen.core.plugin.acp.sdk.registry import AdminRegistry
+
+    conn = op.get_bind()
+
+    reg = AdminRegistry(strict_permission_decls=True)
+    contribute_all(reg, mugen_cfg=mugen_cfg)
+
+    manifest = reg.build_seed_manifest()
+    unapply_manifest(conn, manifest, schema=_SCHEMA)

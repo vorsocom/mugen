@@ -104,10 +104,12 @@ class User(ModelBase, PersonScopedMixin, SoftDeleteMixin):
         passive_deletes=True,
     )
 
-    global_role_memberships: Mapped[list["GlobalRoleMembership"]] = relationship(  # type: ignore
-        back_populates="user",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
+    global_role_memberships: Mapped[list["GlobalRoleMembership"]] = (
+        relationship(  # type: ignore
+            back_populates="user",
+            cascade="all, delete-orphan",
+            passive_deletes=True,
+        )
     )
 
     role_memberships: Mapped[list["RoleMembership"]] = relationship(  # type: ignore

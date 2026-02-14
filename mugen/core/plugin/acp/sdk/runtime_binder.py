@@ -11,17 +11,20 @@ Background and intent
 The admin plugin uses a two-phase model:
 
 1) **Contribution phase** (pure / migration-safe)
-   - Plugins call ``contribute(...)`` and register *declarations* (resources, permissions,
-     roles, grants, flags) and (optionally) *binding specs* as inert metadata (typically
-     string import paths plus small primitives).
+   - Plugins call ``contribute(...)`` and register *declarations* (
+     resources, permissions, roles, grants, flags) and (optionally)
+     *binding specs* as inert metadata (typically string import paths plus
+     small primitives).
    - This phase is safe to run under Alembic migrations because it must not import or
-     instantiate runtime-only dependencies (web framework objects, DI container, SQLAlchemy
-     engines/sessions, etc.).
+     instantiate runtime-only dependencies (
+     web framework objects, DI container, SQLAlchemy engines/sessions, etc.).
 
 2) **Binding phase** (runtime-only)
-   - This module executes during application startup (e.g., inside ``AdminFWExtension.setup()``)
-     and turns the declarative specs into runtime registrations:
-       * SQLAlchemy tables registered into the admin registry and the relational storage gateway
+   - This module executes during application startup (
+     e.g., inside ``AdminFWExtension.setup()``) and turns the
+     declarative specs into runtime registrations:
+       * SQLAlchemy tables registered into the admin registry and the
+         relational storage gateway
        * RGQL EDM schema (types and entity sets) registered into the admin registry
        * Relational service instances created and registered under their service keys
 
@@ -42,7 +45,8 @@ Typical startup sequence:
 Notes
 -----
 - This module intentionally performs dynamic imports (``importlib``). Spec strings are
-  expected to be stable, fully-qualified import references of the form ``"pkg.mod:attr"``.
+  expected to be stable, fully-qualified import references of the form
+  ``"pkg.mod:attr"``.
 - Errors are wrapped with context (spec/provider string) to make misconfiguration easier
   to diagnose.
 """
@@ -157,9 +161,10 @@ class AdminRuntimeBinder:
     """
     Materializes declarative registry binding specs into runtime registrations.
 
-    This class is intentionally narrow: it reads spec objects already stored on the registry
-    (via ``registry.table_specs()``, ``registry.edm_type_specs()``, ``registry.service_specs()``)
-    and performs the runtime actions required to make the admin control-plane operational.
+    This class is intentionally narrow: it reads spec objects already stored on
+    the registry (via ``registry.table_specs()``,
+    ``registry.edm_type_specs()``, ``registry.service_specs()``) and performs
+    the runtime actions required to make the admin control-plane operational.
 
     Parameters
     ----------
@@ -173,8 +178,10 @@ class AdminRuntimeBinder:
     Operational guidance
     --------------------
     - Run the binder *before* freezing the registry.
-    - ``bind_all()`` executes in a safe dependency order (tables -> EDM schema -> services).
-    - If any binding spec is invalid, a :class:`RuntimeBindingError` is raised with context.
+    - ``bind_all()`` executes in a safe dependency order
+      (tables -> EDM schema -> services).
+    - If any binding spec is invalid, a :class:`RuntimeBindingError` is raised
+      with context.
     """
 
     def __init__(
@@ -202,7 +209,8 @@ class AdminRuntimeBinder:
         Side effects
         ------------
         - Calls ``registry.register_tables({...})``.
-        - Calls ``rsg.register_tables(registry.tables)`` to keep the storage gateway in sync.
+        - Calls ``rsg.register_tables(registry.tables)`` to keep the storage
+          gateway in sync.
 
         Raises
         ------
@@ -262,12 +270,14 @@ class AdminRuntimeBinder:
         ----------------------
         Each item returned by ``registry.edm_type_specs()`` must expose:
         - ``edm_provider``: str  (provider string "pkg.mod:Symbol")
-        - (optional) ``edm_type_name``: str  (informational; the loaded object is authoritative)
+        - (optional) ``edm_type_name``: str (informational; the loaded object
+          is authoritative)
 
         Provider resolution
         -------------------
-        The loaded object is expected to be an :class:`~mugen.core.utility.rgql.model.EdmType`
-        (or a compatible object) with:
+        The loaded object is expected to be an
+        :class:`~mugen.core.utility.rgql.model.EdmType` (or a compatible
+        object) with:
         - ``name``: str
         - ``entity_set_name``: str
 
@@ -281,7 +291,8 @@ class AdminRuntimeBinder:
         Raises
         ------
         RuntimeBindingError
-            If a provider cannot be loaded or does not yield an EdmType-compatible object.
+            If a provider cannot be loaded or does not yield an
+            EdmType-compatible object.
         """
         schema_types: dict[str, EdmType] = {}
         schema_sets: dict[str, EntitySet] = {}
@@ -348,8 +359,8 @@ class AdminRuntimeBinder:
 
         Injection policy
         ---------------
-        The binder injects ``rsg=self._rsg`` into each service constructor. Any additional
-        constructor args must be supplied in ``init_kwargs``.
+        The binder injects ``rsg=self._rsg`` into each service constructor.
+        Any additional constructor args must be supplied in ``init_kwargs``.
 
         Raises
         ------

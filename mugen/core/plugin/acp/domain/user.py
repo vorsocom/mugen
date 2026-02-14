@@ -37,7 +37,9 @@ class UserDE(BaseDE, PersonScopedDEMixin, SoftDeleteDEMixin):
 
     token_version: int | None = None
 
-    global_role_memberships: Sequence["GlobalRoleMembershipDE"] | None = None  # type: ignore
+    global_role_memberships: (
+        Sequence["GlobalRoleMembershipDE"] | None
+    ) = None  # type: ignore
 
     refresh_tokens: Sequence["RefreshTokenDE"] | None = None  # type: ignore
 

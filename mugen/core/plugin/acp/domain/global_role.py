@@ -18,6 +18,10 @@ class GlobalRoleDE(BaseDE):  # pylint: disable=too-many-instance-attributes
 
     display_name: str | None = None
 
-    global_permission_entries: Sequence["GlobalPermissionEntryDE"] | None = None  # type: ignore
+    global_permission_entries: (
+        Sequence["GlobalPermissionEntryDE"] | None
+    ) = None  # type: ignore
 
-    global_role_memberships: Sequence["GlobalRoleMembershipDE"] | None = None  # type: ignore
+    global_role_memberships: (
+        Sequence["GlobalRoleMembershipDE"] | None
+    ) = None  # type: ignore

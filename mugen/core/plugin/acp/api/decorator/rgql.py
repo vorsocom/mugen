@@ -128,7 +128,8 @@ def rgql_enabled(
                 edm_type: EdmType,
                 path: str,
             ) -> bool:
-                """Determine if a user is permitted to access the given resource path."""
+                """Determine if a user is permitted to access the given
+                resource path."""
                 nav_property = edm_type.nav_properties.get(path)
                 if nav_property is None:
                     return False
@@ -223,8 +224,8 @@ def rgql_enabled(
                     response_columns[:] if response_columns is not None else None
                 )
 
-                # Ensure query columns include join keys required to materialize any $expand,
-                # even when the client uses $select to omit them.
+                # Ensure query columns include join keys required to materialize
+                # any $expand, even when the client uses $select to omit them.
                 if (
                     opts is not None
                     and isinstance(opts.expand, list)

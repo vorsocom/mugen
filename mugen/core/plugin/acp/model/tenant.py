@@ -50,9 +50,11 @@ class Tenant(ModelBase, SoftDeleteMixin):
         server_default=sa_text("'active'"),
     )
 
-    permission_entries: Mapped[list["PermissionEntries"]] = relationship(  # type: ignore
-        back_populates="tenant",
-        cascade="save-update, merge",
+    permission_entries: Mapped[list["PermissionEntries"]] = (
+        relationship(  # type: ignore
+            back_populates="tenant",
+            cascade="save-update, merge",
+        )
     )
 
     roles: Mapped[list["Roles"]] = relationship(  # type: ignore

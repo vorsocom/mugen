@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.plugin.acp.api.audit import emit_audit_event
 from mugen.core.plugin.acp.api.decorator.auth import permission_required
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
@@ -17,6 +18,22 @@ from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 # pylint: disable=too-many-arguments
 # ylint: disable=too-many-positional-arguments
 # pylint: disable=too-many-locals
+
+
+def _entity_name(edm_type_name: str) -> str:
+    if "." in edm_type_name:
+        return edm_type_name.split(".", 1)[1]
+    return edm_type_name
+
+
+def _request_ids() -> tuple[str | None, str | None]:
+    request_id = request.headers.get("X-Request-Id")
+    correlation_id = (
+        request.headers.get("X-Correlation-Id")
+        or request.headers.get("X-Trace-Id")
+        or request_id
+    )
+    return request_id, correlation_id
 
 
 @api.post("core/acp/v1/<entity_set>/$action/<action>")
@@ -36,8 +53,11 @@ async def dispatch_entity_set_action(
         logger.debug("`data` is not a dict.")
         abort(400)
 
+    request_id, correlation_id = _request_ids()
+
     registry: IAdminRegistry = registry_provider()
     resource = registry.get_resource(entity_set)
+    entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
     if registry.schema.get_type(edm_type_name).find_property("TenantId") is not None:
@@ -72,13 +92,42 @@ async def dispatch_entity_set_action(
         abort(400, str(e))
 
     try:
-        return await handler(
+        result = await handler(
             auth_user_id=auth_user_uuid,
             data=action_data,
         )
     except SQLAlchemyError as e:
         logger.error(e)
+        await emit_audit_event(
+            registry=registry,
+            entity_set=entity_set,
+            entity=entity,
+            operation="action",
+            action_name=action,
+            outcome="error",
+            source_plugin=resource.namespace,
+            actor_id=auth_user_uuid,
+            meta={"handler": handler_name},
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
         abort(500)
+
+    await emit_audit_event(
+        registry=registry,
+        entity_set=entity_set,
+        entity=entity,
+        operation="action",
+        action_name=action,
+        outcome="success",
+        source_plugin=resource.namespace,
+        actor_id=auth_user_uuid,
+        meta={"handler": handler_name},
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+
+    return result
 
 
 @api.post("core/acp/v1/tenants/<tenant_id>/<entity_set>/$action/<action>")
@@ -99,8 +148,11 @@ async def dispatch_entity_set_action_tenant(
         logger.debug("`data` is not a dict.")
         abort(400)
 
+    request_id, correlation_id = _request_ids()
+
     registry: IAdminRegistry = registry_provider()
     resource = registry.get_resource(entity_set)
+    entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
     if registry.schema.get_type(edm_type_name).find_property("TenantId") is None:
@@ -144,7 +196,7 @@ async def dispatch_entity_set_action_tenant(
     where = {"tenant_id": tenant_uuid}
 
     try:
-        return await handler(
+        result = await handler(
             tenant_id=tenant_uuid,
             where=where,
             auth_user_id=auth_user_uuid,
@@ -152,7 +204,38 @@ async def dispatch_entity_set_action_tenant(
         )
     except SQLAlchemyError as e:
         logger.error(e)
+        await emit_audit_event(
+            registry=registry,
+            entity_set=entity_set,
+            entity=entity,
+            operation="action",
+            action_name=action,
+            outcome="error",
+            source_plugin=resource.namespace,
+            actor_id=auth_user_uuid,
+            tenant_id=tenant_uuid,
+            meta={"handler": handler_name},
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
         abort(500)
+
+    await emit_audit_event(
+        registry=registry,
+        entity_set=entity_set,
+        entity=entity,
+        operation="action",
+        action_name=action,
+        outcome="success",
+        source_plugin=resource.namespace,
+        actor_id=auth_user_uuid,
+        tenant_id=tenant_uuid,
+        meta={"handler": handler_name},
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+
+    return result
 
 
 @api.post("core/acp/v1/<entity_set>/<entity_id>/$action/<action>")
@@ -173,8 +256,11 @@ async def dispatch_entity_action(
         logger.debug("`data` is not a dict.")
         abort(400)
 
+    request_id, correlation_id = _request_ids()
+
     registry: IAdminRegistry = registry_provider()
     resource = registry.get_resource(entity_set)
+    entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
     if registry.schema.get_type(edm_type_name).find_property("TenantId") is not None:
@@ -215,14 +301,45 @@ async def dispatch_entity_action(
         abort(400, str(e))
 
     try:
-        return await handler(
+        result = await handler(
             entity_id=entity_uuid,
             auth_user_id=auth_user_uuid,
             data=action_data,
         )
     except SQLAlchemyError as e:
         logger.error(e)
+        await emit_audit_event(
+            registry=registry,
+            entity_set=entity_set,
+            entity=entity,
+            entity_id=entity_uuid,
+            operation="action",
+            action_name=action,
+            outcome="error",
+            source_plugin=resource.namespace,
+            actor_id=auth_user_uuid,
+            meta={"handler": handler_name},
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
         abort(500)
+
+    await emit_audit_event(
+        registry=registry,
+        entity_set=entity_set,
+        entity=entity,
+        entity_id=entity_uuid,
+        operation="action",
+        action_name=action,
+        outcome="success",
+        source_plugin=resource.namespace,
+        actor_id=auth_user_uuid,
+        meta={"handler": handler_name},
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+
+    return result
 
 
 @api.post("core/acp/v1/tenants/<tenant_id>/<entity_set>/<entity_id>/$action/<action>")
@@ -244,8 +361,11 @@ async def dispatch_entity_action_tenant(
         logger.debug("`data` is not a dict.")
         abort(400)
 
+    request_id, correlation_id = _request_ids()
+
     registry: IAdminRegistry = registry_provider()
     resource = registry.get_resource(entity_set)
+    entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
     if registry.schema.get_type(edm_type_name).find_property("TenantId") is None:
@@ -294,7 +414,7 @@ async def dispatch_entity_action_tenant(
     where = {"tenant_id": tenant_uuid, "id": entity_uuid}
 
     try:
-        return await handler(
+        result = await handler(
             tenant_id=tenant_uuid,
             entity_id=entity_uuid,
             where=where,
@@ -303,4 +423,37 @@ async def dispatch_entity_action_tenant(
         )
     except SQLAlchemyError as e:
         logger.error(e)
+        await emit_audit_event(
+            registry=registry,
+            entity_set=entity_set,
+            entity=entity,
+            entity_id=entity_uuid,
+            operation="action",
+            action_name=action,
+            outcome="error",
+            source_plugin=resource.namespace,
+            actor_id=auth_user_uuid,
+            tenant_id=tenant_uuid,
+            meta={"handler": handler_name},
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
         abort(500)
+
+    await emit_audit_event(
+        registry=registry,
+        entity_set=entity_set,
+        entity=entity,
+        entity_id=entity_uuid,
+        operation="action",
+        action_name=action,
+        outcome="success",
+        source_plugin=resource.namespace,
+        actor_id=auth_user_uuid,
+        tenant_id=tenant_uuid,
+        meta={"handler": handler_name},
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+
+    return result

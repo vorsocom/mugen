@@ -32,6 +32,9 @@ _SCHEMA = "mugen"
 # pylint: disable=no-member
 def upgrade() -> None:
     """Upgrade schema."""
+    if context.is_offline_mode():
+        log.warning("Skipping admin user seeding in offline mode.")
+        return
 
     mugen_cfg = context.config.attributes.get("mugen_cfg")
 
@@ -295,4 +298,59 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """No-op: Admin user seed data is not removed on downgrade."""
+    """Remove seeded admin user data."""
+    if context.is_offline_mode():
+        log.warning("Skipping admin user unseeding in offline mode.")
+        return
+
+    conn = op.get_bind()
+    md = sa.MetaData(schema=_SCHEMA)
+
+    try:
+        ptable = sa.Table("admin_person", md, autoload_with=conn)
+        utable = sa.Table("admin_user", md, autoload_with=conn)
+        grmtable = sa.Table("admin_global_role_membership", md, autoload_with=conn)
+    except NoSuchTableError as exc:
+        raise RuntimeError(
+            "Table(s) required for admin user unseeding do(es) not exist."
+        ) from exc
+
+    person_id = uuid.UUID("ab53b9a3-8cdc-4a2e-bbf2-352cea11edaa")
+
+    checku_stmt = sa.select(utable).where(utable.c.person_id == person_id)
+    try:
+        user_row = conn.execute(checku_stmt).first()
+    except SQLAlchemyError as exc:
+        raise RuntimeError("Could not execute check user statement.") from exc
+
+    if user_row is None:
+        return
+
+    user_mapping = dict(user_row._mapping)  # pylint: disable=protected-access
+
+    rmship_stmt = sa.delete(grmtable).where(
+        grmtable.c.user_id == user_mapping["id"],
+    )
+    try:
+        conn.execute(rmship_stmt)
+    except SQLAlchemyError as exc:
+        raise RuntimeError("Could not execute delete role memberships statement.") from exc
+
+    delete_user_stmt = sa.delete(utable).where(utable.c.id == user_mapping["id"])
+    try:
+        conn.execute(delete_user_stmt)
+    except SQLAlchemyError as exc:
+        raise RuntimeError("Could not execute delete user statement.") from exc
+
+    person_ref_stmt = sa.select(sa.literal(True)).where(utable.c.person_id == person_id)
+    try:
+        has_refs = conn.execute(person_ref_stmt).first() is not None
+    except SQLAlchemyError as exc:
+        raise RuntimeError("Could not execute person reference check statement.") from exc
+
+    if not has_refs:
+        delete_person_stmt = sa.delete(ptable).where(ptable.c.id == person_id)
+        try:
+            conn.execute(delete_person_stmt)
+        except SQLAlchemyError as exc:
+            raise RuntimeError("Could not execute delete person statement.") from exc

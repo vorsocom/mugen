@@ -501,3 +501,178 @@ def apply_manifest(
         update_cols=("description",),
         pk_col=tables.system_flag_pk,
     )
+
+
+def _delete_rows(
+    conn: Connection,
+    table: sa.Table,
+    *,
+    cols: Sequence[str],
+    rows: Sequence[tuple],
+) -> None:
+    if not rows:
+        return
+    _require_columns(table, cols)
+
+    if len(cols) == 1:
+        conn.execute(sa.delete(table).where(table.c[cols[0]].in_([r[0] for r in rows])))
+        return
+
+    conn.execute(
+        sa.delete(table).where(
+            sa.tuple_(*[table.c[c] for c in cols]).in_(list(rows))
+        )
+    )
+
+
+def unapply_manifest(
+    conn: Connection,
+    manifest: AdminSeedManifest,
+    *,
+    schema: str = "mugen",
+    tables: TableNames = TableNames(),
+) -> None:
+    """
+    Remove rows addressed by a seed manifest.
+
+    This is a best-effort inverse for apply_manifest and assumes downgrade context
+    where removing seeded policy rows is acceptable.
+    """
+
+    t_pobj = _autoload_table_required(conn, schema, tables.permission_object)
+    t_ptyp = _autoload_table_required(conn, schema, tables.permission_type)
+    t_grole = _autoload_table_required(conn, schema, tables.global_role)
+    t_ggrant = _autoload_table_required(conn, schema, tables.global_grant)
+    t_sysflag = _autoload_table_required(conn, schema, tables.system_flag)
+
+    t_trole = _autoload_table_optional(conn, schema, tables.tenant_role_template)
+    t_tgrant = _autoload_table_optional(conn, schema, tables.tenant_grant)
+
+    pobj_map = _fetch_id_map(
+        conn, t_pobj, tables.permission_object_pk, ("namespace", "name")
+    )
+    ptyp_map = _fetch_id_map(
+        conn, t_ptyp, tables.permission_type_pk, ("namespace", "name")
+    )
+    grole_map = _fetch_id_map(
+        conn, t_grole, tables.global_role_pk, ("namespace", "name")
+    )
+    trole_map = {}
+    if t_trole is not None:
+        trole_map = _fetch_id_map(
+            conn,
+            t_trole,
+            tables.tenant_role_template_pk,
+            ("namespace", "name"),
+        )
+
+    ggrant_keys: set[tuple[Any, Any, Any]] = set()
+    for g in manifest.default_global_grants:
+        role_ns, role_name = _split_key(g.global_role)
+        pobj_ns, pobj_name = _split_key(g.permission_object)
+        ptyp_ns, ptyp_name = _split_key(g.permission_type)
+
+        role_id = grole_map.get((_norm_token(role_ns), _norm_token(role_name)))
+        pobj_id = pobj_map.get((_norm_token(pobj_ns), _norm_token(pobj_name)))
+        ptyp_id = ptyp_map.get((_norm_token(ptyp_ns), _norm_token(ptyp_name)))
+        if role_id is None or pobj_id is None or ptyp_id is None:
+            continue
+        ggrant_keys.add((role_id, pobj_id, ptyp_id))
+
+    _delete_rows(
+        conn,
+        t_ggrant,
+        cols=("global_role_id", "permission_object_id", "permission_type_id"),
+        rows=sorted(ggrant_keys),
+    )
+
+    if t_trole is not None and t_tgrant is not None:
+        tgrant_keys: set[tuple[Any, Any, Any]] = set()
+        for g in manifest.default_tenant_grants:
+            role_ns, role_name = _split_key(g.tenant_role_template)
+            pobj_ns, pobj_name = _split_key(g.permission_object)
+            ptyp_ns, ptyp_name = _split_key(g.permission_type)
+
+            role_id = trole_map.get((_norm_token(role_ns), _norm_token(role_name)))
+            pobj_id = pobj_map.get((_norm_token(pobj_ns), _norm_token(pobj_name)))
+            ptyp_id = ptyp_map.get((_norm_token(ptyp_ns), _norm_token(ptyp_name)))
+            if role_id is None or pobj_id is None or ptyp_id is None:
+                continue
+            tgrant_keys.add((role_id, pobj_id, ptyp_id))
+
+        _delete_rows(
+            conn,
+            t_tgrant,
+            cols=(
+                "tenant_role_template_id",
+                "permission_object_id",
+                "permission_type_id",
+            ),
+            rows=sorted(tgrant_keys),
+        )
+
+    sysflag_keys = sorted(
+        {
+            (_norm_token(flag.namespace), _norm_token(flag.name))
+            for flag in manifest.system_flags
+        }
+    )
+    _delete_rows(
+        conn,
+        t_sysflag,
+        cols=("namespace", "name"),
+        rows=sysflag_keys,
+    )
+
+    trole_keys = sorted(
+        {
+            (_norm_token(r.namespace), _norm_token(r.name))
+            for r in manifest.tenant_role_templates
+        }
+    )
+    if t_trole is not None:
+        _delete_rows(
+            conn,
+            t_trole,
+            cols=("namespace", "name"),
+            rows=trole_keys,
+        )
+
+    grole_keys = sorted(
+        {
+            (_norm_token(r.namespace), _norm_token(r.name))
+            for r in manifest.global_roles
+        }
+    )
+    _delete_rows(
+        conn,
+        t_grole,
+        cols=("namespace", "name"),
+        rows=grole_keys,
+    )
+
+    ptyp_keys = sorted(
+        {
+            (_norm_token(p.namespace), _norm_token(p.name))
+            for p in manifest.permission_types
+        }
+    )
+    _delete_rows(
+        conn,
+        t_ptyp,
+        cols=("namespace", "name"),
+        rows=ptyp_keys,
+    )
+
+    pobj_keys = sorted(
+        {
+            (_norm_token(p.namespace), _norm_token(p.name))
+            for p in manifest.permission_objects
+        }
+    )
+    _delete_rows(
+        conn,
+        t_pobj,
+        cols=("namespace", "name"),
+        rows=pobj_keys,
+    )

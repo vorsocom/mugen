@@ -34,12 +34,16 @@ class GlobalRole(ModelBase):
         index=True,
     )
 
-    global_permission_entries: Mapped[List["GlobalPermissionEntry"]] = relationship(  # type: ignore
-        back_populates="global_role",
+    global_permission_entries: Mapped[List["GlobalPermissionEntry"]] = (
+        relationship(  # type: ignore
+            back_populates="global_role",
+        )
     )
 
-    global_role_memberships: Mapped[List["GlobalRoleMembership"]] = relationship(  # type: ignore
-        back_populates="global_role",
+    global_role_memberships: Mapped[List["GlobalRoleMembership"]] = (
+        relationship(  # type: ignore
+            back_populates="global_role",
+        )
     )
 
     __table_args__ = (

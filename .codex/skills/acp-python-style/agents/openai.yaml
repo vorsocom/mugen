@@ -1,0 +1,4 @@
+interface:
+  display_name: "ACP Python Style"
+  short_description: "Mirror ACP formatting in new Python code"
+  default_prompt: "Use $acp-python-style to implement this ACP plugin change with matching formatting."

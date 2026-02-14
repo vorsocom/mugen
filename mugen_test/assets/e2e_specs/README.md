@@ -1,0 +1,50 @@
+# ACP HTTP E2E Spec Templates
+
+These JSON files are input specs for:
+
+`bash .codex/skills/acp-http-e2e-tester/scripts/run_acp_http_e2e.sh --spec <path>`
+
+To run the whole template suite with automatic unique placeholder injection:
+
+`bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh`
+
+## Plugin Coverage
+
+- `ops_case`: `ops_case/ops-case-e2e-lifecycle.template.json`
+- `ops_sla`: `ops_sla/ops-sla-e2e-clock-lifecycle.template.json`
+- `ops_workflow`: `ops_workflow/ops-workflow-e2e-definition-smoke.template.json`
+- `ops_metering`: `ops_metering/ops-metering-e2e-meter-definition-smoke.template.json`
+- `billing`: `billing/billing-e2e-account-product-smoke.template.json`
+- `ops_vpn`: `ops_vpn/ops-vpn-e2e-vendor-lifecycle.template.json`
+- `knowledge_pack`: `knowledge_pack/knowledge-pack-e2e-pack-smoke.template.json`
+- `ops_governance`: `ops_governance/ops-governance-e2e-policy-evaluate.template.json`
+- `ops_reporting`:
+  - `ops_reporting/ops-reporting-e2e-aggregation.template.json`
+  - `ops_reporting/ops-reporting-e2e-snapshot.template.json`
+- `channel_orchestration`:
+  - `channel_orchestration/channel-orchestration-e2e-conversation.template.json`
+  - `channel_orchestration/channel-orchestration-e2e-blocklist.template.json`
+
+## Usage Notes
+
+- Treat these as templates; copy to `/tmp` and inject unique values for keys/codes.
+- The e2e runner only substitutes these placeholders automatically:
+  - `__ROW_VERSION__`
+  - `__ENTITY_ID__`
+  - `__TENANT_ID__`
+  - `__USER_ID__`
+- Custom placeholders like `__WF_KEY__` must be replaced before running.
+- `run_all_e2e_templates.sh` auto-renders these placeholders:
+  - `__CASE_TITLE__`
+  - `__TRACKED_REF__`
+  - `__WF_KEY__`
+  - `__METER_CODE__`
+  - `__BILLING_ACCOUNT_CODE__`
+  - `__BILLING_PRODUCT_CODE__`
+  - `__VENDOR_CODE__`
+  - `__PACK_KEY__`
+  - `__POLICY_CODE__`
+  - `__SENDER_KEY__`
+  - `__BLOCK_SENDER_KEY__`
+  - `__CODE__`
+  - `__SNAP_NOTE__`

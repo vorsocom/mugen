@@ -5,7 +5,8 @@ Control-plane registry contract.
 - AdminResources (routing + policy bindings)
 - EDM schema contributions (EdmTypes + EntitySets)
 - EDM services (service instances keyed by EdmType name / service key convention)
-- Seedable policy declarations (permission objects/types, roles/templates, default grants)
+- Seedable policy declarations (permission objects/types, roles/templates,
+  default grants)
 - Optional system flags (seedable operational toggles)
 - Optional SQLAlchemy Table registrations (for metadata access / integration)
 

@@ -28,8 +28,10 @@ class PermissionObject(ModelBase):
         index=False,
     )
 
-    global_permission_entries: Mapped[List["GlobalPermissionEntry"]] = relationship(  # type: ignore
-        back_populates="permission_object",
+    global_permission_entries: Mapped[List["GlobalPermissionEntry"]] = (
+        relationship(  # type: ignore
+            back_populates="permission_object",
+        )
     )
 
     permission_entries: Mapped[List["PermissionEntry"]] = relationship(  # type: ignore

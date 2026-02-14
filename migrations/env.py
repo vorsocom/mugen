@@ -2,16 +2,16 @@ import importlib
 from logging.config import fileConfig
 import os
 import sys
+from typing import Optional
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from sqlalchemy import text
+from sqlalchemy import MetaData
 
 import tomlkit
 
 from alembic import context
-
-from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 
 # pylint: disable=no-member
 
@@ -57,13 +57,45 @@ def _import_extension_models(cfg: dict) -> None:
             importlib.import_module(ext["models"])
 
 
+def _is_autogenerate_mode() -> bool:
+    """Determine if Alembic is running `revision --autogenerate`."""
+    cmd_opts = getattr(config, "cmd_opts", None)
+    return bool(getattr(cmd_opts, "autogenerate", False))
+
+
+def _is_truthy_env_var(name: str) -> bool:
+    """Parse common truthy environment variable values."""
+    value = os.getenv(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_target_metadata(cfg: dict) -> Optional[MetaData]:
+    """
+    Load metadata only for autogenerate workflows.
+    Runtime upgrade/downgrade does not require model imports and should avoid
+    bootstrapping application-side package imports.
+
+    Set `MUGEN_ALEMBIC_FORCE_MODEL_IMPORTS=1` to force metadata/model imports
+    for non-autogenerate commands when needed.
+    """
+    if not (
+        _is_autogenerate_mode()
+        or _is_truthy_env_var("MUGEN_ALEMBIC_FORCE_MODEL_IMPORTS")
+    ):
+        return None
+
+    from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase  # pylint: disable=import-outside-toplevel
+
+    _import_extension_models(cfg)
+    return ModelBase.metadata
+
+
 def get_url(cfg: dict) -> str:
     """Determine the database URL for migrations."""
     return cfg["rdbms"]["alembic"]["url"]
 
 
 _mugen_cfg = _load_mugen_config("mugen.toml")
-_import_extension_models(_mugen_cfg)
 
 config.attributes["mugen_cfg"] = _mugen_cfg
 
@@ -71,7 +103,7 @@ config.attributes["mugen_cfg"] = _mugen_cfg
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-target_metadata = ModelBase.metadata
+target_metadata = _load_target_metadata(_mugen_cfg)
 
 
 # other values from the config, defined by the needs of env.py,

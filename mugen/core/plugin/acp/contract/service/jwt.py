@@ -34,7 +34,8 @@ class JwtVerifyProfile(str, enum.Enum):
     @property
     def require_audience(self) -> bool:
         """
-        Whether audience should be enforced by default when params.audience is not provided.
+        Whether audience should be enforced by default when params.audience is
+        not provided.
         """
         return self in {
             JwtVerifyProfile.PRINCIPAL,

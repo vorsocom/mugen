@@ -1,10 +1,11 @@
-"""Provides a keystore abstraction for EdDSA (Ed25519 + Ed448) signing, verification,
-and JWKS publishing.
+"""Provides a keystore abstraction for EdDSA (Ed25519 + Ed448) signing,
+verification, and JWKS publishing.
 
 Overview
 --------
 This module provides a minimal "keystore" abstraction for JWT signing and verification
-using EdDSA with Ed25519 and Ed448 keys, and for publishing the corresponding public keys
+using EdDSA with Ed25519 and Ed448 keys, and for publishing the
+corresponding public keys
 as a JWKS document.
 
 Primary goals:
@@ -314,8 +315,16 @@ def load_eddsa_keystore_from_config(cfg: Any) -> EdDsaKeyStore:
     -------------------------------
       cfg.acp.jwt.active_kid = "2025-12-ed1"
       cfg.acp.jwt.keys = [
-        SimpleNamespace(kid="2025-12-ed1", alg="EdDSA", pem="-----BEGIN PRIVATE KEY-----..."}),
-        SimpleNamespace(kid="2025-12-ed0", alg="EdDSA", pem="-----BEGIN PRIVATE KEY-----..."}),
+        SimpleNamespace(
+          kid="2025-12-ed1",
+          alg="EdDSA",
+          pem="-----BEGIN PRIVATE KEY-----...",
+        ),
+        SimpleNamespace(
+          kid="2025-12-ed0",
+          alg="EdDSA",
+          pem="-----BEGIN PRIVATE KEY-----...",
+        ),
       ]
 
     Parameters
@@ -376,7 +385,8 @@ _FORBIDDEN_JWS_HEADERS = {
     # Protected / algorithm-safety and key selection
     "alg",
     "kid",
-    # Critical extensions: do not allow unless you also enforce critical-header semantics
+    # Critical extensions: do not allow unless you also enforce
+    # critical-header semantics
     "crit",
     # Prevent header-driven key material / indirection footguns for downstream consumers
     "jwk",
@@ -444,7 +454,8 @@ def sign_eddsa_jwt(
         - alg = "EdDSA"
         - kid = selected signing key (active unless kid override is provided)
         - typ = "JWT"
-    - The token's cryptographic curve (Ed25519 vs Ed448) is determined by the active key.
+    - The token's cryptographic curve (Ed25519 vs Ed448) is determined by the
+      active key.
     """
     k = keystore.active if kid is None else keystore.get_signing_key(kid)
 
@@ -481,8 +492,9 @@ def verify_eddsa_jwt(
     keystore:
         EdDsaKeyStore containing public keys indexed by kid.
     verify_exp:
-        Whether to enforce the 'exp' claim. Set False when you want to validate signature
-        and parse claims even if expired (e.g., logout token revocation handling).
+        Whether to enforce the 'exp' claim. Set False when you want to
+        validate signature and parse claims even if expired (e.g., logout
+        token revocation handling).
     issuer:
         If provided, enforce the 'iss' claim. If None, issuer is not checked.
     audience:
@@ -524,7 +536,8 @@ def verify_eddsa_jwt(
     public_key = keystore.get_public_key(kid)
 
     # Require core claims to be present. Also validate iat/nbf if present.
-    # Note: PyJWT validates exp/iat/nbf semantics when enabled; 'require' ensures presence.
+    # Note: PyJWT validates exp/iat/nbf semantics when enabled;
+    # 'require' ensures presence.
     require_list = (
         required_claims if required_claims is not None else ["exp", "iat", "nbf"]
     )

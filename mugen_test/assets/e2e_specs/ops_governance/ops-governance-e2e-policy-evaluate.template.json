@@ -1,0 +1,59 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "PYTHONPATH=/home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/lib/python3.12/site-packages /home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/bin/python -m hypercorn -c hypercorn.e2e.toml quartman",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsPolicyDefinitions",
+  "create_payload": {
+    "Code": "__POLICY_CODE__",
+    "Name": "Governance Policy __POLICY_CODE__"
+  },
+  "lookup": {
+    "field": "Code",
+    "value": "__POLICY_CODE__"
+  },
+  "status_field": "Code",
+  "actions": [
+    {
+      "name": "evaluate_policy",
+      "target": "entity",
+      "expect_code": 200,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "SubjectNamespace": "ops_case",
+        "SubjectRef": "CASE-E2E-001",
+        "Decision": "allow",
+        "Outcome": "applied"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": null,
+    "event_entity_set": "OpsPolicyDecisionLogs",
+    "event_entity_id_field": "PolicyDefinitionId",
+    "event_type_field": "Decision",
+    "expected_event_sequence": [
+      "allow"
+    ]
+  },
+  "negative_creates": [
+    {
+      "name": "retention_missing_target_namespace",
+      "entity_set": "OpsRetentionPolicies",
+      "expect_code": 400,
+      "payload": {
+        "Code": "RET-__POLICY_CODE__",
+        "Name": "Retention __POLICY_CODE__"
+      }
+    }
+  ],
+  "positive_creates": []
+}

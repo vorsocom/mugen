@@ -1,0 +1,52 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "PYTHONPATH=/home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/lib/python3.12/site-packages /home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/bin/python -m hypercorn -c hypercorn.e2e.toml quartman",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "BlocklistEntries",
+  "create_payload": {
+    "SenderKey": "__BLOCK_SENDER_KEY__"
+  },
+  "lookup": {
+    "field": "SenderKey",
+    "value": "__BLOCK_SENDER_KEY__"
+  },
+  "status_field": "IsActive",
+  "actions": [
+    {
+      "name": "block_sender",
+      "target": "entity_set",
+      "expect_code": 200,
+      "payload": {
+        "SenderKey": "__BLOCK_SENDER_KEY__",
+        "Reason": "e2e block"
+      }
+    },
+    {
+      "name": "unblock_sender",
+      "target": "entity_set",
+      "expect_code": 200,
+      "payload": {
+        "SenderKey": "__BLOCK_SENDER_KEY__",
+        "Reason": "e2e unblock"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": null,
+    "event_entity_set": "OrchestrationEvents",
+    "event_entity_id_field": "ConversationStateId",
+    "event_type_field": "EventType",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [],
+  "positive_creates": []
+}

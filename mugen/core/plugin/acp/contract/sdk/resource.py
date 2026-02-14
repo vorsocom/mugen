@@ -35,7 +35,8 @@ class AdminPermissions:
     Rationale:
     - Prevents accidental hard-coded defaults ("admin:read") in a system where the
       admin namespace is configured at runtime.
-    - Ensures resources remain portable across deployments with different admin namespaces.
+    - Ensures resources remain portable across deployments with different
+      admin namespaces.
     """
 
     permission_object: str

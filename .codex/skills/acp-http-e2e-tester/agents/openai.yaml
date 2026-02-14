@@ -1,0 +1,4 @@
+interface:
+  display_name: "ACP HTTP E2E Tester"
+  short_description: "Repeatable ACP HTTP e2e checks with curl."
+  default_prompt: "Use this skill to execute repeatable ACP plugin HTTP end-to-end checks with Hypercorn and curl, including login, tenant-scoped create/read/action flows, and explicit status/assertion validation."

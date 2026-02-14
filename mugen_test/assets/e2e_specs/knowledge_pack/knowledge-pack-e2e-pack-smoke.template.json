@@ -1,0 +1,53 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "PYTHONPATH=/home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/lib/python3.12/site-packages /home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/bin/python -m hypercorn -c hypercorn.e2e.toml quartman",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "KnowledgePacks",
+  "create_payload": {
+    "Key": "__PACK_KEY__",
+    "Name": "Knowledge Pack __PACK_KEY__"
+  },
+  "lookup": {
+    "field": "Key",
+    "value": "__PACK_KEY__"
+  },
+  "status_field": "Key",
+  "actions": [],
+  "assertions": {
+    "final_status": null,
+    "event_entity_set": "KnowledgeApprovals",
+    "event_entity_id_field": "KnowledgePackVersionId",
+    "event_type_field": "ApprovalType",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [
+    {
+      "name": "missing_pack_reference",
+      "entity_set": "KnowledgePackVersions",
+      "expect_code": 400,
+      "payload": {
+        "VersionNumber": 1
+      }
+    }
+  ],
+  "positive_creates": [
+    {
+      "name": "initial_pack_version",
+      "entity_set": "KnowledgePackVersions",
+      "expect_code": 201,
+      "payload": {
+        "KnowledgePackId": "__ENTITY_ID__",
+        "VersionNumber": 1
+      }
+    }
+  ]
+}

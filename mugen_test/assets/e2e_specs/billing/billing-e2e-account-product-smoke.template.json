@@ -1,0 +1,53 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "PYTHONPATH=/home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/lib/python3.12/site-packages /home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/bin/python -m hypercorn -c hypercorn.e2e.toml quartman",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "BillingAccounts",
+  "create_payload": {
+    "Code": "__BILLING_ACCOUNT_CODE__",
+    "DisplayName": "Billing Account __BILLING_ACCOUNT_CODE__"
+  },
+  "lookup": {
+    "field": "Code",
+    "value": "__BILLING_ACCOUNT_CODE__"
+  },
+  "status_field": "Code",
+  "actions": [],
+  "assertions": {
+    "final_status": null,
+    "event_entity_set": "BillingUsageEvents",
+    "event_entity_id_field": "AccountId",
+    "event_type_field": "Status",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [
+    {
+      "name": "missing_account_display_name",
+      "entity_set": "BillingAccounts",
+      "expect_code": 400,
+      "payload": {
+        "Code": "__BILLING_ACCOUNT_CODE__-NEG"
+      }
+    }
+  ],
+  "positive_creates": [
+    {
+      "name": "create_product",
+      "entity_set": "BillingProducts",
+      "expect_code": 201,
+      "payload": {
+        "Code": "__BILLING_PRODUCT_CODE__",
+        "Name": "Billing Product __BILLING_PRODUCT_CODE__"
+      }
+    }
+  ]
+}
