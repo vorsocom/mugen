@@ -591,6 +591,43 @@ class TestDependencyInjector(unittest.TestCase):
 
         self.assertIs(injector.get_ext_service("demo"), second)
 
+    def test_register_ext_services_round_trip(self):
+        """Test bulk extension service registration and retrieval."""
+        injector = di.injector.DependencyInjector()
+        first = object()
+        second = object()
+
+        injector.register_ext_services({"one": first, "two": second})
+
+        self.assertIs(injector.get_ext_service("one"), first)
+        self.assertIs(injector.get_ext_service("two"), second)
+
+    def test_register_ext_services_duplicate_without_override(self):
+        """Test bulk registration duplicate behavior without override."""
+        injector = di.injector.DependencyInjector()
+        injector.register_ext_service("demo", object())
+
+        with self.assertRaises(KeyError):
+            injector.register_ext_services({"demo": object()})
+
+    def test_register_ext_services_duplicate_with_override(self):
+        """Test bulk registration duplicate behavior with override."""
+        injector = di.injector.DependencyInjector()
+        first = object()
+        second = object()
+        injector.register_ext_service("demo", first)
+
+        injector.register_ext_services({"demo": second}, override=True)
+
+        self.assertIs(injector.get_ext_service("demo"), second)
+
+    def test_register_ext_services_requires_mapping(self):
+        """Test bulk registration requires a mapping input."""
+        injector = di.injector.DependencyInjector()
+
+        with self.assertRaises(TypeError):
+            injector.register_ext_services(["demo"])
+
     def test_get_ext_service_missing_with_default(self):
         """Test retrieving missing extension service with a default."""
         injector = di.injector.DependencyInjector()
@@ -645,6 +682,9 @@ class TestDependencyInjector(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             injector.register_ext_service("   ", object())
+
+        with self.assertRaises(ValueError):
+            injector.register_ext_services({"": object()})
 
         with self.assertRaises(ValueError):
             injector.get_ext_service("")

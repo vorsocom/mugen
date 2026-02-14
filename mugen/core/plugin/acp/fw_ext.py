@@ -49,13 +49,11 @@ class AdminFWExtension(IFWExtension):  # pylint: disable=too-few-public-methods
         AdminRuntimeBinder(registry=registry, rsg=self._rsg).bind_all()
         registry.freeze()
 
-        di.container.register_ext_service(
-            di.EXT_SERVICE_ADMIN_SVC_JWT,
-            EdDsaJwtService(),
-        )
-        di.container.register_ext_service(
-            di.EXT_SERVICE_ADMIN_SVC_AUTH,
-            AuthorizationService(),
+        di.container.register_ext_services(
+            {
+                di.EXT_SERVICE_ADMIN_SVC_JWT: EdDsaJwtService(),
+                di.EXT_SERVICE_ADMIN_SVC_AUTH: AuthorizationService(),
+            }
         )
 
         # Import endpoints now that services are available.

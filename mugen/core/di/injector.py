@@ -190,6 +190,18 @@ class DependencyInjector(IDependencyInjector):
 
         self.__ext_services[name] = service
 
+    def register_ext_services(
+        self,
+        services: Mapping[str, Any],
+        *,
+        override: bool = False,
+    ) -> None:
+        if not isinstance(services, Mapping):
+            raise TypeError("Services must be provided as a mapping.")
+
+        for name, service in services.items():
+            self.register_ext_service(name, service, override=override)
+
     def get_ext_service(self, name: str, default: Any | None = None) -> Any:
         name = self._normalise_ext_service_name(name)
 
