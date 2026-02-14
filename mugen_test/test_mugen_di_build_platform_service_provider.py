@@ -174,8 +174,6 @@ class TestDIBuildPlatformService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -188,7 +186,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.platform.IPlatformService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the Platform service.
@@ -260,8 +258,6 @@ class TestDIBuildPlatformService(unittest.TestCase):
 
                 DummyPlatformServiceClass.__module__ = "valid_platform_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyPlatformServiceClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -274,7 +270,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.platform.IPlatformService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyPlatformServiceClass],
                     ),
                 ):
                     # Attempt to build the Platform service.

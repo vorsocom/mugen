@@ -148,8 +148,6 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -160,7 +158,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.logging.ILoggingGateway.__subclasses__",
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the logging gateway.
@@ -229,8 +227,6 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
 
                 DummyLoggingGatewayClass.__module__ = "valid_logging_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyLoggingGatewayClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -241,7 +237,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.logging.ILoggingGateway.__subclasses__",
-                        new_callable=sc,
+                        return_value=[DummyLoggingGatewayClass],
                     ),
                 ):
                     # Attempt to build the logging gateway.

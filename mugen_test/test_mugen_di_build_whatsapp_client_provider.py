@@ -224,8 +224,6 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -238,7 +236,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.client.whatsapp.IWhatsAppClient.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the WhatsApp service.
@@ -425,8 +423,6 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
 
                 DummyWhatsAppClientClass.__module__ = "valid_whatsapp_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyWhatsAppClientClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -439,7 +435,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.client.whatsapp.IWhatsAppClient.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyWhatsAppClientClass],
                     ),
                 ):
                     # Attempt to build the WhatsApp service.

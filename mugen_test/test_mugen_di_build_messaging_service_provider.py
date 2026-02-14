@@ -174,8 +174,6 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -188,7 +186,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.messaging.IMessagingService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the Messaging service.
@@ -348,8 +346,6 @@ class TestDIBuildMessagingService(unittest.TestCase):
 
                 DummyMessagingServiceClass.__module__ = "valid_messaging_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyMessagingServiceClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -362,7 +358,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.messaging.IMessagingService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyMessagingServiceClass],
                     ),
                 ):
                     # Attempt to build the Messaging service.

@@ -184,8 +184,6 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -196,7 +194,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.storage.keyval.IKeyValStorageGateway.__subclasses__",  # pylint: disable=line-too-long
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the key-value storage gateway.
@@ -283,8 +281,6 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     "valid_keyval_storage_module"
                 )
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyKeyValStorageGatewayClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -295,7 +291,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.storage.keyval.IKeyValStorageGateway.__subclasses__",  # pylint: disable=line-too-long
-                        new_callable=sc,
+                        return_value=[DummyKeyValStorageGatewayClass],
                     ),
                 ):
                     # Attempt to build the key-value storage gateway.

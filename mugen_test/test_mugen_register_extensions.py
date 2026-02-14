@@ -160,8 +160,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        sc = unittest.mock.Mock
-        sc.return_value = []
 
         with (
             self.assertLogs(logger="test_app"),
@@ -173,7 +171,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[],
             ),
             self.assertRaises(SystemExit),
         ):
@@ -207,8 +205,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
 
             __module__ = "ct_ext"
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app"),
@@ -220,7 +216,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
             self.assertRaises(SystemExit),
         ):
@@ -273,8 +269,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ) -> None:
                 """Process message for conversational triggers."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -286,7 +280,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -340,8 +334,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ) -> None:
                 """Process message for conversational triggers."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -353,7 +345,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -399,8 +391,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             def get_context(self, user_id: str) -> list[dict]:
                 """Provides conversation context through system messages."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -412,7 +402,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.ctx.ICTXExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -457,8 +447,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             def get_context(self, user_id: str) -> list[dict]:
                 """Provides conversation context through system messages."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -470,7 +458,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.ctx.ICTXExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -516,8 +504,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             async def setup(self, app: Quart) -> None:
                 """Perform extension setup."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -529,7 +515,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.fw.IFWExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -573,8 +559,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             async def setup(self, app: Quart) -> None:
                 """Perform extension setup."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -586,7 +570,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.fw.IFWExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -638,8 +622,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             async def process_ipc_command(self, payload: dict) -> None:
                 """Process an IPC command."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -651,7 +633,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.ipc.IIPCExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -702,8 +684,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             async def process_ipc_command(self, payload: dict) -> None:
                 """Process an IPC command."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -715,7 +695,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.ipc.IIPCExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -774,8 +754,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ) -> None:
                 """Handle a message."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -787,7 +765,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.mh.IMHExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -844,8 +822,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ) -> None:
                 """Handle a message."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -857,7 +833,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.mh.IMHExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -914,8 +890,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ) -> None:
                 """Perform knowledge retrieval."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -927,7 +901,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.rag.IRAGExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -983,8 +957,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ) -> None:
                 """Perform knowledge retrieval."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -996,7 +968,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.rag.IRAGExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -1046,8 +1018,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ) -> str:
                 """Preprocess the assistant response."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -1059,7 +1029,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.rpp.IRPPExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -1108,8 +1078,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ) -> str:
                 """Preprocess the assistant response."""
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
@@ -1121,7 +1089,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch(
                 target="mugen.core.contract.extension.rpp.IRPPExtension.__subclasses__",
-                new_callable=sc,
+                return_value=[DummyExtensionClass],
             ),
         ):
             await register_extensions(
@@ -1159,8 +1127,6 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
 
             __module__ = "xxx_ext"
 
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,

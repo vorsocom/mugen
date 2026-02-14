@@ -174,8 +174,6 @@ class TestDIBuildUserService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -188,7 +186,7 @@ class TestDIBuildUserService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.user.IUserService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the User service.
@@ -263,8 +261,6 @@ class TestDIBuildUserService(unittest.TestCase):
 
                 DummyUserServiceClass.__module__ = "valid_user_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyUserServiceClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -277,7 +273,7 @@ class TestDIBuildUserService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.user.IUserService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyUserServiceClass],
                     ),
                 ):
                     # Attempt to build the User service.

@@ -174,8 +174,6 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -186,7 +184,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",  # pylint: disable=line-too-long
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the completion gateway.
@@ -255,8 +253,6 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
 
                 DummyCompletionGatewayClass.__module__ = "valid_completion_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyCompletionGatewayClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -267,7 +263,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",  # pylint: disable=line-too-long
-                        new_callable=sc,
+                        return_value=[DummyCompletionGatewayClass],
                     ),
                 ):
                     # Attempt to build the completion gateway.

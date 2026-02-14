@@ -74,7 +74,7 @@ def build_table_registry_from_metadata(
     for table_name, table in metadata.tables.items():
         if include_set is not None and table_name not in include_set:
             continue
-        if table_name in exclude_set:
+        if exclude_set is not None and table_name in exclude_set:
             continue
 
         logical_name = mapper(table_name)

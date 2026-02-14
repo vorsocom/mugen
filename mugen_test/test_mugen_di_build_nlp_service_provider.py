@@ -174,8 +174,6 @@ class TestDIBuildNLPService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -188,7 +186,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.nlp.INLPService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the NLP service.
@@ -255,8 +253,6 @@ class TestDIBuildNLPService(unittest.TestCase):
 
                 DummyNLPServiceClass.__module__ = "valid_nlp_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyNLPServiceClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -269,7 +265,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.nlp.INLPService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyNLPServiceClass],
                     ),
                 ):
                     # Attempt to build the NLP service.

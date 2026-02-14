@@ -257,8 +257,6 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -271,7 +269,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.client.matrix.IMatrixClient.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the Matrix service.
@@ -362,8 +360,6 @@ class TestDIBuildMatrixClient(unittest.TestCase):
 
                 DummyMatrixClientClass.__module__ = "valid_matrix_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyMatrixClientClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -376,7 +372,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.client.matrix.IMatrixClient.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyMatrixClientClass],
                     ),
                 ):
                     # Attempt to build the Matrix service.

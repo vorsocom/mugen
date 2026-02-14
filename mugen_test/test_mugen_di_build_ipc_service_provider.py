@@ -174,8 +174,6 @@ class TestDIBuildIPCService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -188,7 +186,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.ipc.IIPCService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the IPC service.
@@ -258,8 +256,6 @@ class TestDIBuildIPCService(unittest.TestCase):
 
                 DummyIPCServiceClass.__module__ = "valid_ipc_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyIPCServiceClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -272,7 +268,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.ipc.IIPCService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyIPCServiceClass],
                     ),
                 ):
                     # Attempt to build the IPC service.

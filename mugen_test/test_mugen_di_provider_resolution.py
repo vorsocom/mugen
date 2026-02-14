@@ -26,11 +26,9 @@ class TestDIProviderResolution(unittest.TestCase):
         SecondCompletionGateway.__module__ = "module.two"
 
         logger = unittest.mock.Mock()
-        subclasses = unittest.mock.Mock
-        subclasses.return_value = [FirstCompletionGateway, SecondCompletionGateway]
         with unittest.mock.patch(
             "mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",
-            new_callable=subclasses,
+            return_value=[FirstCompletionGateway, SecondCompletionGateway],
         ):
             resolved = di._get_provider_class(
                 interface=ICompletionGateway,
@@ -51,11 +49,9 @@ class TestDIProviderResolution(unittest.TestCase):
         OnlyCompletionGateway.__module__ = "other.module"
 
         logger = unittest.mock.Mock()
-        subclasses = unittest.mock.Mock
-        subclasses.return_value = [OnlyCompletionGateway]
         with unittest.mock.patch(
             "mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",
-            new_callable=subclasses,
+            return_value=[OnlyCompletionGateway],
         ):
             resolved = di._get_provider_class(
                 interface=ICompletionGateway,
@@ -102,8 +98,6 @@ class TestDIProviderResolution(unittest.TestCase):
             }
         }
         injector = di.injector.DependencyInjector()
-        subclasses = unittest.mock.Mock
-        subclasses.return_value = [WrongCompletionGateway, RightCompletionGateway]
 
         with (
             unittest.mock.patch.dict(
@@ -114,7 +108,7 @@ class TestDIProviderResolution(unittest.TestCase):
             ),
             unittest.mock.patch(
                 "mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",
-                new_callable=subclasses,
+                return_value=[WrongCompletionGateway, RightCompletionGateway],
             ),
         ):
             di._build_provider(config, injector, provider_name="completion_gateway")

@@ -224,8 +224,6 @@ class TestDIBuildTelnetClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -238,7 +236,7 @@ class TestDIBuildTelnetClient(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.client.telnet.ITelnetClient.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the Telnet service.
@@ -319,8 +317,6 @@ class TestDIBuildTelnetClient(unittest.TestCase):
 
                 DummyTelnetClientClass.__module__ = "valid_telnet_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyTelnetClientClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -333,7 +329,7 @@ class TestDIBuildTelnetClient(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.client.telnet.ITelnetClient.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyTelnetClientClass],
                     ),
                 ):
                     # Attempt to build the Telnet service.

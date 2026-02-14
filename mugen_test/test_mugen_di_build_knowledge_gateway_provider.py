@@ -174,8 +174,6 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -186,7 +184,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.knowledge.IKnowledgeGateway.__subclasses__",  # pylint: disable=line-too-long
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the knowledge gateway.
@@ -258,8 +256,6 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
 
                 DummyKnowledgeGatewayClass.__module__ = "valid_knowledge_module"
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyKnowledgeGatewayClass]
 
                 with (
                     unittest.mock.patch.dict(
@@ -270,7 +266,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.knowledge.IKnowledgeGateway.__subclasses__",  # pylint: disable=line-too-long
-                        new_callable=sc,
+                        return_value=[DummyKnowledgeGatewayClass],
                     ),
                 ):
                     # Attempt to build the knowledge gateway.
