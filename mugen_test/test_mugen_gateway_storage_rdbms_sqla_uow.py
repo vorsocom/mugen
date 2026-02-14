@@ -390,6 +390,76 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
                 {"id": 5, "row_version": 7},
             )
 
+    async def test_remaining_branch_paths_for_count_find_update_and_delete(self) -> None:
+        self.session.execute = AsyncMock(return_value=_FakeResult(scalar_value=4))
+        self.assertEqual(await self.uow.count("widgets"), 4)
+
+        self.session.execute = AsyncMock(return_value=_FakeResult(rows=[{"id": 10}]))
+        found = await self.uow.find("widgets", filter_groups=[FilterGroup()])
+        self.assertEqual(found, [{"id": 10}])
+
+        self.session.execute = AsyncMock(
+            return_value=_FakeResult(rows=[{"id": 1, "tenant_id": 10}])
+        )
+        partitioned = await self.uow.find_partitioned_by_fk(
+            "widgets",
+            fk_field="tenant_id",
+            fk_values=[10],
+            filter_groups=[FilterGroup()],
+            per_fk_limit=None,
+            per_fk_offset=0,
+        )
+        self.assertEqual(partitioned, [{"id": 1, "tenant_id": 10}])
+
+        self.session.execute = AsyncMock(return_value=_FakeResult(rowcount=1))
+        updated_none = await self.uow.update_one(
+            "widgets",
+            where={"id": 1},
+            changes={"row_version": 9},
+            returning=False,
+        )
+        self.assertIsNone(updated_none)
+
+        self.session.execute = AsyncMock(return_value=_FakeResult(rowcount=1))
+        with patch.object(
+            self.uow,
+            "_raise_if_row_version_conflict",
+            new=AsyncMock(),
+        ) as raise_conflict:
+            updated_none = await self.uow.update_one(
+                "widgets",
+                where={"id": 1, "row_version": 5},
+                changes={"name": "Updated"},
+                returning=False,
+            )
+            self.assertIsNone(updated_none)
+            raise_conflict.assert_not_awaited()
+
+        self.session.execute = AsyncMock(return_value=_FakeResult(rows=[]))
+        with patch.object(
+            self.uow,
+            "_raise_if_row_version_conflict",
+            new=AsyncMock(),
+        ) as raise_conflict:
+            updated_none = await self.uow.update_one(
+                "widgets",
+                where={"id": 3},
+                changes={"name": "NoMatch"},
+                returning=True,
+            )
+            self.assertIsNone(updated_none)
+            raise_conflict.assert_not_awaited()
+
+        self.session.execute = AsyncMock(return_value=_FakeResult(rows=[]))
+        with patch.object(
+            self.uow,
+            "_raise_if_row_version_conflict",
+            new=AsyncMock(),
+        ) as raise_conflict:
+            deleted_none = await self.uow.delete_one("widgets", where={"id": 999})
+            self.assertIsNone(deleted_none)
+            raise_conflict.assert_not_awaited()
+
     def test_predicate_helper_branches_and_errors(self) -> None:
         text_filters = [
             TextFilter(field="name", op=TextFilterOp.CONTAINS, value="Ada"),

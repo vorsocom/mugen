@@ -4,7 +4,6 @@ __all__ = ["DefaultTextMHExtension"]
 
 import asyncio
 import json
-import pickle
 from types import SimpleNamespace
 
 from mugen.core import di
@@ -237,26 +236,42 @@ class DefaultTextMHExtension(IMHExtension):
                 continue
 
             tasks.append(
-                asyncio.create_task(
-                    ct_ext.process_message(
-                        message=assistant_response,
-                        role="assistant",
-                        room_id=room_id,
-                        user_id=sender,
-                    )
+                ct_ext.process_message(
+                    message=assistant_response,
+                    role="assistant",
+                    room_id=room_id,
+                    user_id=sender,
                 )
             )
-        asyncio.gather(*tasks)
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    self._logging_gateway.warning(
+                        f"Conversational trigger extension failed: {result}"
+                    )
 
         return [{"type": "text", "content": assistant_response}] + extension_responses
 
     def _load_chat_history(self, room_id: str) -> dict | None:
         history_key = f"chat_history:{room_id}"
         if self._keyval_storage_gateway.has_key(history_key):
-            return pickle.loads(self._keyval_storage_gateway.get(history_key, False))
+            payload = self._keyval_storage_gateway.get(history_key, False)
+            if isinstance(payload, bytes):
+                try:
+                    payload = payload.decode("utf-8")
+                except UnicodeDecodeError:
+                    return {"messages": []}
+            try:
+                loaded = json.loads(payload)
+            except (json.JSONDecodeError, TypeError):
+                return {"messages": []}
+            if isinstance(loaded, dict) and isinstance(loaded.get("messages"), list):
+                return loaded
+            return {"messages": []}
 
         return {"messages": []}
 
     def _save_chat_history(self, room_id: str, history: dict) -> None:
         history_key = f"chat_history:{room_id}"
-        self._keyval_storage_gateway.put(history_key, pickle.dumps(history))
+        self._keyval_storage_gateway.put(history_key, json.dumps(history))

@@ -171,6 +171,11 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(crud_mod._request_ids(), ("req-2", "trace-2"))
 
+        self.assertEqual(
+            crud_mod._build_create_data({"Name": "Alice"}, None, tenant_scoped=False),
+            {},
+        )
+
         create_data = crud_mod._build_create_data(
             {"Name": "Alice", "TenantId": str(uuid.uuid4())},
             ("Name", "TenantId"),
@@ -184,6 +189,17 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             tenant_scoped=True,
         )
         self.assertEqual(typed_data, {"name": "Bob"})
+
+        tenant_id = uuid.uuid4()
+        typed_data_with_tenant = crud_mod._build_create_data(
+            {"name": "Bob", "tenant_id": str(tenant_id)},
+            _CreateSchema,
+            tenant_scoped=False,
+        )
+        self.assertEqual(
+            typed_data_with_tenant,
+            {"name": "Bob", "tenant_id": tenant_id},
+        )
 
         with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as ex:
@@ -208,6 +224,16 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(payload["@context"], "_#Users")
         self.assertEqual(payload["@count"], 1)
+        self.assertEqual(payload["value"], rows)
+
+        payload = await get_entities_fn(
+            entity_set="Users",
+            entity_id=None,
+            edm_type_name="ACP.User",
+            rgql=SimpleNamespace(count=None, values=rows),
+            logger_provider=lambda: logger,
+        )
+        self.assertNotIn("@count", payload)
         self.assertEqual(payload["value"], rows)
 
         payload = await get_entities_fn(
@@ -246,6 +272,40 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             registry_provider=lambda: registry,
         )
         self.assertEqual(tenant_payload["@context"], "_#Users")
+
+        tenant_payload = await get_entities_tenant_fn(
+            entity_set="Users",
+            entity_id=None,
+            edm_type_name="ACP.User",
+            rgql=SimpleNamespace(count=None, values=rows),
+            logger_provider=lambda: logger,
+            registry_provider=lambda: registry,
+        )
+        self.assertNotIn("@count", tenant_payload)
+        self.assertEqual(tenant_payload["value"], rows)
+
+        tenant_payload = await get_entities_tenant_fn(
+            entity_set="Users",
+            entity_id=str(uuid.uuid4()),
+            edm_type_name="ACP.User",
+            rgql=SimpleNamespace(count=None, values=rows),
+            logger_provider=lambda: logger,
+            registry_provider=lambda: registry,
+        )
+        self.assertEqual(tenant_payload["@context"], "_#Users/$entity")
+        self.assertEqual(tenant_payload["Name"], "Alice")
+
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                await get_entities_tenant_fn(
+                    entity_set="Users",
+                    entity_id="missing",
+                    edm_type_name="ACP.User",
+                    rgql=SimpleNamespace(values=[]),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: registry,
+                )
+            self.assertEqual(ex.exception.code, 404)
 
         bad_registry = _FakeRegistry(
             resource=_resource(),
@@ -352,6 +412,26 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             f"/api/core/acp/v1/tenants/{tenant_id}/Users",
             method="POST",
             json={"Name": "Alice"},
+        ):
+            with patch.object(
+                crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+            ):
+                _, status = await create_fn(
+                    tenant_id=str(tenant_id),
+                    entity_set="Users",
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry,
+                )
+        self.assertEqual(status, 201)
+        payload = svc.create.await_args.args[0]
+        self.assertEqual(payload["tenant_id"], tenant_id)
+        self.assertEqual(payload["name"], "Alice")
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+            method="POST",
+            json={"Name": "Alice", "TenantId": str(tenant_id)},
         ):
             with patch.object(
                 crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
@@ -1113,6 +1193,25 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                         registry_provider=lambda: update_registry,
                     )
                 self.assertEqual(ex.exception.code, 400)
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 1},
+        ):
+            _, status = await update_tenant_fn(
+                tenant_id=str(tenant_id),
+                entity_set="Users",
+                entity_id=str(entity_id),
+                auth_user=str(actor_id),
+                logger_provider=_logger,
+                registry_provider=lambda: _FakeRegistry(
+                    resource=_resource(update_schema=None),
+                    service=SimpleNamespace(),
+                    tenant_scoped=True,
+                ),
+            )
+        self.assertEqual(status, 204)
 
         async with self.app.test_request_context(
             f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",

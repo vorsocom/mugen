@@ -139,6 +139,28 @@ class TestMugenOpsReportingMetricDefinitionService(unittest.IsolatedAsyncioTestC
                 )
             self.assertEqual(ex.exception.code, 400)
 
+            class _FlakyWindow:
+                def __init__(self) -> None:
+                    self._start_calls = 0
+
+                @property
+                def window_start(self):
+                    self._start_calls += 1
+                    if self._start_calls >= 3:
+                        return None
+                    return now
+
+                @property
+                def window_end(self):
+                    return now
+
+            with self.assertRaises(_AbortCalled) as ex:
+                MetricDefinitionService._resolve_window_for_run(
+                    data=_FlakyWindow(),
+                    now=now,
+                )
+            self.assertEqual(ex.exception.code, 400)
+
             with self.assertRaises(_AbortCalled) as ex:
                 MetricDefinitionService._compute_bucket_value(
                     rows=[{"value": 1}],
@@ -450,6 +472,29 @@ class TestMugenOpsReportingMetricDefinitionService(unittest.IsolatedAsyncioTestC
                     force_recompute=True,
                 )
             self.assertEqual(ex.exception.code, 409)
+            self.assertEqual(
+                svc._job_service.update.await_args.kwargs["changes"]["error_message"],
+                "'missing-col'",
+            )
+
+            long_key = "x" * 1500
+            svc._rsg.find_many = AsyncMock(side_effect=KeyError(long_key))
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._run_aggregation(
+                    metric=failing_metric,
+                    tenant_id=tenant_id,
+                    auth_user_id=auth_user_id,
+                    window_start=window_start,
+                    window_end=window_end,
+                    bucket_minutes=60,
+                    scope_key="__all__",
+                    force_recompute=True,
+                )
+            self.assertEqual(ex.exception.code, 409)
+            self.assertEqual(
+                len(svc._job_service.update.await_args.kwargs["changes"]["error_message"]),
+                1024,
+            )
 
             svc._rsg.find_many = AsyncMock(side_effect=SQLAlchemyError("boom"))
             with self.assertRaises(_AbortCalled) as ex:

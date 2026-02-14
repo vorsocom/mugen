@@ -1134,3 +1134,247 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                         auth_user=str(uuid.uuid4()),
                     )
                 self.assertEqual(ex.exception.code, 422)
+
+    async def test_branch_completion_for_rgql_optional_paths(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        user_id = uuid.uuid4()
+        entity = _Entity(id=uuid.uuid4(), name="Alice", role_id=uuid.uuid4())
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+
+        class _Adapter:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def build_relational_query(self, _opts):
+                return self._payload
+
+        # Covers:
+        # - allow_global_admin provided (no defaulting),
+        # - query_columns already containing required join keys,
+        # - non-empty filter_groups with term count under the limit.
+        service = SimpleNamespace(
+            list=AsyncMock(return_value=[entity]),
+            count=AsyncMock(return_value=0),
+            get=AsyncMock(return_value=entity),
+        )
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: _FakeRegistry(service=service, rgql_enabled=True),
+        )(_endpoint)
+        opts = SimpleNamespace(
+            select=["Id", "RoleId", "Name"],
+            expand=[SimpleNamespace(path="Role", levels=None)],
+            count=False,
+        )
+
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(
+                rgql_mod,
+                "RGQLToRelationalAdapter",
+                new=lambda: _Adapter(
+                    (
+                        [SimpleNamespace(where=[1], scalar_filters=[], text_filters=[])],
+                        [],
+                        None,
+                        None,
+                    )
+                ),
+            ),
+            patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
+            patch.object(rgql_mod, "parse_rgql_url", return_value=_rgql_url(opts=opts)),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+            patch.object(
+                rgql_mod,
+                "apply_to_filter_groups",
+                side_effect=lambda filter_groups, where: filter_groups,
+            ),
+            patch.object(rgql_mod, "normalise_expand_levels", return_value=1),
+            patch.object(rgql_mod, "expand_navs_bulk", new=AsyncMock(return_value=None)),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users?$select=Id,RoleId,Name&$expand=Role",
+                method="GET",
+            ):
+                result = await wrapped(
+                    entity_set="Users",
+                    entity_id=None,
+                    auth_user=str(user_id),
+                    allow_global_admin=True,
+                )
+        self.assertIn("Id", result["rgql"].values[0])
+        self.assertIn("RoleId", result["rgql"].values[0])
+
+        # Covers: list-path entity collection is None.
+        none_service = SimpleNamespace(
+            list=AsyncMock(return_value=None),
+            count=AsyncMock(return_value=0),
+            get=AsyncMock(return_value=entity),
+        )
+        none_wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: _FakeRegistry(service=none_service, rgql_enabled=True),
+        )(_endpoint)
+        with patch.object(
+            rgql_mod,
+            "make_default_where_provider",
+            return_value=lambda _edm_type_name: {},
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users",
+                method="GET",
+            ):
+                result = await none_wrapped(
+                    entity_set="Users",
+                    entity_id=None,
+                    auth_user=str(user_id),
+                    allow_global_admin=True,
+                )
+        self.assertEqual(result["rgql"].values, [])
+
+        # Covers: opts present but expand is not a list (list path).
+        opts_no_expand = SimpleNamespace(select=["Name"], expand=None, count=False)
+        no_expand_service = SimpleNamespace(
+            list=AsyncMock(return_value=[entity]),
+            count=AsyncMock(return_value=0),
+            get=AsyncMock(return_value=entity),
+        )
+        no_expand_wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: _FakeRegistry(
+                service=no_expand_service,
+                rgql_enabled=True,
+            ),
+        )(_endpoint)
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(
+                rgql_mod,
+                "RGQLToRelationalAdapter",
+                new=lambda: _Adapter(([], [], None, None)),
+            ),
+            patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
+            patch.object(
+                rgql_mod,
+                "parse_rgql_url",
+                return_value=_rgql_url(opts=opts_no_expand),
+            ),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+            patch.object(
+                rgql_mod,
+                "apply_to_filter_groups",
+                side_effect=lambda filter_groups, where: filter_groups,
+            ),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users?$select=Name",
+                method="GET",
+            ):
+                result = await no_expand_wrapped(
+                    entity_set="Users",
+                    entity_id=None,
+                    auth_user=str(user_id),
+                    allow_global_admin=True,
+                )
+        self.assertEqual(result["rgql"].values[0]["Name"], "Alice")
+
+        # Covers: opts present but expand is not a list (single-entity path).
+        entity_wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: _FakeRegistry(
+                service=no_expand_service,
+                rgql_enabled=True,
+            ),
+        )(_endpoint)
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(
+                rgql_mod,
+                "RGQLToRelationalAdapter",
+                new=lambda: _Adapter(([], [], None, None)),
+            ),
+            patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
+            patch.object(
+                rgql_mod,
+                "parse_rgql_url",
+                return_value=_rgql_url(opts=opts_no_expand),
+            ),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+            patch.object(
+                rgql_mod,
+                "apply_to_where",
+                side_effect=lambda where, delete_filter: where,
+            ),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users?$select=Name",
+                method="GET",
+            ):
+                result = await entity_wrapped(
+                    entity_set="Users",
+                    entity_id=str(entity.id),
+                    auth_user=str(user_id),
+                    allow_global_admin=True,
+                )
+        self.assertEqual(result["rgql"].values[0]["Name"], "Alice")
+
+        # Covers: single-entity path with opts.expand as an empty list.
+        opts_empty_expand = SimpleNamespace(select=["Name"], expand=[], count=False)
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(
+                rgql_mod,
+                "RGQLToRelationalAdapter",
+                new=lambda: _Adapter(([], [], None, None)),
+            ),
+            patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
+            patch.object(
+                rgql_mod,
+                "parse_rgql_url",
+                return_value=_rgql_url(opts=opts_empty_expand),
+            ),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+            patch.object(
+                rgql_mod,
+                "apply_to_where",
+                side_effect=lambda where, delete_filter: where,
+            ),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users?$select=Name&$expand=",
+                method="GET",
+            ):
+                result = await entity_wrapped(
+                    entity_set="Users",
+                    entity_id=str(entity.id),
+                    auth_user=str(user_id),
+                    allow_global_admin=True,
+                )
+        self.assertEqual(result["rgql"].values[0]["Name"], "Alice")

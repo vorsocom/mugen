@@ -126,17 +126,20 @@ class AuthorizationService(IAuthorizationService):
         tenant_id: uuid.UUID | None,
         allow_global_admin: bool = False,
     ) -> bool:
-        if permission_object.startswith(":"):
-            obj_ns = self._config.acp.namespace
-            obj_name = permission_object[1:]
-        else:
-            obj_ns, obj_name = permission_object.split(":", 1)
+        try:
+            if permission_object.startswith(":"):
+                obj_ns = self._config.acp.namespace
+                obj_name = permission_object[1:]
+            else:
+                obj_ns, obj_name = permission_object.split(":", 1)
 
-        if permission_type.startswith(":"):
-            typ_ns = self._config.acp.namespace
-            typ_name = permission_type[1:]
-        else:
-            typ_ns, typ_name = permission_type.split(":", 1)
+            if permission_type.startswith(":"):
+                typ_ns = self._config.acp.namespace
+                typ_name = permission_type[1:]
+            else:
+                typ_ns, typ_name = permission_type.split(":", 1)
+        except ValueError:
+            return False
 
         obj_id = await self._get_perm_obj_id(obj_ns, obj_name)
         typ_id = await self._get_perm_type_id(typ_ns, typ_name)

@@ -434,7 +434,7 @@ class UsageRecordService(
         data: UsageRecordRateValidation,
     ) -> tuple[dict, int]:
         """Rate a usage record and write billable usage into billing usage events."""
-        _auth_user_id = auth_user_id
+        _ = auth_user_id
         expected_row_version = int(data.row_version)
         current = await self._get_for_action(
             where=where,
@@ -544,8 +544,7 @@ class UsageRecordService(
         data: UsageRecordVoidValidation,
     ) -> tuple[dict, int]:
         """Void a usage record and void related rated and billing usage rows."""
-        _entity_id = entity_id
-        _auth_user_id = auth_user_id
+        _ = entity_id, auth_user_id
         expected_row_version = int(data.row_version)
         current = await self._get_for_action(
             where=where,

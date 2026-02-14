@@ -1,6 +1,6 @@
 """Unit tests for mugen.core.plugin.command.clear_history.cp_ext."""
 
-import pickle
+import json
 from types import SimpleNamespace
 import unittest
 
@@ -40,7 +40,7 @@ class TestMugenClearHistoryCpExt(unittest.IsolatedAsyncioTestCase):
         keyval = _MemoryKeyVal()
         keyval.put(
             "chat_history:room-1",
-            pickle.dumps({"messages": [{"role": "user", "content": "hello"}]}),
+            json.dumps({"messages": [{"role": "user", "content": "hello"}]}),
         )
         ext = self._new_ext(keyval=keyval, command="/wipe")
 
@@ -54,7 +54,7 @@ class TestMugenClearHistoryCpExt(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, [{"type": "text", "content": "Context cleared."}])
-        saved = pickle.loads(keyval.store["chat_history:room-1"])
+        saved = json.loads(keyval.store["chat_history:room-1"])
         self.assertEqual(saved["messages"], [])
 
     async def test_load_and_save_history_roundtrip(self) -> None:
@@ -74,6 +74,24 @@ class TestMugenClearHistoryCpExt(unittest.IsolatedAsyncioTestCase):
         ext._save_chat_history("room-2", history)  # pylint: disable=protected-access
         loaded = ext._load_chat_history("room-2")  # pylint: disable=protected-access
         self.assertEqual(loaded, history)
+
+        keyval.store["chat_history:room-2"] = "{"
+        self.assertEqual(
+            ext._load_chat_history("room-2"),
+            {"messages": []},
+        )
+
+        keyval.store["chat_history:room-2"] = b"\xff"
+        self.assertEqual(
+            ext._load_chat_history("room-2"),
+            {"messages": []},
+        )
+
+        keyval.store["chat_history:room-2"] = json.dumps(["not-a-dict"])
+        self.assertEqual(
+            ext._load_chat_history("room-2"),
+            {"messages": []},
+        )
 
     async def test_clear_chat_history_keep_modes(self) -> None:
         keyval = _MemoryKeyVal()

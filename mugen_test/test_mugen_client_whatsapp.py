@@ -262,7 +262,7 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         put_kwargs = session.put.await_args.kwargs
         self.assertIs(put_kwargs["data"], form)
 
-    async def test_call_api_unknown_method_raises_unbound_local_error(self) -> None:
+    async def test_call_api_unknown_method_raises_value_error(self) -> None:
         client = self._new_client()
         session = Mock()
         session.delete = AsyncMock(return_value=_Response(text="deleted"))
@@ -271,7 +271,7 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         session.put = AsyncMock(return_value=_Response(text="put"))
         client._client_session = session  # pylint: disable=protected-access
 
-        with self.assertRaises(UnboundLocalError):
+        with self.assertRaisesRegex(ValueError, "Unsupported HTTP method"):
             await client._call_api(
                 "path/patch", method="PATCH"
             )  # pylint: disable=protected-access

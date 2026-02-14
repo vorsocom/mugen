@@ -212,3 +212,71 @@ class TestMugenAcpServiceAuthorization(unittest.IsolatedAsyncioTestCase):
             tenant_id=tenant_id,
         )
         self.assertTrue(allowed_tenant)
+
+    async def test_has_permission_global_admin_fallthrough_paths(self) -> None:
+        svc, services = self._new_service()
+        user_id = uuid.uuid4()
+        global_role_id = uuid.uuid4()
+
+        services["ACP.PermissionObject"].get = AsyncMock(
+            return_value=_row_with_id(uuid.uuid4())
+        )
+        services["ACP.PermissionType"].get = AsyncMock(
+            return_value=_row_with_id(uuid.uuid4())
+        )
+        services["ACP.User"].get_expanded = AsyncMock(
+            side_effect=[
+                None,
+                SimpleNamespace(
+                    global_roles=[SimpleNamespace(namespace="com.vorso", name="viewer")]
+                ),
+            ]
+        )
+        services["ACP.GlobalRoleMembership"].get_role_memberships_by_user = AsyncMock(
+            side_effect=[[], [SimpleNamespace(global_role_id=global_role_id)]]
+        )
+        services["ACP.GlobalPermissionEntry"].list = AsyncMock(
+            return_value=[SimpleNamespace(permitted=None)]
+        )
+
+        denied_missing_user = await svc.has_permission(
+            user_id=user_id,
+            permission_object="com.vorso:users",
+            permission_type="com.vorso:read",
+            tenant_id=None,
+            allow_global_admin=True,
+        )
+        self.assertFalse(denied_missing_user)
+
+        denied_non_admin_with_neutral_global_entry = await svc.has_permission(
+            user_id=user_id,
+            permission_object="com.vorso:users",
+            permission_type="com.vorso:read",
+            tenant_id=None,
+            allow_global_admin=True,
+        )
+        self.assertFalse(denied_non_admin_with_neutral_global_entry)
+
+    async def test_has_permission_rejects_malformed_permission_keys(self) -> None:
+        svc, services = self._new_service()
+        user_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+
+        malformed_object = await svc.has_permission(
+            user_id=user_id,
+            permission_object="users",
+            permission_type="com.vorso:read",
+            tenant_id=tenant_id,
+        )
+        self.assertFalse(malformed_object)
+
+        malformed_type = await svc.has_permission(
+            user_id=user_id,
+            permission_object="com.vorso:users",
+            permission_type="read",
+            tenant_id=tenant_id,
+        )
+        self.assertFalse(malformed_type)
+
+        services["ACP.PermissionObject"].get.assert_not_awaited()
+        services["ACP.PermissionType"].get.assert_not_awaited()

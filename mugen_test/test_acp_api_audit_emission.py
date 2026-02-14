@@ -166,6 +166,26 @@ class TestACPAuditEmission(unittest.IsolatedAsyncioTestCase):
             req_hdr, corr_hdr = audit_mod._resolve_request_ids(None, None)  # pylint: disable=protected-access
             self.assertEqual((req_hdr, corr_hdr), ("req-3", "req-3"))
 
+        async with app.test_request_context(
+            "/api/core/acp/v1/Users",
+            headers={"X-Correlation-Id": "corr-4"},
+        ):
+            req_hdr, corr_hdr = audit_mod._resolve_request_ids(  # pylint: disable=protected-access
+                "req-4",
+                None,
+            )
+            self.assertEqual((req_hdr, corr_hdr), ("req-4", "corr-4"))
+
+        async with app.test_request_context(
+            "/api/core/acp/v1/Users",
+            headers={"X-Request-Id": "req-5"},
+        ):
+            req_hdr, corr_hdr = audit_mod._resolve_request_ids(  # pylint: disable=protected-access
+                None,
+                "corr-5",
+            )
+            self.assertEqual((req_hdr, corr_hdr), ("req-5", "corr-5"))
+
     async def test_emit_honors_snapshot_and_retention_policy(self):
         audit_svc = _FakeAuditService()
         registry = _FakeRegistry(audit_svc)

@@ -2,7 +2,7 @@
 
 __all__ = ["ClearChatHistoryICPExtension"]
 
-import pickle
+import json
 from types import SimpleNamespace
 
 
@@ -78,10 +78,22 @@ class ClearChatHistoryICPExtension(ICPExtension):
     def _load_chat_history(self, room_id: str) -> dict | None:
         history_key = f"chat_history:{room_id}"
         if self._keyval_storage_gateway.has_key(history_key):
-            return pickle.loads(self._keyval_storage_gateway.get(history_key, False))
+            payload = self._keyval_storage_gateway.get(history_key, False)
+            if isinstance(payload, bytes):
+                try:
+                    payload = payload.decode("utf-8")
+                except UnicodeDecodeError:
+                    return {"messages": []}
+            try:
+                loaded = json.loads(payload)
+            except (json.JSONDecodeError, TypeError):
+                return {"messages": []}
+            if isinstance(loaded, dict) and isinstance(loaded.get("messages"), list):
+                return loaded
+            return {"messages": []}
 
         return {"messages": []}
 
     def _save_chat_history(self, room_id: str, history: dict) -> None:
         history_key = f"chat_history:{room_id}"
-        self._keyval_storage_gateway.put(history_key, pickle.dumps(history))
+        self._keyval_storage_gateway.put(history_key, json.dumps(history))

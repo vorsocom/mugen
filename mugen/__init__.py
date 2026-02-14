@@ -304,13 +304,17 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
                         registered = True
                 else:
                     logger.warning(f"Unknown extension type: {ext.type}.")
-            except TypeError as te:
-                logger.error("Incomplete subclass implementation.")
-                logger.error(te.__traceback__)
+            except TypeError:
+                logger.exception(
+                    "Incomplete subclass implementation for extension: %s.",
+                    ext.path,
+                )
                 sys.exit(1)
-        except IndexError as ie:
-            logger.error("Extension not subclass of its intended type.")
-            logger.error(ie.__traceback__)
+        except IndexError:
+            logger.exception(
+                "Extension is not a subclass of its intended type: %s.",
+                ext.path,
+            )
             sys.exit(1)
 
         if not extension_supported:

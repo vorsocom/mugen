@@ -95,6 +95,26 @@ class TestMugenOpsCaseServiceCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["case_number"].startswith("CASE-"))
         svc._append_case_event.assert_awaited_once()
 
+        svc._append_case_event.reset_mock()
+        rsg.insert_one = AsyncMock(
+            return_value={
+                "id": case_id,
+                "tenant_id": None,
+                "status": "new",
+                "created_by_user_id": actor_id,
+                "case_number": "CASE-20260214-XYZXYZ1234",
+            }
+        )
+        created = await svc.create(
+            {
+                "tenant_id": None,
+                "status": "new",
+                "created_by_user_id": actor_id,
+            }
+        )
+        self.assertIsNone(created.tenant_id)
+        svc._append_case_event.assert_not_called()
+
     async def test_get_for_action_and_update_with_row_version_branches(self) -> None:
         tenant_id = uuid.uuid4()
         case_id = uuid.uuid4()

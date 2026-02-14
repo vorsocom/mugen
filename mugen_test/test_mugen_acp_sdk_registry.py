@@ -676,6 +676,69 @@ class TestMugenAcpSdkRegistry(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "AdminRegistry validation failed"):
             registry.freeze()
 
+    def test_freeze_soft_delete_additional_non_error_paths(self) -> None:
+        registry = AdminRegistry(strict_permission_decls=False)
+        registry.register_edm_schema(
+            types={
+                "ACP.FlagOk": _edm_type(
+                    "ACP.FlagOk",
+                    properties={
+                        "IsDeleted": EdmProperty(
+                            name="IsDeleted",
+                            type=TypeRef("Edm.Boolean"),
+                            nullable=False,
+                        )
+                    },
+                )
+            },
+            entity_sets={},
+        )
+
+        registry.register_resource(
+            _resource(
+                entity_set="SeedUnknownType",
+                edm_type_name="ACP.SeedingOnly",
+                behavior=AdminBehavior(
+                    soft_delete=SoftDeletePolicy(
+                        mode=SoftDeleteMode.TIMESTAMP,
+                        column="DeletedAt",
+                    ),
+                    rgql_enabled=False,
+                ),
+            )
+        )
+        registry.register_resource(
+            _resource(
+                entity_set="FlagSoftDeleteOk",
+                edm_type_name="ACP.FlagOk",
+                behavior=AdminBehavior(
+                    soft_delete=SoftDeletePolicy(
+                        mode=SoftDeleteMode.FLAG,
+                        column="IsDeleted",
+                        deleted_value=True,
+                    ),
+                    rgql_enabled=False,
+                ),
+            )
+        )
+        registry.register_resource(
+            _resource(
+                entity_set="UnknownSoftDeleteMode",
+                edm_type_name="ACP.FlagOk",
+                behavior=AdminBehavior(
+                    soft_delete=SoftDeletePolicy(
+                        mode="custom",  # type: ignore[arg-type]
+                        column="IsDeleted",
+                        deleted_value=True,
+                    ),
+                    rgql_enabled=False,
+                ),
+            )
+        )
+
+        registry.freeze(seeding=True)
+        self.assertTrue(registry._frozen)  # pylint: disable=protected-access
+
     def test_freeze_validates_grants_and_declared_roles(self) -> None:
         registry = AdminRegistry(strict_permission_decls=True)
         registry.register_global_role(GlobalRoleDef("acp", "admin", "Admin"))

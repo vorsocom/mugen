@@ -1104,3 +1104,213 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
             call.kwargs["event_type"] for call in svc._append_event.await_args_list
         ]
         self.assertEqual(cancel_events, ["task_completed", "cancelled"])
+
+    async def test_remaining_advance_and_cancel_branch_paths(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        version_id = uuid.uuid4()
+        state_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        where = {"tenant_id": tenant_id, "id": instance_id}
+        now = datetime(2026, 2, 14, 19, 30, tzinfo=timezone.utc)
+
+        resolve_svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        transition_without_key = _transition(
+            tenant_id=tenant_id,
+            workflow_version_id=version_id,
+            from_state_id=state_id,
+            to_state_id=uuid.uuid4(),
+            key="fallback",
+        )
+        resolve_svc._transition_service.list = AsyncMock(
+            return_value=[transition_without_key]
+        )
+        resolved = await resolve_svc._resolve_transition(
+            tenant_id=tenant_id,
+            workflow_version_id=version_id,
+            from_state_id=state_id,
+            transition_key=None,
+            to_state_id=transition_without_key.to_state_id,
+        )
+        self.assertEqual(resolved.id, transition_without_key.id)
+        resolved_where = resolve_svc._transition_service.list.await_args.kwargs[
+            "filter_groups"
+        ][0].where
+        self.assertNotIn("key", resolved_where)
+        self.assertEqual(
+            resolved_where["to_state_id"],
+            transition_without_key.to_state_id,
+        )
+
+        advance_svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        advance_svc._now_utc = Mock(return_value=now)
+        active = _instance(
+            instance_id=instance_id,
+            tenant_id=tenant_id,
+            workflow_version_id=version_id,
+            current_state_id=state_id,
+            status="active",
+            row_version=8,
+        )
+        requires_approval = _transition(
+            transition_id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            workflow_version_id=version_id,
+            from_state_id=state_id,
+            to_state_id=uuid.uuid4(),
+            key="needs_review",
+            requires_approval=True,
+            auto_assign_queue="ops-auto",
+        )
+        advance_svc._get_for_action = AsyncMock(return_value=active)
+        advance_svc._resolve_transition = AsyncMock(return_value=requires_approval)
+        advance_svc._task_service.create = AsyncMock(
+            return_value=_task(
+                task_id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                status="open",
+                row_version=1,
+            )
+        )
+        advance_svc._update_instance_with_row_version = AsyncMock()
+        advance_svc._append_event = AsyncMock()
+        result = await advance_svc.action_advance(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where=where,
+            auth_user_id=actor_id,
+            data=WorkflowAdvanceValidation(
+                row_version=8,
+                transition_key="needs_review",
+                queue_name="  ops-l1  ",
+            ),
+        )
+        self.assertEqual(result, ("", 204))
+        create_payload = advance_svc._task_service.create.await_args.args[0]
+        self.assertEqual(create_payload["queue_name"], "ops-l1")
+        self.assertEqual(create_payload["assigned_by_user_id"], actor_id)
+
+        cancel_without_pending = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        cancel_without_pending._now_utc = Mock(return_value=now)
+        cancel_without_pending._get_for_action = AsyncMock(
+            return_value=_instance(
+                instance_id=instance_id,
+                tenant_id=tenant_id,
+                workflow_version_id=version_id,
+                current_state_id=state_id,
+                status="active",
+                row_version=9,
+                pending_task_id=None,
+            )
+        )
+        cancel_without_pending._task_service.get = AsyncMock()
+        cancel_without_pending._update_instance_with_row_version = AsyncMock()
+        cancel_without_pending._append_event = AsyncMock()
+        cancel_result = await cancel_without_pending.action_cancel_instance(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where=where,
+            auth_user_id=actor_id,
+            data=WorkflowCancelInstanceValidation(row_version=9, reason="no-task"),
+        )
+        self.assertEqual(cancel_result, ("", 204))
+        cancel_without_pending._task_service.get.assert_not_awaited()
+
+        cancel_with_completed_task = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        pending_task_id = uuid.uuid4()
+        cancel_with_completed_task._now_utc = Mock(return_value=now)
+        cancel_with_completed_task._get_for_action = AsyncMock(
+            return_value=_instance(
+                instance_id=instance_id,
+                tenant_id=tenant_id,
+                workflow_version_id=version_id,
+                current_state_id=state_id,
+                status="active",
+                row_version=10,
+                pending_task_id=pending_task_id,
+            )
+        )
+        cancel_with_completed_task._task_service.get = AsyncMock(
+            return_value=_task(
+                task_id=pending_task_id,
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                status="completed",
+                row_version=1,
+            )
+        )
+        cancel_with_completed_task._update_pending_task = AsyncMock()
+        cancel_with_completed_task._update_instance_with_row_version = AsyncMock()
+        cancel_with_completed_task._append_event = AsyncMock()
+        cancel_result = await cancel_with_completed_task.action_cancel_instance(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where=where,
+            auth_user_id=actor_id,
+            data=WorkflowCancelInstanceValidation(row_version=10, reason="done"),
+        )
+        self.assertEqual(cancel_result, ("", 204))
+        cancel_with_completed_task._update_pending_task.assert_not_awaited()
+
+        cancel_with_idless_update = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        cancel_with_idless_update._now_utc = Mock(return_value=now)
+        cancel_with_idless_update._get_for_action = AsyncMock(
+            return_value=_instance(
+                instance_id=instance_id,
+                tenant_id=tenant_id,
+                workflow_version_id=version_id,
+                current_state_id=state_id,
+                status="active",
+                row_version=11,
+                pending_task_id=pending_task_id,
+            )
+        )
+        cancel_with_idless_update._task_service.get = AsyncMock(
+            return_value=_task(
+                task_id=pending_task_id,
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                status="open",
+                row_version=2,
+            )
+        )
+        cancel_with_idless_update._update_pending_task = AsyncMock(
+            return_value=_task(
+                task_id=None,
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                status="cancelled",
+                row_version=3,
+            )
+        )
+        cancel_with_idless_update._update_instance_with_row_version = AsyncMock()
+        cancel_with_idless_update._append_event = AsyncMock()
+        cancel_result = await cancel_with_idless_update.action_cancel_instance(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where=where,
+            auth_user_id=actor_id,
+            data=WorkflowCancelInstanceValidation(row_version=11, reason="cleanup"),
+        )
+        self.assertEqual(cancel_result, ("", 204))
+        self.assertEqual(cancel_with_idless_update._append_event.await_count, 1)
+        self.assertEqual(
+            cancel_with_idless_update._append_event.await_args.kwargs["event_type"],
+            "cancelled",
+        )

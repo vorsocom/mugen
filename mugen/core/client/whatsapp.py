@@ -309,7 +309,12 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         files.add_field("type", file_type)
 
         if isinstance(file_path, BytesIO):
-            files.add_field("file", file_path.getvalue(), content_type=file_type)
+            files.add_field(
+                "file",
+                file_path.getvalue(),
+                filename="upload.bin",
+                content_type=file_type,
+            )
             return await self._call_api(self._api_media_path, files=files)
 
         with open(file_path, "rb") as file:
@@ -355,7 +360,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                 case HTTPMethod.PUT:
                     response = await self._client_session.put(url, **kwargs)
                 case _:
-                    pass
+                    raise ValueError(f"Unsupported HTTP method: {method}")
 
             return await response.text()
         except aiohttp.ClientConnectionError as e:

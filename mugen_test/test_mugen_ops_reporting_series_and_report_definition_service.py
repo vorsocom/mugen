@@ -130,6 +130,22 @@ class TestMugenOpsReportingSeriesAndReportDefinitionService(
                 }
             )
 
+        svc.get = AsyncMock(return_value=None)
+        rsg.insert_one = AsyncMock(side_effect=IntegrityError("ins", {}, None))
+        with self.assertRaises(IntegrityError):
+            await svc.create(
+                {
+                    "tenant_id": None,
+                    "metric_definition_id": metric_id,
+                    "bucket_start": now,
+                    "bucket_end": now.replace(hour=13),
+                    "scope_key": "x",
+                    "source_count": 1,
+                    "value_numeric": 2,
+                    "aggregation_key": "k",
+                }
+            )
+
     async def test_report_definition_service_create_cleans_metric_codes(self) -> None:
         rsg = Mock()
         svc = ReportDefinitionService(table="ops_reporting_report_definition", rsg=rsg)

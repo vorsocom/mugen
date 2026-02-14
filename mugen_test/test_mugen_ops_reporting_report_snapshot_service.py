@@ -135,6 +135,39 @@ class TestMugenOpsReportingReportSnapshotService(unittest.IsolatedAsyncioTestCas
         self.assertEqual(created.id, snapshot_id)
         self.assertEqual(created.status, "draft")
 
+        explicit_snapshot_id = uuid.uuid4()
+        rsg_explicit = Mock()
+        rsg_explicit.insert_one = AsyncMock(
+            return_value={
+                "id": explicit_snapshot_id,
+                "tenant_id": tenant_id,
+                "report_definition_id": report_definition_id,
+                "status": "generated",
+                "scope_key": "ops",
+                "metric_codes": None,
+                "note": "kept",
+            }
+        )
+        svc_explicit = ReportSnapshotService(
+            table="ops_reporting_report_snapshot",
+            rsg=rsg_explicit,
+        )
+        created_explicit = await svc_explicit.create(
+            {
+                "tenant_id": tenant_id,
+                "report_definition_id": report_definition_id,
+                "scope_key": "ops",
+                "metric_codes": None,
+                "status": "generated",
+                "note": " kept ",
+            }
+        )
+        explicit_payload = rsg_explicit.insert_one.await_args.args[1]
+        self.assertIsNone(explicit_payload["metric_codes"])
+        self.assertEqual(explicit_payload["status"], "generated")
+        self.assertEqual(explicit_payload["note"], "kept")
+        self.assertEqual(created_explicit.id, explicit_snapshot_id)
+
     async def test_get_for_action_and_update_helper_branches(self) -> None:
         svc = ReportSnapshotService(table="ops_reporting_report_snapshot", rsg=Mock())
         current = _snapshot()
@@ -320,6 +353,11 @@ class TestMugenOpsReportingReportSnapshotService(unittest.IsolatedAsyncioTestCas
                     source_count=7,
                     computed_at=datetime(2026, 2, 14, 0, 45, tzinfo=timezone.utc),
                 ),
+                MetricSeriesDE(
+                    value_numeric=1,
+                    source_count=2,
+                    computed_at=datetime(2026, 2, 14, 0, 30, tzinfo=timezone.utc),
+                ),
             ]
         )
 
@@ -336,9 +374,9 @@ class TestMugenOpsReportingReportSnapshotService(unittest.IsolatedAsyncioTestCas
         self.assertEqual(summary[0]["value_numeric"], 0)
 
         self.assertFalse(summary[1]["missing_metric_definition"])
-        self.assertEqual(summary[1]["bucket_count"], 2)
-        self.assertEqual(summary[1]["source_count"], 10)
-        self.assertEqual(summary[1]["value_numeric"], 7)
+        self.assertEqual(summary[1]["bucket_count"], 3)
+        self.assertEqual(summary[1]["source_count"], 12)
+        self.assertEqual(summary[1]["value_numeric"], 8)
         self.assertEqual(
             summary[1]["last_computed_at"],
             datetime(2026, 2, 14, 0, 45, tzinfo=timezone.utc).isoformat(),

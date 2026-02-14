@@ -4,10 +4,9 @@ __all__ = ["DefaultMatrixClient"]
 
 from io import BytesIO
 
+import json
 import mimetypes
 import os
-import pickle
-import sys
 import tempfile
 import traceback
 from types import SimpleNamespace
@@ -113,7 +112,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # Responses.
         self.add_response_callback(self._cb_sync_response, SyncResponse)
 
-    async def __aenter__(self) -> None:
+    async def __aenter__(self) -> "DefaultMatrixClient":
         """Initialisation."""
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
         if self._keyval_storage_gateway.get("client_access_token") is None:
@@ -135,10 +134,14 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 )
                 self._keyval_storage_gateway.put("client_device_id", resp.device_id)
                 self._keyval_storage_gateway.put("client_user_id", resp.user_id)
+                self.access_token = resp.access_token
+                self.device_id = resp.device_id
+                self.user_id = resp.user_id
+                self.load_store()
+                return self
             else:
-                self._logging_gateway.debug("Password login failed.")
-                sys.exit(1)
-            sys.exit(0)
+                self._logging_gateway.error("Password login failed.")
+                raise RuntimeError("Matrix password login failed.")
 
         # Otherwise the config file exists, so we'll use the stored credentials.
         self._logging_gateway.debug("Login using saved credentials.")
@@ -162,39 +165,70 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         """Get the key to access the sync key from persistent storage."""
         return self._keyval_storage_gateway.get(self._sync_key)
 
+    def _load_known_devices(self) -> dict[str, list[str]]:
+        if not self._keyval_storage_gateway.has_key(self._known_devices_list_key):
+            return {}
+
+        payload = self._keyval_storage_gateway.get(self._known_devices_list_key, False)
+        if isinstance(payload, bytes):
+            try:
+                payload = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                self._logging_gateway.warning("Invalid known devices payload; resetting.")
+                return {}
+        try:
+            loaded = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            self._logging_gateway.warning("Invalid known devices payload; resetting.")
+            return {}
+
+        if not isinstance(loaded, dict):
+            self._logging_gateway.warning(
+                "Known devices payload type mismatch; resetting."
+            )
+            return {}
+
+        known_devices: dict[str, list[str]] = {}
+        for user_id, devices in loaded.items():
+            if not isinstance(devices, list):
+                continue
+            known_devices[user_id] = [str(device_id) for device_id in devices]
+        return known_devices
+
+    def _save_known_devices(self, known_devices: dict[str, list[str]]) -> None:
+        self._keyval_storage_gateway.put(
+            self._known_devices_list_key,
+            json.dumps(known_devices),
+        )
+
     def cleanup_known_user_devices_list(self) -> None:
         """Clean up known user devices list."""
         self._logging_gateway.debug("Cleaning up known user devices.")
-        if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
-            known_devices = pickle.loads(
-                self._keyval_storage_gateway.get(self._known_devices_list_key, False)
-            )
-            for user_id in known_devices.keys():
-                active_devices = [
-                    x.device_id for x in self.device_store.active_user_devices(user_id)
-                ]
-                self._logging_gateway.debug(f"Active devices: {active_devices}")
-                known_devices[user_id] = active_devices
+        known_devices = self._load_known_devices()
+        if not known_devices:
+            return
 
-            # Persist changes.
-            self._keyval_storage_gateway.put(
-                self._known_devices_list_key, pickle.dumps(known_devices)
-            )
+        for user_id in known_devices.keys():
+            active_devices = [
+                x.device_id for x in self.device_store.active_user_devices(user_id)
+            ]
+            self._logging_gateway.debug(f"Active devices: {active_devices}")
+            known_devices[user_id] = active_devices
+
+        # Persist changes.
+        self._save_known_devices(known_devices)
 
     def trust_known_user_devices(self) -> None:
         """Trust all known user devices."""
         self._logging_gateway.debug("Trusting all known user devices.")
-        if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
-            known_devices = pickle.loads(
-                self._keyval_storage_gateway.get(self._known_devices_list_key, False)
-            )
-            for user_id in known_devices.keys():
-                self._logging_gateway.debug(f"User: {user_id}")
-                for device_id, olm_device in self.device_store[user_id].items():
-                    if device_id in known_devices[user_id]:
-                        # Verify the device.
-                        self._logging_gateway.debug(f"Trusting {device_id}.")
-                        self.verify_device(olm_device)
+        known_devices = self._load_known_devices()
+        for user_id in known_devices.keys():
+            self._logging_gateway.debug(f"User: {user_id}")
+            for device_id, olm_device in self.device_store[user_id].items():
+                if device_id in known_devices[user_id]:
+                    # Verify the device.
+                    self._logging_gateway.debug(f"Trusting {device_id}.")
+                    self.verify_device(olm_device)
 
     def verify_user_devices(self, user_id: str) -> None:
         """Verify all of a user's devices."""
@@ -202,20 +236,11 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # This has to be revised when we figure out a trust mechanism.
         # A solution might be to require users to visit sys admin to perform SAS
         # verification whenever using a new device.
+        known_devices = self._load_known_devices()
         for device_id, olm_device in self.device_store[user_id].items():
             self._logging_gateway.debug(f"Found {device_id}.")
-            known_devices = {}
-            # Load the known devices list if it already exists.
-            if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
-                known_devices = pickle.loads(
-                    self._keyval_storage_gateway.get(
-                        self._known_devices_list_key, False
-                    )
-                )
-
-            # If the list (new or loaded) does not contain an entry for the user.
+            # Ensure the list contains an entry for the user.
             if user_id not in known_devices.keys():
-                # Add an entry for the user.
                 known_devices[user_id] = []
 
             # If the device is not already in the known devices list for the user.
@@ -228,9 +253,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 self.verify_device(olm_device)
 
                 # Persist changes to the known devices list.
-                self._keyval_storage_gateway.put(
-                    self._known_devices_list_key, pickle.dumps(known_devices)
-                )
+                self._save_known_devices(known_devices)
 
     ## Callbacks.
     # Events

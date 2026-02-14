@@ -297,6 +297,67 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     (await payload["response_queue"].get())["response"], "OK"
                 )
 
+    async def test_media_events_skip_handlers_when_media_lookup_or_download_missing(
+        self,
+    ) -> None:
+        cases = [
+            ("audio", "audio/mpeg", "handle_audio_message"),
+            ("document", "application/pdf", "handle_file_message"),
+            ("image", "image/png", "handle_image_message"),
+            ("video", "video/mp4", "handle_video_message"),
+        ]
+
+        for mode in ("missing_url", "missing_download"):
+            for message_type, mime_type, handler_name in cases:
+                with self.subTest(mode=mode, message_type=message_type):
+                    client = _make_client()
+                    if mode == "missing_url":
+                        client.retrieve_media_url = AsyncMock(return_value=None)
+                    else:
+                        client.retrieve_media_url = AsyncMock(
+                            return_value=json.dumps({"url": "https://media.example"})
+                        )
+                        client.download_media = AsyncMock(return_value=None)
+
+                    messaging_service = _make_messaging_service()
+                    ext = _new_extension(
+                        config=_make_config(beta_active=False),
+                        client=client,
+                        messaging_service=messaging_service,
+                        user_service=_make_user_service(known_users={"15550021": "known"}),
+                    )
+                    payload = _make_payload(
+                        _make_message_event(
+                            {
+                                "id": f"wamid-{mode}-{message_type}",
+                                "type": message_type,
+                                message_type: {
+                                    "id": f"media-{message_type}",
+                                    "mime_type": mime_type,
+                                },
+                            },
+                            sender="15550021",
+                        )
+                    )
+
+                    await ext._wacapi_event(payload)  # pylint: disable=protected-access
+
+                    client.retrieve_media_url.assert_awaited_once_with(
+                        f"media-{message_type}"
+                    )
+                    if mode == "missing_url":
+                        client.download_media.assert_not_awaited()
+                    else:
+                        client.download_media.assert_awaited_once_with(
+                            "https://media.example",
+                            mime_type,
+                        )
+                    getattr(messaging_service, handler_name).assert_not_awaited()
+                    self.assertEqual(
+                        (await payload["response_queue"].get())["response"],
+                        "OK",
+                    )
+
     async def test_status_event_routes_to_message_handlers(self) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
         payload = _make_payload(
@@ -312,6 +373,26 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             message={"id": "st-1", "status": "delivered"},
             message_type="status",
         )
+        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
+
+    async def test_event_with_no_messages_or_statuses_still_acknowledges(self) -> None:
+        ext = _new_extension(config=_make_config(beta_active=False))
+        payload = _make_payload(
+            {
+                "entry": [
+                    {
+                        "changes": [
+                            {
+                                "value": {},
+                            }
+                        ]
+                    }
+                ]
+            }
+        )
+
+        await ext._wacapi_event(payload)  # pylint: disable=protected-access
+
         self.assertEqual((await payload["response_queue"].get())["response"], "OK")
 
     async def test_unknown_message_type_delegates_to_message_handlers(self) -> None:

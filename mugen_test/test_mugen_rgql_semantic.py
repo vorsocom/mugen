@@ -45,6 +45,7 @@ from mugen.core.utility.rgql.url_parser import (
     KeyComponent,
     RGQLPathSegment,
     RGQLQueryOptions,
+    RGQLUrl,
 )
 
 
@@ -705,6 +706,364 @@ class TestMugenRgqlSemantic(unittest.TestCase):
 
         with self.assertRaises(SemanticError):
             self.checker._check_apply_transform(_UnknownTransform(), current, {})  # pylint: disable=protected-access
+
+    def test_public_url_entry_points_and_alias_checks(self) -> None:
+        url = RGQLUrl(
+            raw_url="/Customers?$filter=Name eq @p1&@p1='x'",
+            path="/Customers",
+            resource_path=[RGQLPathSegment(name="Customers")],
+            query=RGQLQueryOptions(
+                filter=parse_rgql_expr("Name eq @p1"),
+                param_aliases={"@p1": Literal("x")},
+            ),
+        )
+        self.checker.check_url(url)
+
+        expanded = self.checker.materialize_expand_for_url(  # pylint: disable=protected-access
+            RGQLUrl(
+                raw_url="/Customers?$expand=*",
+                path="/Customers",
+                resource_path=[RGQLPathSegment(name="Customers")],
+                query=RGQLQueryOptions(expand=[ExpandItem(path="*")]),
+            )
+        )
+        self.assertEqual({item.path for item in expanded}, {"Orders", "BestOrder"})
+
+    def test_resource_key_and_segment_edge_branches(self) -> None:
+        check_path = self.checker._check_resource_path  # pylint: disable=protected-access
+        apply_key = self.checker._apply_key  # pylint: disable=protected-access
+        resolve_segment = self.checker._resolve_segment  # pylint: disable=protected-access
+
+        # Backward-compatible key_predicate narrowing.
+        narrowed = check_path([RGQLPathSegment(name="Customers", key_predicate="raw")])
+        self.assertFalse(narrowed.is_collection)
+
+        # _apply_key: collection requirement and no-components fallback.
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.Customer", is_collection=False),
+                RGQLPathSegment(
+                    name="Customers",
+                    key_components=[KeyComponent(name=None, expr=Literal(uuid.uuid4()))],
+                ),
+            )
+        self.assertEqual(
+            apply_key(ValueType("NS.Customer", is_collection=True), RGQLPathSegment("Customers")),
+            ValueType("NS.Customer", is_collection=False),
+        )
+
+        # _apply_key: key predicate validation failures.
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.Address", is_collection=True),
+                RGQLPathSegment(
+                    name="Addresses",
+                    key_components=[KeyComponent(name=None, expr=Literal("x"))],
+                ),
+            )
+
+        self.model.add_type(
+            EdmType(
+                name="NS.NoKeyEntity",
+                kind="entity",
+                properties={"Id": EdmProperty(name="Id", type=TypeRef("Edm.Int32"))},
+                key_properties=None,
+            )
+        )
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.NoKeyEntity", is_collection=True),
+                RGQLPathSegment(
+                    name="NoKeyEntity",
+                    key_components=[KeyComponent(name=None, expr=Literal(1))],
+                ),
+            )
+
+        self.model.add_type(
+            EdmType(
+                name="NS.CompositeEntity",
+                kind="entity",
+                properties={
+                    "K1": EdmProperty(name="K1", type=TypeRef("Edm.Int32")),
+                    "K2": EdmProperty(name="K2", type=TypeRef("Edm.Int32")),
+                },
+                key_properties=("K1", "K2"),
+            )
+        )
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.CompositeEntity", is_collection=True),
+                RGQLPathSegment(
+                    name="CompositeEntity",
+                    key_components=[KeyComponent(name=None, expr=Literal(1))],
+                ),
+            )
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.CompositeEntity", is_collection=True),
+                RGQLPathSegment(
+                    name="CompositeEntity",
+                    key_components=[
+                        KeyComponent(name=None, expr=Literal(1)),
+                        KeyComponent(name="K2", expr=Literal(2)),
+                    ],
+                ),
+            )
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.CompositeEntity", is_collection=True),
+                RGQLPathSegment(
+                    name="CompositeEntity",
+                    key_components=[KeyComponent(name="K1", expr=Literal(1))],
+                ),
+            )
+
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.Customer", is_collection=True),
+                RGQLPathSegment(
+                    name="Customers",
+                    key_components=[KeyComponent(name="Missing", expr=Literal(1))],
+                ),
+            )
+
+        self.model.add_type(
+            EdmType(
+                name="NS.CollectionKeyEntity",
+                kind="entity",
+                properties={
+                    "Id": EdmProperty(
+                        name="Id",
+                        type=TypeRef("Edm.String", is_collection=True),
+                    )
+                },
+                key_properties=("Id",),
+            )
+        )
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.CollectionKeyEntity", is_collection=True),
+                RGQLPathSegment(
+                    name="CollectionKeyEntity",
+                    key_components=[KeyComponent(name=None, expr=Literal("x"))],
+                ),
+            )
+
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.Customer", is_collection=True),
+                RGQLPathSegment(
+                    name="Customers",
+                    key_components=[KeyComponent(name="Id", expr=Identifier("Tags"))],
+                ),
+            )
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.Customer", is_collection=True),
+                RGQLPathSegment(
+                    name="Customers",
+                    key_components=[KeyComponent(name="Id", expr=Identifier("Name"))],
+                ),
+            )
+
+        # Composite non-literal components with matching types.
+        self.assertEqual(
+            apply_key(
+                ValueType("NS.CompositeEntity", is_collection=True),
+                RGQLPathSegment(
+                    name="CompositeEntity",
+                    key_components=[
+                        KeyComponent(name="K1", expr=Identifier("K1")),
+                        KeyComponent(name="K2", expr=Identifier("K2")),
+                    ],
+                ),
+            ),
+            ValueType("NS.CompositeEntity", is_collection=False),
+        )
+
+        # _resolve_segment navigation/property branches with key predicates.
+        self.assertEqual(
+            resolve_segment(
+                ValueType("NS.Customer", is_collection=False),
+                RGQLPathSegment(name="Orders"),
+            ),
+            ValueType("NS.Order", is_collection=True),
+        )
+        self.assertEqual(
+            resolve_segment(
+                ValueType("NS.Customer", is_collection=False),
+                RGQLPathSegment(name="Orders", key_predicate="raw"),
+            ),
+            ValueType("NS.Order", is_collection=False),
+        )
+        self.assertEqual(
+            resolve_segment(
+                ValueType("NS.Customer", is_collection=False),
+                RGQLPathSegment(
+                    name="Orders",
+                    key_components=[
+                        KeyComponent(name=None, expr=Literal(uuid.uuid4())),
+                    ],
+                ),
+            ),
+            ValueType("NS.Order", is_collection=False),
+        )
+        with self.assertRaises(SemanticError):
+            resolve_segment(
+                ValueType("NS.Customer", is_collection=False),
+                RGQLPathSegment(name="BestOrder", key_predicate="raw"),
+            )
+        with self.assertRaises(SemanticError):
+            resolve_segment(
+                ValueType("NS.Customer", is_collection=False),
+                RGQLPathSegment(name="Name", key_predicate="raw"),
+            )
+
+        self.model.add_type(EdmType(name="NS.PrimitiveCast", kind="primitive"))
+        with self.assertRaises(SemanticError):
+            resolve_segment(
+                ValueType("NS.Customer", is_collection=False),
+                RGQLPathSegment(name="NS.PrimitiveCast"),
+            )
+        self.assertEqual(
+            resolve_segment(
+                ValueType("NS.Customer", is_collection=False),
+                RGQLPathSegment(name="NS.Address"),
+            ),
+            ValueType("NS.Address", is_collection=False),
+        )
+        self.assertEqual(
+            resolve_segment(
+                ValueType("NS.Customer", is_collection=False),
+                RGQLPathSegment(name="Name"),
+            ),
+            ValueType("Edm.String", is_collection=False),
+        )
+
+        # Key-as-segment edge cases.
+        self.model.add_type(
+            EdmType(
+                name="NS.StringKeyEntity",
+                kind="entity",
+                properties={"Code": EdmProperty(name="Code", type=TypeRef("Edm.String"))},
+                key_properties=("Code",),
+            )
+        )
+        self.assertEqual(
+            resolve_segment(
+                ValueType("NS.StringKeyEntity", is_collection=True),
+                RGQLPathSegment(name="ABC"),
+            ),
+            ValueType("NS.StringKeyEntity", is_collection=False),
+        )
+
+        with self.assertRaises(SemanticError):
+            resolve_segment(
+                ValueType("NS.Customer", is_collection=True),
+                RGQLPathSegment(name="not-a-guid"),
+            )
+
+        self.model.add_type(
+            EdmType(
+                name="NS.IntKeyEntity",
+                kind="entity",
+                properties={"Id": EdmProperty(name="Id", type=TypeRef("Edm.Int32"))},
+                key_properties=("Id",),
+            )
+        )
+        with self.assertRaises(SemanticError):
+            resolve_segment(
+                ValueType("NS.IntKeyEntity", is_collection=True),
+                RGQLPathSegment(name="1+"),
+            )
+
+        self.model.add_type(
+            EdmType(
+                name="NS.BrokenKeyEntity",
+                kind="entity",
+                properties={},
+                key_properties=("Id",),
+            )
+        )
+        with self.assertRaises(SemanticError):
+            apply_key(
+                ValueType("NS.BrokenKeyEntity", is_collection=True),
+                RGQLPathSegment(
+                    name="BrokenKeyEntity",
+                    key_components=[KeyComponent(name=None, expr=Literal(1))],
+                ),
+            )
+        with self.assertRaises(SemanticError):
+            resolve_segment(
+                ValueType("NS.BrokenKeyEntity", is_collection=True),
+                RGQLPathSegment(name="anything"),
+            )
+
+        with self.assertRaises(SemanticError):
+            resolve_segment(
+                ValueType("NS.CollectionKeyEntity", is_collection=True),
+                RGQLPathSegment(name="anything"),
+            )
+
+        with self.assertRaises(SemanticError):
+            resolve_segment(
+                ValueType("NS.NoKeyEntity", is_collection=True),
+                RGQLPathSegment(name="anything"),
+            )
+        with self.assertRaises(SemanticError):
+            resolve_segment(
+                ValueType("NS.CompositeEntity", is_collection=True),
+                RGQLPathSegment(name="anything"),
+            )
+
+        with self.assertRaises(SemanticError):
+            resolve_segment(
+                ValueType("NS.Customer", is_collection=False),
+                RGQLPathSegment(name="DefinitelyMissing"),
+            )
+
+    def test_additional_semantic_branches_for_member_and_apply(self) -> None:
+        infer = self.checker._infer_expr_type  # pylint: disable=protected-access
+
+        # _resolve_property_path navigation leg.
+        self.assertEqual(
+            self.checker._resolve_property_path(self.base, "Orders"),  # pylint: disable=protected-access
+            ValueType("NS.Order", is_collection=True),
+        )
+
+        # MemberAccess navigation branch.
+        self.model.get_type("NS.Order").nav_properties["Customer"] = EdmNavigationProperty(
+            name="Customer",
+            target_type=TypeRef("NS.Customer", is_collection=False),
+            source_fk="CustomerId",
+        )
+        self.assertEqual(
+            infer(MemberAccess(Identifier("BestOrder"), "Customer"), self.base, {}),
+            ValueType("NS.Customer", is_collection=False),
+        )
+
+        # Primitive check branch coverage for positive paths.
+        check_primitive = self.checker._check_primitive_literal_against_type  # pylint: disable=protected-access
+        check_primitive("ok", ValueType("Edm.String"))
+        check_primitive(b"bytes", ValueType("Edm.Binary"))
+        check_primitive(
+            datetime.datetime.now(datetime.timezone.utc),
+            ValueType("Edm.DateTimeOffset"),
+        )
+
+        current = ValueType("NS.Customer", is_collection=False)
+        self.assertEqual(
+            self.checker._check_apply_transform(SkipTransform(0), current, {}),  # pylint: disable=protected-access
+            current,
+        )
+        self.assertEqual(
+            self.checker._check_apply_transform(
+                GroupByTransform(grouping_paths=["Name"]),
+                current,
+                {},
+            ),  # pylint: disable=protected-access
+            current,
+        )
 
 
 if __name__ == "__main__":

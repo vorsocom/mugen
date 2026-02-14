@@ -2,7 +2,7 @@
 
 __all__ = ["DefaultUserService"]
 
-import pickle
+import json
 
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
@@ -32,9 +32,22 @@ class DefaultUserService(IUserService):
 
     def get_known_users_list(self) -> dict:
         if self._keyval_storage_gateway.has_key(self._known_users_list_key):
-            return pickle.loads(
-                self._keyval_storage_gateway.get(self._known_users_list_key, False)
-            )
+            payload = self._keyval_storage_gateway.get(self._known_users_list_key, False)
+            if isinstance(payload, bytes):
+                try:
+                    payload = payload.decode("utf-8")
+                except UnicodeDecodeError:
+                    self._logging_gateway.warning("Invalid known users payload; resetting.")
+                    return {}
+            try:
+                loaded = json.loads(payload)
+            except (json.JSONDecodeError, TypeError):
+                self._logging_gateway.warning("Invalid known users payload; resetting.")
+                return {}
+            if isinstance(loaded, dict):
+                return loaded
+            self._logging_gateway.warning("Known users payload type mismatch; resetting.")
+            return {}
 
         return {}
 
@@ -46,5 +59,5 @@ class DefaultUserService(IUserService):
 
     def save_known_users_list(self, known_users: dict) -> None:
         self._keyval_storage_gateway.put(
-            self._known_users_list_key, pickle.dumps(known_users)
+            self._known_users_list_key, json.dumps(known_users)
         )

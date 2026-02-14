@@ -1,6 +1,6 @@
 """Unit tests for mugen.core.plugin.message_handler.text.mh_ext."""
 
-import pickle
+import json
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -152,7 +152,7 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         keyval = _MemoryKeyVal()
-        keyval.store["chat_history:room-2"] = pickle.dumps(
+        keyval.store["chat_history:room-2"] = json.dumps(
             {"messages": [{"role": "assistant", "content": "old"}]}
         )
         ctx_supported = _ContextExt(
@@ -190,27 +190,13 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             debug_conversation=True,
         )
 
-        def _create_task(coro):
-            coro.close()
-            return "task"
-
-        with (
-            patch(
-                "mugen.core.plugin.message_handler.text.mh_ext.asyncio.create_task",
-                side_effect=_create_task,
-            ) as create_task,
-            patch(
-                "mugen.core.plugin.message_handler.text.mh_ext.asyncio.gather",
-                return_value=None,
-            ) as gather,
-        ):
-            response = await ext.handle_message(
-                platform="matrix",
-                room_id="room-2",
-                sender="user-2",
-                message="hello",
-                message_context=[{"role": "system", "content": "Attached context"}],
-            )
+        response = await ext.handle_message(
+            platform="matrix",
+            room_id="room-2",
+            sender="user-2",
+            message="hello",
+            message_context=[{"role": "system", "content": "Attached context"}],
+        )
 
         self.assertEqual(response[0], {"type": "text", "content": "preprocessed"})
         self.assertEqual(response[1], {"type": "text", "content": "RAG response"})
@@ -224,7 +210,7 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Attached context", completion_context[-1]["content"])
         self.assertIn("RAG fact", completion_context[-1]["content"])
 
-        persisted = pickle.loads(keyval.store["chat_history:room-2"])
+        persisted = json.loads(keyval.store["chat_history:room-2"])
         self.assertEqual(persisted["messages"][-1]["content"], "Error")
 
         rpp_supported.preprocess_response.assert_awaited_once_with(
@@ -232,8 +218,6 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             user_id="user-2",
         )
         self.assertEqual(ct_supported.process_message.call_count, 1)
-        create_task.assert_called_once()
-        gather.assert_called_once_with("task")
 
     async def test_handle_message_success_path_and_history_helpers(self) -> None:
         keyval = _MemoryKeyVal()
@@ -259,6 +243,12 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
 
         loaded_history = ext._load_chat_history("room-3")
         self.assertEqual(loaded_history, {"messages": []})
+        keyval.store["chat_history:room-3"] = "{"
+        self.assertEqual(ext._load_chat_history("room-3"), {"messages": []})
+        keyval.store["chat_history:room-3"] = b"\xff"
+        self.assertEqual(ext._load_chat_history("room-3"), {"messages": []})
+        keyval.store["chat_history:room-3"] = json.dumps(["not-a-dict"])
+        self.assertEqual(ext._load_chat_history("room-3"), {"messages": []})
 
         response = await ext.handle_message(
             platform="matrix",
@@ -273,9 +263,31 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             "user-3",
         )
         self.assertEqual(response, [{"type": "text", "content": "assistant answer"}])
-        saved = pickle.loads(keyval.store["chat_history:room-3"])
+        saved = json.loads(keyval.store["chat_history:room-3"])
         self.assertEqual(saved["messages"][0], {"role": "user", "content": "hello"})
         self.assertEqual(
             saved["messages"][-1],
             {"role": "assistant", "content": "assistant answer"},
         )
+
+    async def test_handle_message_logs_ct_extension_errors_without_failing(self) -> None:
+        keyval = _MemoryKeyVal()
+        failing_ct = _CtExt(supported=True)
+        failing_ct.process_message = AsyncMock(side_effect=RuntimeError("boom"))
+        messaging_service = _make_messaging_service(ct_extensions=[failing_ct])
+        ext = self._new_ext(
+            completion_result=SimpleNamespace(content="assistant answer"),
+            messaging_service=messaging_service,
+            keyval=keyval,
+            debug_conversation=False,
+        )
+
+        response = await ext.handle_message(
+            platform="matrix",
+            room_id="room-4",
+            sender="user-4",
+            message="hello",
+        )
+
+        self.assertEqual(response, [{"type": "text", "content": "assistant answer"}])
+        ext._logging_gateway.warning.assert_called_once()

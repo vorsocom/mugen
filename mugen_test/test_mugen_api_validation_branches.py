@@ -459,6 +459,16 @@ class TestMugenApiValidationBranches(unittest.TestCase):
         )
         self.assertIsNotNone(valid_policy)
 
+        open_ended_policy = MeterPolicyCreateValidation(
+            row_version=1,
+            tenant_id=tenant_id,
+            meter_definition_id=meter_def_id,
+            code="P2",
+            name="Policy 2",
+            effective_from=now,
+        )
+        self.assertIsNotNone(open_ended_policy)
+
         self.assertIsNotNone(UsageSessionStartValidation(row_version=1))
         self.assertIsNotNone(UsageSessionPauseValidation(row_version=1))
         self.assertIsNotNone(UsageSessionResumeValidation(row_version=1))
@@ -523,6 +533,16 @@ class TestMugenApiValidationBranches(unittest.TestCase):
             source_value_column="amount",
         )
         self.assertIsNotNone(valid_metric_def)
+        self.assertIsNotNone(
+            MetricDefinitionCreateValidation(
+                row_version=1,
+                tenant_id=tenant_id,
+                code="COUNT",
+                name="Count Rows",
+                source_table="table",
+                formula_type="count_rows",
+            )
+        )
 
         with self.assertRaises(ValidationError):
             AggregationJobCreateValidation(
@@ -622,6 +642,13 @@ class TestMugenApiValidationBranches(unittest.TestCase):
                 code="code",
                 name="name",
                 metric_codes=["m1", "m2"],
+            )
+        )
+        self.assertIsNotNone(
+            ReportDefinitionCreateValidation(
+                row_version=1,
+                code="code",
+                name="name",
             )
         )
 

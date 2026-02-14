@@ -1,6 +1,6 @@
 """Unit tests for user and NLP service defaults."""
 
-import pickle
+import json
 import unittest
 from unittest.mock import Mock
 
@@ -22,11 +22,11 @@ class TestMugenServiceUserAndNlp(unittest.TestCase):
         self.assertEqual(svc.get_known_users_list(), {})
         keyval.get.assert_not_called()
 
-    def test_get_known_users_list_unpickles_when_key_exists(self) -> None:
+    def test_get_known_users_list_deserializes_when_key_exists(self) -> None:
         payload = {"u1": {"displayname": "Alice", "dm_id": "!room"}}
         keyval = Mock()
         keyval.has_key.return_value = True
-        keyval.get.return_value = pickle.dumps(payload)
+        keyval.get.return_value = json.dumps(payload)
         svc = DefaultUserService(
             keyval_storage_gateway=keyval,
             logging_gateway=Mock(),
@@ -35,17 +35,36 @@ class TestMugenServiceUserAndNlp(unittest.TestCase):
         self.assertEqual(svc.get_known_users_list(), payload)
         keyval.get.assert_called_once_with("known_users_list", False)
 
+    def test_get_known_users_list_invalid_payload_resets(self) -> None:
+        keyval = Mock()
+        keyval.has_key.return_value = True
+        keyval.get.return_value = "{"
+        logger = Mock()
+        svc = DefaultUserService(
+            keyval_storage_gateway=keyval,
+            logging_gateway=logger,
+        )
+
+        self.assertEqual(svc.get_known_users_list(), {})
+        logger.warning.assert_called_once()
+
+        keyval.get.return_value = b"\xff"
+        self.assertEqual(svc.get_known_users_list(), {})
+
+        keyval.get.return_value = json.dumps(["not-a-dict"])
+        self.assertEqual(svc.get_known_users_list(), {})
+
     def test_add_known_user_and_display_name_paths(self) -> None:
         keyval = Mock()
         keyval.has_key.return_value = True
-        keyval.get.return_value = pickle.dumps({})
+        keyval.get.return_value = json.dumps({})
         svc = DefaultUserService(
             keyval_storage_gateway=keyval,
             logging_gateway=Mock(),
         )
 
         svc.add_known_user(user_id="@alice", displayname="Alice", room_id="!dm")
-        known_users = pickle.loads(keyval.put.call_args.args[1])
+        known_users = json.loads(keyval.put.call_args.args[1])
         keyval.get.return_value = keyval.put.call_args.args[1]
 
         self.assertEqual(known_users["@alice"]["displayname"], "Alice")
@@ -65,7 +84,7 @@ class TestMugenServiceUserAndNlp(unittest.TestCase):
 
         keyval.put.assert_called_once()
         stored = keyval.put.call_args.args[1]
-        self.assertEqual(pickle.loads(stored), payload)
+        self.assertEqual(json.loads(stored), payload)
 
     def test_default_nlp_service_returns_empty_keywords(self) -> None:
         svc = DefaultNLPService(logging_gateway=Mock())

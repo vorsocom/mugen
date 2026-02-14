@@ -13,7 +13,7 @@ class IMatrixClient(ABC, AsyncClient):
     """An ABC for MAtrix clients."""
 
     @abstractmethod
-    async def __aenter__(self) -> None:
+    async def __aenter__(self) -> "IMatrixClient":
         """Initialisation routine."""
 
     @abstractmethod

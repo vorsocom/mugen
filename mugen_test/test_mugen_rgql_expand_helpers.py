@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import unittest
+from unittest.mock import patch
 
 from mugen.core.contract.gateway.storage.rdbms.types import (
     FilterGroup,
@@ -136,6 +137,15 @@ class TestMugenRgqlExpandHelpers(unittest.TestCase):
         )
         self.assertEqual(len(merged_without_where), 1)
         self.assertEqual(merged_without_where[0].where, {"status": "open"})
+
+        # Cover branch where where is absent but loop still runs.
+        merged_with_scalar_only = apply_to_filter_groups(
+            [FilterGroup(where={"status": "open"})],
+            scalars=[],
+            texts=[object()],
+        )
+        self.assertEqual(len(merged_with_scalar_only), 1)
+        self.assertEqual(merged_with_scalar_only[0].where, {"status": "open"})
 
         self.assertEqual(apply_to_where({"id": 1}, {}), {"id": 1})
         self.assertEqual(
@@ -494,6 +504,25 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
                 levels_remaining=1,
             )
 
+        # filter terms exceeded for single-valued path.
+        child_service = _FakeNavService(get_result=_Child(id=5, name="Boss"))
+        services = {"NS.Child": child_service}
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+            max_filter_terms=1,
+            default_where_provider=lambda _type_name: {"is_deleted": False},
+        )
+        with self.assertRaises(RGQLExpandError):
+            await expand_navs_recursive(
+                root_entity=_Entity(id=1, owner_id=5),
+                ctx=ctx,
+                expand_item=ExpandItem(path="Owner"),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+
         # skip exceeds max
         ctx = self._make_context(adapter=_FixedAdapter(([], [], 1, 11)), max_skip=10)
         with self.assertRaises(RGQLExpandError):
@@ -560,6 +589,72 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RGQLExpandError):
             await expand_navs_recursive(
                 root_entity=_Entity(id=1),
+                ctx=ctx,
+                expand_item=ExpandItem(path="Children"),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+
+    async def test_expand_navs_recursive_additional_false_branches(self) -> None:
+        child_service = _FakeNavService(
+            list_result=[],
+            get_result=_Child(id=9, owner_id=None, name=None, secret="hidden"),
+        )
+        services = {"NS.Child": child_service}
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+        )
+
+        parent = _Entity(id=1)
+        await expand_navs_recursive(
+            root_entity=parent,
+            ctx=ctx,
+            expand_item=ExpandItem(path="Children"),
+            current_type_name="NS.Parent",
+            depth=0,
+            levels_remaining=1,
+        )
+        self.assertFalse(hasattr(parent, "children"))
+
+        parent.owner_id = 9
+        await expand_navs_recursive(
+            root_entity=parent,
+            ctx=ctx,
+            expand_item=ExpandItem(path="Owner", select=["Secret"]),
+            current_type_name="NS.Parent",
+            depth=0,
+            levels_remaining=1,
+        )
+        self.assertFalse(hasattr(parent, "owner"))
+
+        # Ensure collection path executes child loop with no nested expands.
+        child_service = _FakeNavService(
+            list_result=[_Child(id=12, parent_id=1, name="Solo")]
+        )
+        services = {"NS.Child": child_service}
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+        )
+        await expand_navs_recursive(
+            root_entity=parent,
+            ctx=ctx,
+            expand_item=ExpandItem(path="Children"),
+            current_type_name="NS.Parent",
+            depth=0,
+            levels_remaining=1,
+        )
+        self.assertEqual(parent.children, [{"Id": 12, "ParentId": 1, "Name": "Solo"}])  # type: ignore[attr-defined]
+
+        # Force defensive branch where collection filter groups are empty.
+        with patch(
+            "mugen.core.utility.rgql_helper.rgql_expand.apply_to_filter_groups",
+            return_value=[],
+        ):
+            await expand_navs_recursive(
+                root_entity=parent,
                 ctx=ctx,
                 expand_item=ExpandItem(path="Children"),
                 current_type_name="NS.Parent",
@@ -723,6 +818,229 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
                 root_entities=[_Entity(id=1)],
                 ctx=ctx,
                 expand_item=ExpandItem(path="Children"),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+
+    async def test_expand_navs_bulk_collection_additional_edges(self) -> None:
+        child_service = _FakeNavService(
+            partition_result=[_Child(id=301, parent_id=10, owner_id=77, name="Kid")]
+        )
+        services = {"NS.Child": child_service}
+
+        # No parent ids -> early return.
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+        )
+        await expand_navs_bulk(
+            root_entities=[_Entity(id=None)],
+            ctx=ctx,
+            expand_item=ExpandItem(path="Children"),
+            current_type_name="NS.Parent",
+            depth=0,
+            levels_remaining=1,
+        )
+        self.assertIsNone(child_service.last_partition_kwargs)
+
+        # Wildcard blocked in bulk.
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+            allow_expand_wildcard=False,
+        )
+        with self.assertRaises(RGQLExpandError):
+            await expand_navs_bulk(
+                root_entities=[_Entity(id=10)],
+                ctx=ctx,
+                expand_item=ExpandItem(path="Children", expand=[ExpandItem(path="*")]),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+
+        # Max expand paths exceeded in bulk.
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+            max_expand_paths=1,
+        )
+        with self.assertRaises(RGQLExpandError):
+            await expand_navs_bulk(
+                root_entities=[_Entity(id=10)],
+                ctx=ctx,
+                expand_item=ExpandItem(
+                    path="Children",
+                    expand=[ExpandItem(path="A"), ExpandItem(path="B")],
+                ),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+
+        # Max select exceeded in bulk.
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+            max_select=1,
+        )
+        with self.assertRaises(RGQLExpandError):
+            await expand_navs_bulk(
+                root_entities=[_Entity(id=10)],
+                ctx=ctx,
+                expand_item=ExpandItem(path="Children", select=["Id", "Name"]),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+
+        # Max filter terms exceeded in collection path.
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+            max_filter_terms=0,
+            default_where_provider=lambda _type_name: {"is_deleted": False},
+        )
+        with self.assertRaises(RGQLExpandError):
+            await expand_navs_bulk(
+                root_entities=[_Entity(id=10)],
+                ctx=ctx,
+                expand_item=ExpandItem(path="Children"),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+
+        # Force column-augmentation fallback branches for parent_fk/id.
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+        )
+        roots = [_Entity(id=10), _Entity(id=11)]
+        with patch(
+            "mugen.core.utility.rgql_helper.rgql_expand._augment_query_columns_for_nested_expands",
+            return_value=["name"],
+        ):
+            await expand_navs_bulk(
+                root_entities=roots,
+                ctx=ctx,
+                expand_item=ExpandItem(
+                    path="Children",
+                    select=["Name"],
+                    expand=[ExpandItem(path="Owner")],
+                ),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+
+        self.assertIn("parent_id", child_service.last_partition_kwargs["columns"])
+        self.assertIn("id", child_service.last_partition_kwargs["columns"])
+        self.assertFalse(hasattr(roots[1], "children"))
+
+        # Query columns left as None.
+        await expand_navs_bulk(
+            root_entities=roots,
+            ctx=ctx,
+            expand_item=ExpandItem(path="Children"),
+            current_type_name="NS.Parent",
+            depth=0,
+            levels_remaining=1,
+        )
+        self.assertIsNone(child_service.last_partition_kwargs["columns"])
+
+        # Query columns include parent_fk already, so no append branch.
+        await expand_navs_bulk(
+            root_entities=roots,
+            ctx=ctx,
+            expand_item=ExpandItem(path="Children", select=["ParentId"]),
+            current_type_name="NS.Parent",
+            depth=0,
+            levels_remaining=1,
+        )
+        self.assertEqual(child_service.last_partition_kwargs["columns"], ["parent_id"])
+
+        # Cover false branch where nested expands are absent.
+        await expand_navs_bulk(
+            root_entities=roots,
+            ctx=ctx,
+            expand_item=ExpandItem(path="Children", select=["Name"]),
+            current_type_name="NS.Parent",
+            depth=0,
+            levels_remaining=1,
+        )
+
+    async def test_expand_navs_bulk_single_additional_edges(self) -> None:
+        child_service = _FakeNavService(
+            list_result=[_Child(id=42, owner_id=42, name="Owner")]
+        )
+        services = {"NS.Child": child_service}
+
+        # No target ids -> early return.
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+        )
+        await expand_navs_bulk(
+            root_entities=[_Entity(id=1, owner_id=None)],
+            ctx=ctx,
+            expand_item=ExpandItem(path="Owner"),
+            current_type_name="NS.Parent",
+            depth=0,
+            levels_remaining=1,
+        )
+        self.assertIsNone(child_service.last_list_kwargs)
+
+        # Max filter terms exceeded in single path.
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+            max_filter_terms=0,
+            default_where_provider=lambda _type_name: {"is_deleted": False},
+        )
+        with self.assertRaises(RGQLExpandError):
+            await expand_navs_bulk(
+                root_entities=[_Entity(id=1, owner_id=42)],
+                ctx=ctx,
+                expand_item=ExpandItem(path="Owner"),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+
+        # Query columns should add id when select is present without nested expand.
+        ctx = self._make_context(
+            adapter=_FixedAdapter(([], [], 1, 0)),
+            service_resolver=lambda type_name: services.get(type_name),
+            serialization_provider=lambda entity, _edm_type, _cols, _paths: {
+                "Id": entity.id,
+                "Name": entity.name,
+            },
+        )
+        roots = [_Entity(id=1, owner_id=42), _Entity(id=2, owner_id=404)]
+        await expand_navs_bulk(
+            root_entities=roots,
+            ctx=ctx,
+            expand_item=ExpandItem(path="Owner", select=["Name"]),
+            current_type_name="NS.Parent",
+            depth=0,
+            levels_remaining=1,
+        )
+
+        self.assertIn("id", child_service.last_list_kwargs["columns"])
+        self.assertEqual(roots[0].owner, {"Id": 42, "Name": "Owner"})  # type: ignore[attr-defined]
+        self.assertFalse(hasattr(roots[1], "owner"))
+
+        # Force defensive branch where single-path filter groups are empty.
+        with patch(
+            "mugen.core.utility.rgql_helper.rgql_expand.apply_to_filter_groups",
+            return_value=[],
+        ):
+            await expand_navs_bulk(
+                root_entities=[_Entity(id=1, owner_id=42)],
+                ctx=ctx,
+                expand_item=ExpandItem(path="Owner"),
                 current_type_name="NS.Parent",
                 depth=0,
                 levels_remaining=1,

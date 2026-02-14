@@ -402,7 +402,9 @@ class KnowledgePackVersionService(
         if current.status != "review":
             abort(409, "Only review versions can be rejected.")
 
-        note = self._normalize_optional_text(data.reason or data.note)
+        note = self._normalize_optional_text(data.reason) or self._normalize_optional_text(
+            data.note
+        )
 
         await self._update_version_with_row_version(
             where=where,
@@ -547,6 +549,10 @@ class KnowledgePackVersionService(
         if current.status == "archived":
             return "", 204
 
+        note = self._normalize_optional_text(data.reason) or self._normalize_optional_text(
+            data.note
+        )
+
         await self._update_version_with_row_version(
             where=where,
             expected_row_version=expected_row_version,
@@ -554,7 +560,7 @@ class KnowledgePackVersionService(
                 "status": "archived",
                 "archived_at": self._now_utc(),
                 "archived_by_user_id": auth_user_id,
-                "note": self._normalize_optional_text(data.reason or data.note),
+                "note": note,
             },
         )
 
@@ -589,7 +595,7 @@ class KnowledgePackVersionService(
             knowledge_pack_version_id=entity_id,
             action="archive",
             actor_user_id=auth_user_id,
-            note=data.reason or data.note,
+            note=note,
         )
 
         return "", 204

@@ -291,6 +291,17 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(create_payload["external_ref"], "ext-2")
         self.assertEqual(created.idempotency_key, "fresh")
 
+        svc.get = AsyncMock(return_value=existing)
+        created_without_idempotency = await svc.create(
+            {
+                "tenant_id": tenant_id,
+                "meter_definition_id": uuid.uuid4(),
+                "measured_units": 3,
+            }
+        )
+        self.assertEqual(created_without_idempotency.external_ref, "ext-2")
+        svc.get.assert_not_awaited()
+
         integrity = IntegrityError("insert", {}, Exception("dup"))
         rsg_conflict = Mock()
         rsg_conflict.insert_one = AsyncMock(side_effect=integrity)
@@ -323,6 +334,21 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
                     "idempotency_key": "dup",
                 }
             )
+
+        svc_raises_without_idempotency = UsageRecordService(
+            table="ops_metering_usage_record",
+            rsg=rsg_conflict,
+        )
+        svc_raises_without_idempotency.get = AsyncMock(return_value=existing)
+        with self.assertRaises(IntegrityError):
+            await svc_raises_without_idempotency.create(
+                {
+                    "tenant_id": tenant_id,
+                    "meter_definition_id": uuid.uuid4(),
+                    "measured_units": 1,
+                }
+            )
+        svc_raises_without_idempotency.get.assert_not_awaited()
 
     async def test_get_update_policy_and_rated_resolver_branches(self) -> None:
         tenant_id = uuid.uuid4()
@@ -966,6 +992,26 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
         record_changes = svc._update_record_with_row_version.await_args.kwargs["changes"]
         self.assertEqual(record_changes["status"], "void")
         self.assertEqual(record_changes["void_reason"], "note")
+
+        rated_without_event = _rated(
+            tenant_id=tenant_id,
+            usage_record_id=record_id,
+            status="rated",
+            billing_usage_event_id=None,
+        )
+        svc._resolve_rated_usage = AsyncMock(return_value=rated_without_event)
+        svc._rated_usage_service.update = AsyncMock()
+        svc._usage_event_service.update = AsyncMock()
+        svc._update_record_with_row_version = AsyncMock()
+        result = await svc.action_void_record(
+            tenant_id=tenant_id,
+            entity_id=record_id,
+            where=where,
+            auth_user_id=actor_id,
+            data=UsageRecordVoidValidation(row_version=3, note="no-event"),
+        )
+        self.assertEqual(result, ("", 204))
+        svc._usage_event_service.update.assert_not_awaited()
 
         svc._resolve_rated_usage = AsyncMock(return_value=None)
         svc._update_record_with_row_version = AsyncMock()
