@@ -43,14 +43,20 @@ class AdminFWExtension(IFWExtension):  # pylint: disable=too-few-public-methods
         app = cors(app, allow_origin=self._config.acp.cors_origins)
 
         registry: IAdminRegistry = AdminRegistry(strict_permission_decls=True)
-        di.container.register_ext_service("admin_registry", registry)
+        di.container.register_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY, registry)
 
         contribute_all(registry=registry, mugen_cfg=self._config.dict)
         AdminRuntimeBinder(registry=registry, rsg=self._rsg).bind_all()
         registry.freeze()
 
-        di.container.register_ext_service("admin_svc_jwt", EdDsaJwtService())
-        di.container.register_ext_service("admin_svc_auth", AuthorizationService())
+        di.container.register_ext_service(
+            di.EXT_SERVICE_ADMIN_SVC_JWT,
+            EdDsaJwtService(),
+        )
+        di.container.register_ext_service(
+            di.EXT_SERVICE_ADMIN_SVC_AUTH,
+            AuthorizationService(),
+        )
 
         # Import endpoints now that services are available.
         # pylint: disable=import-outside-toplevel

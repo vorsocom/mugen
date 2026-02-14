@@ -1,6 +1,13 @@
 """Provides an application-wide dependency injection container."""
 
-__all__ = ["build_container", "container", "reset_container"]
+__all__ = [
+    "EXT_SERVICE_ADMIN_REGISTRY",
+    "EXT_SERVICE_ADMIN_SVC_AUTH",
+    "EXT_SERVICE_ADMIN_SVC_JWT",
+    "build_container",
+    "container",
+    "reset_container",
+]
 
 from importlib import import_module
 import logging
@@ -25,6 +32,10 @@ from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.contract.service.user import IUserService
 
 from .injector import DependencyInjector
+
+EXT_SERVICE_ADMIN_REGISTRY = "admin_registry"
+EXT_SERVICE_ADMIN_SVC_JWT = "admin_svc_jwt"
+EXT_SERVICE_ADMIN_SVC_AUTH = "admin_svc_auth"
 
 
 def _nested_namespace_from_dict(items: dict, ns: SimpleNamespace) -> None:
@@ -159,6 +170,51 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         raise RuntimeError("Dependency injector is missing required providers.")
 
 
+def _get_provider_logger(
+    injector: DependencyInjector,
+    *,
+    provider_name: str,
+) -> ILoggingGateway | logging.Logger | None:
+    """Resolve logger for provider building operations."""
+    try:
+        logger = injector.logging_gateway
+    except AttributeError:
+        logging.getLogger().error(f"Invalid injector ({provider_name}).")
+        return None
+
+    if logger is None:
+        logger = logging.getLogger()
+        logger.warning(f"Using root logger ({provider_name}).")
+
+    return logger
+
+
+def _import_provider_module(
+    *,
+    config: dict,
+    provider_name: str,
+    module_path: tuple[str, ...],
+    logger: ILoggingGateway | logging.Logger,
+    invalid_config_exceptions: tuple[type[Exception], ...] = (KeyError,),
+) -> str | None:
+    """Resolve and import provider module from configuration path."""
+    try:
+        module_name = config
+        for key in module_path:
+            module_name = module_name[key]
+    except invalid_config_exceptions:
+        logger.error(f"Invalid configuration ({provider_name}).")
+        return None
+
+    try:
+        import_module(name=module_name)
+    except ModuleNotFoundError:
+        logger.error(f"Could not import module ({provider_name}).")
+        return None
+
+    return module_name
+
+
 def _build_logging_gateway_provider(
     config: dict,
     injector: DependencyInjector,
@@ -169,17 +225,13 @@ def _build_logging_gateway_provider(
     except AttributeError:
         logger = logging.getLogger()
 
-    try:
-        try:
-            import_module(name=config["mugen"]["modules"]["core"]["gateway"]["logging"])
-        except KeyError:
-            logger.error("Invalid configuration (logging_gateway).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (logging_gateway).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="logging_gateway",
+        module_path=("mugen", "modules", "core", "gateway", "logging"),
+        logger=logger,
+    )
+    if module_name is None:
         return
 
     if injector is None or not hasattr(injector, "config"):
@@ -188,7 +240,7 @@ def _build_logging_gateway_provider(
 
     provider_class = _get_provider_class(
         interface=ILoggingGateway,
-        module_name=config["mugen"]["modules"]["core"]["gateway"]["logging"],
+        module_name=module_name,
         provider_name="logging_gateway",
         logger=logger,
     )
@@ -211,37 +263,22 @@ def _build_completion_gateway_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build completion gateway provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (completion_gateway).")
+    logger = _get_provider_logger(injector, provider_name="completion_gateway")
+    if logger is None:
         return
 
-    if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (completion_gateway).")
-
-    try:
-        try:
-            import_module(
-                name=config["mugen"]["modules"]["core"]["gateway"]["completion"]
-            )
-        except KeyError:
-            logger.error("Invalid configuration (completion_gateway).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (completion_gateway).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="completion_gateway",
+        module_path=("mugen", "modules", "core", "gateway", "completion"),
+        logger=logger,
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=ICompletionGateway,
-        module_name=config["mugen"]["modules"]["core"]["gateway"]["completion"],
+        module_name=module_name,
         provider_name="completion_gateway",
         logger=logger,
     )
@@ -259,35 +296,22 @@ def _build_ipc_service_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build IPC service provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (ipc_service).")
+    logger = _get_provider_logger(injector, provider_name="ipc_service")
+    if logger is None:
         return
 
-    if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (ipc_service).")
-
-    try:
-        try:
-            import_module(name=config["mugen"]["modules"]["core"]["service"]["ipc"])
-        except KeyError:
-            logger.error("Invalid configuration (ipc_service).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (ipc_service).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="ipc_service",
+        module_path=("mugen", "modules", "core", "service", "ipc"),
+        logger=logger,
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=IIPCService,
-        module_name=config["mugen"]["modules"]["core"]["service"]["ipc"],
+        module_name=module_name,
         provider_name="ipc_service",
         logger=logger,
     )
@@ -304,37 +328,22 @@ def _build_keyval_storage_gateway_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build key-value storage gateway provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (keyval_storage_gateway).")
+    logger = _get_provider_logger(injector, provider_name="keyval_storage_gateway")
+    if logger is None:
         return
 
-    if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (keyval_storage_gateway).")
-
-    try:
-        try:
-            import_module(
-                name=config["mugen"]["modules"]["core"]["gateway"]["storage"]["keyval"]
-            )
-        except KeyError:
-            logger.error("Invalid configuration (keyval_storage_gateway).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (keyval_storage_gateway).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="keyval_storage_gateway",
+        module_path=("mugen", "modules", "core", "gateway", "storage", "keyval"),
+        logger=logger,
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=IKeyValStorageGateway,
-        module_name=config["mugen"]["modules"]["core"]["gateway"]["storage"]["keyval"],
+        module_name=module_name,
         provider_name="keyval_storage_gateway",
         logger=logger,
     )
@@ -352,41 +361,22 @@ def _build_relational_storage_gateway_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build relational database storage gateway provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (relational_storage_gateway).")
+    logger = _get_provider_logger(injector, provider_name="relational_storage_gateway")
+    if logger is None:
         return
 
-    if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (relational_storage_gateway).")
-
-    try:
-        try:
-            import_module(
-                name=config["mugen"]["modules"]["core"]["gateway"]["storage"][
-                    "relational"
-                ]
-            )
-        except KeyError:
-            logger.error("Invalid configuration (relational_storage_gateway).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (relational_storage_gateway).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="relational_storage_gateway",
+        module_path=("mugen", "modules", "core", "gateway", "storage", "relational"),
+        logger=logger,
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=IRelationalStorageGateway,
-        module_name=config["mugen"]["modules"]["core"]["gateway"]["storage"][
-            "relational"
-        ],
+        module_name=module_name,
         provider_name="relational_storage_gateway",
         logger=logger,
     )
@@ -404,35 +394,22 @@ def _build_nlp_service_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build NLP service provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (nlp_service).")
+    logger = _get_provider_logger(injector, provider_name="nlp_service")
+    if logger is None:
         return
 
-    if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (nlp_service).")
-
-    try:
-        try:
-            import_module(name=config["mugen"]["modules"]["core"]["service"]["nlp"])
-        except KeyError:
-            logger.error("Invalid configuration (nlp_service).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (nlp_service).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="nlp_service",
+        module_path=("mugen", "modules", "core", "service", "nlp"),
+        logger=logger,
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=INLPService,
-        module_name=config["mugen"]["modules"]["core"]["service"]["nlp"],
+        module_name=module_name,
         provider_name="nlp_service",
         logger=logger,
     )
@@ -449,37 +426,22 @@ def _build_platform_service_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build platform service provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (platform_service).")
+    logger = _get_provider_logger(injector, provider_name="platform_service")
+    if logger is None:
         return
 
-    if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (platform_service).")
-
-    try:
-        try:
-            import_module(
-                name=config["mugen"]["modules"]["core"]["service"]["platform"]
-            )
-        except KeyError:
-            logger.error("Invalid configuration (platform_service).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (platform_service).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="platform_service",
+        module_path=("mugen", "modules", "core", "service", "platform"),
+        logger=logger,
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=IPlatformService,
-        module_name=config["mugen"]["modules"]["core"]["service"]["platform"],
+        module_name=module_name,
         provider_name="platform_service",
         logger=logger,
     )
@@ -497,35 +459,22 @@ def _build_user_service_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build user service provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (user_service).")
+    logger = _get_provider_logger(injector, provider_name="user_service")
+    if logger is None:
         return
 
-    if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (user_service).")
-
-    try:
-        try:
-            import_module(name=config["mugen"]["modules"]["core"]["service"]["user"])
-        except KeyError:
-            logger.error("Invalid configuration (user_service).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (user_service).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="user_service",
+        module_path=("mugen", "modules", "core", "service", "user"),
+        logger=logger,
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=IUserService,
-        module_name=config["mugen"]["modules"]["core"]["service"]["user"],
+        module_name=module_name,
         provider_name="user_service",
         logger=logger,
     )
@@ -543,37 +492,22 @@ def _build_messaging_service_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build messaging service provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (messaging_service).")
+    logger = _get_provider_logger(injector, provider_name="messaging_service")
+    if logger is None:
         return
 
-    if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (messaging_service).")
-
-    try:
-        try:
-            import_module(
-                name=config["mugen"]["modules"]["core"]["service"]["messaging"]
-            )
-        except KeyError:
-            logger.error("Invalid configuration (messaging_service).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (messaging_service).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="messaging_service",
+        module_path=("mugen", "modules", "core", "service", "messaging"),
+        logger=logger,
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=IMessagingService,
-        module_name=config["mugen"]["modules"]["core"]["service"]["messaging"],
+        module_name=module_name,
         provider_name="messaging_service",
         logger=logger,
     )
@@ -594,37 +528,23 @@ def _build_knowledge_gateway_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build knowledge gateway provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (knowledge_gateway).")
+    logger = _get_provider_logger(injector, provider_name="knowledge_gateway")
+    if logger is None:
         return
 
-    if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (knowledge_gateway).")
-
-    try:
-        try:
-            import_module(
-                name=config["mugen"]["modules"]["core"]["gateway"]["knowledge"]
-            )
-        except (KeyError, ValueError):
-            logger.error("Invalid configuration (knowledge_gateway).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (knowledge_gateway).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="knowledge_gateway",
+        module_path=("mugen", "modules", "core", "gateway", "knowledge"),
+        logger=logger,
+        invalid_config_exceptions=(KeyError, ValueError),
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=IKnowledgeGateway,
-        module_name=config["mugen"]["modules"]["core"]["gateway"]["knowledge"],
+        module_name=module_name,
         provider_name="knowledge_gateway",
         logger=logger,
     )
@@ -642,18 +562,9 @@ def _build_matrix_client_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build Matrix platform client provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (matrix_client).")
-        return
-
+    logger = _get_provider_logger(injector, provider_name="matrix_client")
     if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (matrix_client).")
+        return
 
     # Don't load the client if the platform is not enabled.
     if "matrix" not in config["mugen"]["platforms"]:
@@ -662,22 +573,19 @@ def _build_matrix_client_provider(
 
     # Attempt to import the client module.
 
-    try:
-        try:
-            import_module(name=config["mugen"]["modules"]["core"]["client"]["matrix"])
-        except (KeyError, ValueError):
-            logger.error("Invalid configuration (matrix_client).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (matrix_client).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="matrix_client",
+        module_path=("mugen", "modules", "core", "client", "matrix"),
+        logger=logger,
+        invalid_config_exceptions=(KeyError, ValueError),
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=IMatrixClient,
-        module_name=config["mugen"]["modules"]["core"]["client"]["matrix"],
+        module_name=module_name,
         provider_name="matrix_client",
         logger=logger,
     )
@@ -699,18 +607,9 @@ def _build_telnet_client_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build telnet platform client provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (telnet_client).")
-        return
-
+    logger = _get_provider_logger(injector, provider_name="telnet_client")
     if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (telnet_client).")
+        return
 
     # Don't load the client if the platform is not enabled.
     if "telnet" not in config["mugen"]["platforms"]:
@@ -718,22 +617,19 @@ def _build_telnet_client_provider(
         return
 
     # Attempt to import the client module.
-    try:
-        try:
-            import_module(name=config["mugen"]["modules"]["core"]["client"]["telnet"])
-        except (KeyError, ValueError):
-            logger.error("Invalid configuration (telnet_client).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (telnet_client).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="telnet_client",
+        module_path=("mugen", "modules", "core", "client", "telnet"),
+        logger=logger,
+        invalid_config_exceptions=(KeyError, ValueError),
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=ITelnetClient,
-        module_name=config["mugen"]["modules"]["core"]["client"]["telnet"],
+        module_name=module_name,
         provider_name="telnet_client",
         logger=logger,
     )
@@ -755,18 +651,9 @@ def _build_whatsapp_client_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build WhatsApp platform client provider for DI container."""
-    # Get logger.
-    try:
-        logger = injector.logging_gateway
-    except AttributeError:
-        # We'll get an AttributeError if injector
-        # is incorrectly typed.
-        logging.getLogger().error("Invalid injector (whatsapp_client).")
-        return
-
+    logger = _get_provider_logger(injector, provider_name="whatsapp_client")
     if logger is None:
-        logger = logging.getLogger()
-        logger.warning("Using root logger (whatsapp_client).")
+        return
 
     # Don't load the client if the platform is not enabled.
     if "whatsapp" not in config["mugen"]["platforms"]:
@@ -774,22 +661,19 @@ def _build_whatsapp_client_provider(
         return
 
     # Attempt to import the client module.
-    try:
-        try:
-            import_module(name=config["mugen"]["modules"]["core"]["client"]["whatsapp"])
-        except (KeyError, ValueError):
-            logger.error("Invalid configuration (whatsapp_client).")
-            return
-    except ModuleNotFoundError:
-        # This could fail due to missing configuration values or
-        # invalid module paths. Either way, no need to continue
-        # if it fails.
-        logger.error("Could not import module (whatsapp_client).")
+    module_name = _import_provider_module(
+        config=config,
+        provider_name="whatsapp_client",
+        module_path=("mugen", "modules", "core", "client", "whatsapp"),
+        logger=logger,
+        invalid_config_exceptions=(KeyError, ValueError),
+    )
+    if module_name is None:
         return
 
     provider_class = _get_provider_class(
         interface=IWhatsAppClient,
-        module_name=config["mugen"]["modules"]["core"]["client"]["whatsapp"],
+        module_name=module_name,
         provider_name="whatsapp_client",
         logger=logger,
     )

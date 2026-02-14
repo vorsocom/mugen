@@ -173,13 +173,17 @@ class DependencyInjector(IDependencyInjector):
     def whatsapp_client(self, value: IWhatsAppClient) -> None:
         self.__whatsapp_client = value
 
-    def register_ext_service(
-        self, name: str, service: Any, *, override: bool = False
-    ) -> None:
+    @staticmethod
+    def _normalise_ext_service_name(name: str) -> str:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Service name must be a non-empty string.")
 
-        name = name.strip()
+        return name.strip()
+
+    def register_ext_service(
+        self, name: str, service: Any, *, override: bool = False
+    ) -> None:
+        name = self._normalise_ext_service_name(name)
 
         if not override and name in self.__ext_services:
             raise KeyError(f"Extension service '{name}' already registered.")
@@ -187,10 +191,7 @@ class DependencyInjector(IDependencyInjector):
         self.__ext_services[name] = service
 
     def get_ext_service(self, name: str, default: Any | None = None) -> Any:
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("Service name must be a non-empty string.")
-
-        name = name.strip()
+        name = self._normalise_ext_service_name(name)
 
         try:
             return self.__ext_services[name]
@@ -198,6 +199,13 @@ class DependencyInjector(IDependencyInjector):
             if default is not None:
                 return default
             raise KeyError(f"Extension service '{name}' not found.") from None
+
+    def get_required_ext_service(self, name: str) -> Any:
+        return self.get_ext_service(name)
+
+    def has_ext_service(self, name: str) -> bool:
+        name = self._normalise_ext_service_name(name)
+        return name in self.__ext_services
 
     @property
     def ext_services(self) -> Mapping[str, Any]:

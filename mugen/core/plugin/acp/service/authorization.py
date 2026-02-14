@@ -34,7 +34,9 @@ class AuthorizationService(IAuthorizationService):
     def __init__(
         self,
         config_provider=lambda: di.container.config,
-        registry_provider=lambda: di.container.get_ext_service("admin_registry"),
+        registry_provider=lambda: di.container.get_ext_service(
+            di.EXT_SERVICE_ADMIN_REGISTRY
+        ),
     ) -> None:
         self._config = config_provider()
         self._registry: IAdminRegistry = registry_provider()

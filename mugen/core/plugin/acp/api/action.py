@@ -43,7 +43,9 @@ async def dispatch_entity_set_action(
     action: str,
     auth_user: str,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service("admin_registry"),
+    registry_provider=lambda: di.container.get_ext_service(
+        di.EXT_SERVICE_ADMIN_REGISTRY
+    ),
     **_,
 ) -> Any:
     """Dispatch an action for an EDM entity set."""
@@ -138,7 +140,9 @@ async def dispatch_entity_set_action_tenant(
     action: str,
     auth_user: str,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service("admin_registry"),
+    registry_provider=lambda: di.container.get_ext_service(
+        di.EXT_SERVICE_ADMIN_REGISTRY
+    ),
     **_,
 ) -> Any:
     """Dispatch a tenant-scoped action for an EDM entity."""
@@ -246,7 +250,9 @@ async def dispatch_entity_action(
     action: str,
     auth_user: str,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service("admin_registry"),
+    registry_provider=lambda: di.container.get_ext_service(
+        di.EXT_SERVICE_ADMIN_REGISTRY
+    ),
     **_,
 ) -> Any:
     """Dispatch an action for an EDM entity."""
@@ -351,7 +357,9 @@ async def dispatch_entity_action_tenant(
     action: str,
     auth_user: str,
     logger_provider=lambda: di.container.logging_gateway,
-    registry_provider=lambda: di.container.get_ext_service("admin_registry"),
+    registry_provider=lambda: di.container.get_ext_service(
+        di.EXT_SERVICE_ADMIN_REGISTRY
+    ),
     **_,
 ) -> Any:
     """Dispatch a tenant-scoped action for an EDM entity."""

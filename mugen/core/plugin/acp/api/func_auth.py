@@ -22,7 +22,9 @@ from mugen.core.plugin.acp.contract.service.jwt import (
 
 
 @api.get("core/acp/v1/auth/.well-known/jwks.json")
-async def jwks(jwt_provider=lambda: di.container.get_ext_service("admin_svc_jwt")):
+async def jwks(
+    jwt_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT),
+):
     """Publish JWKS."""
     jwt_svc: IJwtService = jwt_provider()
     return jwt_svc.jwks(), 200
@@ -32,8 +34,10 @@ async def jwks(jwt_provider=lambda: di.container.get_ext_service("admin_svc_jwt"
 async def user_login(  # pylint: disable=too-many-locals
     config_provider=lambda: di.container.config,
     logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_ext_service("admin_svc_jwt"),
-    registry_provider=lambda: di.container.get_ext_service("admin_registry"),
+    jwt_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT),
+    registry_provider=lambda: di.container.get_ext_service(
+        di.EXT_SERVICE_ADMIN_REGISTRY
+    ),
 ):
     """User login."""
     config: SimpleNamespace = config_provider()
@@ -162,8 +166,10 @@ async def user_logout(
     auth_user: str,
     config_provider=lambda: di.container.config,
     logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_ext_service("admin_svc_jwt"),
-    registry_provider=lambda: di.container.get_ext_service("admin_registry"),
+    jwt_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT),
+    registry_provider=lambda: di.container.get_ext_service(
+        di.EXT_SERVICE_ADMIN_REGISTRY
+    ),
     **_,
 ):
     """User logout."""
@@ -226,8 +232,10 @@ async def user_logout(
 async def user_refresh_login(
     config_provider=lambda: di.container.config,
     logger_provider=lambda: di.container.logging_gateway,
-    jwt_provider=lambda: di.container.get_ext_service("admin_svc_jwt"),
-    registry_provider=lambda: di.container.get_ext_service("admin_registry"),
+    jwt_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT),
+    registry_provider=lambda: di.container.get_ext_service(
+        di.EXT_SERVICE_ADMIN_REGISTRY
+    ),
 ):
     """Refresh access token."""
     config: SimpleNamespace = config_provider()

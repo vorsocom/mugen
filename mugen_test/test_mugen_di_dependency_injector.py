@@ -605,6 +605,29 @@ class TestDependencyInjector(unittest.TestCase):
         with self.assertRaises(KeyError):
             injector.get_ext_service("missing")
 
+    def test_get_required_ext_service_round_trip(self):
+        """Test get_required_ext_service returns registered service."""
+        injector = di.injector.DependencyInjector()
+        service = object()
+        injector.register_ext_service("demo", service)
+
+        self.assertIs(injector.get_required_ext_service("demo"), service)
+
+    def test_get_required_ext_service_missing(self):
+        """Test get_required_ext_service raises for missing service."""
+        injector = di.injector.DependencyInjector()
+
+        with self.assertRaises(KeyError):
+            injector.get_required_ext_service("missing")
+
+    def test_has_ext_service(self):
+        """Test has_ext_service for existing and missing names."""
+        injector = di.injector.DependencyInjector()
+        injector.register_ext_service("demo", object())
+
+        self.assertTrue(injector.has_ext_service("demo"))
+        self.assertFalse(injector.has_ext_service("missing"))
+
     def test_ext_services_is_read_only_mapping(self):
         """Test extension services mapping is read-only."""
         injector = di.injector.DependencyInjector()
@@ -625,3 +648,9 @@ class TestDependencyInjector(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             injector.get_ext_service("")
+
+        with self.assertRaises(ValueError):
+            injector.get_required_ext_service("   ")
+
+        with self.assertRaises(ValueError):
+            injector.has_ext_service("")

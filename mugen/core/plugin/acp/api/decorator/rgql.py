@@ -48,8 +48,10 @@ def rgql_enabled(
     tenant_kw: str | None = None,
     config_provider=lambda: di.container.config,
     logger_provider=lambda: di.container.logging_gateway,
-    auth_provider=lambda: di.container.get_ext_service("admin_svc_auth"),
-    registry_provider=lambda: di.container.get_ext_service("admin_registry"),
+    auth_provider=lambda: di.container.get_ext_service(di.EXT_SERVICE_ADMIN_SVC_AUTH),
+    registry_provider=lambda: di.container.get_ext_service(
+        di.EXT_SERVICE_ADMIN_REGISTRY
+    ),
 ):
     """
     Enable RGQL/OData-style query options ($filter/$orderby/$top/$skip/$select/$expand

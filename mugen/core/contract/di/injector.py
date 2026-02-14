@@ -108,6 +108,14 @@ class IDependencyInjector(ABC):
     def get_ext_service(self, name: str, default: Any | None = None) -> Any:
         """Retrieve a previously registered extension service."""
 
+    @abstractmethod
+    def get_required_ext_service(self, name: str) -> Any:
+        """Retrieve a previously registered extension service or raise."""
+
+    @abstractmethod
+    def has_ext_service(self, name: str) -> bool:
+        """Check whether an extension service has been registered."""
+
     @property
     @abstractmethod
     def ext_services(self) -> Mapping[str, Any]:
