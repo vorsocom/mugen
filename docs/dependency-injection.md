@@ -33,6 +33,21 @@ bulk extension registration.
 `get_ext_service(...)` supports an explicit default value. Passing `None` as the
 default now returns `None` when the key is missing.
 
+## Constructor Fallback Pattern
+
+For extension/service constructors that allow dependency overrides:
+
+- Accept explicit constructor args for testability (for example `config=None`,
+  `logging_gateway=None`).
+- Resolve defaults through module-level provider callables (for example
+  `_config_provider()`), not inline `... else di.container.<dep>` expressions.
+- Keep fallback resolution runtime-only by calling provider functions in
+  `__init__`, never at import-time.
+
+Reference regression coverage:
+
+- `mugen_test/test_mugen_di_constructor_fallbacks.py`
+
 ## Required Validation Gates
 
 Run these before merging DI changes:
