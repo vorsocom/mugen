@@ -32,6 +32,12 @@ from mugen.core.plugin.acp.contract.service import (
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.domain import UserDE
 
+_EDM_USER = "ACP.User"
+_EDM_GLOBAL_ROLE = "ACP.GlobalRole"
+_EDM_GLOBAL_ROLE_MEMBERSHIP = "ACP.GlobalRoleMembership"
+_EDM_PERSON = "ACP.Person"
+_EDM_REFRESH_TOKEN = "ACP.RefreshToken"
+
 
 def _config_provider():
     return di.container.config
@@ -73,22 +79,22 @@ class UserService(
         self._logger: ILoggingGateway = logger_provider()
 
         registry: IAdminRegistry = registry_provider()
-        self._resource = registry.get_resource_by_type("ACP.User")
+        self._resource = registry.get_resource_by_type(_EDM_USER)
 
         self._grole_svc: IGlobalRoleService = registry.get_edm_service(
-            registry.get_resource_by_type("ACP.GlobalRole").service_key,
+            registry.get_resource_by_type(_EDM_GLOBAL_ROLE).service_key,
         )
 
         self._grole_mship_svc: IGlobalRoleMembershipService = registry.get_edm_service(
-            registry.get_resource_by_type("ACP.GlobalRoleMembership").service_key,
+            registry.get_resource_by_type(_EDM_GLOBAL_ROLE_MEMBERSHIP).service_key,
         )
 
         self._person_svc: IPersonService = registry.get_edm_service(
-            registry.get_resource_by_type("ACP.Person").service_key,
+            registry.get_resource_by_type(_EDM_PERSON).service_key,
         )
 
         self._rtoken_svc: IRefreshTokenService = registry.get_edm_service(
-            registry.get_resource_by_type("ACP.RefreshToken").service_key,
+            registry.get_resource_by_type(_EDM_REFRESH_TOKEN).service_key,
         )
 
     async def bump_token_version(self, where: Mapping[str, Any]) -> UserDE | None:

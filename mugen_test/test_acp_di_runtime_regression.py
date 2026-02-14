@@ -11,6 +11,7 @@ import uuid
 
 from mugen.core.plugin.acp.api.decorator import auth as auth_decorator
 from mugen.core.plugin.acp.service.authorization import AuthorizationService
+from mugen.core.plugin.acp.service.user import UserService
 
 
 class _FakeUserService:
@@ -37,6 +38,22 @@ class _FakeRegistry:
         self.requested_keys.append(key)
         if self._user_svc is not None:
             return self._user_svc
+        return object()
+
+
+class _FakeRegistryWithTypeLookup:
+    """Registry double for `get_resource_by_type` key lookup assertions."""
+
+    def __init__(self) -> None:
+        self.resource_type_lookups: list[str] = []
+        self.service_key_lookups: list[str] = []
+
+    def get_resource_by_type(self, edm_type_name: str):
+        self.resource_type_lookups.append(edm_type_name)
+        return SimpleNamespace(service_key=f"svc:{edm_type_name}")
+
+    def get_edm_service(self, service_key: str):
+        self.service_key_lookups.append(service_key)
         return object()
 
 
@@ -137,5 +154,27 @@ class TestACPDiRuntimeRegression(unittest.IsolatedAsyncioTestCase):
                 "com.test.admin:ACP.PermissionType",
                 "com.test.admin:ACP.RoleMembership",
                 "com.test.admin:ACP.User",
+            ],
+        )
+
+    def test_user_service_uses_expected_acp_edm_type_names(self) -> None:
+        registry = _FakeRegistryWithTypeLookup()
+
+        UserService(
+            table="users",
+            rsg=SimpleNamespace(),
+            config_provider=lambda: SimpleNamespace(),
+            logger_provider=lambda: SimpleNamespace(),
+            registry_provider=lambda: registry,
+        )
+
+        self.assertEqual(
+            registry.resource_type_lookups,
+            [
+                "ACP.User",
+                "ACP.GlobalRole",
+                "ACP.GlobalRoleMembership",
+                "ACP.Person",
+                "ACP.RefreshToken",
             ],
         )
