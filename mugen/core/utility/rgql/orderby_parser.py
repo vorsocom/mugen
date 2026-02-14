@@ -91,8 +91,6 @@ def parse_orderby(text: str) -> List[OrderByItem]:
     items: List[OrderByItem] = []
     for part in _split_commas_top_level(text):
         s = part.strip()
-        if not s:
-            continue
 
         direction = "asc"
         lower = s.lower()
@@ -102,6 +100,9 @@ def parse_orderby(text: str) -> List[OrderByItem]:
         elif lower.endswith(" desc"):
             direction = "desc"
             expr_text = s[:-5].rstrip()
+        elif lower in {"asc", "desc"}:
+            direction = lower
+            expr_text = ""
         else:
             expr_text = s
 

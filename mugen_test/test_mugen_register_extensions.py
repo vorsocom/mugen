@@ -8,7 +8,7 @@ import unittest.mock
 
 from quart import Quart
 
-from mugen import register_extensions
+from mugen import register_extensions as _register_extensions
 from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.fw import IFWExtension
@@ -16,6 +16,61 @@ from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
+
+
+def _ipc_provider():
+    return SimpleNamespace(register_ipc_extension=unittest.mock.Mock())
+
+
+def _messaging_provider():
+    return SimpleNamespace(
+        register_cp_extension=unittest.mock.Mock(),
+        register_ct_extension=unittest.mock.Mock(),
+        register_ctx_extension=unittest.mock.Mock(),
+        register_mh_extension=unittest.mock.Mock(),
+        register_rag_extension=unittest.mock.Mock(),
+        register_rpp_extension=unittest.mock.Mock(),
+    )
+
+
+def _platform_provider():
+    return SimpleNamespace(extension_supported=unittest.mock.Mock(return_value=True))
+
+
+def _platform_provider_for_config(config: SimpleNamespace):
+    active = set(getattr(config.mugen, "platforms", []))
+
+    def _supported(ext) -> bool:
+        raw_platforms = getattr(ext, "platforms", None)
+        if raw_platforms is None:
+            return True
+        try:
+            ext_platforms = set(raw_platforms)
+        except TypeError:
+            return True
+        if not ext_platforms:
+            return True
+        if not active:
+            return True
+        return bool(ext_platforms.intersection(active))
+
+    return SimpleNamespace(
+        extension_supported=unittest.mock.Mock(side_effect=_supported)
+    )
+
+
+async def register_extensions(*args, **kwargs):
+    """Wrapper providing deterministic defaults for extension wiring tests."""
+    cfg_provider = kwargs.get("config_provider")
+    cfg = cfg_provider() if callable(cfg_provider) else None
+    kwargs.setdefault("ipc_provider", _ipc_provider)
+    kwargs.setdefault("messaging_provider", _messaging_provider)
+    if "platform_provider" not in kwargs:
+        if cfg is not None and hasattr(cfg, "mugen"):
+            kwargs["platform_provider"] = lambda: _platform_provider_for_config(cfg)
+        else:
+            kwargs["platform_provider"] = _platform_provider
+    return await _register_extensions(*args, **kwargs)
 
 
 # pylint: disable=too-many-public-methods

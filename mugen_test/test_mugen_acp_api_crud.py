@@ -1,0 +1,2320 @@
+"""Unit tests for mugen.core.plugin.acp.api.crud."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from datetime import datetime, timezone
+import sys
+import unittest
+import uuid
+from unittest.mock import AsyncMock, Mock, patch
+
+from pydantic import BaseModel
+from quart import Quart
+from sqlalchemy.exc import SQLAlchemyError
+
+
+def _bootstrap_namespace_packages() -> None:
+    root = Path(__file__).resolve().parents[1] / "mugen"
+
+    if "mugen" not in sys.modules:
+        mugen_pkg = ModuleType("mugen")
+        mugen_pkg.__path__ = [str(root)]
+        sys.modules["mugen"] = mugen_pkg
+
+    if "mugen.core" not in sys.modules:
+        core_pkg = ModuleType("mugen.core")
+        core_pkg.__path__ = [str(root / "core")]
+        sys.modules["mugen.core"] = core_pkg
+        setattr(sys.modules["mugen"], "core", core_pkg)
+
+    if "mugen.core.di" not in sys.modules:
+        di_mod = ModuleType("mugen.core.di")
+        di_mod.container = SimpleNamespace(
+            config=SimpleNamespace(),
+            logging_gateway=SimpleNamespace(
+                debug=lambda *_: None,
+                error=lambda *_: None,
+                warning=lambda *_: None,
+            ),
+            get_ext_service=lambda *_: None,
+            get_required_ext_service=lambda *_: None,
+        )
+        sys.modules["mugen.core.di"] = di_mod
+        setattr(sys.modules["mugen.core"], "di", di_mod)
+
+
+_bootstrap_namespace_packages()
+
+# noqa: E402
+# pylint: disable=wrong-import-position
+from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
+from mugen.core.plugin.acp.api import crud as crud_mod
+from mugen.core.plugin.acp.contract.sdk.resource import SoftDeleteMode
+
+
+class _AbortCalled(Exception):
+    def __init__(self, code: int, message: str | None = None):
+        super().__init__(code, message)
+        self.code = code
+        self.message = message
+
+
+def _abort_raiser(code: int, message: str | None = None):
+    raise _AbortCalled(code, message)
+
+
+class _CreateSchema(BaseModel):
+    name: str
+    tenant_id: uuid.UUID | None = None
+
+
+class _FakeEdmType:
+    def __init__(self, *, tenant_scoped: bool):
+        self._tenant_scoped = tenant_scoped
+
+    def find_property(self, name: str):
+        if name == "TenantId" and self._tenant_scoped:
+            return object()
+        return None
+
+
+class _FakeSchema:
+    def __init__(self, *, tenant_scoped: bool):
+        self._tenant_scoped = tenant_scoped
+
+    def get_type(self, _edm_type_name: str):
+        return _FakeEdmType(tenant_scoped=self._tenant_scoped)
+
+
+def _resource(
+    *,
+    create_schema=None,
+    update_schema=None,
+    soft_delete_mode: SoftDeleteMode = SoftDeleteMode.TIMESTAMP,
+    allow_restore: bool = True,
+    soft_delete_column: str = "DeletedAt",
+):
+    return SimpleNamespace(
+        edm_type_name="ACP.User",
+        service_key="user_svc",
+        namespace="com.test.acp",
+        crud=SimpleNamespace(
+            create_schema=create_schema,
+            update_schema=update_schema,
+        ),
+        behavior=SimpleNamespace(
+            soft_delete=SimpleNamespace(
+                mode=soft_delete_mode,
+                allow_restore=allow_restore,
+                column=soft_delete_column,
+            )
+        ),
+    )
+
+
+class _FakeRegistry:
+    def __init__(self, *, resource, service, tenant_scoped: bool = True):
+        self._resource = resource
+        self._service = service
+        self.schema = _FakeSchema(tenant_scoped=tenant_scoped)
+
+    def get_resource(self, _entity_set: str):
+        return self._resource
+
+    def get_edm_service(self, _service_key: str):
+        return self._service
+
+
+def _logger():
+    return SimpleNamespace(
+        debug=Mock(),
+        error=Mock(),
+        warning=Mock(),
+    )
+
+
+class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
+    """Covers helper branches and endpoint flows in CRUD API handlers."""
+
+    async def asyncSetUp(self) -> None:
+        self.app = Quart("test-acp-api-crud")
+
+    def test_provider_and_helper_functions(self) -> None:
+        container = SimpleNamespace(
+            logging_gateway="logger",
+            get_required_ext_service=Mock(return_value="registry"),
+        )
+        with patch.object(crud_mod.di, "container", new=container):
+            self.assertEqual(crud_mod._logger_provider(), "logger")
+            self.assertEqual(crud_mod._registry_provider(), "registry")
+
+        good_id = uuid.uuid4()
+        self.assertEqual(crud_mod._parse_uuid_or_none(str(good_id)), good_id)
+        self.assertIsNone(crud_mod._parse_uuid_or_none(None))
+        self.assertIsNone(crud_mod._parse_uuid_or_none("bad-uuid"))
+
+        self.assertEqual(crud_mod._entity_name("ACP.User"), "User")
+        self.assertEqual(crud_mod._entity_name("User"), "User")
+
+    async def test_request_ids_and_build_create_data_paths(self) -> None:
+        async with self.app.test_request_context(
+            "/api/core/acp/v1/Users",
+            headers={"X-Request-Id": "req-1", "X-Correlation-Id": "corr-1"},
+        ):
+            self.assertEqual(crud_mod._request_ids(), ("req-1", "corr-1"))
+
+        async with self.app.test_request_context(
+            "/api/core/acp/v1/Users",
+            headers={"X-Request-Id": "req-2", "X-Trace-Id": "trace-2"},
+        ):
+            self.assertEqual(crud_mod._request_ids(), ("req-2", "trace-2"))
+
+        create_data = crud_mod._build_create_data(
+            {"Name": "Alice", "TenantId": str(uuid.uuid4())},
+            ("Name", "TenantId"),
+            tenant_scoped=True,
+        )
+        self.assertEqual(create_data, {"name": "Alice"})
+
+        typed_data = crud_mod._build_create_data(
+            {"name": "Bob", "tenant_id": str(uuid.uuid4())},
+            _CreateSchema,
+            tenant_scoped=True,
+        )
+        self.assertEqual(typed_data, {"name": "Bob"})
+
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._build_create_data({}, ("Name",), tenant_scoped=False)
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._build_create_data({}, _CreateSchema, tenant_scoped=False)
+            self.assertEqual(ex.exception.code, 400)
+
+    async def test_get_entities_and_get_entities_tenant_paths(self) -> None:
+        logger = _logger()
+        get_entities_fn = crud_mod.get_entities.__wrapped__.__wrapped__
+
+        rows = [{"Id": "1", "Name": "Alice"}]
+        payload = await get_entities_fn(
+            entity_set="Users",
+            entity_id=None,
+            edm_type_name="ACP.User",
+            rgql=SimpleNamespace(count=1, values=rows),
+            logger_provider=lambda: logger,
+        )
+        self.assertEqual(payload["@context"], "_#Users")
+        self.assertEqual(payload["@count"], 1)
+        self.assertEqual(payload["value"], rows)
+
+        payload = await get_entities_fn(
+            entity_set="Users",
+            entity_id=str(uuid.uuid4()),
+            edm_type_name="ACP.User",
+            rgql=SimpleNamespace(count=None, values=rows),
+            logger_provider=lambda: logger,
+        )
+        self.assertEqual(payload["@context"], "_#Users/$entity")
+        self.assertEqual(payload["Name"], "Alice")
+
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                await get_entities_fn(
+                    entity_set="Users",
+                    entity_id="missing",
+                    edm_type_name="ACP.User",
+                    rgql=SimpleNamespace(values=[]),
+                    logger_provider=lambda: logger,
+                )
+            self.assertEqual(ex.exception.code, 404)
+
+        get_entities_tenant_fn = crud_mod.get_entities_tenant.__wrapped__.__wrapped__
+        registry = _FakeRegistry(
+            resource=_resource(),
+            service=SimpleNamespace(),
+            tenant_scoped=True,
+        )
+        tenant_payload = await get_entities_tenant_fn(
+            entity_set="Users",
+            entity_id=None,
+            edm_type_name="ACP.User",
+            rgql=SimpleNamespace(count=0, values=[]),
+            logger_provider=lambda: logger,
+            registry_provider=lambda: registry,
+        )
+        self.assertEqual(tenant_payload["@context"], "_#Users")
+
+        bad_registry = _FakeRegistry(
+            resource=_resource(),
+            service=SimpleNamespace(),
+            tenant_scoped=False,
+        )
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                await get_entities_tenant_fn(
+                    entity_set="Users",
+                    entity_id=None,
+                    edm_type_name="ACP.User",
+                    rgql=SimpleNamespace(count=0, values=[]),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: bad_registry,
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+    async def test_create_entity_paths(self) -> None:
+        actor_id = uuid.uuid4()
+        created_id = uuid.uuid4()
+
+        svc = SimpleNamespace(
+            create=AsyncMock(return_value=SimpleNamespace(id=created_id))
+        )
+        registry = _FakeRegistry(
+            resource=_resource(create_schema=("Name",)),
+            service=svc,
+        )
+        emit = AsyncMock(return_value=None)
+        create_fn = crud_mod.create_entity.__wrapped__
+
+        async with self.app.test_request_context(
+            "/api/core/acp/v1/Users",
+            method="POST",
+            json={"Name": "Alice"},
+            headers={"X-Request-Id": "req-1", "X-Correlation-Id": "corr-1"},
+        ):
+            with patch.object(crud_mod, "emit_audit_event", new=emit):
+                _, status = await create_fn(
+                    entity_set="Users",
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry,
+                )
+        self.assertEqual(status, 201)
+        self.assertEqual(svc.create.await_args.args[0], {"name": "Alice"})
+        self.assertEqual(emit.await_args.kwargs["outcome"], "success")
+
+        async with self.app.test_request_context(
+            "/api/core/acp/v1/Users",
+            method="POST",
+            json=["bad"],
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_fn(
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        failing = SimpleNamespace(create=AsyncMock(side_effect=SQLAlchemyError("boom")))
+        fail_registry = _FakeRegistry(
+            resource=_resource(create_schema=("Name",)),
+            service=failing,
+        )
+        emit = AsyncMock(return_value=None)
+        async with self.app.test_request_context(
+            "/api/core/acp/v1/Users",
+            method="POST",
+            json={"Name": "Alice"},
+        ):
+            with (
+                patch.object(crud_mod, "emit_audit_event", new=emit),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_fn(
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: fail_registry,
+                    )
+                self.assertEqual(ex.exception.code, 500)
+        self.assertEqual(emit.await_args.kwargs["outcome"], "error")
+
+    async def test_create_entity_tenant_paths(self) -> None:
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        svc = SimpleNamespace(
+            create=AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+        )
+        registry = _FakeRegistry(
+            resource=_resource(create_schema=("TenantId", "Name")),
+            service=svc,
+            tenant_scoped=True,
+        )
+        create_fn = crud_mod.create_entity_tenant.__wrapped__
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+            method="POST",
+            json={"Name": "Alice"},
+        ):
+            with patch.object(
+                crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+            ):
+                _, status = await create_fn(
+                    tenant_id=str(tenant_id),
+                    entity_set="Users",
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry,
+                )
+        self.assertEqual(status, 201)
+        payload = svc.create.await_args.args[0]
+        self.assertEqual(payload["tenant_id"], tenant_id)
+        self.assertEqual(payload["name"], "Alice")
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+            method="POST",
+            json={"Name": "Alice", "TenantId": str(uuid.uuid4())},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        bad_registry = _FakeRegistry(
+            resource=_resource(create_schema=("TenantId", "Name")),
+            service=svc,
+            tenant_scoped=False,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+            method="POST",
+            json={"Name": "Alice"},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: bad_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+    async def test_update_entity_and_update_entity_tenant_paths(self) -> None:
+        entity_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        before = SimpleNamespace(id=entity_id, display_name="old")
+        after = SimpleNamespace(id=entity_id, display_name="new")
+
+        svc = SimpleNamespace(
+            get=AsyncMock(return_value=before),
+            update_with_row_version=AsyncMock(return_value=after),
+        )
+        registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=svc,
+            tenant_scoped=True,
+        )
+        update_fn = crud_mod.update_entity.__wrapped__
+        emit = AsyncMock(return_value=None)
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 7, "DisplayName": "new"},
+        ):
+            with patch.object(crud_mod, "emit_audit_event", new=emit):
+                _, status = await update_fn(
+                    entity_set="Users",
+                    entity_id=str(entity_id),
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry,
+                )
+        self.assertEqual(status, 204)
+        self.assertEqual(
+            svc.update_with_row_version.await_args.kwargs["changes"],
+            {"display_name": "new"},
+        )
+        self.assertEqual(emit.await_args.kwargs["outcome"], "success")
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 7},
+        ):
+            _, status = await update_fn(
+                entity_set="Users",
+                entity_id=str(entity_id),
+                auth_user=str(actor_id),
+                logger_provider=_logger,
+                registry_provider=lambda: registry,
+            )
+        self.assertEqual(status, 204)
+
+        conflict_svc = SimpleNamespace(
+            get=AsyncMock(return_value=before),
+            update_with_row_version=AsyncMock(side_effect=RowVersionConflict("rv")),
+        )
+        conflict_registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=conflict_svc,
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 7, "DisplayName": "new"},
+        ):
+            with (
+                patch.object(
+                    crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: conflict_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
+        update_tenant_fn = crud_mod.update_entity_tenant.__wrapped__
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 8, "DisplayName": "next"},
+        ):
+            with patch.object(
+                crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+            ):
+                _, status = await update_tenant_fn(
+                    tenant_id=str(tenant_id),
+                    entity_set="Users",
+                    entity_id=str(entity_id),
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry,
+                )
+        self.assertEqual(status, 204)
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 8, "TenantId": str(tenant_id), "DisplayName": "next"},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+    async def test_delete_entity_and_delete_entity_tenant_paths(self) -> None:
+        entity_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        deleted = SimpleNamespace(id=entity_id)
+        svc = SimpleNamespace(delete_with_row_version=AsyncMock(return_value=deleted))
+        registry = _FakeRegistry(resource=_resource(), service=svc, tenant_scoped=True)
+        delete_fn = crud_mod.delete_entity.__wrapped__
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="DELETE",
+            json={"RowVersion": 9},
+        ):
+            with patch.object(
+                crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+            ):
+                _, status = await delete_fn(
+                    entity_set="Users",
+                    entity_id=str(entity_id),
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry,
+                )
+        self.assertEqual(status, 204)
+
+        conflict_svc = SimpleNamespace(
+            delete_with_row_version=AsyncMock(side_effect=RowVersionConflict("rv"))
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="DELETE",
+            json={"RowVersion": 9},
+        ):
+            with (
+                patch.object(
+                    crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: _FakeRegistry(
+                            resource=_resource(),
+                            service=conflict_svc,
+                        ),
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
+        delete_tenant_fn = crud_mod.delete_entity_tenant.__wrapped__
+        missing_svc = SimpleNamespace(
+            delete_with_row_version=AsyncMock(return_value=None)
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="DELETE",
+            json={"RowVersion": 10},
+        ):
+            with (
+                patch.object(
+                    crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: _FakeRegistry(
+                            resource=_resource(),
+                            service=missing_svc,
+                            tenant_scoped=True,
+                        ),
+                    )
+                self.assertEqual(ex.exception.code, 404)
+
+    async def test_restore_entity_and_restore_entity_tenant_paths(self) -> None:
+        entity_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+
+        deleted_at = datetime.now(timezone.utc)
+        before = SimpleNamespace(id=entity_id, deleted_at=deleted_at)
+        restored = SimpleNamespace(id=entity_id, deleted_at=None)
+        svc = SimpleNamespace(
+            get=AsyncMock(return_value=before),
+            update_with_row_version=AsyncMock(return_value=restored),
+        )
+        registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=svc,
+            tenant_scoped=True,
+        )
+        restore_fn = crud_mod.restore_entity.__wrapped__
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 11},
+        ):
+            with patch.object(
+                crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+            ):
+                _, status = await restore_fn(
+                    entity_set="Users",
+                    entity_id=str(entity_id),
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry,
+                )
+        self.assertEqual(status, 204)
+
+        unsupported_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.NONE,
+                allow_restore=False,
+            ),
+            service=svc,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 11},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: unsupported_registry,
+                    )
+                self.assertEqual(ex.exception.code, 405)
+
+        restore_tenant_fn = crud_mod.restore_entity_tenant.__wrapped__
+        before_flag = SimpleNamespace(id=entity_id, is_deleted=True)
+        svc_flag = SimpleNamespace(
+            get=AsyncMock(return_value=before_flag),
+            update_with_row_version=AsyncMock(
+                return_value=SimpleNamespace(id=entity_id)
+            ),
+        )
+        registry_flag = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.FLAG,
+                soft_delete_column="IsDeleted",
+            ),
+            service=svc_flag,
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 12},
+        ):
+            with patch.object(
+                crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+            ):
+                _, status = await restore_tenant_fn(
+                    tenant_id=str(tenant_id),
+                    entity_set="Users",
+                    entity_id=str(entity_id),
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry_flag,
+                )
+        self.assertEqual(status, 204)
+
+        conflict_flag = SimpleNamespace(id=entity_id, is_deleted=False)
+        svc_conflict = SimpleNamespace(
+            get=AsyncMock(return_value=conflict_flag),
+            update_with_row_version=AsyncMock(return_value=None),
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 12},
+        ):
+            with (
+                patch.object(
+                    crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: _FakeRegistry(
+                            resource=_resource(
+                                soft_delete_mode=SoftDeleteMode.FLAG,
+                                soft_delete_column="IsDeleted",
+                            ),
+                            service=svc_conflict,
+                            tenant_scoped=True,
+                        ),
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
+    async def test_create_and_update_validation_error_branches(self) -> None:
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        entity_id = uuid.uuid4()
+
+        create_tenant_fn = crud_mod.create_entity_tenant.__wrapped__
+        create_registry = _FakeRegistry(
+            resource=_resource(create_schema=("TenantId", "Name")),
+            service=SimpleNamespace(
+                create=AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+            ),
+            tenant_scoped=True,
+        )
+
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/tenants/not-a-uuid/Users",
+                method="POST",
+                json={"Name": "Alice"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_tenant_fn(
+                        tenant_id="not-a-uuid",
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: create_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+                method="POST",
+                json=["bad"],
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: create_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+                method="POST",
+                json={"Name": "Alice", "TenantId": "bad"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: create_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+                method="POST",
+                json={"Name": "Alice", "TenantId": str(uuid.uuid4())},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: create_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        error_registry = _FakeRegistry(
+            resource=_resource(create_schema=("TenantId", "Name")),
+            service=SimpleNamespace(
+                create=AsyncMock(side_effect=SQLAlchemyError("boom"))
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+            method="POST",
+            json={"Name": "Alice"},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: error_registry,
+                    )
+                self.assertEqual(ex.exception.code, 500)
+
+        update_fn = crud_mod.update_entity.__wrapped__
+        update_registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=SimpleNamespace(id=entity_id)),
+                update_with_row_version=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id)
+                ),
+            ),
+            tenant_scoped=True,
+        )
+
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/Users/{entity_id}",
+                method="PATCH",
+                json=["bad"],
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: update_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/Users/{entity_id}",
+                method="PATCH",
+                json={"DisplayName": "new"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: update_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/Users/{entity_id}",
+                method="PATCH",
+                json={"RowVersion": "bad", "DisplayName": "new"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: update_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users/not-a-uuid",
+                method="PATCH",
+                json={"RowVersion": 1, "DisplayName": "new"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="Users",
+                        entity_id="not-a-uuid",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: update_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        empty_schema_registry = _FakeRegistry(
+            resource=_resource(update_schema=None),
+            service=SimpleNamespace(),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 1},
+        ):
+            _, status = await update_fn(
+                entity_set="Users",
+                entity_id=str(entity_id),
+                auth_user=str(actor_id),
+                logger_provider=_logger,
+                registry_provider=lambda: empty_schema_registry,
+            )
+        self.assertEqual(status, 204)
+
+        sql_error_registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=SimpleNamespace(id=entity_id)),
+                update_with_row_version=AsyncMock(side_effect=SQLAlchemyError("boom")),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 1, "DisplayName": "new"},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: sql_error_registry,
+                    )
+                self.assertEqual(ex.exception.code, 500)
+
+        not_found_registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=SimpleNamespace(id=entity_id)),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 1, "DisplayName": "new"},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: not_found_registry,
+                    )
+                self.assertEqual(ex.exception.code, 404)
+
+    async def test_update_delete_and_tenant_delete_error_branches(self) -> None:
+        entity_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+
+        update_tenant_fn = crud_mod.update_entity_tenant.__wrapped__
+        update_registry = _FakeRegistry(
+            resource=_resource(update_schema=("TenantId", "DisplayName")),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=SimpleNamespace(id=entity_id)),
+                update_with_row_version=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id)
+                ),
+            ),
+            tenant_scoped=True,
+        )
+
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+                method="PATCH",
+                json={"RowVersion": 1, "DisplayName": "new"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: _FakeRegistry(
+                            resource=_resource(update_schema=("DisplayName",)),
+                            service=SimpleNamespace(),
+                            tenant_scoped=False,
+                        ),
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/tenants/not-a-uuid/Users/also-bad",
+                method="PATCH",
+                json={"RowVersion": 1, "DisplayName": "new"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id="not-a-uuid",
+                        entity_set="Users",
+                        entity_id="also-bad",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: update_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+                method="PATCH",
+                json=["bad"],
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: update_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+                method="PATCH",
+                json={"DisplayName": "new"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: update_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+                method="PATCH",
+                json={"RowVersion": "bad", "DisplayName": "new"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: update_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/not-a-uuid",
+                method="PATCH",
+                json={"RowVersion": 1, "DisplayName": "new"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id="not-a-uuid",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: update_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 1, "DisplayName": None},
+        ):
+            _, status = await update_tenant_fn(
+                tenant_id=str(tenant_id),
+                entity_set="Users",
+                entity_id=str(entity_id),
+                auth_user=str(actor_id),
+                logger_provider=_logger,
+                registry_provider=lambda: update_registry,
+            )
+        self.assertEqual(status, 204)
+
+        conflict_registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=SimpleNamespace(id=entity_id)),
+                update_with_row_version=AsyncMock(side_effect=RowVersionConflict("rv")),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 1, "DisplayName": "new"},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: conflict_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
+        sql_error_registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=SimpleNamespace(id=entity_id)),
+                update_with_row_version=AsyncMock(side_effect=SQLAlchemyError("boom")),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 1, "DisplayName": "new"},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: sql_error_registry,
+                    )
+                self.assertEqual(ex.exception.code, 500)
+
+        not_found_registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=SimpleNamespace(id=entity_id)),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 1, "DisplayName": "new"},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: not_found_registry,
+                    )
+                self.assertEqual(ex.exception.code, 404)
+
+        delete_fn = crud_mod.delete_entity.__wrapped__
+        delete_registry = _FakeRegistry(
+            resource=_resource(),
+            service=SimpleNamespace(
+                delete_with_row_version=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id)
+                )
+            ),
+            tenant_scoped=True,
+        )
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/Users/{entity_id}",
+                method="DELETE",
+                json=["bad"],
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/Users/{entity_id}",
+                method="DELETE",
+                json={},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/Users/{entity_id}",
+                method="DELETE",
+                json={"RowVersion": "bad"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users/not-a-uuid",
+                method="DELETE",
+                json={"RowVersion": 1},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_fn(
+                        entity_set="Users",
+                        entity_id="not-a-uuid",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        delete_sql_error_registry = _FakeRegistry(
+            resource=_resource(),
+            service=SimpleNamespace(
+                delete_with_row_version=AsyncMock(side_effect=SQLAlchemyError("boom"))
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="DELETE",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_sql_error_registry,
+                    )
+                self.assertEqual(ex.exception.code, 500)
+
+        delete_not_found_registry = _FakeRegistry(
+            resource=_resource(),
+            service=SimpleNamespace(
+                delete_with_row_version=AsyncMock(return_value=None)
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="DELETE",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_not_found_registry,
+                    )
+                self.assertEqual(ex.exception.code, 404)
+
+        delete_tenant_fn = crud_mod.delete_entity_tenant.__wrapped__
+        delete_tenant_registry = _FakeRegistry(
+            resource=_resource(),
+            service=SimpleNamespace(
+                delete_with_row_version=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id)
+                )
+            ),
+            tenant_scoped=True,
+        )
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+                method="DELETE",
+                json={"RowVersion": 1},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: _FakeRegistry(
+                            resource=_resource(),
+                            service=SimpleNamespace(),
+                            tenant_scoped=False,
+                        ),
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/tenants/not-a-uuid/Users/not-a-uuid",
+                method="DELETE",
+                json={"RowVersion": 1},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_tenant_fn(
+                        tenant_id="not-a-uuid",
+                        entity_set="Users",
+                        entity_id="not-a-uuid",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/not-a-uuid",
+                method="DELETE",
+                json={"RowVersion": 1},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id="not-a-uuid",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+                method="DELETE",
+                json=["bad"],
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+                method="DELETE",
+                json={},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+                method="DELETE",
+                json={"RowVersion": "bad"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: delete_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        conflict_tenant_registry = _FakeRegistry(
+            resource=_resource(),
+            service=SimpleNamespace(
+                delete_with_row_version=AsyncMock(side_effect=RowVersionConflict("rv"))
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="DELETE",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: conflict_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
+        sql_error_tenant_registry = _FakeRegistry(
+            resource=_resource(),
+            service=SimpleNamespace(
+                delete_with_row_version=AsyncMock(side_effect=SQLAlchemyError("boom"))
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="DELETE",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await delete_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: sql_error_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 500)
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="DELETE",
+            json={"RowVersion": 1},
+        ):
+            with patch.object(
+                crud_mod,
+                "emit_audit_event",
+                new=AsyncMock(return_value=None),
+            ):
+                _, status = await delete_tenant_fn(
+                    tenant_id=str(tenant_id),
+                    entity_set="Users",
+                    entity_id=str(entity_id),
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: delete_tenant_registry,
+                )
+        self.assertEqual(status, 204)
+
+    async def test_restore_error_branches(self) -> None:
+        entity_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+
+        restore_fn = crud_mod.restore_entity.__wrapped__
+        restore_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=object())
+                ),
+                update_with_row_version=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id)
+                ),
+            ),
+            tenant_scoped=True,
+        )
+
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/Users/{entity_id}/$restore",
+                method="POST",
+                json=["bad"],
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restore_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/Users/{entity_id}/$restore",
+                method="POST",
+                json={},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restore_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/Users/{entity_id}/$restore",
+                method="POST",
+                json={"RowVersion": "bad"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restore_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users/not-a-uuid/$restore",
+                method="POST",
+                json={"RowVersion": 1},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id="not-a-uuid",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restore_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        weird_registry = _FakeRegistry(
+            resource=SimpleNamespace(
+                edm_type_name="ACP.User",
+                service_key="user_svc",
+                namespace="com.test.acp",
+                behavior=SimpleNamespace(
+                    soft_delete=SimpleNamespace(
+                        mode="weird",
+                        allow_restore=True,
+                        column="DeletedAt",
+                    )
+                ),
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=object())
+                ),
+                update_with_row_version=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id)
+                ),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: weird_registry,
+                    )
+                self.assertEqual(ex.exception.code, 405)
+
+        get_error_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(side_effect=SQLAlchemyError("boom")),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: get_error_registry,
+                    )
+                self.assertEqual(ex.exception.code, 500)
+
+        before_none_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=None),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: before_none_registry,
+                    )
+                self.assertEqual(ex.exception.code, 404)
+
+        timestamp_conflict_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=None)
+                ),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: timestamp_conflict_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
+        flag_conflict_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.FLAG,
+                soft_delete_column="IsDeleted",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, is_deleted=False)
+                ),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: flag_conflict_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
+        row_conflict_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=object())
+                ),
+                update_with_row_version=AsyncMock(side_effect=RowVersionConflict("rv")),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: row_conflict_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
+        update_sql_error_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=object())
+                ),
+                update_with_row_version=AsyncMock(side_effect=SQLAlchemyError("boom")),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: update_sql_error_registry,
+                    )
+                self.assertEqual(ex.exception.code, 500)
+
+        restored_none_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=object())
+                ),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restored_none_registry,
+                    )
+                self.assertEqual(ex.exception.code, 404)
+
+        restore_tenant_fn = crud_mod.restore_entity_tenant.__wrapped__
+        restore_tenant_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=object())
+                ),
+                update_with_row_version=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id)
+                ),
+            ),
+            tenant_scoped=True,
+        )
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+                method="POST",
+                json=["bad"],
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restore_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+                method="POST",
+                json={},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restore_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+                method="POST",
+                json={"RowVersion": "bad"},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restore_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/tenants/not-a-uuid/Users/not-a-uuid/$restore",
+                method="POST",
+                json={"RowVersion": 1},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id="not-a-uuid",
+                        entity_set="Users",
+                        entity_id="not-a-uuid",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restore_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/not-a-uuid/$restore",
+                method="POST",
+                json={"RowVersion": 1},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id="not-a-uuid",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restore_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+                method="POST",
+                json={"RowVersion": 1},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: _FakeRegistry(
+                            resource=_resource(
+                                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                                soft_delete_column="DeletedAt",
+                            ),
+                            service=SimpleNamespace(),
+                            tenant_scoped=False,
+                        ),
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+                method="POST",
+                json={"RowVersion": 1},
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: _FakeRegistry(
+                            resource=_resource(
+                                soft_delete_mode=SoftDeleteMode.NONE,
+                                allow_restore=False,
+                            ),
+                            service=SimpleNamespace(),
+                            tenant_scoped=True,
+                        ),
+                    )
+                self.assertEqual(ex.exception.code, 405)
+
+        weird_tenant_registry = _FakeRegistry(
+            resource=SimpleNamespace(
+                edm_type_name="ACP.User",
+                service_key="user_svc",
+                namespace="com.test.acp",
+                behavior=SimpleNamespace(
+                    soft_delete=SimpleNamespace(
+                        mode="weird",
+                        allow_restore=True,
+                        column="DeletedAt",
+                    )
+                ),
+                crud=SimpleNamespace(create_schema=None, update_schema=None),
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=object())
+                ),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: weird_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 405)
+
+        get_error_tenant_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(side_effect=SQLAlchemyError("boom")),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: get_error_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 500)
+
+        before_none_tenant_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=None),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: before_none_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 404)
+
+        timestamp_conflict_tenant_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=None)
+                ),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: timestamp_conflict_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
+        row_conflict_tenant_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=object())
+                ),
+                update_with_row_version=AsyncMock(side_effect=RowVersionConflict("rv")),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: row_conflict_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
+        sql_error_tenant_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=object())
+                ),
+                update_with_row_version=AsyncMock(side_effect=SQLAlchemyError("boom")),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: sql_error_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 500)
+
+        restored_none_tenant_registry = _FakeRegistry(
+            resource=_resource(
+                soft_delete_mode=SoftDeleteMode.TIMESTAMP,
+                soft_delete_column="DeletedAt",
+            ),
+            service=SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(id=entity_id, deleted_at=object())
+                ),
+                update_with_row_version=AsyncMock(return_value=None),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}/$restore",
+            method="POST",
+            json={"RowVersion": 1},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await restore_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: restored_none_tenant_registry,
+                    )
+                self.assertEqual(ex.exception.code, 404)

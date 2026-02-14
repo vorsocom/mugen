@@ -146,10 +146,6 @@ def simplify_boolean(expr: Expr) -> Expr:
         collect(left)
         collect(right)
 
-        if not items:
-            # Shouldn't happen, but be defensive: treat as literal True
-            return Literal(True)
-
         # Rebuild a left-associative tree: ((((i0 and i1) and i2) ...) and in)
         result = items[0]
         for item in items[1:]:

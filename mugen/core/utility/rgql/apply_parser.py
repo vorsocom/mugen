@@ -585,16 +585,21 @@ def _match_closing_paren(text: str, start_index: int) -> Optional[int]:
 
     in_string = False
     depth = 0
-    for i in range(start_index, len(text)):
+    i = start_index
+    n = len(text)
+    while i < n:
         ch = text[i]
 
         if ch == "'":
             if in_string and i + 1 < len(text) and text[i + 1] == "'":
+                i += 2
                 continue
             in_string = not in_string
+            i += 1
             continue
 
         if in_string:
+            i += 1
             continue
 
         if ch == "(":
@@ -603,6 +608,7 @@ def _match_closing_paren(text: str, start_index: int) -> Optional[int]:
             depth -= 1
             if depth == 0:
                 return i
+        i += 1
 
     return None
 

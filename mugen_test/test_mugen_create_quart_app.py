@@ -6,7 +6,20 @@ import unittest.mock
 
 from quart import Quart
 
-from mugen import create_quart_app
+from mugen import create_quart_app as _create_quart_app
+
+
+def _logger_provider():
+    return unittest.mock.Mock(
+        debug=unittest.mock.Mock(),
+        error=unittest.mock.Mock(),
+    )
+
+
+def create_quart_app(*args, **kwargs):
+    """Wrapper to avoid depending on DI-backed logger provider in unit tests."""
+    kwargs.setdefault("logger_provider", _logger_provider)
+    return _create_quart_app(*args, **kwargs)
 
 
 class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):

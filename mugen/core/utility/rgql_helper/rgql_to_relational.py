@@ -216,7 +216,8 @@ class RGQLToRelationalAdapter:
                     scalar_filters.append(
                         ScalarFilter(field=col, op=ScalarFilterOp.LTE, value=value)
                     )
-                elif op == "in":
+                else:
+                    # Remaining supported operator at this point is "in".
                     if not isinstance(value, (list, tuple)):
                         raise ValueError(
                             "IN operator expects a collection literal on RHS"
@@ -271,7 +272,6 @@ class RGQLToRelationalAdapter:
         result: List[OrderBy] = []
 
         for item in items:
-            print(item)
             prop_path = _prop_path(item.expr)
             col = _prop_path_to_column(prop_path)
             result.append(

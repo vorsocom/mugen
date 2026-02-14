@@ -482,9 +482,8 @@ def _parse_path(path: str) -> List[RGQLPathSegment]:
             idx = p.index("(")
             name = p[:idx]
             key_predicate = p[idx + 1 : -1]
-            if key_predicate is not None:
-                # May raise ParseError on malformed keys, which is correct
-                key_components = _parse_key_predicate(key_predicate)
+            # May raise ParseError on malformed keys, which is correct.
+            key_components = _parse_key_predicate(key_predicate)
 
         segments.append(
             RGQLPathSegment(

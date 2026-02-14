@@ -633,6 +633,23 @@ class TestDependencyInjector(unittest.TestCase):
 
         self.assertFalse(injector.has_ext_service("new"))
 
+    def test_register_ext_services_atomic_success(self):
+        """Test atomic bulk registration applies all services on success."""
+        injector = di.injector.DependencyInjector()
+        one = object()
+        two = object()
+
+        injector.register_ext_services(
+            {
+                "one": one,
+                "two": two,
+            },
+            atomic=True,
+        )
+
+        self.assertIs(injector.get_ext_service("one"), one)
+        self.assertIs(injector.get_ext_service("two"), two)
+
     def test_register_ext_services_duplicate_without_override(self):
         """Test bulk registration duplicate behavior without override."""
         injector = di.injector.DependencyInjector()

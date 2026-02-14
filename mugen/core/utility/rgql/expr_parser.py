@@ -554,10 +554,10 @@ class ExprParser:  # pylint: disable=too-few-public-methods
                 full_name=full,
             )
 
-        parts = [ident_tok.text]
+        parts = ident_tok.text.split(".")
         while self._match(TokenKind.DOT):
             part_tok = self._expect(TokenKind.IDENT)
-            parts.append(part_tok.text)
+            parts.extend(part_tok.text.split("."))
 
         full_name = ".".join(parts)
         namespace = ".".join(parts[:-1]) if len(parts) > 1 else None
