@@ -24,8 +24,5 @@ jobs:
       - name: Install Dependencies
         run: poetry install --no-interaction --no-root
 
-      - name: Run DI Pytest Gate
-        run: poetry run pytest mugen_test/test_mugen_di_*.py mugen_test/test_mugen_di_constructor_fallbacks.py
-
-      - name: Run DI Unittest Gate
-        run: poetry run python -m unittest mugen_test.test_mugen_register_extensions mugen_test.test_mugen_run_clients mugen_test.test_mugen_create_quart_app mugen_test.test_mugen_run_whatsapp_client
+      - name: Run Full Test Suite
+        run: poetry run pytest mugen_test -q
