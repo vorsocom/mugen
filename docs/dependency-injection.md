@@ -48,6 +48,34 @@ Reference regression coverage:
 
 - `mugen_test/test_mugen_di_constructor_fallbacks.py`
 
+## Repo-Wide Status
+
+Done:
+
+- Core DI provider construction is unified under `_PROVIDER_SPECS` +
+  `_build_provider(...)`.
+- Extension-service injector API is hardened (`has_ext_service`,
+  `get_required_ext_service`, sentinel-aware `get_ext_service`,
+  optional atomic bulk registration).
+- ACP and non-ACP runtime modules now use module-level provider callables for DI
+  defaults instead of inline `lambda: di.container...` signatures and direct
+  constructor fallback expressions.
+- Import-time DI safety is covered by:
+  - `mugen_test/test_acp_di_runtime_regression.py`
+  - `mugen_test/test_mugen_di_runtime_import_regression.py`
+- Constructor fallback behavior is covered by:
+  - `mugen_test/test_mugen_di_constructor_fallbacks.py`
+- CI DI gate exists at:
+  - `.github/workflows/di-gates.yml`
+
+Remaining:
+
+- `di.container` is still used intentionally at runtime in provider callables and
+  extension setup paths; this is expected and currently required for lazy container
+  behavior.
+- Keep extending focused regression tests when new modules adopt DI defaults so
+  import-time safety and constructor fallback semantics remain locked.
+
 ## Required Validation Gates
 
 Run these before merging DI changes:
