@@ -15,6 +15,26 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.messaging import IMessagingService
 
 
+def _completion_gateway_provider():
+    return di.container.completion_gateway
+
+
+def _config_provider():
+    return di.container.config
+
+
+def _keyval_storage_gateway_provider():
+    return di.container.keyval_storage_gateway
+
+
+def _logging_gateway_provider():
+    return di.container.logging_gateway
+
+
+def _messaging_service_provider():
+    return di.container.messaging_service
+
+
 class DefaultTextMHExtension(IMHExtension):
     """An implmentation of IMHExtension for text messages across all platforms."""
 
@@ -31,23 +51,23 @@ class DefaultTextMHExtension(IMHExtension):
         self._completion_gateway = (
             completion_gateway
             if completion_gateway is not None
-            else di.container.completion_gateway
+            else _completion_gateway_provider()
         )
-        self._config = config if config is not None else di.container.config
+        self._config = config if config is not None else _config_provider()
         self._keyval_storage_gateway = (
             keyval_storage_gateway
             if keyval_storage_gateway is not None
-            else di.container.keyval_storage_gateway
+            else _keyval_storage_gateway_provider()
         )
         self._logging_gateway = (
             logging_gateway
             if logging_gateway is not None
-            else di.container.logging_gateway
+            else _logging_gateway_provider()
         )
         self._messaging_service = (
             messaging_service
             if messaging_service is not None
-            else di.container.messaging_service
+            else _messaging_service_provider()
         )
 
     @property

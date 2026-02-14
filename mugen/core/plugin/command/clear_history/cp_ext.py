@@ -11,6 +11,14 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core import di
 
 
+def _config_provider():
+    return di.container.config
+
+
+def _keyval_storage_gateway_provider():
+    return di.container.keyval_storage_gateway
+
+
 class ClearChatHistoryICPExtension(ICPExtension):
     """An implementation of ICPExtension to clear chat history."""
 
@@ -19,11 +27,11 @@ class ClearChatHistoryICPExtension(ICPExtension):
         config: SimpleNamespace | None = None,
         keyval_storage_gateway: IKeyValStorageGateway | None = None,
     ) -> None:
-        self._config = config if config is not None else di.container.config
+        self._config = config if config is not None else _config_provider()
         self._keyval_storage_gateway = (
             keyval_storage_gateway
             if keyval_storage_gateway is not None
-            else di.container.keyval_storage_gateway
+            else _keyval_storage_gateway_provider()
         )
 
     @property

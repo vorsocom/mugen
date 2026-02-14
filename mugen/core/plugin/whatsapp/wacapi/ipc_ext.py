@@ -15,6 +15,26 @@ from mugen.core.contract.service.user import IUserService
 from mugen.core import di
 
 
+def _whatsapp_client_provider():
+    return di.container.whatsapp_client
+
+
+def _config_provider():
+    return di.container.config
+
+
+def _logging_gateway_provider():
+    return di.container.logging_gateway
+
+
+def _messaging_service_provider():
+    return di.container.messaging_service
+
+
+def _user_service_provider():
+    return di.container.user_service
+
+
 class WhatsAppWACAPIIPCExtension(IIPCExtension):
     """An implementation of IIPCExtension for WhatsApp Cloud API support."""
 
@@ -29,21 +49,23 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         whatsapp_client: IWhatsAppClient | None = None,
     ) -> None:
         self._client = (
-            whatsapp_client if whatsapp_client is not None else di.container.whatsapp_client
+            whatsapp_client
+            if whatsapp_client is not None
+            else _whatsapp_client_provider()
         )
-        self._config = config if config is not None else di.container.config
+        self._config = config if config is not None else _config_provider()
         self._logging_gateway = (
             logging_gateway
             if logging_gateway is not None
-            else di.container.logging_gateway
+            else _logging_gateway_provider()
         )
         self._messaging_service = (
             messaging_service
             if messaging_service is not None
-            else di.container.messaging_service
+            else _messaging_service_provider()
         )
         self._user_service = (
-            user_service if user_service is not None else di.container.user_service
+            user_service if user_service is not None else _user_service_provider()
         )
 
     @property
