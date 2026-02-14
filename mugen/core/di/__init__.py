@@ -452,199 +452,36 @@ def _build_provider_from_spec(
         logger.error(f"Invalid injector ({spec.provider_name}).")
 
 
-def _build_logging_gateway_provider(
+def _build_provider(
     config: dict,
     injector: DependencyInjector,
+    *,
+    provider_name: str,
 ) -> None:
-    """Build logging gateway provider for DI container."""
-    logger = _get_bootstrap_provider_logger(config)
+    """Build a provider by name."""
+    spec = _PROVIDER_SPECS[provider_name]
+
+    if provider_name == "logging_gateway":
+        logger = _get_bootstrap_provider_logger(config)
+        _build_provider_from_spec(
+            config,
+            injector,
+            spec=spec,
+            logger=logger,
+            validate_injector_config=True,
+        )
+        return
+
+    logger = _get_provider_logger(injector, provider_name=provider_name)
+    if logger is None:
+        return
+
     _build_provider_from_spec(
         config,
         injector,
-        spec=_PROVIDER_SPECS["logging_gateway"],
+        spec=spec,
         logger=logger,
-        validate_injector_config=True,
     )
-
-
-def _build_completion_gateway_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build completion gateway provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="completion_gateway")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["completion_gateway"],
-            logger=logger,
-        )
-
-
-def _build_ipc_service_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build IPC service provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="ipc_service")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["ipc_service"],
-            logger=logger,
-        )
-
-
-def _build_keyval_storage_gateway_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build key-value storage gateway provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="keyval_storage_gateway")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["keyval_storage_gateway"],
-            logger=logger,
-        )
-
-
-def _build_relational_storage_gateway_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build relational database storage gateway provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="relational_storage_gateway")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["relational_storage_gateway"],
-            logger=logger,
-        )
-
-
-def _build_nlp_service_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build NLP service provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="nlp_service")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["nlp_service"],
-            logger=logger,
-        )
-
-
-def _build_platform_service_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build platform service provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="platform_service")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["platform_service"],
-            logger=logger,
-        )
-
-
-def _build_user_service_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build user service provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="user_service")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["user_service"],
-            logger=logger,
-        )
-
-
-def _build_messaging_service_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build messaging service provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="messaging_service")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["messaging_service"],
-            logger=logger,
-        )
-
-
-def _build_knowledge_gateway_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build knowledge gateway provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="knowledge_gateway")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["knowledge_gateway"],
-            logger=logger,
-        )
-
-
-def _build_matrix_client_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build Matrix platform client provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="matrix_client")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["matrix_client"],
-            logger=logger,
-        )
-
-
-def _build_telnet_client_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build telnet platform client provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="telnet_client")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["telnet_client"],
-            logger=logger,
-        )
-
-
-def _build_whatsapp_client_provider(
-    config: dict,
-    injector: DependencyInjector,
-) -> None:
-    """Build WhatsApp platform client provider for DI container."""
-    logger = _get_provider_logger(injector, provider_name="whatsapp_client")
-    if logger is not None:
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS["whatsapp_client"],
-            logger=logger,
-        )
 
 
 def _load_config(config_file: str) -> dict:
@@ -674,18 +511,10 @@ def _build_container() -> DependencyInjector:
 
     _build_config_provider(config, injector)
 
-    _build_logging_gateway_provider(config, injector)
+    _build_provider(config, injector, provider_name="logging_gateway")
 
     for provider_name in _PROVIDER_BUILD_ORDER:
-        logger = _get_provider_logger(injector, provider_name=provider_name)
-        if logger is None:
-            continue
-        _build_provider_from_spec(
-            config,
-            injector,
-            spec=_PROVIDER_SPECS[provider_name],
-            logger=logger,
-        )
+        _build_provider(config, injector, provider_name=provider_name)
 
     _validate_container(config, injector)
 

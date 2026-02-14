@@ -70,14 +70,18 @@ class TestDIProviderResolution(unittest.TestCase):
         """Build completion provider using configured module class."""
 
         class WrongCompletionGateway(ICompletionGateway):
-            def __init__(self, config, logging_gateway):  # pylint: disable=unused-argument
+            def __init__(
+                self, config, logging_gateway
+            ):  # pylint: disable=unused-argument
                 raise AssertionError("Wrong completion gateway selected.")
 
             async def get_completion(self, context, operation="completion"):
                 return None
 
         class RightCompletionGateway(ICompletionGateway):
-            def __init__(self, config, logging_gateway):  # pylint: disable=unused-argument
+            def __init__(
+                self, config, logging_gateway
+            ):  # pylint: disable=unused-argument
                 pass
 
             async def get_completion(self, context, operation="completion"):
@@ -113,6 +117,6 @@ class TestDIProviderResolution(unittest.TestCase):
                 new_callable=subclasses,
             ),
         ):
-            di._build_completion_gateway_provider(config, injector)
+            di._build_provider(config, injector, provider_name="completion_gateway")
 
         self.assertIsInstance(injector.completion_gateway, RightCompletionGateway)

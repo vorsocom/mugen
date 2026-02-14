@@ -33,7 +33,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                 injector = None
 
                 # Attempt to build the Platform service.
-                di._build_platform_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="platform_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -74,7 +74,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the Platform service.
-                di._build_platform_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="platform_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -124,7 +124,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the Platform service.
-                di._build_platform_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="platform_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -192,7 +192,9 @@ class TestDIBuildPlatformService(unittest.TestCase):
                     ),
                 ):
                     # Attempt to build the Platform service.
-                    di._build_platform_service_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="platform_service"
+                    )
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -276,7 +278,9 @@ class TestDIBuildPlatformService(unittest.TestCase):
                     ),
                 ):
                     # Attempt to build the Platform service.
-                    di._build_platform_service_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="platform_service"
+                    )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

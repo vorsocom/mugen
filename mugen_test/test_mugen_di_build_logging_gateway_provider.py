@@ -22,7 +22,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the logging gateway.
-                di._build_logging_gateway_provider(config, injector)
+                di._build_provider(config, injector, provider_name="logging_gateway")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -61,7 +61,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the logging gateway.
-                di._build_logging_gateway_provider(config, injector)
+                di._build_provider(config, injector, provider_name="logging_gateway")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -106,7 +106,9 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     },
                 ):
                     # Attempt to build the logging gateway.
-                    di._build_logging_gateway_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="logging_gateway"
+                    )
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -162,7 +164,9 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     ),
                 ):
                     # Attempt to build the logging gateway.
-                    di._build_logging_gateway_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="logging_gateway"
+                    )
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -241,7 +245,9 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     ),
                 ):
                     # Attempt to build the logging gateway.
-                    di._build_logging_gateway_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="logging_gateway"
+                    )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.
