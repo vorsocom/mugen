@@ -200,6 +200,20 @@ auth_header="Authorization: Bearer $access_token"
 tenant_id="$(echo "$spec_json" | jq -r '.tenant_id // empty')"
 if [[ -z "$tenant_id" || "$tenant_id" == "null" ]]; then
   tenant_id="$(curl -sk -H "$auth_header" "$base_url/Tenants" | jq -r '.value[0].Id // empty')"
+  if [[ -z "$tenant_id" ]]; then
+    tenant_suffix="$(date +%Y%m%d%H%M%S)"
+    tenant_payload="$(jq -cn --arg suffix "$tenant_suffix" '{Name:("E2E Tenant " + $suffix),Slug:("e2e-" + $suffix)}')"
+    tenant_create_code="$(curl -sk -o /tmp/acp_http_e2e_create_tenant.out -w "%{http_code}" \
+      -H "$auth_header" -H "Content-Type: application/json" \
+      -X POST "$base_url/Tenants" \
+      -d "$tenant_payload")"
+    if [[ "$tenant_create_code" != "201" ]]; then
+      echo "ERROR: could not bootstrap tenant (HTTP $tenant_create_code)" >&2
+      cat /tmp/acp_http_e2e_create_tenant.out >&2
+      exit 1
+    fi
+    tenant_id="$(jq -r '.Id // empty' /tmp/acp_http_e2e_create_tenant.out)"
+  fi
 fi
 if [[ -z "$tenant_id" ]]; then
   echo "ERROR: could not determine tenant_id" >&2
