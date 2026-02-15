@@ -118,6 +118,16 @@ def whatsapp_server_ip_allow_list_required(
             config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
 
+            verification_required: bool
+            try:
+                verification_required = config.whatsapp.servers.verify_ip
+            except (AttributeError, KeyError):
+                logger.error("WhatsApp ip verification requirement unknown.")
+                verification_required = None
+
+            if verification_required is not True:
+                return await func(*args, **kwargs)
+
             try:
                 networks: list
                 with open(
@@ -125,29 +135,41 @@ def whatsapp_server_ip_allow_list_required(
                     "r",
                     encoding="utf8",
                 ) as f:
-                    networks = [l.rstrip() for l in f]
+                    networks = [line.strip() for line in f if line.strip() != ""]
             except (AttributeError, FileNotFoundError, IsADirectoryError, KeyError):
                 logger.error("WhatsApp servers allow list not found.")
                 abort(500)
 
-            verification_required: str
+            remote_addr = None
+            if hasattr(request, "access_route") and len(request.access_route) > 0:
+                remote_addr = request.access_route[0]
+            if remote_addr in [None, ""]:
+                remote_addr = request.remote_addr
+            if remote_addr in [None, ""]:
+                remote_addr = request.headers.get("Remote-Addr")
+            if remote_addr in [None, ""]:
+                logger.error("Remote address could not be determined.")
+                abort(400)
+
             try:
-                verification_required = config.whatsapp.servers.verify_ip
-            except (AttributeError, KeyError):
-                logger.error("WhatsApp ip verification requirement unknown.")
-                verification_required = None
+                remote_ip = ipaddress.ip_address(remote_addr)
+            except ValueError:
+                logger.error("Remote address is invalid.")
+                abort(400)
 
-            if verification_required is True:
-                remote_addr = request.headers["Remote-Addr"]
+            try:
                 hits = [
-                    x
-                    for x in networks
-                    if ipaddress.ip_address(remote_addr) in ipaddress.ip_network(x)
+                    network
+                    for network in networks
+                    if remote_ip in ipaddress.ip_network(network)
                 ]
+            except ValueError:
+                logger.error("Invalid CIDR entry in WhatsApp allow list.")
+                abort(500)
 
-                if len(hits) == 0:
-                    logger.error("Remote address not in allow list.")
-                    abort(500)
+            if len(hits) == 0:
+                logger.error("Remote address not in allow list.")
+                abort(403)
 
             return await func(*args, **kwargs)
 
