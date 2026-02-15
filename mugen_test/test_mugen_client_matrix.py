@@ -21,6 +21,18 @@ class _DeviceStore(dict):
         return [SimpleNamespace(device_id=device_id) for device_id in devices.keys()]
 
 
+class _DeviceStoreNoGet:  # pylint: disable=too-few-public-methods
+    def __init__(self, devices_by_user: dict[str, dict[str, object]]):
+        self._devices_by_user = devices_by_user
+
+    def __getitem__(self, user_id: str) -> dict[str, object]:
+        return self._devices_by_user[user_id]
+
+    def active_user_devices(self, user_id: str) -> list[SimpleNamespace]:
+        devices = self._devices_by_user.get(user_id, {})
+        return [SimpleNamespace(device_id=device_id) for device_id in devices.keys()]
+
+
 class _FakeUploadResponse:  # pylint: disable=too-few-public-methods
     def __init__(self, content_uri: str = "mxc://example/media") -> None:
         self.content_uri = content_uri
@@ -434,6 +446,27 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._keyval_storage_gateway.get = Mock(return_value=json.dumps(known))
 
         client.verify_user_devices("@user:example.com")
+
+        client.verify_device.assert_not_called()
+        client._keyval_storage_gateway.put.assert_not_called()
+
+    async def test_verify_user_devices_supports_device_store_without_get(self) -> None:
+        client = self._client()
+        client._config.matrix.security.device_trust.mode = "permissive"
+        client.device_store = _DeviceStoreNoGet(
+            {"@user:example.com": {"DEV-1": object(), "DEV-2": object()}}
+        )
+        client._keyval_storage_gateway.has_key = Mock(return_value=False)
+
+        client.verify_user_devices("@user:example.com")
+
+        self.assertEqual(client.verify_device.call_count, 2)
+        self.assertEqual(client._keyval_storage_gateway.put.call_count, 2)
+
+        client.verify_device.reset_mock()
+        client._keyval_storage_gateway.put.reset_mock()
+
+        client.verify_user_devices("@missing:example.com")
 
         client.verify_device.assert_not_called()
         client._keyval_storage_gateway.put.assert_not_called()
