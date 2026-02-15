@@ -572,6 +572,18 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             "Reason: Malformed sender.",
             client._logging_gateway.warning.call_args.args[0],
         )
+        self.assertEqual(
+            client._matrix_metrics["matrix.messages.ignored.self_message"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.messages.ignored.room_not_direct"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.messages.accepted.validated"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.messages.rejected.malformed_sender"], 1  # pylint: disable=protected-access
+        )
 
     async def test_is_direct_message_handles_malformed_room_state_payload(self) -> None:
         client = self._client()
@@ -650,6 +662,21 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             "@u:example.com",
             "User",
             "!room:test",
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.invites.ignored.membership_not_invite"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.invites.rejected.domain_not_allowed"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.invites.rejected.non_beta_user"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.invites.rejected.not_direct_message"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.invites.accepted.joined"], 1  # pylint: disable=protected-access
         )
 
     async def test_cb_invite_member_event_rejects_malformed_sender(self) -> None:
@@ -746,6 +773,33 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Matrix callback skipped.", log_message)
             self.assertIn(f"callback={callback_name}", log_message)
             self.assertIn("reason=unsupported_dm_scope", log_message)
+
+    async def test_track_matrix_decision_logs_reason_codes_and_counts(self) -> None:
+        client = self._client()
+
+        client._track_matrix_decision(  # pylint: disable=protected-access
+            domain="messages",
+            action="ignored",
+            reason="room_not_direct",
+            room_id="!room:test",
+            sender="@user:example.com",
+        )
+        client._track_matrix_decision(  # pylint: disable=protected-access
+            domain="messages",
+            action="ignored",
+            reason="room_not_direct",
+            room_id="!room:test",
+            sender="@user:example.com",
+        )
+
+        self.assertEqual(
+            client._matrix_metrics["matrix.messages.ignored.room_not_direct"], 2  # pylint: disable=protected-access
+        )
+        log_message = client._logging_gateway.debug.call_args.args[0]
+        self.assertIn("Matrix decision domain=messages action=ignored", log_message)
+        self.assertIn("reason=room_not_direct", log_message)
+        self.assertIn("room_id=!room:test", log_message)
+        self.assertIn("sender=@user:example.com", log_message)
 
     async def test_non_core_callbacks_dispatch_to_matrix_event_hook(self) -> None:
         client = self._client()
@@ -1153,6 +1207,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                     info={"mimetype": "application/octet-stream"},
                 )
             )
+        self.assertEqual(
+            client._matrix_metrics["matrix.media.rejected.extension_unknown"], 1  # pylint: disable=protected-access
+        )
 
         async def _fake_download(url: str, save_to: str):
             with open(save_to, "wb") as f:
@@ -1178,6 +1235,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         with open(output_path, "rb") as f:
             self.assertEqual(f.read(), b"decrypted")
         os.unlink(output_path)
+        self.assertEqual(
+            client._matrix_metrics["matrix.media.accepted.downloaded"], 1  # pylint: disable=protected-access
+        )
 
     async def test_download_file_returns_none_for_unexpected_download_response(
         self,
@@ -1198,6 +1258,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIsNone(output_path)
+        self.assertEqual(
+            client._matrix_metrics["matrix.media.rejected.download_response_unexpected"], 1  # pylint: disable=protected-access
+        )
 
     async def test_media_config_resolution_and_mimetype_matching(self) -> None:
         client = self._client()
@@ -1327,6 +1390,21 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                     info={"mimetype": "text/plain", "size": 4},
                 )
             )
+        self.assertEqual(
+            client._matrix_metrics["matrix.media.rejected.invalid_metadata"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.media.rejected.missing_mimetype"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.media.rejected.mimetype_not_allowed"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.media.rejected.declared_size_exceeded"], 1  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.media.rejected.downloaded_size_exceeded"], 1  # pylint: disable=protected-access
+        )
 
     async def test_download_file_returns_none_when_decryption_fails(self) -> None:
         client = self._client()
@@ -1365,6 +1443,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertGreaterEqual(client._logging_gateway.warning.call_count, 1)
+        self.assertEqual(
+            client._matrix_metrics["matrix.media.rejected.decrypt_failed"], 1  # pylint: disable=protected-access
+        )
 
     async def test_cb_sync_response_persists_next_batch_token(self) -> None:
         client = self._client()
