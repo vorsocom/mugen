@@ -1,6 +1,6 @@
 """Provides an implementation of IWhatsApp client."""
 
-__all__ = ["DefaultWhatsAppClient"]
+__all__ = ["DefaultWhatsAppClient", "WhatsAppAPIResponse"]
 
 import asyncio
 from http import HTTPMethod
@@ -10,6 +10,7 @@ import mimetypes
 import os
 import tempfile
 from types import SimpleNamespace
+from typing import TypedDict
 
 import aiohttp
 
@@ -21,6 +22,16 @@ from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 
 
+class WhatsAppAPIResponse(TypedDict):
+    """Represents a normalized Graph API response envelope."""
+
+    ok: bool
+    status: int | None
+    data: dict | None
+    error: str | None
+    raw: str | None
+
+
 # pylint: disable=too-many-instance-attributes
 class DefaultWhatsAppClient(IWhatsAppClient):
     """An implementation of IWhatsAppClient."""
@@ -28,6 +39,10 @@ class DefaultWhatsAppClient(IWhatsAppClient):
     _default_http_timeout_seconds: float = 10.0
 
     _default_max_download_bytes: int = 20 * 1024 * 1024
+
+    _default_max_api_retries: int = 2
+
+    _default_retry_backoff_seconds: float = 0.5
 
     _api_base_path: str
 
@@ -53,6 +68,8 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         self._user_service = user_service
         self._http_timeout_seconds = self._resolve_http_timeout_seconds()
         self._max_download_bytes = self._resolve_max_download_bytes()
+        self._max_api_retries = self._resolve_max_api_retries()
+        self._retry_backoff_seconds = self._resolve_retry_backoff_seconds()
 
         self._api_base_path = (
             f"{self._config.whatsapp.graphapi.base_url}/"
@@ -97,9 +114,92 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
         return limit
 
+    def _resolve_max_api_retries(self) -> int:
+        raw_retries = getattr(
+            getattr(getattr(self._config, "whatsapp", None), "graphapi", None),
+            "max_api_retries",
+            self._default_max_api_retries,
+        )
+        try:
+            retries = int(raw_retries)
+        except (TypeError, ValueError):
+            retries = self._default_max_api_retries
+
+        if retries < 0:
+            return self._default_max_api_retries
+
+        return retries
+
+    def _resolve_retry_backoff_seconds(self) -> float:
+        raw_backoff = getattr(
+            getattr(getattr(self._config, "whatsapp", None), "graphapi", None),
+            "retry_backoff_seconds",
+            self._default_retry_backoff_seconds,
+        )
+        try:
+            backoff = float(raw_backoff)
+        except (TypeError, ValueError):
+            backoff = self._default_retry_backoff_seconds
+
+        if backoff <= 0:
+            return self._default_retry_backoff_seconds
+
+        return backoff
+
     @staticmethod
     def _format_recipient(recipient: str) -> str:
         return f"+{recipient.lstrip('+')}"
+
+    @staticmethod
+    def _parse_response_payload(response_text: str | None) -> dict | None:
+        if response_text in [None, ""]:
+            return None
+
+        try:
+            parsed = json.loads(response_text)
+        except (TypeError, ValueError):
+            return None
+
+        if isinstance(parsed, dict):
+            return parsed
+
+        return None
+
+    @staticmethod
+    def _build_api_response(
+        *,
+        ok: bool,
+        status: int | None,
+        data: dict | None = None,
+        error: str | None = None,
+        raw: str | None = None,
+    ) -> WhatsAppAPIResponse:
+        return {
+            "ok": ok,
+            "status": status,
+            "data": data,
+            "error": error,
+            "raw": raw,
+        }
+
+    @staticmethod
+    def _is_retryable_status(status: int) -> bool:
+        return status == 429 or status >= 500
+
+    async def _wait_before_retry(
+        self,
+        *,
+        attempt: int,
+        method: str,
+        path: str,
+        reason: str,
+    ) -> None:
+        delay_seconds = self._retry_backoff_seconds * (2**attempt)
+        self._logging_gateway.warning(
+            f"Retrying Graph API call for {method} {path} in "
+            f"{delay_seconds:.2f}s ({reason})."
+        )
+        await asyncio.sleep(delay_seconds)
 
     async def init(self) -> None:
         self._logging_gateway.debug("DefaultWhatsAppClient.init")
@@ -122,13 +222,13 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
         self._client_session = None
 
-    async def delete_media(self, media_id: str) -> str | None:
+    async def delete_media(self, media_id: str) -> dict | None:
         return await self._call_api(media_id, method=HTTPMethod.DELETE)
 
     async def download_media(self, media_url: str, mimetype: str) -> str | None:
         return await self._download_file_http(media_url, mimetype)
 
-    async def retrieve_media_url(self, media_id: str) -> str | None:
+    async def retrieve_media_url(self, media_id: str) -> dict | None:
         return await self._call_api(media_id, method=HTTPMethod.GET)
 
     async def send_audio_message(
@@ -136,7 +236,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         audio: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -157,7 +257,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         contacts: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -178,7 +278,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         document: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -199,7 +299,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         image: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -220,7 +320,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         interactive: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -241,7 +341,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         location: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -257,7 +357,9 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
         return await self._send_message(data=data)
 
-    async def send_reaction_message(self, reaction: dict, recipient: str) -> str | None:
+    async def send_reaction_message(
+        self, reaction: dict, recipient: str
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -273,7 +375,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         sticker: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -294,7 +396,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         template: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -315,7 +417,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         message: str,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -339,7 +441,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         video: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -359,7 +461,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         self,
         file_path: str | BytesIO,
         file_type: str,
-    ) -> str | None:
+    ) -> dict | None:
         files = aiohttp.FormData()
         files.add_field("messaging_product", "whatsapp")
         files.add_field("type", file_type)
@@ -378,7 +480,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                 payload = file.read()
         except OSError as e:
             self._logging_gateway.error(str(e))
-            return None
+            return self._build_api_response(ok=False, status=None, error=str(e))
 
         files.add_field(
             "file",
@@ -395,13 +497,14 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data: dict = None,
         files: dict = None,
         method: str = HTTPMethod.POST,
-    ) -> str | None:
+    ) -> dict | None:
         """Make a call to Graph API."""
         if self._client_session is None or (
             getattr(self._client_session, "closed", False) is True
         ):
-            self._logging_gateway.error("WhatsApp client session is not initialized.")
-            return None
+            error = "WhatsApp client session is not initialized."
+            self._logging_gateway.error(error)
+            return self._build_api_response(ok=False, status=None, error=error)
 
         headers = {
             "Authorization": f"Bearer {self._config.whatsapp.graphapi.access_token}",
@@ -422,32 +525,73 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         if files is not None:
             kwargs["data"] = files
 
-        try:
-            match method:
-                case HTTPMethod.DELETE:
-                    response = await self._client_session.delete(url, **kwargs)
-                case HTTPMethod.GET:
-                    response = await self._client_session.get(url, **kwargs)
-                case HTTPMethod.POST:
-                    response = await self._client_session.post(url, **kwargs)
-                case HTTPMethod.PUT:
-                    response = await self._client_session.put(url, **kwargs)
-                case _:
-                    raise ValueError(f"Unsupported HTTP method: {method}")
+        for attempt in range(self._max_api_retries + 1):
+            try:
+                match method:
+                    case HTTPMethod.DELETE:
+                        response = await self._client_session.delete(url, **kwargs)
+                    case HTTPMethod.GET:
+                        response = await self._client_session.get(url, **kwargs)
+                    case HTTPMethod.POST:
+                        response = await self._client_session.post(url, **kwargs)
+                    case HTTPMethod.PUT:
+                        response = await self._client_session.put(url, **kwargs)
+                    case _:
+                        raise ValueError(f"Unsupported HTTP method: {method}")
 
-            response_text = await response.text()
-            if response.status < 200 or response.status >= 300:
-                self._logging_gateway.error(
+                response_text = await response.text()
+                response_data = self._parse_response_payload(response_text)
+
+                if response.status >= 200 and response.status < 300:
+                    return self._build_api_response(
+                        ok=True,
+                        status=response.status,
+                        data=response_data,
+                        raw=response_text,
+                    )
+
+                error = (
                     f"Graph API call failed ({response.status}) for {method} {path}."
                 )
+                if (
+                    self._is_retryable_status(response.status)
+                    and attempt < self._max_api_retries
+                ):
+                    await self._wait_before_retry(
+                        attempt=attempt,
+                        method=str(method),
+                        path=path,
+                        reason=f"status={response.status}",
+                    )
+                    continue
+
+                self._logging_gateway.error(error)
                 if response_text != "":
                     self._logging_gateway.error(response_text)
-                return None
+                return self._build_api_response(
+                    ok=False,
+                    status=response.status,
+                    data=response_data,
+                    error=error,
+                    raw=response_text,
+                )
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt < self._max_api_retries:
+                    await self._wait_before_retry(
+                        attempt=attempt,
+                        method=str(method),
+                        path=path,
+                        reason=str(e),
+                    )
+                    continue
 
-            return response_text
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            self._logging_gateway.error(str(e))
-            return None
+                error = str(e)
+                self._logging_gateway.error(error)
+                return self._build_api_response(ok=False, status=None, error=error)
+
+        return self._build_api_response(
+            ok=False, status=None, error="Unknown API failure."
+        )
 
     async def _download_file_http(self, url: str, mimetype: str) -> str | None:
         if self._client_session is None or (
@@ -480,7 +624,9 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
             bytes_written = 0
             body = b""
-            if hasattr(response, "content") and hasattr(response.content, "iter_chunked"):
+            if hasattr(response, "content") and hasattr(
+                response.content, "iter_chunked"
+            ):
                 stream = bytearray()
                 async for chunk in response.content.iter_chunked(8192):
                     bytes_written += len(chunk)
@@ -513,7 +659,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             if not download_complete and file_path and os.path.exists(file_path):
                 os.remove(file_path)
 
-    async def _send_message(self, data: dict) -> str | None:
+    async def _send_message(self, data: dict) -> dict | None:
         """Utility for all message functions."""
         return await self._call_api(
             path=self._api_messages_path,

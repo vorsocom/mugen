@@ -18,7 +18,7 @@ class IWhatsAppClient(ABC):
         """Perform shutdown routine."""
 
     @abstractmethod
-    async def delete_media(self, media_id: str) -> str | None:
+    async def delete_media(self, media_id: str) -> dict | None:
         """Delete a media file from WhatsApp."""
 
     @abstractmethod
@@ -26,7 +26,7 @@ class IWhatsAppClient(ABC):
         """Download a media file from WhatsApp."""
 
     @abstractmethod
-    async def retrieve_media_url(self, media_id: str) -> str | None:
+    async def retrieve_media_url(self, media_id: str) -> dict | None:
         """Retrieve a media file URL from WhatsApp."""
 
     @abstractmethod
@@ -35,7 +35,7 @@ class IWhatsAppClient(ABC):
         audio: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         """Send an Audio message to a WhatsApp user."""
 
     @abstractmethod
@@ -44,7 +44,7 @@ class IWhatsAppClient(ABC):
         contacts: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         """Send a Contacts message to a WhatsApp user."""
 
     @abstractmethod
@@ -53,7 +53,7 @@ class IWhatsAppClient(ABC):
         document: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         """Send a Document message to a WhatsApp user."""
 
     @abstractmethod
@@ -62,7 +62,7 @@ class IWhatsAppClient(ABC):
         image: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         """Send an Image message to a WhatsApp user."""
 
     @abstractmethod
@@ -71,7 +71,7 @@ class IWhatsAppClient(ABC):
         interactive: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         """Send an Interactive message to a WhatsApp user.
 
         This applies to:
@@ -89,11 +89,13 @@ class IWhatsAppClient(ABC):
         location: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         """Send a Location message to a WhatsApp user."""
 
     @abstractmethod
-    async def send_reaction_message(self, reaction: dict, recipient: str) -> str | None:
+    async def send_reaction_message(
+        self, reaction: dict, recipient: str
+    ) -> dict | None:
         """Send a Reaction message to a WhatsApp user."""
 
     @abstractmethod
@@ -102,7 +104,7 @@ class IWhatsAppClient(ABC):
         sticker: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         """Send a Sticker message to a WhatsApp user."""
 
     @abstractmethod
@@ -111,7 +113,7 @@ class IWhatsAppClient(ABC):
         template: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         """Send a Template message to a WhatsApp user.
 
         This applies to:
@@ -129,7 +131,7 @@ class IWhatsAppClient(ABC):
         message: str,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         """Send a Text message to a WhatsApp user."""
 
     @abstractmethod
@@ -138,7 +140,7 @@ class IWhatsAppClient(ABC):
         video: dict,
         recipient: str,
         reply_to: str = None,
-    ) -> str | None:
+    ) -> dict | None:
         """Send a Video message to a WhatsApp user."""
 
     @abstractmethod
@@ -146,5 +148,5 @@ class IWhatsAppClient(ABC):
         self,
         file_path: str | BytesIO,
         file_type: str,
-    ) -> str | None:
+    ) -> dict | None:
         """Upload a media file to WhatsApp."""
