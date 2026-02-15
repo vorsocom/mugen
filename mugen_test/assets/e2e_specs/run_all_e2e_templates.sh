@@ -24,6 +24,41 @@ require_cmd() {
   fi
 }
 
+resolve_python_bin() {
+  local candidate="${ACP_E2E_PYTHON_BIN:-python3}"
+
+  if [[ -x "$candidate" ]]; then
+    echo "$candidate"
+    return
+  fi
+
+  if command -v "$candidate" >/dev/null 2>&1; then
+    command -v "$candidate"
+    return
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    command -v python
+    return
+  fi
+
+  echo "ERROR: could not find a usable python interpreter for E2E Hypercorn startup." >&2
+  echo "Set ACP_E2E_PYTHON_BIN to a valid interpreter path." >&2
+  exit 1
+}
+
+shell_join_quoted() {
+  local arg output=""
+  for arg in "$@"; do
+    output+=$(printf '%q ' "$arg")
+  done
+  echo "${output% }"
+}
+
+escape_sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[&|]/\\&/g'
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RUNNER="$REPO_ROOT/.codex/skills/acp-http-e2e-tester/scripts/run_acp_http_e2e.sh"
@@ -67,6 +102,14 @@ if [[ ! -x "$RUNNER" ]]; then
   exit 1
 fi
 
+E2E_PYTHON_BIN="$(resolve_python_bin)"
+E2E_PYTHONPATH="$REPO_ROOT"
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  E2E_PYTHONPATH="$REPO_ROOT:$PYTHONPATH"
+fi
+HYPERCORN_CMD="$(shell_join_quoted env "PYTHONPATH=$E2E_PYTHONPATH" "$E2E_PYTHON_BIN" -m hypercorn --bind 127.0.0.1:8081 quartman)"
+HYPERCORN_CMD_ESCAPED="$(escape_sed_replacement "$HYPERCORN_CMD")"
+
 declare -a SPECS=(
   "mugen_test/assets/e2e_specs/ops_case/ops-case-e2e-lifecycle.template.json"
   "mugen_test/assets/e2e_specs/ops_sla/ops-sla-e2e-clock-lifecycle.template.json"
@@ -86,6 +129,7 @@ render_spec() {
   local template="$1"
   local output="$2"
   local run_id="$3"
+  local hypercorn_cmd_escaped="$4"
 
   local run_id_flat
   run_id_flat="$(echo "$run_id" | tr -cd '[:alnum:]_')"
@@ -109,6 +153,7 @@ render_spec() {
   snap_note="Ops reporting snapshot lifecycle e2e ${run_id}"
 
   sed \
+    -e "s|__HYPERCORN_CMD__|${hypercorn_cmd_escaped}|g" \
     -e "s|__CASE_TITLE__|${case_title}|g" \
     -e "s|__TRACKED_REF__|${tracked_ref}|g" \
     -e "s|__WF_KEY__|${wf_key}|g" \
@@ -151,7 +196,7 @@ for spec_rel in "${SPECS[@]}"; do
 
   run_id="$(date +%Y%m%d_%H%M%S)_${index}"
   rendered_spec="$(mktemp "/tmp/acp_http_e2e_${index}_XXXXXX.json")"
-  render_spec "$spec_path" "$rendered_spec" "$run_id"
+  render_spec "$spec_path" "$rendered_spec" "$run_id" "$HYPERCORN_CMD_ESCAPED"
 
   echo
   echo "=== RUNNING: $spec_rel ==="

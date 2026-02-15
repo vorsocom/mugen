@@ -1,7 +1,7 @@
 {
   "runtime": {
     "spawn_hypercorn": true,
-    "hypercorn_cmd": "PYTHONPATH=/home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/lib/python3.12/site-packages /home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/bin/python -m hypercorn -c hypercorn.e2e.toml quartman",
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
     "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
     "startup_timeout_secs": 30
   },

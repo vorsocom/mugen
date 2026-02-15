@@ -111,7 +111,14 @@ status_field="$(echo "$spec_json" | jq -r '.status_field // "Status"')"
 spawn_hypercorn="$(echo "$spec_json" | jq -r '.runtime.spawn_hypercorn // false')"
 hypercorn_cmd="$(echo "$spec_json" | jq -r '.runtime.hypercorn_cmd // empty')"
 health_url="$(echo "$spec_json" | jq -r '.runtime.health_url // (.base_url + "/auth/.well-known/jwks.json")')"
-startup_timeout_secs="$(echo "$spec_json" | jq -r '.runtime.startup_timeout_secs // 30')"
+spec_startup_timeout_secs="$(echo "$spec_json" | jq -r '.runtime.startup_timeout_secs // 30')"
+startup_timeout_secs="${ACP_E2E_STARTUP_TIMEOUT_SECS:-$spec_startup_timeout_secs}"
+
+if [[ ! "$startup_timeout_secs" =~ ^[0-9]+$ || "$startup_timeout_secs" -le 0 ]]; then
+  echo "ERROR: invalid startup timeout: $startup_timeout_secs" >&2
+  echo "Set runtime.startup_timeout_secs in the spec, or ACP_E2E_STARTUP_TIMEOUT_SECS to a positive integer." >&2
+  exit 1
+fi
 
 if [[ -z "$base_url" || "$base_url" == "null" ]]; then
   echo "ERROR: base_url is required" >&2
@@ -151,6 +158,12 @@ if [[ "$spawn_hypercorn" == "true" ]]; then
 
   started=0
   for _ in $(seq 1 "$startup_timeout_secs"); do
+    if ! kill -0 "$hypercorn_pid" >/dev/null 2>&1; then
+      echo "ERROR: Hypercorn process exited before becoming healthy." >&2
+      echo "See log: $log_file" >&2
+      tail -n 120 "$log_file" >&2 || true
+      exit 1
+    fi
     health_code="$(curl -sk -o /dev/null -w "%{http_code}" "$health_url" || true)"
     if [[ "$health_code" == "200" ]]; then
       started=1
@@ -161,6 +174,7 @@ if [[ "$spawn_hypercorn" == "true" ]]; then
   if [[ "$started" -ne 1 ]]; then
     echo "ERROR: Hypercorn did not become healthy within ${startup_timeout_secs}s" >&2
     echo "See log: $log_file" >&2
+    tail -n 120 "$log_file" >&2 || true
     exit 1
   fi
 fi
@@ -186,6 +200,32 @@ auth_header="Authorization: Bearer $access_token"
 tenant_id="$(echo "$spec_json" | jq -r '.tenant_id // empty')"
 if [[ -z "$tenant_id" || "$tenant_id" == "null" ]]; then
   tenant_id="$(curl -sk -H "$auth_header" "$base_url/Tenants" | jq -r '.value[0].Id // empty')"
+  if [[ -z "$tenant_id" ]]; then
+    tenant_suffix="$(date +%Y%m%d%H%M%S)"
+    tenant_slug="e2e-${tenant_suffix}"
+    tenant_payload="$(jq -cn --arg suffix "$tenant_suffix" --arg slug "$tenant_slug" '{Name:("E2E Tenant " + $suffix),Slug:$slug}')"
+    tenant_create_code="$(curl -sk -o /tmp/acp_http_e2e_create_tenant.out -w "%{http_code}" \
+      -H "$auth_header" -H "Content-Type: application/json" \
+      -X POST "$base_url/Tenants" \
+      -d "$tenant_payload")"
+    if [[ "$tenant_create_code" != "201" ]]; then
+      echo "ERROR: could not bootstrap tenant (HTTP $tenant_create_code)" >&2
+      cat /tmp/acp_http_e2e_create_tenant.out >&2
+      exit 1
+    fi
+    tenant_id="$(jq -r '.Id // empty' /tmp/acp_http_e2e_create_tenant.out)"
+    if [[ -z "$tenant_id" ]]; then
+      for _ in $(seq 1 10); do
+        tenant_id="$(curl -sk -H "$auth_header" "$base_url/Tenants" \
+          | jq -r --arg slug "$tenant_slug" '.value[] | select(.Slug == $slug) | .Id' \
+          | tail -n1)"
+        if [[ -n "$tenant_id" ]]; then
+          break
+        fi
+        sleep 1
+      done
+    fi
+  fi
 fi
 if [[ -z "$tenant_id" ]]; then
   echo "ERROR: could not determine tenant_id" >&2

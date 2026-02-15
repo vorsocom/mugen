@@ -87,6 +87,6 @@ elif [[ "$COVERAGE_BADGE_MODE" == "check" ]]; then
 fi
 
 echo "==> Full E2E template validation"
-bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh
+ACP_E2E_PYTHON_BIN="$PYTHON_BIN" bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh
 
 echo "All pre-push quality gates passed."
