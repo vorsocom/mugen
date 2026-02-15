@@ -57,6 +57,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 ):
     """A custom implementation of IMatrixClient."""
 
+    _callback_skip_reason_dm_scope: str = "unsupported_dm_scope"
+
     _flags_key: str = "m.agent_flags"
 
     _ipc_callback: Coroutine
@@ -255,14 +257,29 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 # Persist changes to the known devices list.
                 self._save_known_devices(known_devices)
 
+    def _log_skipped_callback(
+        self,
+        callback_name: str,
+        event: object = None,
+        reason: str = _callback_skip_reason_dm_scope,
+    ) -> None:
+        event_type = type(event).__name__ if event is not None else "UnknownEvent"
+        self._logging_gateway.debug(
+            "Matrix callback skipped."
+            f" callback={callback_name}"
+            f" event={event_type}"
+            f" reason={reason}"
+        )
+
     ## Callbacks.
     # Events
     async def _cb_megolm_event(self, _room: MatrixRoom, _event: MegolmEvent) -> None:
         """Handle MegolmEvents."""
-        self._logging_gateway.debug("MegolmEvent")
+        self._log_skipped_callback("_cb_megolm_event", event=_event)
 
     async def _cb_invite_alias_event(self, _event: InviteAliasEvent) -> None:
         """Handle InviteAliasEvents."""
+        self._log_skipped_callback("_cb_invite_alias_event", event=_event)
 
     async def _cb_invite_member_event(
         self, room: MatrixInvitedRoom, event: InviteMemberEvent
@@ -333,22 +350,27 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self, _room: MatrixInvitedRoom, _event: InviteNameEvent
     ) -> None:
         """Handle InviteNameEvents."""
+        self._log_skipped_callback("_cb_invite_name_event", event=_event)
 
     async def _cb_room_create_event(
         self, _room: MatrixRoom, _event: RoomCreateEvent
     ) -> None:
         """Handle RoomCreateEvents."""
+        self._log_skipped_callback("_cb_room_create_event", event=_event)
 
     async def _cb_key_verification_event(self, event: KeyVerificationEvent) -> None:
         """Handle key verification events."""
+        self._log_skipped_callback("_cb_key_verification_event", event=event)
 
     async def _cb_room_key_event(self, _event: RoomKeyEvent) -> None:
         """Handle RoomKeyEvents."""
+        self._log_skipped_callback("_cb_room_key_event", event=_event)
 
     async def _cb_room_key_request(
         self, _room: MatrixRoom, _event: RoomKeyRequest
     ) -> None:
         """Handle RoomKeyRequests."""
+        self._log_skipped_callback("_cb_room_key_request", event=_event)
 
     async def _validate_message(self, room: MatrixRoom, message) -> bool:
         """Validate an incoming message"""
@@ -458,9 +480,11 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self, _room: MatrixRoom, _event: RoomMemberEvent
     ) -> None:
         """Handle RoomMemberEvents."""
+        self._log_skipped_callback("_cb_room_member_event", event=_event)
 
     async def _cb_tag_event(self, _event: TagEvent) -> None:
         """Handle TagEvents."""
+        self._log_skipped_callback("_cb_tag_event", event=_event)
 
     # Responses
     async def _cb_sync_response(self, resp: SyncResponse):
