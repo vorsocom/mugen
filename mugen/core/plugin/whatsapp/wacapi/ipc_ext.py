@@ -5,6 +5,7 @@ __all__ = ["WhatsAppWACAPIIPCExtension"]
 import asyncio
 import hashlib
 import json
+import time
 from types import SimpleNamespace
 
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
@@ -220,6 +221,12 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         return None
 
     async def _process_message_event(self, event_value: dict, message: dict) -> None:
+        started = time.perf_counter()
+        correlation_id = message.get("id")
+        self._logging_gateway.debug(
+            f"[cid={correlation_id}] Process WhatsApp message event "
+            f"type={message.get('type')}."
+        )
         sender = message.get("from")
         contact = self._get_contact_for_sender(event_value.get("contacts"), sender)
 
@@ -390,8 +397,19 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         self._logging_gateway.debug("Send responses to user.")
         for response in message_responses or []:
             await self._send_response_to_user(response=response, sender=sender)
+        latency_ms = (time.perf_counter() - started) * 1000
+        self._logging_gateway.debug(
+            f"[cid={correlation_id}] WhatsApp message event completed "
+            f"latency_ms={latency_ms:.2f}."
+        )
 
     async def _process_status_event(self, status: dict) -> None:
+        started = time.perf_counter()
+        correlation_id = status.get("id")
+        self._logging_gateway.debug(
+            f"[cid={correlation_id}] Process WhatsApp status event "
+            f"status={status.get('status')}."
+        )
         if self._is_duplicate_event("status", status):
             self._logging_gateway.debug("Skip duplicate WhatsApp status event.")
             return
@@ -399,6 +417,11 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         await self._call_message_handlers(
             message=status,
             message_type="status",
+        )
+        latency_ms = (time.perf_counter() - started) * 1000
+        self._logging_gateway.debug(
+            f"[cid={correlation_id}] WhatsApp status event completed "
+            f"latency_ms={latency_ms:.2f}."
         )
 
     async def _upload_response_media(self, response: dict, context: str) -> dict | None:
@@ -590,6 +613,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
 
     async def _wacapi_event(self, payload: dict) -> None:
         """Process WhatsApp Cloud API event."""
+        started = time.perf_counter()
         response_queue = payload.get("response_queue")
         try:
             event = payload["data"]
@@ -640,6 +664,10 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         except (KeyError, TypeError):
             self._logging_gateway.error("Malformed WhatsApp event payload.")
         finally:
+            latency_ms = (time.perf_counter() - started) * 1000
+            self._logging_gateway.debug(
+                f"WhatsApp webhook event processing latency_ms={latency_ms:.2f}."
+            )
             if response_queue is not None:
                 await response_queue.put({"response": "OK"})
 
