@@ -10,7 +10,7 @@ class ITelnetClient(ABC):  # pylint: disable=too-few-public-methods
     """An ABC for Telnet clients."""
 
     @abstractmethod
-    async def __aenter__(self) -> None:
+    async def __aenter__(self) -> "ITelnetClient":
         """Initialisation routine."""
 
     @abstractmethod

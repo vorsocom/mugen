@@ -292,6 +292,10 @@ api.key = "<sambanova-api-key>"
 [telnet]
 socket.host = "localhost"
 socket.port = 8888
+# Maximum seconds to wait for input before disconnecting (<=0 disables timeout).
+read_timeout_seconds = 300.0
+# Maximum raw input bytes accepted for one prompt.
+max_prompt_bytes = 4096
 
 # === Transformers ===
 [transformers]
