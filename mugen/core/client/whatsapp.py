@@ -3,6 +3,7 @@
 __all__ = ["DefaultWhatsAppClient", "WhatsAppAPIResponse"]
 
 import asyncio
+from collections.abc import Callable
 from http import HTTPMethod
 from io import BytesIO
 import json
@@ -486,40 +487,53 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         file_path: str | BytesIO,
         file_type: str,
     ) -> dict | None:
-        files = aiohttp.FormData()
-        files.add_field("messaging_product", "whatsapp")
-        files.add_field("type", file_type)
-
         if isinstance(file_path, BytesIO):
-            files.add_field(
-                "file",
-                file_path.getvalue(),
-                filename="upload.bin",
-                content_type=file_type,
-            )
+            payload = file_path.getvalue()
+
+            def files_factory() -> tuple[aiohttp.FormData, list]:
+                files = aiohttp.FormData()
+                files.add_field("messaging_product", "whatsapp")
+                files.add_field("type", file_type)
+                files.add_field(
+                    "file",
+                    payload,
+                    filename="upload.bin",
+                    content_type=file_type,
+                )
+                return files, []
+
             return await self._call_api(
                 self._api_media_path,
-                files=files,
+                files_factory=files_factory,
                 correlation_id=self._new_correlation_id(),
             )
 
         try:
-            with open(file_path, "rb") as file:
-                payload = file.read()
+            with open(file_path, "rb"):
+                pass
         except OSError as e:
             self._logging_gateway.error(str(e))
             return self._build_api_response(ok=False, status=None, error=str(e))
 
-        files.add_field(
-            "file",
-            payload,
-            filename=os.path.basename(file_path),
-            content_type=file_type,
-        )
+        file_name = os.path.basename(file_path)
+
+        def files_factory() -> tuple[aiohttp.FormData, list]:
+            files = aiohttp.FormData()
+            files.add_field("messaging_product", "whatsapp")
+            files.add_field("type", file_type)
+            file_stream = open(file_path, "rb")
+            files.add_field(
+                "file",
+                file_stream,
+                filename=file_name,
+                content_type=file_type,
+            )
+            return files, [file_stream]
+
         return await self._call_api(
             self._api_media_path,
-            files=files,
-            correlation_id=os.path.basename(file_path),
+            files_factory=files_factory,
+            correlation_id=file_name,
         )
 
     async def _call_api(
@@ -528,6 +542,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         content_type: str = None,
         data: dict = None,
         files: dict = None,
+        files_factory: Callable[[], tuple[aiohttp.FormData, list]] | None = None,
         method: str = HTTPMethod.POST,
         correlation_id: str | None = None,
     ) -> dict | None:
@@ -549,18 +564,26 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
         url = f"{self._api_base_path}/{path}"
 
-        kwargs = {
-            "headers": headers,
-        }
-
-        if data is not None:
-            kwargs["data"] = json.dumps(data)
-
-        if files is not None:
-            kwargs["data"] = files
-
         for attempt in range(self._max_api_retries + 1):
             started = time.perf_counter()
+            kwargs = {
+                "headers": headers,
+            }
+            if data is not None:
+                kwargs["data"] = json.dumps(data)
+
+            resources_to_close: list = []
+            if files_factory is not None:
+                try:
+                    built_files, resources_to_close = files_factory()
+                except OSError as e:
+                    error = str(e)
+                    self._logging_gateway.error(error)
+                    return self._build_api_response(ok=False, status=None, error=error)
+                kwargs["data"] = built_files
+            elif files is not None:
+                kwargs["data"] = files
+
             try:
                 match method:
                     case HTTPMethod.DELETE:
@@ -647,6 +670,9 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                 )
                 self._logging_gateway.error(error)
                 return self._build_api_response(ok=False, status=None, error=error)
+            finally:
+                for resource in resources_to_close:
+                    resource.close()
 
         return self._build_api_response(
             ok=False, status=None, error="Unknown API failure."
@@ -688,34 +714,30 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             if not extension:
                 return None
 
+            fd, file_path = tempfile.mkstemp(suffix=extension)
+            os.close(fd)
             bytes_written = 0
-            body = b""
-            if hasattr(response, "content") and hasattr(
-                response.content, "iter_chunked"
-            ):
-                stream = bytearray()
-                async for chunk in response.content.iter_chunked(8192):
-                    bytes_written += len(chunk)
+            with open(file_path, "wb") as file:
+                if hasattr(response, "content") and hasattr(
+                    response.content, "iter_chunked"
+                ):
+                    async for chunk in response.content.iter_chunked(8192):
+                        bytes_written += len(chunk)
+                        if bytes_written > self._max_download_bytes:
+                            self._logging_gateway.error(
+                                "Downloaded media exceeded max allowed size."
+                            )
+                            return None
+                        file.write(chunk)
+                else:
+                    body = await response.read()
+                    bytes_written = len(body)
                     if bytes_written > self._max_download_bytes:
                         self._logging_gateway.error(
                             "Downloaded media exceeded max allowed size."
                         )
                         return None
-                    stream.extend(chunk)
-                body = bytes(stream)
-            else:
-                body = await response.read()
-                bytes_written = len(body)
-                if bytes_written > self._max_download_bytes:
-                    self._logging_gateway.error(
-                        "Downloaded media exceeded max allowed size."
-                    )
-                    return None
-
-            fd, file_path = tempfile.mkstemp(suffix=extension)
-            os.close(fd)
-            with open(file_path, "wb") as file:
-                file.write(body)
+                    file.write(body)
             download_complete = True
             latency_ms = (time.perf_counter() - started) * 1000
             self._logging_gateway.debug(
