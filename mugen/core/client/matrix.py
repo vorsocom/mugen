@@ -503,6 +503,32 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             f" reason={reason}"
         )
 
+    def _increment_matrix_metric(self, metric_name: str) -> None:
+        metrics = getattr(self, "_matrix_metrics", None)
+        if not isinstance(metrics, dict):
+            metrics = {}
+            self._matrix_metrics = metrics
+        metrics[metric_name] = metrics.get(metric_name, 0) + 1
+
+    def _track_matrix_decision(
+        self,
+        domain: str,
+        action: str,
+        reason: str,
+        **fields,
+    ) -> None:
+        self._increment_matrix_metric(f"matrix.{domain}.{action}.{reason}")
+        structured_fields = " ".join(
+            f"{key}={value}" for key, value in fields.items() if value is not None
+        )
+        self._logging_gateway.debug(
+            "Matrix decision"
+            f" domain={domain}"
+            f" action={action}"
+            f" reason={reason}"
+            f" {structured_fields}"
+        )
+
     async def _dispatch_matrix_event_hook(
         self,
         callback_name: str,
@@ -599,6 +625,14 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # Filter out events that do not have membership set to invite.
         membership = event_content.get("membership")
         if membership is not None and membership != "invite":
+            self._track_matrix_decision(
+                domain="invites",
+                action="ignored",
+                reason="membership_not_invite",
+                sender=event.sender,
+                room_id=room.room_id,
+                membership=membership,
+            )
             return
 
         # Only process invites from allowed domains.
@@ -609,6 +643,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         sender_domain = self._parse_sender_domain(event.sender)
         if sender_domain is None:
             await self.room_leave(room.room_id)
+            self._track_matrix_decision(
+                domain="invites",
+                action="rejected",
+                reason="malformed_sender",
+                sender=event.sender,
+                room_id=room.room_id,
+            )
             self._logging_gateway.warning(
                 "InviteMemberEvent: Rejected invitation. Reason: Malformed sender."
                 f" ({event.sender})"
@@ -617,6 +658,14 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
         if sender_domain not in allowed_domains or sender_domain in denied_domains:
             await self.room_leave(room.room_id)
+            self._track_matrix_decision(
+                domain="invites",
+                action="rejected",
+                reason="domain_not_allowed",
+                sender=event.sender,
+                room_id=room.room_id,
+                sender_domain=sender_domain,
+            )
             self._logging_gateway.warning(
                 "InviteMemberEvent: Rejected invitation. Reason: Domain"
                 f" not allowed. ({event.sender})"
@@ -629,6 +678,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             beta_users: list = self._config.matrix.beta.users
             if event.sender not in beta_users:
                 await self.room_leave(room.room_id)
+                self._track_matrix_decision(
+                    domain="invites",
+                    action="rejected",
+                    reason="non_beta_user",
+                    sender=event.sender,
+                    room_id=room.room_id,
+                )
                 self._logging_gateway.warning(
                     "InviteMemberEvent: Rejected invitation. Reason:"
                     f" Non-beta user. ({event.sender})"
@@ -640,6 +696,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             is_direct = event_content.get("is_direct")
             if is_direct is not True:
                 await self.room_leave(room.room_id)
+                self._track_matrix_decision(
+                    domain="invites",
+                    action="rejected",
+                    reason="not_direct_message",
+                    sender=event.sender,
+                    room_id=room.room_id,
+                )
                 self._logging_gateway.warning(
                     "InviteMemberEvent: Rejected invitation. Reason: Not direct"
                     f" message. ({event.sender})"
@@ -657,6 +720,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             room_id=room.room_id,
             event_type=self._flags_key,
             content={"m.direct": 1},
+        )
+        self._track_matrix_decision(
+            domain="invites",
+            action="accepted",
+            reason="joined",
+            sender=event.sender,
+            room_id=room.room_id,
         )
 
         # Get profile and add user to list of known users if required.
@@ -714,6 +784,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         """Validate an incoming message"""
         sender_id = getattr(message, "sender", None)
         if self._parse_sender_domain(sender_id) is None:
+            self._track_matrix_decision(
+                domain="messages",
+                action="rejected",
+                reason="malformed_sender",
+                sender=sender_id,
+                room_id=room.room_id,
+            )
             self._logging_gateway.warning(
                 "RoomMessage: Rejected message. Reason: Malformed sender."
                 f" ({sender_id})"
@@ -725,8 +802,22 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # will create a message loop.
         is_direct = await self._is_direct_message(room.room_id)
         if sender_id == self.user_id:
+            self._track_matrix_decision(
+                domain="messages",
+                action="ignored",
+                reason="self_message",
+                sender=sender_id,
+                room_id=room.room_id,
+            )
             return False
         if not is_direct:
+            self._track_matrix_decision(
+                domain="messages",
+                action="ignored",
+                reason="room_not_direct",
+                sender=sender_id,
+                room_id=room.room_id,
+            )
             self._logging_gateway.debug(
                 "RoomMessage: Ignored message. Reason: Room not marked direct."
                 f" ({room.room_id})"
@@ -739,6 +830,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # Set the room read marker to indicate that the assistant has read the
         # message.
         await self.room_read_markers(room.room_id, message.event_id, message.event_id)
+        self._track_matrix_decision(
+            domain="messages",
+            action="accepted",
+            reason="validated",
+            sender=sender_id,
+            room_id=room.room_id,
+        )
 
         return True
 
@@ -1102,6 +1200,11 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     async def _download_file(self, file: dict, info: dict) -> str | None:
         if not isinstance(info, dict):
+            self._track_matrix_decision(
+                domain="media",
+                action="rejected",
+                reason="invalid_metadata",
+            )
             self._logging_gateway.warning(
                 "Matrix media download rejected. Reason: Invalid metadata payload."
             )
@@ -1109,6 +1212,11 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
         mimetype = info.get("mimetype")
         if not isinstance(mimetype, str) or mimetype.strip() == "":
+            self._track_matrix_decision(
+                domain="media",
+                action="rejected",
+                reason="missing_mimetype",
+            )
             self._logging_gateway.warning(
                 "Matrix media download rejected. Reason: Missing mimetype."
             )
@@ -1116,6 +1224,12 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
         mimetype = mimetype.strip().lower()
         if not self._media_mimetype_allowed(mimetype):
+            self._track_matrix_decision(
+                domain="media",
+                action="rejected",
+                reason="mimetype_not_allowed",
+                mimetype=mimetype,
+            )
             self._logging_gateway.warning(
                 "Matrix media download rejected."
                 f" Reason: Mimetype not allowed ({mimetype})."
@@ -1125,6 +1239,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         max_download_bytes = self._resolve_media_max_download_bytes()
         declared_size = info.get("size")
         if isinstance(declared_size, int) and declared_size > max_download_bytes:
+            self._track_matrix_decision(
+                domain="media",
+                action="rejected",
+                reason="declared_size_exceeded",
+                declared_size=declared_size,
+                max_download_bytes=max_download_bytes,
+            )
             self._logging_gateway.warning(
                 "Matrix media download rejected."
                 f" Reason: Declared size exceeds limit ({declared_size} > {max_download_bytes})."
@@ -1149,6 +1270,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 if isinstance(resp, DiskDownloadResponse):
                     downloaded_size = os.path.getsize(tf.name)
                     if downloaded_size > max_download_bytes:
+                        self._track_matrix_decision(
+                            domain="media",
+                            action="rejected",
+                            reason="downloaded_size_exceeded",
+                            downloaded_size=downloaded_size,
+                            max_download_bytes=max_download_bytes,
+                        )
                         self._logging_gateway.warning(
                             "Matrix media download rejected."
                             f" Reason: Downloaded size exceeds limit ({downloaded_size} > {max_download_bytes})."
@@ -1171,13 +1299,39 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                                 suffix=extension, delete=False
                             ) as df:
                                 df.write(decrypted_file)
+                                self._track_matrix_decision(
+                                    domain="media",
+                                    action="accepted",
+                                    reason="downloaded",
+                                    mimetype=mimetype,
+                                )
                                 return df.name
                         except Exception as exc:  # pylint: disable=broad-exception-caught
+                            self._track_matrix_decision(
+                                domain="media",
+                                action="rejected",
+                                reason="decrypt_failed",
+                            )
                             self._logging_gateway.warning(
                                 "Matrix media decryption failed."
                                 f" error={type(exc).__name__}: {exc}"
                             )
                             return None
+
+                self._track_matrix_decision(
+                    domain="media",
+                    action="rejected",
+                    reason="download_response_unexpected",
+                )
+                return None
+
+        self._track_matrix_decision(
+            domain="media",
+            action="rejected",
+            reason="extension_unknown",
+            mimetype=mimetype,
+        )
+        return None
 
     async def _upload_file(self, file: dict):
         resp = None
