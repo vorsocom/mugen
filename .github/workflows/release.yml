@@ -35,6 +35,20 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mugen
+          POSTGRES_USER: mugen
+          POSTGRES_PASSWORD: mugen
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mugen -d mugen"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - name: Checkout develop
         uses: actions/checkout@v4
@@ -61,10 +75,14 @@ jobs:
       - name: Prepare Test Config
         if: ${{ inputs.mode == 'prepare' && inputs.run_gates }}
         run: |
-          cp conf/mugen.toml.sample mugen.toml
           mkdir -p .tmp/ci
-          sed -i 's|^storage\.keyval\.dbm\.path = ".*"$|storage.keyval.dbm.path = ".tmp/ci/storage.db"|' mugen.toml
-          sed -i 's|^api\.region = ""$|api.region = "us-east-1"|' mugen.toml
+          poetry run python scripts/prepare_ci_config.py \
+            --sample conf/mugen.toml.sample \
+            --output mugen.toml \
+            --keyval-db-path .tmp/ci/storage.db \
+            --rdbms-url postgresql+psycopg://mugen:mugen@127.0.0.1:5432/mugen \
+            --aws-region us-east-1
+          poetry run python -m alembic upgrade head
 
       - name: Run Release Automation
         env:
