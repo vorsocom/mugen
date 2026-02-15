@@ -210,6 +210,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                     denied=[],
                 ),
                 beta=SimpleNamespace(users=["@beta:example.com"]),
+                security=SimpleNamespace(
+                    device_trust=SimpleNamespace(
+                        mode="strict_known",
+                        allowlist=[],
+                    )
+                ),
             ),
             mugen=SimpleNamespace(beta=SimpleNamespace(active=False)),
         )
@@ -377,6 +383,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         client = self._client()
+        client._config.matrix.security.device_trust.mode = "permissive"
         client.device_store = _DeviceStore(
             {"@user:example.com": {"DEV-1": object(), "DEV-2": object()}}
         )
@@ -397,6 +404,103 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         client.verify_device.assert_not_called()
         client._keyval_storage_gateway.put.assert_not_called()
+
+    async def test_verify_user_devices_strict_known_only_verifies_known_devices(
+        self,
+    ) -> None:
+        client = self._client()
+        client._config.matrix.security.device_trust.mode = "strict_known"
+        client.device_store = _DeviceStore(
+            {"@user:example.com": {"DEV-1": object(), "DEV-2": object()}}
+        )
+        client._keyval_storage_gateway.has_key = Mock(return_value=True)
+        client._keyval_storage_gateway.get = Mock(
+            return_value=json.dumps({"@user:example.com": ["DEV-1"]})
+        )
+
+        client.verify_user_devices("@user:example.com")
+
+        self.assertEqual(client.verify_device.call_count, 1)
+        client._keyval_storage_gateway.put.assert_not_called()
+        self.assertIn(
+            "mode=strict_known",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+    async def test_verify_user_devices_allowlist_mode(self) -> None:
+        client = self._client()
+        client._config.matrix.security.device_trust.mode = "allowlist"
+        client._config.matrix.security.device_trust.allowlist = [
+            {
+                "user_id": "@user:example.com",
+                "device_ids": ["DEV-2"],
+            }
+        ]
+        client.device_store = _DeviceStore(
+            {"@user:example.com": {"DEV-1": object(), "DEV-2": object()}}
+        )
+        client._keyval_storage_gateway.has_key = Mock(return_value=False)
+
+        client.verify_user_devices("@user:example.com")
+
+        self.assertEqual(client.verify_device.call_count, 1)
+        client._keyval_storage_gateway.put.assert_not_called()
+        self.assertIn(
+            "reason=not_in_allowlist",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+    async def test_resolve_device_trust_mode_defaults_and_invalid_values(self) -> None:
+        client = self._client()
+        del client._config.matrix.security
+        self.assertEqual(
+            client._resolve_device_trust_mode(),  # pylint: disable=protected-access
+            "strict_known",
+        )
+
+        client._config.matrix.security = SimpleNamespace(
+            device_trust=SimpleNamespace(mode=42)
+        )
+        self.assertEqual(
+            client._resolve_device_trust_mode(),  # pylint: disable=protected-access
+            "strict_known",
+        )
+
+        client._config.matrix.security.device_trust.mode = "unsupported"
+        self.assertEqual(
+            client._resolve_device_trust_mode(),  # pylint: disable=protected-access
+            "strict_known",
+        )
+
+    async def test_resolve_device_trust_allowlist_parses_and_validates_entries(
+        self,
+    ) -> None:
+        client = self._client()
+        client._config.matrix.security.device_trust.allowlist = [
+            {
+                "user_id": "@user:example.com",
+                "device_ids": ["DEV-1", 2],
+            },
+            SimpleNamespace(
+                user_id="@user:example.com",
+                device_ids=["DEV-2"],
+            ),
+            {
+                "user_id": "@invalid:example.com",
+                "device_ids": "DEV-3",
+            },
+            object(),
+        ]
+        self.assertEqual(
+            client._resolve_device_trust_allowlist(),  # pylint: disable=protected-access
+            {"@user:example.com": {"DEV-1", "2", "DEV-2"}},
+        )
+
+        client._config.matrix.security.device_trust.allowlist = "invalid"
+        self.assertEqual(
+            client._resolve_device_trust_allowlist(),  # pylint: disable=protected-access
+            {},
+        )
 
     async def test_is_direct_message_and_validate_message_paths(self) -> None:
         client = self._client()

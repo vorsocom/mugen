@@ -59,6 +59,12 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     _callback_skip_reason_dm_scope: str = "unsupported_dm_scope"
 
+    _device_trust_mode_allowlist: str = "allowlist"
+
+    _device_trust_mode_permissive: str = "permissive"
+
+    _device_trust_mode_strict_known: str = "strict_known"
+
     _flags_key: str = "m.agent_flags"
 
     _ipc_callback: Coroutine
@@ -232,15 +238,136 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                     self._logging_gateway.debug(f"Trusting {device_id}.")
                     self.verify_device(olm_device)
 
+    def _resolve_device_trust_mode(self) -> str:
+        mode = getattr(
+            getattr(
+                getattr(
+                    getattr(self._config, "matrix", SimpleNamespace()),
+                    "security",
+                    SimpleNamespace(),
+                ),
+                "device_trust",
+                SimpleNamespace(),
+            ),
+            "mode",
+            self._device_trust_mode_strict_known,
+        )
+        if not isinstance(mode, str):
+            self._logging_gateway.warning(
+                "Matrix device trust mode invalid; using strict_known."
+            )
+            return self._device_trust_mode_strict_known
+
+        mode = mode.strip().lower()
+        supported_modes = {
+            self._device_trust_mode_strict_known,
+            self._device_trust_mode_allowlist,
+            self._device_trust_mode_permissive,
+        }
+        if mode in supported_modes:
+            return mode
+
+        self._logging_gateway.warning(
+            f"Matrix device trust mode unsupported ({mode}); using strict_known."
+        )
+        return self._device_trust_mode_strict_known
+
+    def _resolve_device_trust_allowlist(self) -> dict[str, set[str]]:
+        allowlist = getattr(
+            getattr(
+                getattr(
+                    getattr(self._config, "matrix", SimpleNamespace()),
+                    "security",
+                    SimpleNamespace(),
+                ),
+                "device_trust",
+                SimpleNamespace(),
+            ),
+            "allowlist",
+            [],
+        )
+
+        if not isinstance(allowlist, list):
+            self._logging_gateway.warning(
+                "Matrix device trust allowlist invalid; expected list."
+            )
+            return {}
+
+        parsed_allowlist: dict[str, set[str]] = {}
+        for entry in allowlist:
+            user_id = None
+            device_ids = None
+
+            if isinstance(entry, dict):
+                user_id = entry.get("user_id")
+                device_ids = entry.get("device_ids")
+            elif isinstance(entry, SimpleNamespace):
+                user_id = getattr(entry, "user_id", None)
+                device_ids = getattr(entry, "device_ids", None)
+
+            if not isinstance(user_id, str) or not isinstance(device_ids, list):
+                continue
+
+            if user_id not in parsed_allowlist:
+                parsed_allowlist[user_id] = set()
+            parsed_allowlist[user_id].update(
+                [str(device_id) for device_id in device_ids]
+            )
+
+        return parsed_allowlist
+
+    def _log_untrusted_device(
+        self,
+        user_id: str,
+        device_id: str,
+        mode: str,
+        reason: str,
+    ) -> None:
+        self._logging_gateway.warning(
+            "Matrix device not trusted."
+            f" user_id={user_id}"
+            f" device_id={device_id}"
+            f" mode={mode}"
+            f" reason={reason}"
+        )
+
     def verify_user_devices(self, user_id: str) -> None:
         """Verify all of a user's devices."""
         self._logging_gateway.debug(f"Verifying all user devices ({user_id}).")
-        # This has to be revised when we figure out a trust mechanism.
-        # A solution might be to require users to visit sys admin to perform SAS
-        # verification whenever using a new device.
+        mode = self._resolve_device_trust_mode()
+        allowlist = {}
+        if mode == self._device_trust_mode_allowlist:
+            allowlist = self._resolve_device_trust_allowlist()
+
         known_devices = self._load_known_devices()
-        for device_id, olm_device in self.device_store[user_id].items():
+        for device_id, olm_device in self.device_store.get(user_id, {}).items():
             self._logging_gateway.debug(f"Found {device_id}.")
+            if mode == self._device_trust_mode_strict_known:
+                if device_id in known_devices.get(user_id, []):
+                    self._logging_gateway.debug(f"Verifying {device_id}.")
+                    self.verify_device(olm_device)
+                else:
+                    self._log_untrusted_device(
+                        user_id=user_id,
+                        device_id=device_id,
+                        mode=mode,
+                        reason="unknown_device",
+                    )
+                continue
+
+            if mode == self._device_trust_mode_allowlist:
+                if device_id in allowlist.get(user_id, set()):
+                    self._logging_gateway.debug(f"Verifying {device_id}.")
+                    self.verify_device(olm_device)
+                else:
+                    self._log_untrusted_device(
+                        user_id=user_id,
+                        device_id=device_id,
+                        mode=mode,
+                        reason="not_in_allowlist",
+                    )
+                continue
+
             # Ensure the list contains an entry for the user.
             if user_id not in known_devices.keys():
                 known_devices[user_id] = []
