@@ -36,6 +36,9 @@ A muGen application consists of five layers, ranging from high-level platform in
 
 The platform layer includes communication platforms through which users interact with your application. These platforms can range from instant messaging services like Matrix and WhatsApp (currently supported by muGen core) to custom web applications. As muGen evolves, support for additional platforms will be added. A single muGen instance can handle multiple platforms concurrently, allowing for flexible multi-channel deployment.
 
+For the current Matrix core boundary (supported scope, intentional exclusions,
+and next planned scope), see [`docs/matrix-support-contract.md`](docs/matrix-support-contract.md).
+
 ### API
 
 muGen runs on the same asyncio event loop as [Quart](https://palletsprojects.com/projects/quart), a Python web framework that supports asynchronous programming. This allows muGen to coexist with Quart and leverage its API-building functionality without being entirely dependent on it. The registration muGen's core API blueprint is delayed until extensions have been registered, enabling extensions to define custom endpoints or add routes to the core API seamlessly.
