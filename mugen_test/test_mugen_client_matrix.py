@@ -269,9 +269,13 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._messaging_service = Mock()
         client._user_service = Mock()
         client._ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock())
+        client._direct_room_ids = set()
+        client.access_token = "access-token"
         client.user_id = "@assistant:example.com"
         client.login = AsyncMock()
         client.load_store = Mock()
+        client.list_direct_rooms = AsyncMock(return_value=SimpleNamespace(rooms={}))
+        client._send = AsyncMock(return_value=matrix_mod.EmptyResponse())
         client.get_profile = AsyncMock()
         client.room_leave = AsyncMock()
         client.join = AsyncMock()
@@ -572,15 +576,15 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
 
-        client.room_get_state = AsyncMock(
+        client.list_direct_rooms = AsyncMock(
             return_value=SimpleNamespace(
-                events=[
-                    {"type": client._flags_key, "content": {"m.direct": 1}},
-                ]
+                rooms={"@user:example.com": ["!room:test"]},
             )
         )
         self.assertTrue(await client._is_direct_message(room.room_id))
 
+        client._direct_room_ids.clear()
+        client.list_direct_rooms = AsyncMock(return_value=SimpleNamespace(rooms={}))
         client.room_get_state = AsyncMock(return_value=SimpleNamespace(events=[]))
         self.assertFalse(await client._is_direct_message(room.room_id))
 
@@ -618,18 +622,26 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._matrix_metrics["matrix.messages.rejected.malformed_sender"], 1  # pylint: disable=protected-access
         )
 
-    async def test_is_direct_message_handles_malformed_room_state_payload(self) -> None:
+    async def test_is_direct_message_handles_direct_rooms_and_legacy_fallback(self) -> None:
         client = self._client()
 
+        client.list_direct_rooms = AsyncMock(return_value=SimpleNamespace(rooms="invalid"))
         client.room_get_state = AsyncMock(return_value=SimpleNamespace(events="invalid"))
         self.assertFalse(await client._is_direct_message("!room:test"))
 
+        client.list_direct_rooms = AsyncMock(
+            return_value=SimpleNamespace(rooms={"@u:example.com": ["!room:test"]})
+        )
+        self.assertTrue(await client._is_direct_message("!room:test"))
+
+        client._direct_room_ids.clear()
+        client.list_direct_rooms = AsyncMock(return_value=SimpleNamespace(rooms={}))
         client.room_get_state = AsyncMock(
             return_value=SimpleNamespace(
                 events=[
                     "not-a-dict",
                     {"type": "m.other", "content": {"m.direct": 1}},
-                    {"type": client._flags_key, "content": {"m.direct": 0}},
+                    {"type": client._legacy_direct_flags_key, "content": {"m.direct": 0}},
                 ]
             )
         )
@@ -638,17 +650,186 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.room_get_state = AsyncMock(
             return_value=SimpleNamespace(
                 events=[
-                    {"type": client._flags_key, "content": "invalid"},
-                    {"type": client._flags_key, "content": {"m.direct": True}},
+                    {"type": client._legacy_direct_flags_key, "content": "invalid"},
+                    {
+                        "type": client._legacy_direct_flags_key,
+                        "content": {"m.direct": True},
+                    },
                 ]
             )
         )
         self.assertTrue(await client._is_direct_message("!room:test"))
 
+    async def test_is_direct_message_cache_hit_and_multi_user_scan(self) -> None:
+        client = self._client()
+
+        client._direct_room_ids.add("!cached:test")
+        self.assertTrue(await client._is_direct_message("!cached:test"))
+
+        client._direct_room_ids.clear()
+        client.list_direct_rooms = AsyncMock(
+            return_value=SimpleNamespace(
+                rooms={
+                    "@a:example.com": ["!other:test"],
+                    "@b:example.com": ["!target:test"],
+                }
+            )
+        )
+        self.assertTrue(await client._is_direct_message("!target:test"))
+        self.assertIn("!target:test", client._direct_room_ids)
+
+    async def test_normalize_and_load_direct_rooms(self) -> None:
+        client = self._client()
+        self.assertEqual(
+            client._normalize_direct_rooms(  # pylint: disable=protected-access
+                {"@u:example.com": ["!a:test", 2], "@bad:example.com": "invalid"}
+            ),
+            {"@u:example.com": ["!a:test", "2"]},
+        )
+        self.assertEqual(
+            client._normalize_direct_rooms(  # pylint: disable=protected-access
+                ["invalid"]
+            ),
+            {},
+        )
+
+        client.list_direct_rooms = AsyncMock(
+            return_value=SimpleNamespace(
+                rooms={
+                    "@u:example.com": ["!room:test"],
+                    "@bad:example.com": "invalid",
+                }
+            )
+        )
+        self.assertEqual(
+            await client._load_direct_rooms(),  # pylint: disable=protected-access
+            {"@u:example.com": ["!room:test"]},
+        )
+
+        client._logging_gateway.debug.reset_mock()
+        client.list_direct_rooms = AsyncMock(return_value=matrix_mod.DirectRoomsResponse({}))
+        self.assertEqual(
+            await client._load_direct_rooms(),  # pylint: disable=protected-access
+            {},
+        )
+        client._logging_gateway.debug.assert_not_called()
+
+        client._logging_gateway.debug.reset_mock()
+        client.list_direct_rooms = AsyncMock(return_value=SimpleNamespace())
+        self.assertEqual(
+            await client._load_direct_rooms(),  # pylint: disable=protected-access
+            {},
+        )
+        self.assertIn(
+            "direct room list unavailable",
+            client._logging_gateway.debug.call_args.args[0],
+        )
+
+        client.list_direct_rooms = AsyncMock(side_effect=RuntimeError("boom"))
+        self.assertEqual(
+            await client._load_direct_rooms(),  # pylint: disable=protected-access
+            {},
+        )
+        self.assertIn(
+            "lookup failed",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+    async def test_persist_direct_rooms_handles_success_failure_and_exception(self) -> None:
+        client = self._client()
+
+        with patch.object(matrix_mod.Api, "_build_path", return_value="/m.direct"):
+            client._send = AsyncMock(return_value=matrix_mod.EmptyResponse())
+            self.assertTrue(
+                await client._persist_direct_rooms(  # pylint: disable=protected-access
+                    {"@u:example.com": ["!room:test"]}
+                )
+            )
+            client._send.assert_awaited_once_with(
+                matrix_mod.EmptyResponse,
+                "PUT",
+                "/m.direct",
+                json.dumps({"@u:example.com": ["!room:test"]}),
+            )
+
+            client._send = AsyncMock(return_value=object())
+            self.assertFalse(
+                await client._persist_direct_rooms(  # pylint: disable=protected-access
+                    {"@u:example.com": ["!room:test"]}
+                )
+            )
+            self.assertIn(
+                "response=object",
+                client._logging_gateway.warning.call_args.args[0],
+            )
+
+            client._send = AsyncMock(side_effect=RuntimeError("boom"))
+            self.assertFalse(
+                await client._persist_direct_rooms(  # pylint: disable=protected-access
+                    {"@u:example.com": ["!room:test"]}
+                )
+            )
+            self.assertIn(
+                "error=RuntimeError: boom",
+                client._logging_gateway.warning.call_args.args[0],
+            )
+
+    async def test_mark_room_as_direct_updates_cache_and_persists(self) -> None:
+        client = self._client()
+        client._load_direct_rooms = AsyncMock(  # pylint: disable=protected-access
+            return_value={"@u:example.com": ["!old:test"]}
+        )
+        client._persist_direct_rooms = AsyncMock(  # pylint: disable=protected-access
+            return_value=True
+        )
+
+        await client._mark_room_as_direct(  # pylint: disable=protected-access
+            "@u:example.com", "!room:test"
+        )
+        client._persist_direct_rooms.assert_awaited_once_with(  # pylint: disable=protected-access
+            {"@u:example.com": ["!old:test", "!room:test"]}
+        )
+        self.assertIn("!room:test", client._direct_room_ids)  # pylint: disable=protected-access
+
+        client._persist_direct_rooms.reset_mock()  # pylint: disable=protected-access
+        await client._mark_room_as_direct(  # pylint: disable=protected-access
+            "@u:example.com", "!room:test"
+        )
+        client._persist_direct_rooms.assert_not_called()  # pylint: disable=protected-access
+
+        await client._mark_room_as_direct(  # pylint: disable=protected-access
+            None, "!sender-optional:test"
+        )
+        self.assertIn(  # pylint: disable=protected-access
+            "!sender-optional:test",
+            client._direct_room_ids,
+        )
+
+        client._load_direct_rooms = AsyncMock(return_value={})  # pylint: disable=protected-access
+        client._persist_direct_rooms = AsyncMock(  # pylint: disable=protected-access
+            return_value=False
+        )
+        await client._mark_room_as_direct(  # pylint: disable=protected-access
+            "@u:example.com",
+            "!persist-fail:test",
+        )
+        self.assertIn(
+            "direct room marker not persisted",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+        direct_room_ids_before = set(client._direct_room_ids)  # pylint: disable=protected-access
+        await client._mark_room_as_direct(  # pylint: disable=protected-access
+            "@u:example.com",
+            " ",
+        )
+        self.assertEqual(client._direct_room_ids, direct_room_ids_before)  # pylint: disable=protected-access
+
     async def test_cb_invite_member_event_reject_and_accept_paths(self) -> None:
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
         client.verify_user_devices = Mock()
+        client._mark_room_as_direct = AsyncMock()
 
         event = SimpleNamespace(content={"membership": "join"}, sender="@u:example.com")
         await client._cb_invite_member_event(room, event)
@@ -690,7 +871,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             await client._cb_invite_member_event(room, event)
 
         client.join.assert_awaited_once_with("!room:test")
-        client.room_put_state.assert_awaited_once()
+        client._mark_room_as_direct.assert_awaited_once_with(
+            "@u:example.com", "!room:test"
+        )
         client._user_service.add_known_user.assert_called_once_with(
             "@u:example.com",
             "User",
@@ -733,6 +916,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         room = SimpleNamespace(room_id="!room:test")
         client._config.matrix.invites.direct_only = False
         client.verify_user_devices = Mock()
+        client._mark_room_as_direct = AsyncMock()
         client.get_profile = AsyncMock(return_value=_FakeProfileGetResponse("User"))
         event = SimpleNamespace(content={"membership": "invite"}, sender="@u:example.com")
 
@@ -741,6 +925,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         client.room_leave.assert_not_called()
         client.join.assert_awaited_once_with("!room:test")
+        client._mark_room_as_direct.assert_awaited_once_with(
+            "@u:example.com", "!room:test"
+        )
 
     async def test_parse_sender_domain(self) -> None:
         client = self._client()
@@ -769,6 +956,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         room = SimpleNamespace(room_id="!room:test")
         client._config.mugen.beta.active = True
         client.verify_user_devices = Mock()
+        client._mark_room_as_direct = AsyncMock()
         client.get_profile = AsyncMock(return_value=object())
         event = SimpleNamespace(
             content={"membership": "invite", "is_direct": True},
@@ -779,7 +967,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             await client._cb_invite_member_event(room, event)
 
         client.join.assert_awaited_once_with("!room:test")
-        client.room_put_state.assert_awaited_once()
+        client._mark_room_as_direct.assert_awaited_once_with(
+            "@beta:example.com", "!room:test"
+        )
         client._user_service.add_known_user.assert_not_called()
 
     async def test_callback_skip_logging_for_stubbed_paths(self) -> None:
@@ -787,12 +977,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         room = SimpleNamespace(room_id="!room:test")
         callback_invocations = [
             ("_cb_megolm_event", (room, object())),
-            ("_cb_invite_alias_event", (object(),)),
+            ("_cb_invite_alias_event", (room, object())),
             ("_cb_invite_name_event", (room, object())),
             ("_cb_room_create_event", (room, object())),
             ("_cb_key_verification_event", (object(),)),
             ("_cb_room_key_event", (object(),)),
-            ("_cb_room_key_request", (room, object())),
+            ("_cb_room_key_request", (object(),)),
             ("_cb_room_member_event", (room, object())),
             ("_cb_tag_event", (object(),)),
         ]
@@ -839,12 +1029,15 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         room = SimpleNamespace(room_id="!room:test")
         callback_invocations = [
             ("_cb_megolm_event", (room, SimpleNamespace(sender="@u:example.com"))),
-            ("_cb_invite_alias_event", (SimpleNamespace(),)),
+            (
+                "_cb_invite_alias_event",
+                (room, SimpleNamespace(content={"alias": "#room:example.com"})),
+            ),
             ("_cb_invite_name_event", (room, SimpleNamespace(content={"name": "x"}))),
             ("_cb_room_create_event", (room, SimpleNamespace(content={"creator": "x"}))),
             ("_cb_key_verification_event", (SimpleNamespace(sender="@u:example.com"),)),
             ("_cb_room_key_event", (SimpleNamespace(source={"content": {"a": 1}}),)),
-            ("_cb_room_key_request", (room, SimpleNamespace(sender="@u:example.com"))),
+            ("_cb_room_key_request", (SimpleNamespace(sender="@u:example.com"),)),
             ("_cb_room_member_event", (room, SimpleNamespace(content={"membership": "leave"}))),
             ("_cb_tag_event", (SimpleNamespace(content={"tags": {}}),)),
         ]

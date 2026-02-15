@@ -17,6 +17,7 @@ from typing import Coroutine
 import aiofiles
 
 from nio import (
+    Api,
     InviteAliasEvent,
     InviteMemberEvent,
     InviteNameEvent,
@@ -44,7 +45,12 @@ from nio import (
 
 import nio.crypto
 from nio.exceptions import OlmUnverifiedDeviceError
-from nio.responses import UploadResponse, DiskDownloadResponse
+from nio.responses import (
+    DirectRoomsResponse,
+    DiskDownloadResponse,
+    EmptyResponse,
+    UploadResponse,
+)
 
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -77,7 +83,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     _device_trust_mode_strict_known: str = "strict_known"
 
-    _flags_key: str = "m.agent_flags"
+    _direct_rooms_event_type: str = "m.direct"
+
+    _legacy_direct_flags_key: str = "m.agent_flags"
 
     _ipc_callback: Coroutine
 
@@ -111,6 +119,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._user_service = user_service
+        self._direct_room_ids: set[str] = set()
 
         ## Callbacks
         # Invite Room Events.
@@ -614,11 +623,16 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             room=_room,
         )
 
-    async def _cb_invite_alias_event(self, _event: InviteAliasEvent) -> None:
+    async def _cb_invite_alias_event(
+        self,
+        _room: MatrixInvitedRoom,
+        _event: InviteAliasEvent,
+    ) -> None:
         """Handle InviteAliasEvents."""
         await self._handle_non_core_event_callback(
             callback_name="_cb_invite_alias_event",
             event=_event,
+            room=_room,
         )
 
     async def _cb_invite_member_event(
@@ -719,13 +733,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
         # Join room.
         await self.join(room.room_id)
-
-        # Flag room as direct chat.
-        await self.room_put_state(
-            room_id=room.room_id,
-            event_type=self._flags_key,
-            content={"m.direct": 1},
-        )
+        await self._mark_room_as_direct(event.sender, room.room_id)
         self._track_matrix_decision(
             domain="invites",
             action="accepted",
@@ -775,14 +783,11 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             event=_event,
         )
 
-    async def _cb_room_key_request(
-        self, _room: MatrixRoom, _event: RoomKeyRequest
-    ) -> None:
+    async def _cb_room_key_request(self, _event: RoomKeyRequest) -> None:
         """Handle RoomKeyRequests."""
         await self._handle_non_core_event_callback(
             callback_name="_cb_room_key_request",
             event=_event,
-            room=_room,
         )
 
     async def _validate_message(self, room: MatrixRoom, message) -> bool:
@@ -972,8 +977,89 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._keyval_storage_gateway.put(self._sync_key, resp.next_batch)
 
     ## Utilities.
-    async def _is_direct_message(self, room_id: str) -> bool:
-        """Indicate if the given room was flagged as a 1:1 chat."""
+    def _normalize_direct_rooms(self, payload: object) -> dict[str, list[str]]:
+        if not isinstance(payload, dict):
+            return {}
+
+        direct_rooms: dict[str, list[str]] = {}
+        for user_id, room_ids in payload.items():
+            if not isinstance(user_id, str) or not isinstance(room_ids, list):
+                continue
+            direct_rooms[user_id] = [str(room_id) for room_id in room_ids]
+        return direct_rooms
+
+    async def _load_direct_rooms(self) -> dict[str, list[str]]:
+        try:
+            response = await self.list_direct_rooms()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Matrix direct room lookup failed."
+                f" error={type(exc).__name__}: {exc}"
+            )
+            return {}
+        rooms = self._normalize_direct_rooms(getattr(response, "rooms", None))
+        if rooms or isinstance(response, DirectRoomsResponse):
+            return rooms
+
+        self._logging_gateway.debug(
+            "Matrix direct room list unavailable; continuing with fallback checks."
+        )
+        return {}
+
+    async def _persist_direct_rooms(self, direct_rooms: dict[str, list[str]]) -> bool:
+        try:
+            path = Api._build_path(
+                [
+                    "user",
+                    self.user_id,
+                    "account_data",
+                    self._direct_rooms_event_type,
+                ],
+                {"access_token": self.access_token},
+            )
+            response = await self._send(
+                EmptyResponse,
+                "PUT",
+                path,
+                json.dumps(direct_rooms),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Matrix direct room marker update failed."
+                f" error={type(exc).__name__}: {exc}"
+            )
+            return False
+
+        if isinstance(response, EmptyResponse):
+            return True
+
+        self._logging_gateway.warning(
+            "Matrix direct room marker update failed."
+            f" response={type(response).__name__}"
+        )
+        return False
+
+    async def _mark_room_as_direct(self, sender: str, room_id: str) -> None:
+        if not isinstance(room_id, str) or room_id.strip() == "":
+            return
+
+        if isinstance(sender, str) and sender.strip() != "":
+            direct_rooms = await self._load_direct_rooms()
+            user_rooms = direct_rooms.get(sender, [])
+            if room_id not in user_rooms:
+                user_rooms.append(room_id)
+                direct_rooms[sender] = user_rooms
+                if not await self._persist_direct_rooms(direct_rooms):
+                    self._logging_gateway.warning(
+                        "Matrix direct room marker not persisted."
+                        f" sender={sender}"
+                        f" room_id={room_id}"
+                    )
+
+        self._direct_room_ids.add(room_id)
+
+    async def _is_legacy_direct_message(self, room_id: str) -> bool:
+        """Fallback for rooms flagged by legacy muGen markers."""
         room_state = await self.room_get_state(room_id)
         events = getattr(room_state, "events", [])
         if not isinstance(events, list):
@@ -982,7 +1068,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         for event in events:
             if not isinstance(event, dict):
                 continue
-            if event.get("type") != self._flags_key:
+            if event.get("type") != self._legacy_direct_flags_key:
                 continue
             content = event.get("content")
             if not isinstance(content, dict):
@@ -991,6 +1077,20 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return True
 
         return False
+
+    async def _is_direct_message(self, room_id: str) -> bool:
+        """Indicate if the room is marked direct via Matrix account data."""
+        if room_id in self._direct_room_ids:
+            return True
+
+        direct_rooms = await self._load_direct_rooms()
+        for direct_room_ids in direct_rooms.values():
+            if room_id in direct_room_ids:
+                self._direct_room_ids.add(room_id)
+                return True
+
+        # Retain compatibility with rooms marked before m.direct support.
+        return await self._is_legacy_direct_message(room_id)
 
     async def _process_message_responses(
         self, room_id: str, message_responses: list[dict]
