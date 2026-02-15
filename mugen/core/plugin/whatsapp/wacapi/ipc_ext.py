@@ -79,22 +79,257 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         """Get the platform that the extension is targeting."""
         return ["whatsapp"]
 
-    def _parse_json_dict(self, payload: str | None, context: str) -> dict | None:
+    def _extract_api_data(self, payload: dict | None, context: str) -> dict | None:
         if payload is None:
             self._logging_gateway.error(f"Missing payload for {context}.")
             return None
 
-        try:
-            parsed = json.loads(payload)
-        except (TypeError, json.JSONDecodeError):
-            self._logging_gateway.error(f"Invalid JSON payload for {context}.")
-            return None
-
-        if not isinstance(parsed, dict):
+        if not isinstance(payload, dict):
             self._logging_gateway.error(f"Unexpected payload type for {context}.")
             return None
 
-        return parsed
+        if payload.get("ok") is not True:
+            self._logging_gateway.error(f"{context} failed.")
+            error = payload.get("error")
+            if error not in [None, ""]:
+                self._logging_gateway.error(str(error))
+            raw = payload.get("raw")
+            if isinstance(raw, str) and raw != "":
+                self._logging_gateway.error(raw)
+            return None
+
+        data = payload.get("data")
+        if data is None:
+            return {}
+
+        if not isinstance(data, dict):
+            self._logging_gateway.error(f"Unexpected payload type for {context}.")
+            return None
+
+        return data
+
+    @staticmethod
+    def _extract_user_text(message: dict) -> str | None:
+        message_type = message.get("type")
+
+        if message_type == "text":
+            text_body = message.get("text", {}).get("body")
+            return text_body if isinstance(text_body, str) else None
+
+        if message_type == "button":
+            button = message.get("button", {})
+            button_text = button.get("text")
+            if isinstance(button_text, str) and button_text != "":
+                return button_text
+            payload = button.get("payload")
+            return payload if isinstance(payload, str) else None
+
+        if message_type != "interactive":
+            return None
+
+        interactive = message.get("interactive", {})
+        interactive_type = interactive.get("type")
+        if interactive_type == "button_reply":
+            button_reply = interactive.get("button_reply", {})
+            title = button_reply.get("title")
+            if isinstance(title, str) and title != "":
+                return title
+            button_id = button_reply.get("id")
+            return button_id if isinstance(button_id, str) else None
+
+        if interactive_type == "list_reply":
+            list_reply = interactive.get("list_reply", {})
+            title = list_reply.get("title")
+            if isinstance(title, str) and title != "":
+                return title
+            list_id = list_reply.get("id")
+            return list_id if isinstance(list_id, str) else None
+
+        if interactive_type == "nfm_reply":
+            nfm_reply = interactive.get("nfm_reply", {})
+            response_json = nfm_reply.get("response_json")
+            if isinstance(response_json, str):
+                return response_json
+            if isinstance(response_json, dict):
+                return json.dumps(response_json)
+
+        return None
+
+    async def _upload_response_media(self, response: dict, context: str) -> dict | None:
+        file_data = response.get("file")
+        if not isinstance(file_data, dict):
+            self._logging_gateway.error(f"Missing file payload for {context} response.")
+            return None
+
+        uri = file_data.get("uri")
+        content_type = file_data.get("type")
+        if not isinstance(uri, str) or not isinstance(content_type, str):
+            self._logging_gateway.error(f"Invalid file payload for {context} response.")
+            return None
+
+        upload_response = await self._client.upload_media(uri, content_type)
+        upload_data = self._extract_api_data(upload_response, f"{context} upload")
+        if upload_data is None:
+            return None
+
+        media_id = upload_data.get("id")
+        if not isinstance(media_id, str) or media_id == "":
+            self._logging_gateway.error(f"{context} upload did not return media id.")
+            return None
+
+        return {
+            "id": media_id,
+            "file": file_data,
+        }
+
+    async def _send_response_to_user(self, response: dict, sender: str) -> None:
+        response_type = response.get("type")
+        reply_to = response.get("reply_to")
+        if not isinstance(reply_to, str):
+            reply_to = None
+
+        if response_type == "audio":
+            uploaded = await self._upload_response_media(response, "audio")
+            if uploaded is None:
+                return
+            send_result = await self._client.send_audio_message(
+                audio={"id": uploaded["id"]},
+                recipient=sender,
+                reply_to=reply_to,
+            )
+            self._extract_api_data(send_result, "audio send")
+            return
+
+        if response_type == "file":
+            uploaded = await self._upload_response_media(response, "document")
+            if uploaded is None:
+                return
+            document = {
+                "id": uploaded["id"],
+            }
+            file_name = uploaded["file"].get("name")
+            if isinstance(file_name, str) and file_name != "":
+                document["filename"] = file_name
+            send_result = await self._client.send_document_message(
+                document=document,
+                recipient=sender,
+                reply_to=reply_to,
+            )
+            self._extract_api_data(send_result, "document send")
+            return
+
+        if response_type == "image":
+            uploaded = await self._upload_response_media(response, "image")
+            if uploaded is None:
+                return
+            send_result = await self._client.send_image_message(
+                image={"id": uploaded["id"]},
+                recipient=sender,
+                reply_to=reply_to,
+            )
+            self._extract_api_data(send_result, "image send")
+            return
+
+        if response_type == "video":
+            uploaded = await self._upload_response_media(response, "video")
+            if uploaded is None:
+                return
+            send_result = await self._client.send_video_message(
+                video={"id": uploaded["id"]},
+                recipient=sender,
+                reply_to=reply_to,
+            )
+            self._extract_api_data(send_result, "video send")
+            return
+
+        if response_type == "text":
+            content = response.get("content")
+            if not isinstance(content, str):
+                self._logging_gateway.error("Missing text content in response payload.")
+                return
+            send_result = await self._client.send_text_message(
+                message=content,
+                recipient=sender,
+                reply_to=reply_to,
+            )
+            self._extract_api_data(send_result, "text send")
+            return
+
+        if response_type == "contacts":
+            contacts = response.get("contacts", response.get("content"))
+            send_result = await self._client.send_contacts_message(
+                contacts=contacts,
+                recipient=sender,
+                reply_to=reply_to,
+            )
+            self._extract_api_data(send_result, "contacts send")
+            return
+
+        if response_type == "location":
+            location = response.get("location", response.get("content"))
+            if not isinstance(location, dict):
+                self._logging_gateway.error("Missing location payload in response.")
+                return
+            send_result = await self._client.send_location_message(
+                location=location,
+                recipient=sender,
+                reply_to=reply_to,
+            )
+            self._extract_api_data(send_result, "location send")
+            return
+
+        if response_type == "interactive":
+            interactive = response.get("interactive", response.get("content"))
+            if not isinstance(interactive, dict):
+                self._logging_gateway.error("Missing interactive payload in response.")
+                return
+            send_result = await self._client.send_interactive_message(
+                interactive=interactive,
+                recipient=sender,
+                reply_to=reply_to,
+            )
+            self._extract_api_data(send_result, "interactive send")
+            return
+
+        if response_type == "template":
+            template = response.get("template", response.get("content"))
+            if not isinstance(template, dict):
+                self._logging_gateway.error("Missing template payload in response.")
+                return
+            send_result = await self._client.send_template_message(
+                template=template,
+                recipient=sender,
+                reply_to=reply_to,
+            )
+            self._extract_api_data(send_result, "template send")
+            return
+
+        if response_type == "sticker":
+            sticker = response.get("sticker", response.get("content"))
+            if not isinstance(sticker, dict):
+                self._logging_gateway.error("Missing sticker payload in response.")
+                return
+            send_result = await self._client.send_sticker_message(
+                sticker=sticker,
+                recipient=sender,
+                reply_to=reply_to,
+            )
+            self._extract_api_data(send_result, "sticker send")
+            return
+
+        if response_type == "reaction":
+            reaction = response.get("reaction", response.get("content"))
+            if not isinstance(reaction, dict):
+                self._logging_gateway.error("Missing reaction payload in response.")
+                return
+            send_result = await self._client.send_reaction_message(
+                reaction=reaction,
+                recipient=sender,
+            )
+            self._extract_api_data(send_result, "reaction send")
+            return
+
+        self._logging_gateway.error(f"Unsupported response type: {response_type}.")
 
     async def process_ipc_command(self, payload: dict) -> None:
         self._logging_gateway.debug(
@@ -127,7 +362,6 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                         )
                         return
 
-                # Add user to list of known users if required.
                 known_users = self._user_service.get_known_users_list()
                 if sender not in known_users.keys():
                     self._logging_gateway.debug(f"New WhatsApp contact: {sender}")
@@ -143,7 +377,9 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                         get_media_url = await self._client.retrieve_media_url(
                             message["audio"]["id"],
                         )
-                        media_url = self._parse_json_dict(get_media_url, "audio media URL")
+                        media_url = self._extract_api_data(
+                            get_media_url, "audio media URL"
+                        )
                         if media_url and "url" in media_url.keys():
                             get_media = await self._client.download_media(
                                 media_url["url"],
@@ -166,7 +402,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                         get_media_url = await self._client.retrieve_media_url(
                             message["document"]["id"],
                         )
-                        media_url = self._parse_json_dict(
+                        media_url = self._extract_api_data(
                             get_media_url, "document media URL"
                         )
                         if media_url and "url" in media_url.keys():
@@ -191,7 +427,9 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                         get_media_url = await self._client.retrieve_media_url(
                             message["image"]["id"],
                         )
-                        media_url = self._parse_json_dict(get_media_url, "image media URL")
+                        media_url = self._extract_api_data(
+                            get_media_url, "image media URL"
+                        )
                         if media_url and "url" in media_url.keys():
                             get_media = await self._client.download_media(
                                 media_url["url"],
@@ -210,18 +448,30 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                         },
                                     )
                                 )
-                    case "text":
-                        message_responses = await self._messaging_service.handle_text_message(
-                            "whatsapp",
-                            room_id=sender,
-                            sender=sender,
-                            message=message["text"]["body"],
-                        )
+                    case "text" | "interactive" | "button":
+                        text_message = self._extract_user_text(message)
+                        if text_message is None:
+                            await self._call_message_handlers(
+                                message=message,
+                                message_type=message["type"],
+                                sender=sender,
+                            )
+                        else:
+                            message_responses = (
+                                await self._messaging_service.handle_text_message(
+                                    "whatsapp",
+                                    room_id=sender,
+                                    sender=sender,
+                                    message=text_message,
+                                )
+                            )
                     case "video":
                         get_media_url = await self._client.retrieve_media_url(
                             message["video"]["id"],
                         )
-                        media_url = self._parse_json_dict(get_media_url, "video media URL")
+                        media_url = self._extract_api_data(
+                            get_media_url, "video media URL"
+                        )
                         if media_url and "url" in media_url.keys():
                             get_media = await self._client.download_media(
                                 media_url["url"],
@@ -249,116 +499,8 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
 
                 self._logging_gateway.debug("Send responses to user.")
                 for response in message_responses or []:
-                    # Audio.
-                    if response["type"] == "audio":
-                        upload = await self._client.upload_media(
-                            response["file"]["uri"], response["file"]["type"]
-                        )
-                        upload_response = self._parse_json_dict(upload, "audio upload")
-                        if upload_response is None:
-                            continue
-
-                        if "error" in upload_response.keys():
-                            self._logging_gateway.debug("Audio upload failed.")
-                            self._logging_gateway.error(upload_response["error"])
-                        elif "id" in upload_response.keys():
-                            send = await self._client.send_audio_message(
-                                audio={
-                                    "id": upload_response["id"],
-                                },
-                                recipient=sender,
-                            )
-                            data = self._parse_json_dict(send, "audio send")
-
-                            if data and "error" in data.keys():
-                                self._logging_gateway.error("Send audio to user failed.")
-                                self._logging_gateway.error(data["error"])
-                    # Document.
-                    if response["type"] == "file":
-                        upload = await self._client.upload_media(
-                            response["file"]["uri"], response["file"]["type"]
-                        )
-                        upload_response = self._parse_json_dict(upload, "document upload")
-                        if upload_response is None:
-                            continue
-
-                        if "error" in upload_response.keys():
-                            self._logging_gateway.debug("Document upload failed.")
-                            self._logging_gateway.error(upload_response["error"])
-                        elif "id" in upload_response.keys():
-                            send = await self._client.send_document_message(
-                                document={
-                                    "id": upload_response["id"],
-                                    "filename": response["file"]["name"],
-                                },
-                                recipient=sender,
-                            )
-                            data = self._parse_json_dict(send, "document send")
-
-                            if data and "error" in data.keys():
-                                self._logging_gateway.error("Send document to user failed.")
-                                self._logging_gateway.error(data["error"])
-                    # Image.
-                    if response["type"] == "image":
-                        upload = await self._client.upload_media(
-                            response["file"]["uri"], response["file"]["type"]
-                        )
-                        upload_response = self._parse_json_dict(upload, "image upload")
-                        if upload_response is None:
-                            continue
-
-                        if "error" in upload_response.keys():
-                            self._logging_gateway.debug("Image upload failed.")
-                            self._logging_gateway.error(upload_response["error"])
-                        elif "id" in upload_response.keys():
-                            send = await self._client.send_image_message(
-                                image={
-                                    "id": upload_response["id"],
-                                },
-                                recipient=sender,
-                            )
-                            data = self._parse_json_dict(send, "image send")
-
-                            if data and "error" in data.keys():
-                                self._logging_gateway.error("Send image to user failed.")
-                                self._logging_gateway.error(data["error"])
-                    # Text.
-                    if response["type"] == "text":
-                        send = await self._client.send_text_message(
-                            message=response["content"],
-                            recipient=sender,
-                        )
-                        data = self._parse_json_dict(send, "text send")
-
-                        if data and "error" in data.keys():
-                            self._logging_gateway.error("Send text to user failed.")
-                            self._logging_gateway.error(data["error"])
-                    # Video.
-                    if response["type"] == "video":
-                        upload = await self._client.upload_media(
-                            response["file"]["uri"], response["file"]["type"]
-                        )
-                        upload_response = self._parse_json_dict(upload, "video upload")
-                        if upload_response is None:
-                            continue
-
-                        if "error" in upload_response.keys():
-                            self._logging_gateway.debug("Video upload failed.")
-                            self._logging_gateway.error(upload_response["error"])
-                        elif "id" in upload_response.keys():
-                            send = await self._client.send_video_message(
-                                video={
-                                    "id": upload_response["id"],
-                                },
-                                recipient=sender,
-                            )
-                            data = self._parse_json_dict(send, "video send")
-
-                            if data and "error" in data.keys():
-                                self._logging_gateway.error("Send video to user failed.")
-                                self._logging_gateway.error(data["error"])
+                    await self._send_response_to_user(response=response, sender=sender)
             elif "statuses" in event_value.keys():
-                # Process message sent, delivered, and read statuses.
                 await self._call_message_handlers(
                     message=event_value["statuses"][0],
                     message_type="status",
