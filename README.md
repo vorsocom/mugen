@@ -6,7 +6,7 @@
 # muGen - The GenAI Microframework
 
 [![Static Badge](https://img.shields.io/badge/License-Sustainable_Use_1.0-blue)](LICENSE.md)
-[![Test Gates](https://github.com/vorsocom/mugen/actions/workflows/test-gates.yml/badge.svg)](https://github.com/vorsocom/mugen/actions/workflows/test-gates.yml)
+[![Test Gates](https://github.com/vorsocom/mugen/actions/workflows/test-gates.yml/badge.svg?branch=develop)](https://github.com/vorsocom/mugen/actions/workflows/test-gates.yml?query=branch%3Adevelop)
 [![Release Automation](https://github.com/vorsocom/mugen/actions/workflows/release.yml/badge.svg)](https://github.com/vorsocom/mugen/actions/workflows/release.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/vorsocom/mugen)](https://github.com/vorsocom/mugen/releases)
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
