@@ -210,6 +210,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                     denied=[],
                 ),
                 beta=SimpleNamespace(users=["@beta:example.com"]),
+                invites=SimpleNamespace(direct_only=True),
                 security=SimpleNamespace(
                     device_trust=SimpleNamespace(
                         mode="strict_known",
@@ -533,6 +534,40 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.verify_user_devices.assert_called_with("@user:example.com")
         client.room_read_markers.assert_awaited_with("!room:test", "$e3", "$e3")
 
+        malformed_sender = SimpleNamespace(sender="invalid-user-id", event_id="$e4")
+        self.assertFalse(await client._validate_message(room, malformed_sender))
+        self.assertIn(
+            "Reason: Malformed sender.",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+    async def test_is_direct_message_handles_malformed_room_state_payload(self) -> None:
+        client = self._client()
+
+        client.room_get_state = AsyncMock(return_value=SimpleNamespace(events="invalid"))
+        self.assertFalse(await client._is_direct_message("!room:test"))
+
+        client.room_get_state = AsyncMock(
+            return_value=SimpleNamespace(
+                events=[
+                    "not-a-dict",
+                    {"type": "m.other", "content": {"m.direct": 1}},
+                    {"type": client._flags_key, "content": {"m.direct": 0}},
+                ]
+            )
+        )
+        self.assertFalse(await client._is_direct_message("!room:test"))
+
+        client.room_get_state = AsyncMock(
+            return_value=SimpleNamespace(
+                events=[
+                    {"type": client._flags_key, "content": "invalid"},
+                    {"type": client._flags_key, "content": {"m.direct": True}},
+                ]
+            )
+        )
+        self.assertTrue(await client._is_direct_message("!room:test"))
+
     async def test_cb_invite_member_event_reject_and_accept_paths(self) -> None:
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
@@ -583,6 +618,56 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             "@u:example.com",
             "User",
             "!room:test",
+        )
+
+    async def test_cb_invite_member_event_rejects_malformed_sender(self) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+
+        event = SimpleNamespace(
+            content={"membership": "invite", "is_direct": True},
+            sender="malformed",
+        )
+        await client._cb_invite_member_event(room, event)
+
+        client.room_leave.assert_awaited_once_with("!room:test")
+        self.assertIn(
+            "Reason: Malformed sender.",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+    async def test_cb_invite_member_event_accepts_non_direct_when_configured(self) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        client._config.matrix.invites.direct_only = False
+        client.verify_user_devices = Mock()
+        client.get_profile = AsyncMock(return_value=_FakeProfileGetResponse("User"))
+        event = SimpleNamespace(content={"membership": "invite"}, sender="@u:example.com")
+
+        with patch.object(matrix_mod, "ProfileGetResponse", _FakeProfileGetResponse):
+            await client._cb_invite_member_event(room, event)
+
+        client.room_leave.assert_not_called()
+        client.join.assert_awaited_once_with("!room:test")
+
+    async def test_parse_sender_domain(self) -> None:
+        client = self._client()
+        self.assertEqual(
+            client._parse_sender_domain("@user:example.com"),  # pylint: disable=protected-access
+            "example.com",
+        )
+        self.assertEqual(
+            client._parse_sender_domain("@user:example.com:8448"),  # pylint: disable=protected-access
+            "example.com:8448",
+        )
+        self.assertIsNone(
+            client._parse_sender_domain("@user"),  # pylint: disable=protected-access
+        )
+        self.assertIsNone(
+            client._parse_sender_domain("user:example.com"),  # pylint: disable=protected-access
+        )
+        self.assertIsNone(
+            client._parse_sender_domain(123),  # pylint: disable=protected-access
         )
 
     async def test_cb_invite_member_event_beta_user_without_profile_object(

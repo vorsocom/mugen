@@ -259,6 +259,7 @@ domain = ""
 domains.allowed = []
 domains.denied = []
 homeserver = ""
+invites.direct_only = true
 security.device_trust.mode = "strict_known"
 # Optional allowlist entries used when security.device_trust.mode = "allowlist".
 # [[matrix.security.device_trust.allowlist]]
