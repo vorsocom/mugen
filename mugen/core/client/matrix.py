@@ -4,6 +4,8 @@ __all__ = ["DefaultMatrixClient"]
 
 from io import BytesIO
 
+import asyncio
+import inspect
 import json
 import mimetypes
 import os
@@ -80,6 +82,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     _ipc_callback: Coroutine
 
     _known_devices_list_key: str = "known_devices_list"
+
+    _matrix_event_hook_command: str = "matrix_event"
 
     _sync_key: str = "matrix_client_sync_next_batch"
 
@@ -499,15 +503,92 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             f" reason={reason}"
         )
 
+    async def _dispatch_matrix_event_hook(
+        self,
+        callback_name: str,
+        event: object = None,
+        room: MatrixRoom | MatrixInvitedRoom | None = None,
+        reason: str = _callback_skip_reason_dm_scope,
+    ) -> None:
+        if self._ipc_service is None:
+            return
+
+        handle_ipc_request = getattr(self._ipc_service, "handle_ipc_request", None)
+        if not callable(handle_ipc_request):
+            return
+
+        event_type = type(event).__name__ if event is not None else "UnknownEvent"
+        room_id = getattr(room, "room_id", None)
+        payload = {
+            "response_queue": asyncio.Queue(),
+            "command": self._matrix_event_hook_command,
+            "data": {
+                "callback": callback_name,
+                "event_type": event_type,
+                "reason": reason,
+                "room_id": room_id if isinstance(room_id, str) else None,
+                "sender": getattr(event, "sender", None),
+                "content": (
+                    event.content
+                    if isinstance(getattr(event, "content", None), dict)
+                    else None
+                ),
+                "source": (
+                    event.source
+                    if isinstance(getattr(event, "source", None), dict)
+                    else None
+                ),
+                "event": event,
+            },
+        }
+
+        try:
+            maybe_dispatch = handle_ipc_request("matrix", payload)
+            if inspect.isawaitable(maybe_dispatch):
+                await maybe_dispatch
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Matrix event extension dispatch failed."
+                f" callback={callback_name}"
+                f" event={event_type}"
+                f" error={type(exc).__name__}: {exc}"
+            )
+
+    async def _handle_non_core_event_callback(
+        self,
+        callback_name: str,
+        event: object = None,
+        room: MatrixRoom | MatrixInvitedRoom | None = None,
+        reason: str = _callback_skip_reason_dm_scope,
+    ) -> None:
+        self._log_skipped_callback(
+            callback_name=callback_name,
+            event=event,
+            reason=reason,
+        )
+        await self._dispatch_matrix_event_hook(
+            callback_name=callback_name,
+            event=event,
+            room=room,
+            reason=reason,
+        )
+
     ## Callbacks.
     # Events
     async def _cb_megolm_event(self, _room: MatrixRoom, _event: MegolmEvent) -> None:
         """Handle MegolmEvents."""
-        self._log_skipped_callback("_cb_megolm_event", event=_event)
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_megolm_event",
+            event=_event,
+            room=_room,
+        )
 
     async def _cb_invite_alias_event(self, _event: InviteAliasEvent) -> None:
         """Handle InviteAliasEvents."""
-        self._log_skipped_callback("_cb_invite_alias_event", event=_event)
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_invite_alias_event",
+            event=_event,
+        )
 
     async def _cb_invite_member_event(
         self, room: MatrixInvitedRoom, event: InviteMemberEvent
@@ -589,27 +670,45 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self, _room: MatrixInvitedRoom, _event: InviteNameEvent
     ) -> None:
         """Handle InviteNameEvents."""
-        self._log_skipped_callback("_cb_invite_name_event", event=_event)
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_invite_name_event",
+            event=_event,
+            room=_room,
+        )
 
     async def _cb_room_create_event(
         self, _room: MatrixRoom, _event: RoomCreateEvent
     ) -> None:
         """Handle RoomCreateEvents."""
-        self._log_skipped_callback("_cb_room_create_event", event=_event)
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_room_create_event",
+            event=_event,
+            room=_room,
+        )
 
     async def _cb_key_verification_event(self, event: KeyVerificationEvent) -> None:
         """Handle key verification events."""
-        self._log_skipped_callback("_cb_key_verification_event", event=event)
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_key_verification_event",
+            event=event,
+        )
 
     async def _cb_room_key_event(self, _event: RoomKeyEvent) -> None:
         """Handle RoomKeyEvents."""
-        self._log_skipped_callback("_cb_room_key_event", event=_event)
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_room_key_event",
+            event=_event,
+        )
 
     async def _cb_room_key_request(
         self, _room: MatrixRoom, _event: RoomKeyRequest
     ) -> None:
         """Handle RoomKeyRequests."""
-        self._log_skipped_callback("_cb_room_key_request", event=_event)
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_room_key_request",
+            event=_event,
+            room=_room,
+        )
 
     async def _validate_message(self, room: MatrixRoom, message) -> bool:
         """Validate an incoming message"""
@@ -751,11 +850,18 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self, _room: MatrixRoom, _event: RoomMemberEvent
     ) -> None:
         """Handle RoomMemberEvents."""
-        self._log_skipped_callback("_cb_room_member_event", event=_event)
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_room_member_event",
+            event=_event,
+            room=_room,
+        )
 
     async def _cb_tag_event(self, _event: TagEvent) -> None:
         """Handle TagEvents."""
-        self._log_skipped_callback("_cb_tag_event", event=_event)
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_tag_event",
+            event=_event,
+        )
 
     # Responses
     async def _cb_sync_response(self, resp: SyncResponse):
