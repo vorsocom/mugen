@@ -1094,6 +1094,74 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.room_send = AsyncMock(side_effect=LocalProtocolError("boom"))
         await client._send_text_message("!room:test", "hello")
 
+    async def test_send_text_message_retries_for_unverified_self_device(self) -> None:
+        client = self._client()
+        client.room_send = AsyncMock(
+            side_effect=[
+                matrix_mod.OlmUnverifiedDeviceError(
+                    SimpleNamespace(user_id=client.user_id, device_id="DEV-1")
+                ),
+                object(),
+            ]
+        )
+
+        await client._send_text_message("!room:test", "hello")
+
+        self.assertEqual(client.room_send.await_count, 2)
+        first_send_kwargs = client.room_send.await_args_list[0].kwargs
+        second_send_kwargs = client.room_send.await_args_list[1].kwargs
+        self.assertEqual(first_send_kwargs["room_id"], "!room:test")
+        self.assertNotIn("ignore_unverified_devices", first_send_kwargs)
+        self.assertTrue(second_send_kwargs["ignore_unverified_devices"])
+        self.assertIn(
+            "retrying with ignore_unverified_devices",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+    async def test_send_text_message_retries_for_unverified_self_device_id_alias(
+        self,
+    ) -> None:
+        client = self._client()
+        client.room_send = AsyncMock(
+            side_effect=[
+                matrix_mod.OlmUnverifiedDeviceError(
+                    SimpleNamespace(user_id=client.user_id, id="DEV-ID-1")
+                ),
+                object(),
+            ]
+        )
+
+        await client._send_text_message("!room:test", "hello")
+
+        self.assertEqual(client.room_send.await_count, 2)
+        self.assertTrue(
+            client.room_send.await_args_list[1].kwargs["ignore_unverified_devices"]
+        )
+        self.assertIn(
+            "device_id=DEV-ID-1",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+    async def test_send_text_message_does_not_retry_for_unverified_non_self_device(
+        self,
+    ) -> None:
+        client = self._client()
+        client.room_send = AsyncMock(
+            side_effect=matrix_mod.OlmUnverifiedDeviceError(
+                SimpleNamespace(user_id="@other:example.com", device_id="DEV-1")
+            )
+        )
+
+        with patch.object(matrix_mod.traceback, "print_exc") as print_exc:
+            await client._send_text_message("!room:test", "hello")
+
+        self.assertEqual(client.room_send.await_count, 1)
+        self.assertIn(
+            "Error sending text message",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+        print_exc.assert_called_once()
+
     async def test_send_media_helpers_return_early_when_upload_is_none(self) -> None:
         client = self._client()
         client._upload_file = AsyncMock(return_value=(None, None))
