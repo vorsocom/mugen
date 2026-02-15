@@ -35,6 +35,11 @@ cryptography = "^46.0.3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
+coverage = "^7.11.0"
+black = "^26.1.0"
+pylint = "^3.3.0"
+pre-commit = "^4.0.0"
+pytest-timeout = "^2.4.0"
 
 [build-system]
 requires = ["poetry-core"]
