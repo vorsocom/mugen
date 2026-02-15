@@ -331,6 +331,26 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             f" reason={reason}"
         )
 
+    @staticmethod
+    def _parse_sender_domain(sender_id: str) -> str | None:
+        if not isinstance(sender_id, str):
+            return None
+
+        local_part, separator, domain_part = sender_id.partition(":")
+        if separator == "" or not local_part.startswith("@") or domain_part.strip() == "":
+            return None
+
+        return domain_part
+
+    def _direct_invites_only(self) -> bool:
+        return bool(
+            getattr(
+                getattr(getattr(self._config, "matrix", SimpleNamespace()), "invites", None),
+                "direct_only",
+                True,
+            )
+        )
+
     def verify_user_devices(self, user_id: str) -> None:
         """Verify all of a user's devices."""
         self._logging_gateway.debug(f"Verifying all user devices ({user_id}).")
@@ -412,8 +432,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self, room: MatrixInvitedRoom, event: InviteMemberEvent
     ) -> None:
         """Handle InviteMemberEvents."""
+        event_content = event.content if isinstance(event.content, dict) else {}
+
         # Filter out events that do not have membership set to invite.
-        membership = event.content.get("membership")
+        membership = event_content.get("membership")
         if membership is not None and membership != "invite":
             return
 
@@ -422,7 +444,15 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # to initiate conversations with the assistant.
         allowed_domains: list = self._config.matrix.domains.allowed
         denied_domains: list = self._config.matrix.domains.denied
-        sender_domain: str = event.sender.split(":")[1]
+        sender_domain = self._parse_sender_domain(event.sender)
+        if sender_domain is None:
+            await self.room_leave(room.room_id)
+            self._logging_gateway.warning(
+                "InviteMemberEvent: Rejected invitation. Reason: Malformed sender."
+                f" ({event.sender})"
+            )
+            return
+
         if sender_domain not in allowed_domains or sender_domain in denied_domains:
             await self.room_leave(room.room_id)
             self._logging_gateway.warning(
@@ -444,14 +474,15 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return
 
         # Only accept invites to Direct Messages for now.
-        is_direct = event.content.get("is_direct")
-        if is_direct is None:
-            await self.room_leave(room.room_id)
-            self._logging_gateway.warning(
-                "InviteMemberEvent: Rejected invitation. Reason: Not direct"
-                f" message. ({event.sender})"
-            )
-            return
+        if self._direct_invites_only():
+            is_direct = event_content.get("is_direct")
+            if is_direct is not True:
+                await self.room_leave(room.room_id)
+                self._logging_gateway.warning(
+                    "InviteMemberEvent: Rejected invitation. Reason: Not direct"
+                    f" message. ({event.sender})"
+                )
+                return
 
         # Verify user devices.
         self.verify_user_devices(event.sender)
@@ -501,15 +532,29 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     async def _validate_message(self, room: MatrixRoom, message) -> bool:
         """Validate an incoming message"""
+        sender_id = getattr(message, "sender", None)
+        if self._parse_sender_domain(sender_id) is None:
+            self._logging_gateway.warning(
+                "RoomMessage: Rejected message. Reason: Malformed sender."
+                f" ({sender_id})"
+            )
+            return False
+
         # Only process messages from direct chats for now.
         # And ignore the assistant's messages, otherwise it
         # will create a message loop.
         is_direct = await self._is_direct_message(room.room_id)
-        if message.sender == self.user_id or not is_direct:
+        if sender_id == self.user_id:
+            return False
+        if not is_direct:
+            self._logging_gateway.debug(
+                "RoomMessage: Ignored message. Reason: Room not marked direct."
+                f" ({room.room_id})"
+            )
             return False
 
         # Verify user devices.
-        self.verify_user_devices(message.sender)
+        self.verify_user_devices(sender_id)
 
         # Set the room read marker to indicate that the assistant has read the
         # message.
@@ -622,10 +667,22 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     async def _is_direct_message(self, room_id: str) -> bool:
         """Indicate if the given room was flagged as a 1:1 chat."""
         room_state = await self.room_get_state(room_id)
-        flags: list[dict[str, dict[str, int]]] = [
-            x for x in room_state.events if x["type"] == self._flags_key
-        ]
-        return len(flags) > 0 and "m.direct" in flags[0].get("content").keys()
+        events = getattr(room_state, "events", [])
+        if not isinstance(events, list):
+            return False
+
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") != self._flags_key:
+                continue
+            content = event.get("content")
+            if not isinstance(content, dict):
+                continue
+            if content.get("m.direct") in [1, True]:
+                return True
+
+        return False
 
     async def _process_message_responses(
         self, room_id: str, message_responses: list[dict]
