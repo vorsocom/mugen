@@ -202,7 +202,8 @@ if [[ -z "$tenant_id" || "$tenant_id" == "null" ]]; then
   tenant_id="$(curl -sk -H "$auth_header" "$base_url/Tenants" | jq -r '.value[0].Id // empty')"
   if [[ -z "$tenant_id" ]]; then
     tenant_suffix="$(date +%Y%m%d%H%M%S)"
-    tenant_payload="$(jq -cn --arg suffix "$tenant_suffix" '{Name:("E2E Tenant " + $suffix),Slug:("e2e-" + $suffix)}')"
+    tenant_slug="e2e-${tenant_suffix}"
+    tenant_payload="$(jq -cn --arg suffix "$tenant_suffix" --arg slug "$tenant_slug" '{Name:("E2E Tenant " + $suffix),Slug:$slug}')"
     tenant_create_code="$(curl -sk -o /tmp/acp_http_e2e_create_tenant.out -w "%{http_code}" \
       -H "$auth_header" -H "Content-Type: application/json" \
       -X POST "$base_url/Tenants" \
@@ -213,6 +214,17 @@ if [[ -z "$tenant_id" || "$tenant_id" == "null" ]]; then
       exit 1
     fi
     tenant_id="$(jq -r '.Id // empty' /tmp/acp_http_e2e_create_tenant.out)"
+    if [[ -z "$tenant_id" ]]; then
+      for _ in $(seq 1 10); do
+        tenant_id="$(curl -sk -H "$auth_header" "$base_url/Tenants" \
+          | jq -r --arg slug "$tenant_slug" '.value[] | select(.Slug == $slug) | .Id' \
+          | tail -n1)"
+        if [[ -n "$tenant_id" ]]; then
+          break
+        fi
+        sleep 1
+      done
+    fi
   fi
 fi
 if [[ -z "$tenant_id" ]]; then
