@@ -65,8 +65,8 @@ Done:
   - `mugen_test/test_mugen_di_runtime_import_regression.py`
 - Constructor fallback behavior is covered by:
   - `mugen_test/test_mugen_di_constructor_fallbacks.py`
-- CI DI gate exists at:
-  - `.github/workflows/di-gates.yml`
+- CI test gate (which includes DI coverage) exists at:
+  - `.github/workflows/test-gates.yml`
 
 Remaining:
 
