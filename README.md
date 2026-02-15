@@ -19,6 +19,7 @@ muGen (pronounced "mew-jen") is a [fair-code](https://faircode.io) licensed micr
 4. [License](#license)
 5. [Why Source-Available](#why-source-available)
 6. [Enterprise Services](#enterprise-services)
+7. [Release Automation](#release-automation)
 
 ## Architecture
 
@@ -114,6 +115,21 @@ You can now open a new terminal and connect to the running instance using Telnet
 ## Building Applications with muGen
 
 To start building, check out the guide on [building muGen applications](docs/apps.md).
+
+## Release Automation
+
+muGen includes a release automation script that mirrors the release flow:
+
+```bash
+# On develop, prepare a release branch and run full gates.
+poetry run python scripts/release.py prepare --bump patch --python "$(poetry run which python)"
+
+# Finish release: merge/tag/push and merge back into develop.
+poetry run python scripts/release.py finish --version 0.43.3
+```
+
+A manual GitHub Actions workflow is also available at:
+`.github/workflows/release.yml`
 
 ## License
 
