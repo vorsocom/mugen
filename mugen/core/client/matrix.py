@@ -445,7 +445,12 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             allowlist = self._resolve_device_trust_allowlist()
 
         known_devices = self._load_known_devices()
-        for device_id, olm_device in self.device_store.get(user_id, {}).items():
+        try:
+            user_devices = self.device_store[user_id]
+        except KeyError:
+            user_devices = {}
+
+        for device_id, olm_device in user_devices.items():
             self._logging_gateway.debug(f"Found {device_id}.")
             if mode == self._device_trust_mode_strict_known:
                 if device_id in known_devices.get(user_id, []):
