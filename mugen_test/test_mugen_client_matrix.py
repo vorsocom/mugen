@@ -12,6 +12,7 @@ from nio import LocalProtocolError
 
 from mugen.core.client import matrix as matrix_mod
 from mugen.core.client.matrix import DefaultMatrixClient
+from mugen.core.service.ipc import DefaultIPCService
 
 
 class _DeviceStore(dict):
@@ -99,6 +100,36 @@ class _MatrixClientForTests(DefaultMatrixClient):
     @device_store.setter
     def device_store(self, value) -> None:
         self._test_device_store = value
+
+
+class _RecordingMatrixEventIPCExtension:  # pylint: disable=too-few-public-methods
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    @property
+    def platforms(self) -> list[str]:
+        return ["matrix"]
+
+    @property
+    def ipc_commands(self) -> list[str]:
+        return ["matrix_event"]
+
+    async def process_ipc_command(self, payload: dict) -> None:
+        data = payload.get("data", {})
+        self.events.append(
+            {
+                "callback": data.get("callback"),
+                "event_type": data.get("event_type"),
+                "reason": data.get("reason"),
+                "room_id": data.get("room_id"),
+            }
+        )
+        await payload["response_queue"].put(
+            {
+                "handler": type(self).__name__,
+                "response": {"ok": True},
+            }
+        )
 
 
 class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
@@ -225,7 +256,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._keyval_storage_gateway = Mock()
         client._messaging_service = Mock()
         client._user_service = Mock()
-        client._ipc_service = Mock()
+        client._ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock())
         client.user_id = "@assistant:example.com"
         client.login = AsyncMock()
         client.load_store = Mock()
@@ -715,6 +746,102 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Matrix callback skipped.", log_message)
             self.assertIn(f"callback={callback_name}", log_message)
             self.assertIn("reason=unsupported_dm_scope", log_message)
+
+    async def test_non_core_callbacks_dispatch_to_matrix_event_hook(self) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        callback_invocations = [
+            ("_cb_megolm_event", (room, SimpleNamespace(sender="@u:example.com"))),
+            ("_cb_invite_alias_event", (SimpleNamespace(),)),
+            ("_cb_invite_name_event", (room, SimpleNamespace(content={"name": "x"}))),
+            ("_cb_room_create_event", (room, SimpleNamespace(content={"creator": "x"}))),
+            ("_cb_key_verification_event", (SimpleNamespace(sender="@u:example.com"),)),
+            ("_cb_room_key_event", (SimpleNamespace(source={"content": {"a": 1}}),)),
+            ("_cb_room_key_request", (room, SimpleNamespace(sender="@u:example.com"))),
+            ("_cb_room_member_event", (room, SimpleNamespace(content={"membership": "leave"}))),
+            ("_cb_tag_event", (SimpleNamespace(content={"tags": {}}),)),
+        ]
+
+        for callback_name, args in callback_invocations:
+            client._ipc_service.handle_ipc_request.reset_mock()
+            callback = getattr(client, callback_name)
+            await callback(*args)
+            client._ipc_service.handle_ipc_request.assert_awaited_once()
+            platform, payload = client._ipc_service.handle_ipc_request.await_args.args
+            self.assertEqual(platform, "matrix")
+            self.assertEqual(payload["command"], client._matrix_event_hook_command)
+            self.assertEqual(payload["data"]["callback"], callback_name)
+            self.assertEqual(
+                payload["data"]["reason"],
+                client._callback_skip_reason_dm_scope,
+            )
+            self.assertIn("event_type", payload["data"])
+
+    async def test_dispatch_matrix_event_hook_handles_missing_ipc_service_paths(
+        self,
+    ) -> None:
+        client = self._client()
+
+        client._ipc_service = None
+        await client._dispatch_matrix_event_hook(  # pylint: disable=protected-access
+            callback_name="_cb_tag_event",
+            event=SimpleNamespace(),
+        )
+
+        client._ipc_service = SimpleNamespace(handle_ipc_request=None)
+        await client._dispatch_matrix_event_hook(  # pylint: disable=protected-access
+            callback_name="_cb_tag_event",
+            event=SimpleNamespace(),
+        )
+
+        non_awaitable_handler = Mock(return_value=None)
+        client._ipc_service = SimpleNamespace(handle_ipc_request=non_awaitable_handler)
+        await client._dispatch_matrix_event_hook(  # pylint: disable=protected-access
+            callback_name="_cb_tag_event",
+            event=SimpleNamespace(),
+        )
+        non_awaitable_handler.assert_called_once()
+
+    async def test_non_core_callback_logs_warning_on_dispatch_failure(self) -> None:
+        client = self._client()
+        client._ipc_service = SimpleNamespace(
+            handle_ipc_request=AsyncMock(side_effect=RuntimeError("boom")),
+        )
+
+        await client._cb_tag_event(SimpleNamespace())
+
+        warning_messages = [
+            call.args[0] for call in client._logging_gateway.warning.call_args_list
+        ]
+        self.assertTrue(
+            any(
+                "Matrix event extension dispatch failed." in message
+                for message in warning_messages
+            )
+        )
+
+    async def test_non_core_callback_integration_dispatches_to_ipc_extension(
+        self,
+    ) -> None:
+        client = self._client()
+        ipc_service = DefaultIPCService(logging_gateway=Mock())
+        ipc_service._ipc_extensions = []
+        extension = _RecordingMatrixEventIPCExtension()
+        ipc_service.register_ipc_extension(extension)
+        client._ipc_service = ipc_service
+
+        room = SimpleNamespace(room_id="!room:test")
+        event = SimpleNamespace(content={"membership": "join"})
+        await client._cb_room_member_event(room, event)
+
+        self.assertEqual(len(extension.events), 1)
+        self.assertEqual(extension.events[0]["callback"], "_cb_room_member_event")
+        self.assertEqual(extension.events[0]["event_type"], "SimpleNamespace")
+        self.assertEqual(
+            extension.events[0]["reason"],
+            client._callback_skip_reason_dm_scope,
+        )
+        self.assertEqual(extension.events[0]["room_id"], "!room:test")
 
     async def test_cb_room_message_dispatches_text_and_media_handlers(self) -> None:
         client = self._client()
