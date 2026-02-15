@@ -6,7 +6,7 @@ import unittest.mock
 
 from quart import Quart
 
-from mugen import create_quart_app as _create_quart_app
+from mugen import BootstrapConfigError, create_quart_app as _create_quart_app
 
 
 def _logger_provider():
@@ -31,7 +31,7 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
             # Create dummy configuration for testing.
             dummy_config = SimpleNamespace()
 
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(BootstrapConfigError):
                 create_quart_app(config_provider=lambda: dummy_config)
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -48,7 +48,7 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(BootstrapConfigError):
                 create_quart_app(config_provider=lambda: dummy_config)
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions

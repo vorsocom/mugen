@@ -110,6 +110,12 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 ~$ hypercorn -c hypercorn.toml quartman
 ```
 
+Bootstrap lifecycle at startup:
+1. **Phase A (blocking):** load/register extensions, then register the API blueprint.
+2. **Phase B (background):** start long-running platform clients (Matrix/Telnet/WhatsApp).
+
+The server does not begin serving requests until Phase A completes successfully.
+
 You can now open a new terminal and connect to the running instance using Telnet:
 
 ```bash

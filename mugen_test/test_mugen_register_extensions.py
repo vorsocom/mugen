@@ -8,7 +8,8 @@ import unittest.mock
 
 from quart import Quart
 
-from mugen import register_extensions as _register_extensions
+import mugen as mugen_mod
+from mugen import ExtensionLoadError, register_extensions as _register_extensions
 from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.fw import IFWExtension
@@ -76,6 +77,25 @@ async def register_extensions(*args, **kwargs):
 # pylint: disable=too-many-public-methods
 class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
     """Unit tests for mugen.register_extensions."""
+
+    async def test_extension_enabled_parses_common_string_values(self) -> None:
+        """String-form enable flags should be parsed deterministically."""
+        self.assertTrue(
+            mugen_mod._extension_enabled(SimpleNamespace(enabled=" yes "))  # pylint: disable=protected-access
+        )
+        self.assertFalse(
+            mugen_mod._extension_enabled(SimpleNamespace(enabled="OFF"))  # pylint: disable=protected-access
+        )
+        self.assertTrue(
+            mugen_mod._extension_enabled(SimpleNamespace(enabled="maybe"))  # pylint: disable=protected-access
+        )
+
+    async def test_split_extension_path_rejects_invalid_values(self) -> None:
+        """Extension path helper should reject empty and malformed class targets."""
+        with self.assertRaises(ValueError):
+            mugen_mod._split_extension_path("")  # pylint: disable=protected-access
+        with self.assertRaises(ValueError):
+            mugen_mod._split_extension_path("module:")  # pylint: disable=protected-access
 
     async def test_plugin_config_unavailable(self) -> None:
         """Test effects of missing plugins configuration."""
@@ -167,6 +187,75 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 "DEBUG:test_app:Adding extensions for loading.",
             )
 
+    async def test_disabled_core_plugin_is_skipped(self) -> None:
+        """Disabled core plugins should be skipped without loading/importing."""
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    core=SimpleNamespace(
+                        plugins=[
+                            SimpleNamespace(
+                                type="ct",
+                                path="disabled.core.plugin",
+                                enabled=False,
+                            )
+                        ],
+                    ),
+                )
+            )
+        )
+
+        with (
+            self.assertLogs(logger="test_app", level="INFO") as logger,
+            unittest.mock.patch("mugen.import_module") as import_module_mock,
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+        import_module_mock.assert_not_called()
+        self.assertIn(
+            "INFO:test_app:Skipping disabled extension: disabled.core.plugin (ct).",
+            logger.output,
+        )
+
+    async def test_disabled_third_party_extension_is_skipped(self) -> None:
+        """Disabled third-party extensions should be skipped without import."""
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions=[
+                        SimpleNamespace(
+                            type="ipc",
+                            path="disabled.third.party.extension",
+                            enabled=False,
+                        )
+                    ],
+                ),
+            )
+        )
+
+        with (
+            self.assertLogs(logger="test_app", level="INFO") as logger,
+            unittest.mock.patch("mugen.import_module") as import_module_mock,
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+        import_module_mock.assert_not_called()
+        self.assertIn(
+            "INFO:test_app:Skipping disabled extension:"
+            " disabled.third.party.extension (ipc).",
+            logger.output,
+        )
+
     async def test_import_module_failure(self) -> None:
         """Test effects of module import failing."""
         # Create dummy app to get context.
@@ -188,7 +277,33 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
 
         with (
             self.assertLogs(logger="test_app"),
-            self.assertRaises(SystemExit),
+            self.assertRaises(ExtensionLoadError),
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+    async def test_invalid_extension_path_format_raises(self) -> None:
+        """Invalid extension paths should fail before import/registration."""
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions=[
+                        SimpleNamespace(
+                            type="ct",
+                            path="invalid.module.path:",
+                        )
+                    ],
+                )
+            )
+        )
+
+        with (
+            self.assertLogs(logger="test_app"),
+            self.assertRaises(ExtensionLoadError),
         ):
             await register_extensions(
                 app=app,
@@ -228,7 +343,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
                 return_value=[],
             ),
-            self.assertRaises(SystemExit),
+            self.assertRaises(ExtensionLoadError),
         ):
             await register_extensions(
                 app=app,
@@ -273,7 +388,233 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
                 return_value=[DummyExtensionClass],
             ),
-            self.assertRaises(SystemExit),
+            self.assertRaises(ExtensionLoadError),
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+    async def test_register_extension_with_explicit_class_path(self) -> None:
+        """module:ClassName extension paths should resolve deterministically."""
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions=[
+                        SimpleNamespace(
+                            type="ct",
+                            path="ct_ext:TargetCTExtension",
+                        )
+                    ],
+                )
+            )
+        )
+
+        class TargetCTExtension(ICTExtension):
+            __module__ = "ct_ext"
+
+            @property
+            def platforms(self) -> list[str]:
+                return []
+
+            @property
+            def triggers(self) -> list[str]:
+                return ["target"]
+
+            async def process_message(
+                self,
+                message: str,
+                role: str,
+                room_id: str,
+                user_id: str,
+            ) -> None:
+                _ = (message, role, room_id, user_id)
+
+        class OtherCTExtension(ICTExtension):
+            __module__ = "ct_ext"
+
+            @property
+            def platforms(self) -> list[str]:
+                return []
+
+            @property
+            def triggers(self) -> list[str]:
+                return ["other"]
+
+            async def process_message(
+                self,
+                message: str,
+                role: str,
+                room_id: str,
+                user_id: str,
+            ) -> None:
+                _ = (message, role, room_id, user_id)
+
+        with (
+            self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            unittest.mock.patch.dict(
+                "sys.modules",
+                {
+                    "ct_ext": unittest.mock.Mock(
+                        TargetCTExtension=TargetCTExtension,
+                        OtherCTExtension=OtherCTExtension,
+                    ),
+                },
+            ),
+            unittest.mock.patch(
+                target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
+                return_value=[OtherCTExtension, TargetCTExtension],
+            ),
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+        self.assertIn(
+            "DEBUG:test_app:Registered CT extension: ct_ext:TargetCTExtension.",
+            logger.output,
+        )
+
+    async def test_extension_class_path_missing_target_class(self) -> None:
+        """module:ClassName should fail when class target is missing."""
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions=[
+                        SimpleNamespace(
+                            type="ct",
+                            path="ct_ext:MissingClass",
+                        )
+                    ],
+                )
+            )
+        )
+
+        with (
+            self.assertLogs(logger="test_app"),
+            unittest.mock.patch.dict(
+                "sys.modules",
+                {
+                    "ct_ext": unittest.mock.Mock(),
+                },
+            ),
+            self.assertRaises(ExtensionLoadError),
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+    async def test_extension_class_path_with_wrong_interface(self) -> None:
+        """module:ClassName should fail when class does not implement interface."""
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions=[
+                        SimpleNamespace(
+                            type="ct",
+                            path="ct_ext:NotCTExtension",
+                        )
+                    ],
+                )
+            )
+        )
+
+        class NotCTExtension:  # pylint: disable=too-few-public-methods
+            __module__ = "ct_ext"
+
+        with (
+            self.assertLogs(logger="test_app"),
+            unittest.mock.patch.dict(
+                "sys.modules",
+                {
+                    "ct_ext": unittest.mock.Mock(NotCTExtension=NotCTExtension),
+                },
+            ),
+            self.assertRaises(ExtensionLoadError),
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+    async def test_extension_without_class_path_fails_when_ambiguous(self) -> None:
+        """module-only extension path should fail when multiple classes match."""
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions=[
+                        SimpleNamespace(
+                            type="ct",
+                            path="ct_ext",
+                        )
+                    ],
+                )
+            )
+        )
+
+        class FirstCTExtension(ICTExtension):
+            __module__ = "ct_ext"
+
+            @property
+            def platforms(self) -> list[str]:
+                return []
+
+            @property
+            def triggers(self) -> list[str]:
+                return ["first"]
+
+            async def process_message(
+                self,
+                message: str,
+                role: str,
+                room_id: str,
+                user_id: str,
+            ) -> None:
+                _ = (message, role, room_id, user_id)
+
+        class SecondCTExtension(ICTExtension):
+            __module__ = "ct_ext"
+
+            @property
+            def platforms(self) -> list[str]:
+                return []
+
+            @property
+            def triggers(self) -> list[str]:
+                return ["second"]
+
+            async def process_message(
+                self,
+                message: str,
+                role: str,
+                room_id: str,
+                user_id: str,
+            ) -> None:
+                _ = (message, role, room_id, user_id)
+
+        with (
+            self.assertLogs(logger="test_app"),
+            unittest.mock.patch.dict(
+                "sys.modules",
+                {
+                    "ct_ext": unittest.mock.Mock(),
+                },
+            ),
+            unittest.mock.patch(
+                target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
+                return_value=[FirstCTExtension, SecondCTExtension],
+            ),
+            self.assertRaises(ExtensionLoadError),
         ):
             await register_extensions(
                 app=app,

@@ -1,12 +1,20 @@
 """Quart application package."""
 
-__all__ = ["create_quart_app", "run_clients"]
+__all__ = [
+    "BootstrapConfigError",
+    "BootstrapError",
+    "ExtensionLoadError",
+    "bootstrap_app",
+    "create_quart_app",
+    "run_clients",
+    "run_platform_clients",
+]
 
 import asyncio
 from importlib import import_module
 import random
 import re
-import sys
+from time import perf_counter
 from types import SimpleNamespace
 
 from quart import Quart
@@ -29,6 +37,18 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
+
+
+class BootstrapError(RuntimeError):
+    """Base error type for application bootstrap failures."""
+
+
+class BootstrapConfigError(BootstrapError):
+    """Raised when bootstrap configuration is invalid."""
+
+
+class ExtensionLoadError(BootstrapError):
+    """Raised when an extension cannot be loaded or initialized."""
 
 
 def _config_provider():
@@ -63,6 +83,72 @@ def _matrix_provider():
     return di.container.matrix_client
 
 
+def _extension_enabled(ext: SimpleNamespace) -> bool:
+    """Resolve whether an extension is enabled by configuration."""
+    raw_enabled = getattr(ext, "enabled", True)
+    if isinstance(raw_enabled, str):
+        normalized = raw_enabled.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return bool(raw_enabled)
+
+
+def _split_extension_path(path: str) -> tuple[str, str | None]:
+    """Split extension path into module and optional class target."""
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("Extension path must be a non-empty string.")
+
+    normalized = path.strip()
+    if ":" not in normalized:
+        return normalized, None
+
+    module_name, class_name = normalized.split(":", 1)
+    if not module_name or not class_name:
+        raise ValueError("Extension path must use module:ClassName.")
+
+    return module_name, class_name
+
+
+def _resolve_extension_class(
+    *,
+    interface: type,
+    module_name: str,
+    class_name: str | None,
+    ext_path: str,
+) -> type:
+    """Resolve extension class deterministically for the configured path."""
+    if class_name is not None:
+        module = import_module(name=module_name)
+        ext_class = getattr(module, class_name, None)
+        if not isinstance(ext_class, type):
+            raise ExtensionLoadError(f"Extension class not found: {ext_path}.")
+        if not issubclass(ext_class, interface):
+            raise ExtensionLoadError(
+                f"Extension class is not a valid {interface.__name__}: {ext_path}."
+            )
+        return ext_class
+
+    module_matches = [x for x in interface.__subclasses__() if x.__module__ == module_name]
+    if not module_matches:
+        raise ExtensionLoadError(
+            f"Extension is not a subclass of its intended type: {ext_path}."
+        )
+
+    if len(module_matches) > 1:
+        candidates = ", ".join(
+            sorted(x.__qualname__ for x in module_matches)
+        )
+        raise ExtensionLoadError(
+            "Multiple extension classes found. "
+            f"Use module:ClassName for deterministic resolution ({ext_path}). "
+            f"Candidates: {candidates}."
+        )
+
+    return module_matches[0]
+
+
 def create_quart_app(
     config_provider=_config_provider,
     logger_provider=_logger_provider,
@@ -77,9 +163,9 @@ def create_quart_app(
     # Check for valid configuration name.
     try:
         environment = config.mugen.environment
-    except AttributeError:
+    except AttributeError as exc:
         logger.error("Configuration unavailable.")
-        sys.exit(1)
+        raise BootstrapConfigError("Configuration unavailable.") from exc
 
     logger.debug(f"Configured environment: {environment}.")
     if environment not in (
@@ -89,7 +175,7 @@ def create_quart_app(
         "production",
     ):
         logger.error("Invalid environment name.")
-        sys.exit(1)
+        raise BootstrapConfigError("Invalid environment name.")
 
     # Create application configuration object.
     app.config.from_object(AppConfig[environment])
@@ -112,10 +198,20 @@ async def run_clients(
     whatsapp_provider=_whatsapp_provider,
 ) -> None:
     """Entrypoint for assistants."""
-    config: SimpleNamespace = config_provider()
-    logger: ILoggingGateway = logger_provider()
-    whatsapp_client: IWhatsAppClient = whatsapp_provider()
+    await bootstrap_app(app, config_provider=config_provider)
+    await run_platform_clients(
+        app,
+        config_provider=config_provider,
+        logger_provider=logger_provider,
+        whatsapp_provider=whatsapp_provider,
+    )
 
+
+async def bootstrap_app(
+    app: Quart,
+    config_provider=_config_provider,
+) -> None:
+    """Phase A bootstrap for app extensions and API registration."""
     # Discover and register core plugins and
     # third-party extensions.
     await register_extensions(app, config_provider=config_provider)
@@ -123,6 +219,18 @@ async def run_clients(
     # Register blueprints after extensions have been loaded.
     # This allows extensions to hack the api.
     app.register_blueprint(api, url_prefix="/api")
+
+
+async def run_platform_clients(
+    app: Quart,
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    whatsapp_provider=_whatsapp_provider,
+) -> None:
+    """Phase B bootstrap for long-running platform clients."""
+    config: SimpleNamespace = config_provider()
+    logger: ILoggingGateway = logger_provider()
+    whatsapp_client: IWhatsAppClient = whatsapp_provider()
 
     # Do platform checks.
     tasks = []
@@ -142,9 +250,9 @@ async def run_clients(
             logger.debug("Running whatsapp client.")
             # Create task to run WhatsApp client.
             tasks.append(asyncio.create_task(run_whatsapp_client()))
-    except AttributeError:
+    except AttributeError as exc:
         logger.error("Invalid platform configuration.")
-        sys.exit(1)
+        raise BootstrapConfigError("Invalid platform configuration.") from exc
 
     try:
         await asyncio.gather(*tasks)
@@ -179,6 +287,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
     # 7. Retrieval Augmented Generation (RAG) extensions.
     # 8. Response Pre-Processor (RPP) extensions.
     extensions = []
+    sweep_started_at = perf_counter()
 
     try:
         # Load core plugins.
@@ -198,6 +307,27 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
 
     # Register core plugins and third party extensions.
     for ext in extensions:
+        ext_started_at = perf_counter()
+        ext_type = getattr(ext, "type", "<unknown>")
+        ext_path = getattr(ext, "path", "<unknown>")
+        if not _extension_enabled(ext):
+            logger.info(f"Skipping disabled extension: {ext_path} ({ext_type}).")
+            continue
+
+        try:
+            ext_module_name, ext_class_name = _split_extension_path(ext_path)
+        except ValueError as exc:
+            logger.error("Invalid extension path format.")
+            logger.info(f"Module: {ext_path}.")
+            logger.error(
+                "Extension bootstrap failed"
+                f" type={ext_type} path={ext_path}"
+                f" elapsed_seconds={perf_counter() - ext_started_at:.3f}"
+            )
+            raise ExtensionLoadError(
+                f"Invalid extension path format: {ext_path}."
+            ) from exc
+
         # Flag used to signal that the plugin/extension
         # registration was successful.
         registered = False
@@ -208,122 +338,156 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
 
         # Try importing the plugin/extension module.
         try:
-            import_module(name=ext.path)
-        except ModuleNotFoundError:
+            import_module(name=ext_module_name)
+        except ModuleNotFoundError as exc:
             logger.error("Module import failed.")
-            logger.info(f"Module: {ext.path}.")
-            sys.exit(1)
+            logger.info(f"Module: {ext_module_name}.")
+            logger.error(
+                "Extension bootstrap failed"
+                f" type={ext_type} path={ext_path}"
+                f" elapsed_seconds={perf_counter() - ext_started_at:.3f}"
+            )
+            raise ExtensionLoadError(f"Module import failed: {ext_module_name}.") from exc
 
         try:
-            try:
-                if ext.type == "cp":
-                    cp_ext_class = [
-                        x
-                        for x in ICPExtension.__subclasses__()
-                        if x.__module__ == ext.path
-                    ][0]
-                    cp_ext = cp_ext_class()
-                    extension_supported = platform_service.extension_supported(cp_ext)
-                    if extension_supported:
-                        messaging_service.register_cp_extension(cp_ext)
-                        registered = True
-                elif ext.type == "ct":
-                    ct_ext_class = [
-                        x
-                        for x in ICTExtension.__subclasses__()
-                        if x.__module__ == ext.path
-                    ][0]
-                    ct_ext = ct_ext_class()
-                    extension_supported = platform_service.extension_supported(ct_ext)
-                    if extension_supported:
-                        messaging_service.register_ct_extension(ct_ext)
-                        registered = True
-                elif ext.type == "ctx":
-                    ctx_ext_class = [
-                        x
-                        for x in ICTXExtension.__subclasses__()
-                        if x.__module__ == ext.path
-                    ][0]
-                    ctx_ext = ctx_ext_class()
-                    extension_supported = platform_service.extension_supported(ctx_ext)
-                    if extension_supported:
-                        messaging_service.register_ctx_extension(ctx_ext)
-                        registered = True
-                elif ext.type == "fw":
-                    fw_ext_class = [
-                        x
-                        for x in IFWExtension.__subclasses__()
-                        if x.__module__ == ext.path
-                    ][0]
-                    fw_ext = fw_ext_class()
-                    extension_supported = platform_service.extension_supported(fw_ext)
-                    if extension_supported:
-                        await fw_ext.setup(app)
-                        registered = True
-                elif ext.type == "ipc":
-                    ipc_ext_class = [
-                        x
-                        for x in IIPCExtension.__subclasses__()
-                        if x.__module__ == ext.path
-                    ][0]
-                    ipc_ext = ipc_ext_class()
-                    extension_supported = platform_service.extension_supported(ipc_ext)
-                    if extension_supported:
-                        ipc_service.register_ipc_extension(ipc_ext)
-                        registered = True
-                elif ext.type == "mh":
-                    mh_ext_class = [
-                        x
-                        for x in IMHExtension.__subclasses__()
-                        if x.__module__ == ext.path
-                    ][0]
-                    mh_ext = mh_ext_class()
-                    extension_supported = platform_service.extension_supported(mh_ext)
-                    if extension_supported:
-                        messaging_service.register_mh_extension(mh_ext)
-                        registered = True
-                elif ext.type == "rag":
-                    rag_ext_class = [
-                        x
-                        for x in IRAGExtension.__subclasses__()
-                        if x.__module__ == ext.path
-                    ][0]
-                    rag_ext = rag_ext_class()
-                    extension_supported = platform_service.extension_supported(rag_ext)
-                    if extension_supported:
-                        messaging_service.register_rag_extension(rag_ext)
-                        registered = True
-                elif ext.type == "rpp":
-                    rpp_ext_class = [
-                        x
-                        for x in IRPPExtension.__subclasses__()
-                        if x.__module__ == ext.path
-                    ][0]
-                    rpp_ext = rpp_ext_class()
-                    extension_supported = platform_service.extension_supported(rpp_ext)
-                    if extension_supported:
-                        messaging_service.register_rpp_extension(rpp_ext)
-                        registered = True
-                else:
-                    logger.warning(f"Unknown extension type: {ext.type}.")
-            except TypeError:
-                logger.exception(
-                    "Incomplete subclass implementation for extension: %s.",
-                    ext.path,
+            if ext_type == "cp":
+                cp_ext_class = _resolve_extension_class(
+                    interface=ICPExtension,
+                    module_name=ext_module_name,
+                    class_name=ext_class_name,
+                    ext_path=ext_path,
                 )
-                sys.exit(1)
-        except IndexError:
+                cp_ext = cp_ext_class()
+                extension_supported = platform_service.extension_supported(cp_ext)
+                if extension_supported:
+                    messaging_service.register_cp_extension(cp_ext)
+                    registered = True
+            elif ext_type == "ct":
+                ct_ext_class = _resolve_extension_class(
+                    interface=ICTExtension,
+                    module_name=ext_module_name,
+                    class_name=ext_class_name,
+                    ext_path=ext_path,
+                )
+                ct_ext = ct_ext_class()
+                extension_supported = platform_service.extension_supported(ct_ext)
+                if extension_supported:
+                    messaging_service.register_ct_extension(ct_ext)
+                    registered = True
+            elif ext_type == "ctx":
+                ctx_ext_class = _resolve_extension_class(
+                    interface=ICTXExtension,
+                    module_name=ext_module_name,
+                    class_name=ext_class_name,
+                    ext_path=ext_path,
+                )
+                ctx_ext = ctx_ext_class()
+                extension_supported = platform_service.extension_supported(ctx_ext)
+                if extension_supported:
+                    messaging_service.register_ctx_extension(ctx_ext)
+                    registered = True
+            elif ext_type == "fw":
+                fw_ext_class = _resolve_extension_class(
+                    interface=IFWExtension,
+                    module_name=ext_module_name,
+                    class_name=ext_class_name,
+                    ext_path=ext_path,
+                )
+                fw_ext = fw_ext_class()
+                extension_supported = platform_service.extension_supported(fw_ext)
+                if extension_supported:
+                    await fw_ext.setup(app)
+                    registered = True
+            elif ext_type == "ipc":
+                ipc_ext_class = _resolve_extension_class(
+                    interface=IIPCExtension,
+                    module_name=ext_module_name,
+                    class_name=ext_class_name,
+                    ext_path=ext_path,
+                )
+                ipc_ext = ipc_ext_class()
+                extension_supported = platform_service.extension_supported(ipc_ext)
+                if extension_supported:
+                    ipc_service.register_ipc_extension(ipc_ext)
+                    registered = True
+            elif ext_type == "mh":
+                mh_ext_class = _resolve_extension_class(
+                    interface=IMHExtension,
+                    module_name=ext_module_name,
+                    class_name=ext_class_name,
+                    ext_path=ext_path,
+                )
+                mh_ext = mh_ext_class()
+                extension_supported = platform_service.extension_supported(mh_ext)
+                if extension_supported:
+                    messaging_service.register_mh_extension(mh_ext)
+                    registered = True
+            elif ext_type == "rag":
+                rag_ext_class = _resolve_extension_class(
+                    interface=IRAGExtension,
+                    module_name=ext_module_name,
+                    class_name=ext_class_name,
+                    ext_path=ext_path,
+                )
+                rag_ext = rag_ext_class()
+                extension_supported = platform_service.extension_supported(rag_ext)
+                if extension_supported:
+                    messaging_service.register_rag_extension(rag_ext)
+                    registered = True
+            elif ext_type == "rpp":
+                rpp_ext_class = _resolve_extension_class(
+                    interface=IRPPExtension,
+                    module_name=ext_module_name,
+                    class_name=ext_class_name,
+                    ext_path=ext_path,
+                )
+                rpp_ext = rpp_ext_class()
+                extension_supported = platform_service.extension_supported(rpp_ext)
+                if extension_supported:
+                    messaging_service.register_rpp_extension(rpp_ext)
+                    registered = True
+            else:
+                logger.warning(f"Unknown extension type: {ext_type}.")
+        except TypeError as exc:
             logger.exception(
-                "Extension is not a subclass of its intended type: %s.",
-                ext.path,
+                "Incomplete subclass implementation for extension: %s.",
+                ext_path,
             )
-            sys.exit(1)
+            logger.error(
+                "Extension bootstrap failed"
+                f" type={ext_type} path={ext_path}"
+                f" elapsed_seconds={perf_counter() - ext_started_at:.3f}"
+            )
+            raise ExtensionLoadError(
+                f"Incomplete subclass implementation for extension: {ext_path}."
+            ) from exc
+        except ExtensionLoadError:
+            logger.exception("Extension class resolution failed: %s.", ext_path)
+            logger.error(
+                "Extension bootstrap failed"
+                f" type={ext_type} path={ext_path}"
+                f" elapsed_seconds={perf_counter() - ext_started_at:.3f}"
+            )
+            raise
 
         if not extension_supported:
-            logger.warning(f"Extension not supported by active platforms: {ext.path}.")
+            logger.warning(f"Extension not supported by active platforms: {ext_path}.")
 
         if registered:
-            logger.debug(f"Registered {ext.type.upper()} extension: {ext.path}.")
+            logger.debug(f"Registered {ext_type.upper()} extension: {ext_path}.")
+
+        logger.debug(
+            "Extension bootstrap completed"
+            f" type={ext_type} path={ext_path}"
+            f" supported={extension_supported} registered={registered}"
+            f" elapsed_seconds={perf_counter() - ext_started_at:.3f}"
+        )
+
+    logger.debug(
+        "Extension bootstrap sweep completed"
+        f" total_extensions={len(extensions)}"
+        f" elapsed_seconds={perf_counter() - sweep_started_at:.3f}"
+    )
 
 
 async def run_telnet_client(
