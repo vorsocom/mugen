@@ -4,6 +4,8 @@ __all__ = ["create_quart_app", "run_clients"]
 
 import asyncio
 from importlib import import_module
+import random
+import re
 import sys
 from types import SimpleNamespace
 
@@ -349,6 +351,10 @@ async def run_matrix_client(
     config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
     matrix_client: IMatrixClient = matrix_provider()
+    max_sync_retries = 5
+    backoff_base_seconds = 1.0
+    backoff_max_seconds = 30.0
+    backoff_jitter_seconds = 0.25
 
     # Initialise matrix client.
     async with matrix_client as client:
@@ -371,23 +377,56 @@ async def run_matrix_client(
             # matrix_client.cleanup_known_user_devices_list()
             client.trust_known_user_devices()
 
-        try:
-            # Start process loop.
-            await asyncio.gather(
-                asyncio.create_task(wait_on_first_sync()),
-                asyncio.create_task(
-                    client.sync_forever(
-                        since=client.sync_token,
-                        timeout=100,
-                        full_state=True,
-                        set_presence="online",
+        retry_attempt = 0
+        while True:
+            try:
+                # Start process loop.
+                await asyncio.gather(
+                    asyncio.create_task(wait_on_first_sync()),
+                    asyncio.create_task(
+                        client.sync_forever(
+                            since=client.sync_token,
+                            timeout=100,
+                            full_state=True,
+                            set_presence="online",
+                        )
+                    ),
+                    return_exceptions=False,
+                )
+                logger.debug("Matrix client started.")
+                return
+            except asyncio.exceptions.CancelledError:
+                logger.error("Matrix client shutting down.")
+                return
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                is_auth_failure = (
+                    re.search(
+                        r"(m_unknown_token|unauthorized|forbidden|invalid token|access token)",
+                        str(exc).lower(),
                     )
-                ),
-                return_exceptions=False,
-            )
-            logger.debug("Matrix client started.")
-        except asyncio.exceptions.CancelledError:
-            logger.error("Matrix client shutting down.")
+                    is not None
+                )
+                if is_auth_failure:
+                    logger.error("Matrix client authentication failed; shutting down.")
+                    return
+
+                if retry_attempt >= max_sync_retries:
+                    logger.error("Matrix client sync failed after max retries.")
+                    return
+
+                delay_seconds = min(
+                    backoff_max_seconds,
+                    (backoff_base_seconds * (2**retry_attempt))
+                    + random.uniform(0, backoff_jitter_seconds),
+                )
+                logger.warning(
+                    "Matrix client sync error; retrying."
+                    f" attempt={retry_attempt + 1}/{max_sync_retries}"
+                    f" delay_seconds={delay_seconds:.2f}"
+                    f" error={type(exc).__name__}: {exc}"
+                )
+                retry_attempt += 1
+                await asyncio.sleep(delay_seconds)
 
 
 async def run_whatsapp_client(
