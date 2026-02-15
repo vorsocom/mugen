@@ -152,6 +152,25 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
 
         event_handler.assert_awaited_once()
 
+    async def test_parse_json_dict_handles_missing_invalid_and_non_dict(self) -> None:
+        logging_gateway = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            logging_gateway=logging_gateway,
+        )
+
+        self.assertIsNone(ext._parse_json_dict(None, "ctx"))  # pylint: disable=protected-access
+        self.assertIsNone(
+            ext._parse_json_dict("{not-json}", "ctx")  # pylint: disable=protected-access
+        )
+        self.assertIsNone(
+            ext._parse_json_dict("[]", "ctx")  # pylint: disable=protected-access
+        )
+
+        logging_gateway.error.assert_any_call("Missing payload for ctx.")
+        logging_gateway.error.assert_any_call("Invalid JSON payload for ctx.")
+        logging_gateway.error.assert_any_call("Unexpected payload type for ctx.")
+
     async def test_beta_gate_replies_and_returns_early(self) -> None:
         client = _make_client()
         messaging_service = _make_messaging_service()
@@ -515,6 +534,99 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         logging_gateway.error.assert_any_call("text-failed")
         logging_gateway.error.assert_any_call("video-upload-failed")
 
+    async def test_response_upload_none_payload_skips_send_calls(self) -> None:
+        client = _make_client()
+        client.upload_media = AsyncMock(side_effect=[None, None, None, None])
+        messaging_service = _make_messaging_service()
+        messaging_service.handle_text_message = AsyncMock(
+            return_value=[
+                {"type": "audio", "file": {"uri": "/tmp/a.ogg", "type": "audio/ogg"}},
+                {
+                    "type": "file",
+                    "file": {
+                        "uri": "/tmp/f.pdf",
+                        "type": "application/pdf",
+                        "name": "f.pdf",
+                    },
+                },
+                {"type": "image", "file": {"uri": "/tmp/i.png", "type": "image/png"}},
+                {"type": "video", "file": {"uri": "/tmp/v.mp4", "type": "video/mp4"}},
+            ]
+        )
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+            messaging_service=messaging_service,
+            user_service=_make_user_service(known_users={"15550014": "known"}),
+        )
+        payload = _make_payload(
+            _make_message_event(
+                {
+                    "id": "wamid-upload-none",
+                    "type": "text",
+                    "text": {"body": "incoming"},
+                },
+                sender="15550014",
+            )
+        )
+
+        await ext._wacapi_event(payload)  # pylint: disable=protected-access
+
+        client.send_audio_message.assert_not_awaited()
+        client.send_document_message.assert_not_awaited()
+        client.send_image_message.assert_not_awaited()
+        client.send_video_message.assert_not_awaited()
+
+    async def test_response_upload_without_id_or_error_skips_send_calls(self) -> None:
+        client = _make_client()
+        client.upload_media = AsyncMock(
+            side_effect=[
+                json.dumps({}),
+                json.dumps({}),
+                json.dumps({}),
+                json.dumps({}),
+            ]
+        )
+        messaging_service = _make_messaging_service()
+        messaging_service.handle_text_message = AsyncMock(
+            return_value=[
+                {"type": "audio", "file": {"uri": "/tmp/a.ogg", "type": "audio/ogg"}},
+                {
+                    "type": "file",
+                    "file": {
+                        "uri": "/tmp/f.pdf",
+                        "type": "application/pdf",
+                        "name": "f.pdf",
+                    },
+                },
+                {"type": "image", "file": {"uri": "/tmp/i.png", "type": "image/png"}},
+                {"type": "video", "file": {"uri": "/tmp/v.mp4", "type": "video/mp4"}},
+            ]
+        )
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+            messaging_service=messaging_service,
+            user_service=_make_user_service(known_users={"15550015": "known"}),
+        )
+        payload = _make_payload(
+            _make_message_event(
+                {
+                    "id": "wamid-upload-empty",
+                    "type": "text",
+                    "text": {"body": "incoming"},
+                },
+                sender="15550015",
+            )
+        )
+
+        await ext._wacapi_event(payload)  # pylint: disable=protected-access
+
+        client.send_audio_message.assert_not_awaited()
+        client.send_document_message.assert_not_awaited()
+        client.send_image_message.assert_not_awaited()
+        client.send_video_message.assert_not_awaited()
+
     async def test_response_send_error_paths_are_logged(self) -> None:
         client = _make_client()
         client.upload_media = AsyncMock(
@@ -584,6 +696,30 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         logging_gateway.error.assert_any_call("image-send")
         logging_gateway.error.assert_any_call("Send video to user failed.")
         logging_gateway.error.assert_any_call("video-send")
+
+    async def test_malformed_event_payload_is_logged_and_acknowledged(self) -> None:
+        logging_gateway = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            logging_gateway=logging_gateway,
+        )
+        payload = _make_payload({"entry": []})
+
+        await ext._wacapi_event(payload)  # pylint: disable=protected-access
+
+        logging_gateway.error.assert_any_call("Malformed WhatsApp event payload.")
+        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
+
+    async def test_malformed_event_without_response_queue_still_returns(self) -> None:
+        logging_gateway = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            logging_gateway=logging_gateway,
+        )
+
+        await ext._wacapi_event({"data": {"entry": []}})  # pylint: disable=protected-access
+
+        logging_gateway.error.assert_any_call("Malformed WhatsApp event payload.")
 
     async def test_call_message_handlers_supported_and_unsupported_paths(self) -> None:
         client = _make_client()

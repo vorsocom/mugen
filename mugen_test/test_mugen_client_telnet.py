@@ -67,6 +67,29 @@ class _DummyWriter:
         return None
 
 
+class _DummyWriterNoPeer:
+    def __init__(self):
+        self.writes = []
+        self.drain = AsyncMock(return_value=None)
+        self.close_calls = 0
+        self.wait_closed = AsyncMock(return_value=None)
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+class _ErrorWriter:
+    def __init__(self, *, error: Exception):
+        self._error = error
+        self.drain = AsyncMock(return_value=None)
+
+    def write(self, _data: bytes) -> None:
+        raise self._error
+
+
 class _SlowReader:
     async def readline(self):
         await asyncio.sleep(0.01)
@@ -121,6 +144,94 @@ class TestMugenClientTelnet(unittest.IsolatedAsyncioTestCase):
         client._logging_gateway.info.assert_called_once_with(
             "Telnet server running on 127.0.0.1:2323."
         )
+
+    async def test_start_server_without_socket_logs_started_message(self) -> None:
+        client = self._new_client()
+        server = _DummyServer()
+        server.sockets = []
+
+        with patch(
+            "mugen.core.client.telnet.asyncio.start_server",
+            new=AsyncMock(return_value=server),
+        ):
+            await client.start_server()
+
+        client._logging_gateway.info.assert_called_once_with("Telnet server started.")
+
+    async def test_resolve_session_identity_handles_missing_peer_and_non_tuple(
+        self,
+    ) -> None:
+        client = self._new_client()
+
+        room_id, sender = client._resolve_session_identity(_DummyWriterNoPeer())  # pylint: disable=protected-access
+        self.assertEqual((room_id, sender), ("telnet_room", "telnet_user"))
+
+        writer = _DummyWriter(peername="peer-string")
+        room_id, sender = client._resolve_session_identity(writer)  # pylint: disable=protected-access
+        self.assertEqual((room_id, sender), ("telnet_room", "telnet_user"))
+
+    async def test_write_returns_false_when_writer_raises(self) -> None:
+        client = self._new_client()
+
+        disconnected = await client._write(  # pylint: disable=protected-access
+            _ErrorWriter(error=ConnectionError("gone")),
+            b"payload",
+        )
+        self.assertFalse(disconnected)
+        client._logging_gateway.debug.assert_called_with(
+            "Telnet client disconnected while writing."
+        )
+
+    async def test_close_writer_swallows_wait_closed_errors(self) -> None:
+        client = self._new_client()
+        writer = _DummyWriter()
+        writer.wait_closed = AsyncMock(side_effect=RuntimeError("closed"))  # type: ignore[method-assign]
+
+        await client._close_writer(writer)  # pylint: disable=protected-access
+
+        self.assertEqual(writer.close_calls, 1)
+        writer.wait_closed.assert_awaited_once()
+
+    async def test_resolve_timeout_and_prompt_limits_handle_invalid_values(self) -> None:
+        config = SimpleNamespace(
+            telnet=SimpleNamespace(
+                socket=SimpleNamespace(host="127.0.0.1", port="2323"),
+                read_timeout_seconds="invalid",
+                max_prompt_bytes="bad",
+            )
+        )
+        client = DefaultTelnetClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        self.assertEqual(client._read_timeout_seconds, 300.0)  # pylint: disable=protected-access
+        self.assertEqual(client._max_prompt_bytes, 4096)  # pylint: disable=protected-access
+
+        config.telnet.read_timeout_seconds = 0
+        config.telnet.max_prompt_bytes = 0
+        client = DefaultTelnetClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        self.assertIsNone(client._read_timeout_seconds)  # pylint: disable=protected-access
+        self.assertEqual(client._max_prompt_bytes, 4096)  # pylint: disable=protected-access
+
+    async def test_readline_without_timeout_uses_reader_directly(self) -> None:
+        client = self._new_client()
+        client._read_timeout_seconds = None  # pylint: disable=protected-access
+        reader = _DummyReader([b"hello\n"])
+
+        line = await client._readline(reader)  # pylint: disable=protected-access
+
+        self.assertEqual(line, b"hello\n")
 
     async def test_handle_connection_quit_path(self) -> None:
         client = self._new_client()
@@ -220,6 +331,71 @@ class TestMugenClientTelnet(unittest.IsolatedAsyncioTestCase):
         client._logging_gateway.warning.assert_any_call(
             "Telnet payload exceeded max prompt size (4 bytes)."
         )
+
+    async def test_handle_connection_breaks_when_initial_write_fails(self) -> None:
+        client = self._new_client()
+        client._write = AsyncMock(return_value=False)  # pylint: disable=protected-access
+        client._readline = AsyncMock(return_value=b"hello\n")  # pylint: disable=protected-access
+        client._handle_text_message = AsyncMock(return_value=["ignored"])
+        reader = _DummyReader([b"hello\n"])
+        writer = _DummyWriter()
+
+        await client._handle_connection(reader, writer)
+
+        client._readline.assert_not_awaited()
+        client._handle_text_message.assert_not_awaited()
+        self.assertEqual(writer.close_calls, 1)
+
+    async def test_handle_connection_ignores_empty_prompt_text(self) -> None:
+        client = self._new_client()
+        client._handle_text_message = AsyncMock(return_value=["ignored"])
+        reader = _DummyReader([b"\n", b".quit\n"])
+        writer = _DummyWriter()
+
+        await client._handle_connection(reader, writer)
+
+        client._handle_text_message.assert_not_awaited()
+        self.assertGreaterEqual(writer.writes.count(b"~ user: "), 2)
+
+    async def test_handle_connection_breaks_when_assistant_prompt_write_fails(
+        self,
+    ) -> None:
+        client = self._new_client()
+        client._write = AsyncMock(side_effect=[True, False])  # pylint: disable=protected-access
+        client._handle_text_message = AsyncMock(return_value=["ignored"])
+        reader = _DummyReader([b"hello\n"])
+        writer = _DummyWriter()
+
+        await client._handle_connection(reader, writer)
+
+        client._handle_text_message.assert_not_awaited()
+        self.assertEqual(writer.close_calls, 1)
+
+    async def test_handle_connection_continues_on_empty_text_responses(self) -> None:
+        client = self._new_client()
+        client._write = AsyncMock(return_value=True)  # pylint: disable=protected-access
+        client._readline = AsyncMock(side_effect=[b"hello\n", None])  # pylint: disable=protected-access
+        client._handle_text_message = AsyncMock(return_value=[])
+        reader = _DummyReader([])
+        writer = _DummyWriter()
+
+        await client._handle_connection(reader, writer)
+
+        client._handle_text_message.assert_awaited_once()
+        self.assertEqual(client._write.await_count, 3)  # pylint: disable=protected-access
+        self.assertEqual(writer.close_calls, 1)
+
+    async def test_handle_connection_breaks_when_response_write_fails(self) -> None:
+        client = self._new_client()
+        client._write = AsyncMock(side_effect=[True, True, False])  # pylint: disable=protected-access
+        client._handle_text_message = AsyncMock(return_value=["OK"])
+        reader = _DummyReader([b"hello\n"])
+        writer = _DummyWriter()
+
+        await client._handle_connection(reader, writer)
+
+        client._handle_text_message.assert_awaited_once()
+        self.assertEqual(writer.close_calls, 1)
 
     async def test_handle_text_message_returns_text_responses_only(
         self,

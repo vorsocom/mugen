@@ -40,34 +40,19 @@ class _Response:
         return self._body
 
 
-class _FakeTempFileContext:
-    def __init__(self, name: str):
-        self.name = name
+class _ChunkStream:
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = list(chunks)
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        _ = (exc_type, exc_val, exc_tb)
-        return False
+    async def iter_chunked(self, _size: int):
+        for chunk in self._chunks:
+            yield chunk
 
 
-class _FakeAsyncFileContext:
-    def __init__(self, path: str):
-        self._path = path
-        self._fh = None
-
-    async def __aenter__(self):
-        self._fh = open(self._path, "wb")
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        _ = (exc_type, exc_val, exc_tb)
-        self._fh.close()
-        return False
-
-    async def write(self, data: bytes):
-        self._fh.write(data)
+class _StreamResponse(_Response):
+    def __init__(self, *, chunks: list[bytes], status: int = 200):
+        super().__init__(status=status, body=b"")
+        self.content = _ChunkStream(chunks)
 
 
 class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
@@ -87,6 +72,7 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         client = self._new_client()
         fake_session = Mock()
         fake_session.close = AsyncMock(return_value=None)
+        fake_session.closed = False
 
         with patch(
             "mugen.core.client.whatsapp.aiohttp.ClientSession",
@@ -98,6 +84,66 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         client._logging_gateway.debug.assert_any_call("DefaultWhatsAppClient.init")
         client._logging_gateway.debug.assert_any_call("DefaultWhatsAppClient.close")
         fake_session.close.assert_awaited_once()
+
+    async def test_close_is_safe_without_init(self) -> None:
+        client = self._new_client()
+
+        await client.close()
+
+        client._logging_gateway.debug.assert_called_with("DefaultWhatsAppClient.close")
+
+    async def test_init_is_idempotent_when_session_exists(self) -> None:
+        client = self._new_client()
+        existing_session = Mock()
+        existing_session.closed = False
+        existing_session.close = AsyncMock(return_value=None)
+        client._client_session = existing_session  # pylint: disable=protected-access
+
+        with patch("mugen.core.client.whatsapp.aiohttp.ClientSession") as session_cls:
+            await client.init()
+
+        session_cls.assert_not_called()
+
+    async def test_close_skips_already_closed_session_and_clears_reference(self) -> None:
+        client = self._new_client()
+        existing_session = Mock()
+        existing_session.closed = True
+        existing_session.close = AsyncMock(return_value=None)
+        client._client_session = existing_session  # pylint: disable=protected-access
+
+        await client.close()
+
+        existing_session.close.assert_not_awaited()
+        self.assertIsNone(client._client_session)  # pylint: disable=protected-access
+
+    async def test_resolve_config_values_fallback_to_defaults(self) -> None:
+        config = _make_config()
+        config.whatsapp.graphapi.timeout_seconds = "invalid"
+        config.whatsapp.graphapi.max_download_bytes = "bad"
+
+        client = DefaultWhatsAppClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        self.assertEqual(client._http_timeout_seconds, 10.0)  # pylint: disable=protected-access
+        self.assertEqual(client._max_download_bytes, 20 * 1024 * 1024)  # pylint: disable=protected-access
+
+        config.whatsapp.graphapi.timeout_seconds = -1
+        config.whatsapp.graphapi.max_download_bytes = 0
+        client = DefaultWhatsAppClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        self.assertEqual(client._http_timeout_seconds, 10.0)  # pylint: disable=protected-access
+        self.assertEqual(client._max_download_bytes, 20 * 1024 * 1024)  # pylint: disable=protected-access
 
     async def test_api_wrapper_methods_delegate_to_internal_helpers(self) -> None:
         client = self._new_client()
@@ -192,6 +238,17 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reaction_data["type"], "reaction")
         self.assertEqual(reaction_data["reaction"], {"emoji": "👍"})
 
+    async def test_send_text_message_normalizes_recipient_prefix(self) -> None:
+        client = self._new_client()
+        client._send_message = AsyncMock(
+            return_value="sent"
+        )  # pylint: disable=protected-access
+
+        await client.send_text_message("hello", "+15550002")
+
+        text_data = client._send_message.await_args.kwargs["data"]
+        self.assertEqual(text_data["to"], "+15550002")
+
     async def test_upload_media_bytesio_and_file_path(self) -> None:
         client = self._new_client()
         client._call_api = AsyncMock(
@@ -215,6 +272,14 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(second_call.kwargs["files"], aiohttp.FormData)
         finally:
             os.remove(path)
+
+    async def test_upload_media_logs_and_returns_none_when_file_open_fails(self) -> None:
+        client = self._new_client()
+
+        result = await client.upload_media("/tmp/does-not-exist.bin", "application/octet-stream")
+
+        self.assertIsNone(result)
+        client._logging_gateway.error.assert_called_once()
 
     async def test_call_api_all_methods_and_payload_options(self) -> None:
         client = self._new_client()
@@ -256,7 +321,7 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
             post_kwargs["headers"]["Authorization"],
             "Bearer TOKEN_123",
         )
-        self.assertEqual(post_kwargs["headers"]["Content-type"], "application/json")
+        self.assertEqual(post_kwargs["headers"]["Content-Type"], "application/json")
         self.assertEqual(post_kwargs["data"], json.dumps({"a": 1}))
 
         put_kwargs = session.put.await_args.kwargs
@@ -289,30 +354,59 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         client._logging_gateway.error.assert_called_once_with("offline")
 
+    async def test_call_api_requires_initialized_session(self) -> None:
+        client = self._new_client()
+
+        result = await client._call_api(
+            "path/get", method=HTTPMethod.GET
+        )  # pylint: disable=protected-access
+
+        self.assertIsNone(result)
+        client._logging_gateway.error.assert_called_once_with(
+            "WhatsApp client session is not initialized."
+        )
+
+    async def test_call_api_returns_none_for_non_success_status(self) -> None:
+        client = self._new_client()
+        session = Mock()
+        session.get = AsyncMock(return_value=_Response(status=401, text="unauthorized"))
+        client._client_session = session  # pylint: disable=protected-access
+
+        result = await client._call_api(
+            "path/get", method=HTTPMethod.GET
+        )  # pylint: disable=protected-access
+
+        self.assertIsNone(result)
+        client._logging_gateway.error.assert_any_call(
+            "Graph API call failed (401) for GET path/get."
+        )
+        client._logging_gateway.error.assert_any_call("unauthorized")
+
+    async def test_call_api_non_success_with_empty_body_logs_once(self) -> None:
+        client = self._new_client()
+        session = Mock()
+        session.get = AsyncMock(return_value=_Response(status=500, text=""))
+        client._client_session = session  # pylint: disable=protected-access
+
+        result = await client._call_api(
+            "path/get", method=HTTPMethod.GET
+        )  # pylint: disable=protected-access
+
+        self.assertIsNone(result)
+        client._logging_gateway.error.assert_called_once_with(
+            "Graph API call failed (500) for GET path/get."
+        )
+
     async def test_download_file_http_success_and_fallback_paths(self) -> None:
         client = self._new_client()
         session = Mock()
         session.get = AsyncMock(return_value=_Response(status=200, body=b"png-bytes"))
         client._client_session = session  # pylint: disable=protected-access
 
-        fd, expected_path = tempfile.mkstemp(suffix=".png")
-        os.close(fd)
-        with (
-            patch(
-                "mugen.core.client.whatsapp.tempfile.NamedTemporaryFile",
-                return_value=_FakeTempFileContext(expected_path),
-            ),
-            patch(
-                "mugen.core.client.whatsapp.aiofiles.open",
-                side_effect=lambda path, _mode, **_kwargs: _FakeAsyncFileContext(path),
-            ),
-        ):
-            saved_path = (
-                await client._download_file_http(  # pylint: disable=protected-access
-                    "https://example.com/file",
-                    "image/png; charset=utf-8",
-                )
-            )
+        saved_path = await client._download_file_http(  # pylint: disable=protected-access
+            "https://example.com/file",
+            "image/png; charset=utf-8",
+        )
         self.assertTrue(os.path.exists(saved_path))
         with open(saved_path, "rb") as fh:
             self.assertEqual(fh.read(), b"png-bytes")
@@ -336,6 +430,21 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(not_found)
 
+    async def test_download_file_http_requires_open_session(self) -> None:
+        client = self._new_client()
+        closed_session = Mock()
+        closed_session.closed = True
+        client._client_session = closed_session  # pylint: disable=protected-access
+
+        result = await client._download_file_http(
+            "https://example.com/file", "image/png"
+        )  # pylint: disable=protected-access
+
+        self.assertIsNone(result)
+        client._logging_gateway.error.assert_called_once_with(
+            "WhatsApp client session is not initialized."
+        )
+
     async def test_download_file_http_handles_connection_error(self) -> None:
         client = self._new_client()
         session = Mock()
@@ -350,6 +459,72 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         client._logging_gateway.error.assert_called_once_with("network-down")
+
+    async def test_download_file_http_rejects_oversized_media(self) -> None:
+        client = self._new_client()
+        client._max_download_bytes = 2  # pylint: disable=protected-access
+        session = Mock()
+        session.get = AsyncMock(return_value=_Response(status=200, body=b"abc"))
+        client._client_session = session  # pylint: disable=protected-access
+
+        result = await client._download_file_http(
+            "https://example.com/file", "image/png"
+        )  # pylint: disable=protected-access
+
+        self.assertIsNone(result)
+        client._logging_gateway.error.assert_any_call(
+            "Downloaded media exceeded max allowed size."
+        )
+
+    async def test_download_file_http_streaming_path_and_stream_limit(self) -> None:
+        client = self._new_client()
+        session = Mock()
+        session.get = AsyncMock(
+            return_value=_StreamResponse(status=200, chunks=[b"ab", b"cd"])
+        )
+        client._client_session = session  # pylint: disable=protected-access
+
+        saved_path = await client._download_file_http(
+            "https://example.com/file", "image/png"
+        )  # pylint: disable=protected-access
+        self.assertTrue(os.path.exists(saved_path))
+        with open(saved_path, "rb") as fh:
+            self.assertEqual(fh.read(), b"abcd")
+        os.remove(saved_path)
+
+        client._max_download_bytes = 2  # pylint: disable=protected-access
+        session.get = AsyncMock(return_value=_StreamResponse(status=200, chunks=[b"abc"]))
+        oversized = await client._download_file_http(
+            "https://example.com/file", "image/png"
+        )  # pylint: disable=protected-access
+        self.assertIsNone(oversized)
+        client._logging_gateway.error.assert_any_call(
+            "Downloaded media exceeded max allowed size."
+        )
+
+    async def test_download_file_http_removes_partial_file_on_write_error(self) -> None:
+        client = self._new_client()
+        session = Mock()
+        session.get = AsyncMock(return_value=_Response(status=200, body=b"png-bytes"))
+        client._client_session = session  # pylint: disable=protected-access
+
+        fd, temp_path = tempfile.mkstemp(suffix=".png")
+        with (
+            patch(
+                "mugen.core.client.whatsapp.tempfile.mkstemp",
+                return_value=(fd, temp_path),
+            ),
+            patch(
+                "mugen.core.client.whatsapp.open",
+                side_effect=OSError("disk full"),
+            ),
+        ):
+            result = await client._download_file_http(
+                "https://example.com/file", "image/png"
+            )  # pylint: disable=protected-access
+
+        self.assertIsNone(result)
+        self.assertFalse(os.path.exists(temp_path))
 
     async def test_send_message_delegates_to_call_api(self) -> None:
         client = self._new_client()

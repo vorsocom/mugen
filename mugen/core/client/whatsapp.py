@@ -2,15 +2,16 @@
 
 __all__ = ["DefaultWhatsAppClient"]
 
+import asyncio
 from http import HTTPMethod
 from io import BytesIO
 import json
 import mimetypes
+import os
 import tempfile
 from types import SimpleNamespace
 
 import aiohttp
-import aiofiles
 
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -23,6 +24,10 @@ from mugen.core.contract.service.user import IUserService
 # pylint: disable=too-many-instance-attributes
 class DefaultWhatsAppClient(IWhatsAppClient):
     """An implementation of IWhatsAppClient."""
+
+    _default_http_timeout_seconds: float = 10.0
+
+    _default_max_download_bytes: int = 20 * 1024 * 1024
 
     _api_base_path: str
 
@@ -46,6 +51,8 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._user_service = user_service
+        self._http_timeout_seconds = self._resolve_http_timeout_seconds()
+        self._max_download_bytes = self._resolve_max_download_bytes()
 
         self._api_base_path = (
             f"{self._config.whatsapp.graphapi.base_url}/"
@@ -58,13 +65,62 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             f"{self._config.whatsapp.business.phone_number_id}/messages"
         )
 
+    def _resolve_http_timeout_seconds(self) -> float:
+        raw_timeout = getattr(
+            getattr(getattr(self._config, "whatsapp", None), "graphapi", None),
+            "timeout_seconds",
+            self._default_http_timeout_seconds,
+        )
+        try:
+            timeout = float(raw_timeout)
+        except (TypeError, ValueError):
+            timeout = self._default_http_timeout_seconds
+
+        if timeout <= 0:
+            return self._default_http_timeout_seconds
+
+        return timeout
+
+    def _resolve_max_download_bytes(self) -> int:
+        raw_limit = getattr(
+            getattr(getattr(self._config, "whatsapp", None), "graphapi", None),
+            "max_download_bytes",
+            self._default_max_download_bytes,
+        )
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            limit = self._default_max_download_bytes
+
+        if limit <= 0:
+            return self._default_max_download_bytes
+
+        return limit
+
+    @staticmethod
+    def _format_recipient(recipient: str) -> str:
+        return f"+{recipient.lstrip('+')}"
+
     async def init(self) -> None:
         self._logging_gateway.debug("DefaultWhatsAppClient.init")
-        self._client_session = aiohttp.ClientSession()
+        if (
+            self._client_session is not None
+            and getattr(self._client_session, "closed", False) is False
+        ):
+            return
+
+        timeout = aiohttp.ClientTimeout(total=self._http_timeout_seconds)
+        self._client_session = aiohttp.ClientSession(timeout=timeout)
 
     async def close(self) -> None:
         self._logging_gateway.debug("DefaultWhatsAppClient.close")
-        await self._client_session.close()
+        if self._client_session is None:
+            return
+
+        if getattr(self._client_session, "closed", False) is not True:
+            await self._client_session.close()
+
+        self._client_session = None
 
     async def delete_media(self, media_id: str) -> str | None:
         return await self._call_api(media_id, method=HTTPMethod.DELETE)
@@ -84,7 +140,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "audio",
             "audio": audio,
         }
@@ -105,7 +161,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "contacts",
             "contacts": contacts,
         }
@@ -126,7 +182,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "document",
             "document": document,
         }
@@ -147,7 +203,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "image",
             "image": image,
         }
@@ -168,7 +224,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "interactive",
             "interactive": interactive,
         }
@@ -189,7 +245,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "location",
             "location": location,
         }
@@ -201,11 +257,11 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
         return await self._send_message(data=data)
 
-    async def send_reaction_message(self, reaction: dict, recipient: str) -> None:
+    async def send_reaction_message(self, reaction: dict, recipient: str) -> str | None:
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "reaction",
             "reaction": reaction,
         }
@@ -221,7 +277,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "sticker",
             "sticker": sticker,
         }
@@ -242,7 +298,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "template",
             "template": template,
         }
@@ -263,7 +319,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "text",
             "text": {
                 "preview_url": True,
@@ -287,7 +343,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": f"+{recipient}",
+            "to": self._format_recipient(recipient),
             "type": "video",
             "video": video,
         }
@@ -317,9 +373,20 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             )
             return await self._call_api(self._api_media_path, files=files)
 
-        with open(file_path, "rb") as file:
-            files.add_field("file", file)
-            return await self._call_api(self._api_media_path, files=files)
+        try:
+            with open(file_path, "rb") as file:
+                payload = file.read()
+        except OSError as e:
+            self._logging_gateway.error(str(e))
+            return None
+
+        files.add_field(
+            "file",
+            payload,
+            filename=os.path.basename(file_path),
+            content_type=file_type,
+        )
+        return await self._call_api(self._api_media_path, files=files)
 
     async def _call_api(
         self,
@@ -330,12 +397,18 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         method: str = HTTPMethod.POST,
     ) -> str | None:
         """Make a call to Graph API."""
+        if self._client_session is None or (
+            getattr(self._client_session, "closed", False) is True
+        ):
+            self._logging_gateway.error("WhatsApp client session is not initialized.")
+            return None
+
         headers = {
             "Authorization": f"Bearer {self._config.whatsapp.graphapi.access_token}",
         }
 
         if content_type:
-            headers["Content-type"] = content_type
+            headers["Content-Type"] = content_type
 
         url = f"{self._api_base_path}/{path}"
 
@@ -343,10 +416,10 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             "headers": headers,
         }
 
-        if data:
+        if data is not None:
             kwargs["data"] = json.dumps(data)
 
-        if files:
+        if files is not None:
             kwargs["data"] = files
 
         try:
@@ -362,11 +435,27 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                 case _:
                     raise ValueError(f"Unsupported HTTP method: {method}")
 
-            return await response.text()
-        except aiohttp.ClientConnectionError as e:
+            response_text = await response.text()
+            if response.status < 200 or response.status >= 300:
+                self._logging_gateway.error(
+                    f"Graph API call failed ({response.status}) for {method} {path}."
+                )
+                if response_text != "":
+                    self._logging_gateway.error(response_text)
+                return None
+
+            return response_text
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self._logging_gateway.error(str(e))
+            return None
 
     async def _download_file_http(self, url: str, mimetype: str) -> str | None:
+        if self._client_session is None or (
+            getattr(self._client_session, "closed", False) is True
+        ):
+            self._logging_gateway.error("WhatsApp client session is not initialized.")
+            return None
+
         headers = {
             "Authorization": f"Bearer {self._config.whatsapp.graphapi.access_token}",
         }
@@ -375,21 +464,54 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             "headers": headers,
         }
 
+        file_path: str | None = None
+        download_complete = False
         try:
             response = await self._client_session.get(url, **kwargs)
+            if response.status != 200:
+                self._logging_gateway.error(
+                    f"Media download failed with status code {response.status}."
+                )
+                return None
 
-            if response.status == 200:
-                extension = mimetypes.guess_extension(mimetype.split(";")[0].strip())
-                if extension:
-                    with tempfile.NamedTemporaryFile(
-                        suffix=extension,
-                        delete=False,
-                    ) as tf:
-                        async with aiofiles.open(tf.name, "wb") as af:
-                            await af.write(await response.read())
-                            return tf.name
-        except aiohttp.ClientConnectionError as e:
+            extension = mimetypes.guess_extension(mimetype.split(";")[0].strip())
+            if not extension:
+                return None
+
+            bytes_written = 0
+            body = b""
+            if hasattr(response, "content") and hasattr(response.content, "iter_chunked"):
+                stream = bytearray()
+                async for chunk in response.content.iter_chunked(8192):
+                    bytes_written += len(chunk)
+                    if bytes_written > self._max_download_bytes:
+                        self._logging_gateway.error(
+                            "Downloaded media exceeded max allowed size."
+                        )
+                        return None
+                    stream.extend(chunk)
+                body = bytes(stream)
+            else:
+                body = await response.read()
+                bytes_written = len(body)
+                if bytes_written > self._max_download_bytes:
+                    self._logging_gateway.error(
+                        "Downloaded media exceeded max allowed size."
+                    )
+                    return None
+
+            fd, file_path = tempfile.mkstemp(suffix=extension)
+            os.close(fd)
+            with open(file_path, "wb") as file:
+                file.write(body)
+            download_complete = True
+            return file_path
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
             self._logging_gateway.error(str(e))
+            return None
+        finally:
+            if not download_complete and file_path and os.path.exists(file_path):
+                os.remove(file_path)
 
     async def _send_message(self, data: dict) -> str | None:
         """Utility for all message functions."""

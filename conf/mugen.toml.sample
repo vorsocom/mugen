@@ -310,6 +310,10 @@ business.phone_number_id = ""
 graphapi.access_token = "<whatsapp-graph-access-token>"
 graphapi.base_url = "https://graph.facebook.com"
 graphapi.version = "v20.0"
+# Graph API request timeout in seconds.
+graphapi.timeout_seconds = 10.0
+# Maximum bytes allowed when downloading media from Graph API.
+graphapi.max_download_bytes = 20971520
 servers.allowed = ""
 servers.verify_ip = false
 webhook.verification_token = "<whatsapp-webhook-verification-token>"
