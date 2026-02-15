@@ -7,7 +7,7 @@ import unittest.mock
 
 from quart import Quart
 
-from mugen import run_clients
+from mugen import BootstrapConfigError, run_clients
 
 
 class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
@@ -23,7 +23,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
 
         with (
             self.assertLogs(logger="test_app", level="ERROR"),
-            self.assertRaises(SystemExit),
+            self.assertRaises(BootstrapConfigError),
         ):
             await run_clients(
                 app,

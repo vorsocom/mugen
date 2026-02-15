@@ -135,10 +135,16 @@ muGen uses [Poetry](https://python-poetry.org/) for dependency management. Poetr
 Now, you can run your muGen application using Hypercorn:
 
 ```shell
-~$ hypercorn -c hypercorn.toml quartman:mugen
+~$ hypercorn -c hypercorn.toml quartman
 ```
 
-This command tells Hypercorn to use the configuration file `hypercorn.toml` and run the `mugen` app defined in the `quartman` module.
+This command tells Hypercorn to use the configuration file `hypercorn.toml` and run the app exposed by the `quartman` module.
+
+Startup lifecycle:
+1. **Phase A (blocking):** bootstrap extensions and register API routes.
+2. **Phase B (background):** start long-running platform clients.
+
+Requests are served only after Phase A completes.
 
 ### Step 9: Communicate with Your Application
 
