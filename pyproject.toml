@@ -8,7 +8,7 @@ readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = ">=3.12,<3.14"
 aiodns = "^3.5.0"
 atomicwrites = "^1.4.1"
 boto3 = "^1.41.2"
@@ -19,6 +19,7 @@ matrix-nio = "^0.25.2"
 qdrant-client = "^1.16.0"
 quart = "^0.20.0"
 sentence-transformers = "^5.1.2"
+torch = "2.8.0"
 tomlkit = "^0.13.3"
 peewee = "^3.18.3"
 python-olm = "^3.2.16"
