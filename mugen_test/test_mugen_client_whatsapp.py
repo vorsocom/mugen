@@ -194,11 +194,39 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
             await client.download_media("https://example.com/x", "image/png"),
             "/tmp/file.png",
         )
-        client._call_api.assert_any_await("media-id", method=HTTPMethod.DELETE)
-        client._call_api.assert_any_await("media-id", method=HTTPMethod.GET)
-        client._download_file_http.assert_awaited_once_with(
-            "https://example.com/x", "image/png"
+        client._call_api.assert_any_await(
+            "media-id",
+            method=HTTPMethod.DELETE,
+            correlation_id="media-id",
         )
+        client._call_api.assert_any_await(
+            "media-id",
+            method=HTTPMethod.GET,
+            correlation_id="media-id",
+        )
+        client._download_file_http.assert_awaited_once_with(
+            "https://example.com/x",
+            "image/png",
+            correlation_id="https://example.com/x",
+        )
+
+    def test_resolve_correlation_id_prefers_explicit_value(self) -> None:
+        client = self._new_client()
+
+        with patch.object(
+            client,
+            "_new_correlation_id",
+            return_value="generated-cid",
+        ) as new_cid:
+            self.assertEqual(
+                client._resolve_correlation_id("explicit-cid"),  # pylint: disable=protected-access
+                "explicit-cid",
+            )
+            self.assertEqual(
+                client._resolve_correlation_id(None),  # pylint: disable=protected-access
+                "generated-cid",
+            )
+            new_cid.assert_called_once()
 
     async def test_send_message_payload_builders(self) -> None:
         client = self._new_client()
@@ -677,4 +705,109 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
             path="123456789/messages",
             content_type="application/json",
             data={"type": "text"},
+            correlation_id=None,
+        )
+
+    async def test_send_message_uses_context_message_id_as_correlation_id(self) -> None:
+        client = self._new_client()
+        client._call_api = AsyncMock(return_value={"ok": True})  # pylint: disable=protected-access
+
+        await client._send_message(  # pylint: disable=protected-access
+            {
+                "type": "text",
+                "context": {
+                    "message_id": "wamid-context",
+                },
+            }
+        )
+
+        client._call_api.assert_awaited_once_with(
+            path="123456789/messages",
+            content_type="application/json",
+            data={
+                "type": "text",
+                "context": {
+                    "message_id": "wamid-context",
+                },
+            },
+            correlation_id="wamid-context",
+        )
+
+    async def test_send_message_ignores_empty_context_message_id(self) -> None:
+        client = self._new_client()
+        client._call_api = AsyncMock(return_value={"ok": True})  # pylint: disable=protected-access
+
+        await client._send_message(  # pylint: disable=protected-access
+            {
+                "type": "text",
+                "context": {
+                    "message_id": "",
+                },
+            }
+        )
+
+        client._call_api.assert_awaited_once_with(
+            path="123456789/messages",
+            content_type="application/json",
+            data={
+                "type": "text",
+                "context": {
+                    "message_id": "",
+                },
+            },
+            correlation_id=None,
+        )
+
+    async def test_send_message_uses_reaction_message_id_as_correlation_id(self) -> None:
+        client = self._new_client()
+        client._call_api = AsyncMock(return_value={"ok": True})  # pylint: disable=protected-access
+
+        await client._send_message(  # pylint: disable=protected-access
+            {
+                "type": "reaction",
+                "reaction": {
+                    "message_id": "wamid-reaction",
+                    "emoji": "👍",
+                },
+            }
+        )
+
+        client._call_api.assert_awaited_once_with(
+            path="123456789/messages",
+            content_type="application/json",
+            data={
+                "type": "reaction",
+                "reaction": {
+                    "message_id": "wamid-reaction",
+                    "emoji": "👍",
+                },
+            },
+            correlation_id="wamid-reaction",
+        )
+
+    async def test_send_message_ignores_empty_reaction_message_id(self) -> None:
+        client = self._new_client()
+        client._call_api = AsyncMock(return_value={"ok": True})  # pylint: disable=protected-access
+
+        await client._send_message(  # pylint: disable=protected-access
+            {
+                "type": "reaction",
+                "reaction": {
+                    "message_id": "",
+                    "emoji": "👍",
+                },
+            }
+        )
+
+        client._call_api.assert_awaited_once_with(
+            path="123456789/messages",
+            content_type="application/json",
+            data={
+                "type": "reaction",
+                "reaction": {
+                    "message_id": "",
+                    "emoji": "👍",
+                },
+            },
+            correlation_id=None,
         )

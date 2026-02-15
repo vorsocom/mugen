@@ -9,8 +9,10 @@ import json
 import mimetypes
 import os
 import tempfile
+import time
 from types import SimpleNamespace
 from typing import TypedDict
+import uuid
 
 import aiohttp
 
@@ -190,16 +192,26 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         self,
         *,
         attempt: int,
+        correlation_id: str,
         method: str,
         path: str,
         reason: str,
     ) -> None:
         delay_seconds = self._retry_backoff_seconds * (2**attempt)
         self._logging_gateway.warning(
-            f"Retrying Graph API call for {method} {path} in "
-            f"{delay_seconds:.2f}s ({reason})."
+            f"[cid={correlation_id}] Retrying Graph API call for {method} {path} in "
+            f"{delay_seconds:.2f}s ({reason}) attempt={attempt + 1}."
         )
         await asyncio.sleep(delay_seconds)
+
+    @staticmethod
+    def _new_correlation_id() -> str:
+        return uuid.uuid4().hex
+
+    def _resolve_correlation_id(self, correlation_id: str | None) -> str:
+        if isinstance(correlation_id, str) and correlation_id != "":
+            return correlation_id
+        return self._new_correlation_id()
 
     async def init(self) -> None:
         self._logging_gateway.debug("DefaultWhatsAppClient.init")
@@ -223,13 +235,25 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         self._client_session = None
 
     async def delete_media(self, media_id: str) -> dict | None:
-        return await self._call_api(media_id, method=HTTPMethod.DELETE)
+        return await self._call_api(
+            media_id,
+            method=HTTPMethod.DELETE,
+            correlation_id=media_id,
+        )
 
     async def download_media(self, media_url: str, mimetype: str) -> str | None:
-        return await self._download_file_http(media_url, mimetype)
+        return await self._download_file_http(
+            media_url,
+            mimetype,
+            correlation_id=media_url,
+        )
 
     async def retrieve_media_url(self, media_id: str) -> dict | None:
-        return await self._call_api(media_id, method=HTTPMethod.GET)
+        return await self._call_api(
+            media_id,
+            method=HTTPMethod.GET,
+            correlation_id=media_id,
+        )
 
     async def send_audio_message(
         self,
@@ -473,7 +497,11 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                 filename="upload.bin",
                 content_type=file_type,
             )
-            return await self._call_api(self._api_media_path, files=files)
+            return await self._call_api(
+                self._api_media_path,
+                files=files,
+                correlation_id=self._new_correlation_id(),
+            )
 
         try:
             with open(file_path, "rb") as file:
@@ -488,7 +516,11 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             filename=os.path.basename(file_path),
             content_type=file_type,
         )
-        return await self._call_api(self._api_media_path, files=files)
+        return await self._call_api(
+            self._api_media_path,
+            files=files,
+            correlation_id=os.path.basename(file_path),
+        )
 
     async def _call_api(
         self,
@@ -497,8 +529,10 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data: dict = None,
         files: dict = None,
         method: str = HTTPMethod.POST,
+        correlation_id: str | None = None,
     ) -> dict | None:
         """Make a call to Graph API."""
+        resolved_correlation_id = self._resolve_correlation_id(correlation_id)
         if self._client_session is None or (
             getattr(self._client_session, "closed", False) is True
         ):
@@ -526,6 +560,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             kwargs["data"] = files
 
         for attempt in range(self._max_api_retries + 1):
+            started = time.perf_counter()
             try:
                 match method:
                     case HTTPMethod.DELETE:
@@ -541,8 +576,14 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
                 response_text = await response.text()
                 response_data = self._parse_response_payload(response_text)
+                latency_ms = (time.perf_counter() - started) * 1000
 
                 if response.status >= 200 and response.status < 300:
+                    self._logging_gateway.debug(
+                        f"[cid={resolved_correlation_id}] Graph API success "
+                        f"{method} {path} status={response.status} "
+                        f"latency_ms={latency_ms:.2f} attempt={attempt + 1}."
+                    )
                     return self._build_api_response(
                         ok=True,
                         status=response.status,
@@ -557,14 +598,25 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                     self._is_retryable_status(response.status)
                     and attempt < self._max_api_retries
                 ):
+                    self._logging_gateway.warning(
+                        f"[cid={resolved_correlation_id}] Graph API retryable status "
+                        f"for {method} {path} status={response.status} "
+                        f"latency_ms={latency_ms:.2f} attempt={attempt + 1}."
+                    )
                     await self._wait_before_retry(
                         attempt=attempt,
+                        correlation_id=resolved_correlation_id,
                         method=str(method),
                         path=path,
                         reason=f"status={response.status}",
                     )
                     continue
 
+                self._logging_gateway.debug(
+                    f"[cid={resolved_correlation_id}] Graph API terminal failure "
+                    f"{method} {path} status={response.status} "
+                    f"latency_ms={latency_ms:.2f} attempt={attempt + 1}."
+                )
                 self._logging_gateway.error(error)
                 if response_text != "":
                     self._logging_gateway.error(response_text)
@@ -579,6 +631,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                 if attempt < self._max_api_retries:
                     await self._wait_before_retry(
                         attempt=attempt,
+                        correlation_id=resolved_correlation_id,
                         method=str(method),
                         path=path,
                         reason=str(e),
@@ -586,6 +639,12 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                     continue
 
                 error = str(e)
+                latency_ms = (time.perf_counter() - started) * 1000
+                self._logging_gateway.debug(
+                    f"[cid={resolved_correlation_id}] Graph API transport failure "
+                    f"{method} {path} latency_ms={latency_ms:.2f} "
+                    f"attempt={attempt + 1}."
+                )
                 self._logging_gateway.error(error)
                 return self._build_api_response(ok=False, status=None, error=error)
 
@@ -593,7 +652,13 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             ok=False, status=None, error="Unknown API failure."
         )
 
-    async def _download_file_http(self, url: str, mimetype: str) -> str | None:
+    async def _download_file_http(
+        self,
+        url: str,
+        mimetype: str,
+        correlation_id: str | None = None,
+    ) -> str | None:
+        resolved_correlation_id = self._resolve_correlation_id(correlation_id)
         if self._client_session is None or (
             getattr(self._client_session, "closed", False) is True
         ):
@@ -610,6 +675,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
         file_path: str | None = None
         download_complete = False
+        started = time.perf_counter()
         try:
             response = await self._client_session.get(url, **kwargs)
             if response.status != 200:
@@ -651,8 +717,18 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             with open(file_path, "wb") as file:
                 file.write(body)
             download_complete = True
+            latency_ms = (time.perf_counter() - started) * 1000
+            self._logging_gateway.debug(
+                f"[cid={resolved_correlation_id}] WhatsApp media download success "
+                f"latency_ms={latency_ms:.2f} bytes={bytes_written}."
+            )
             return file_path
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+            latency_ms = (time.perf_counter() - started) * 1000
+            self._logging_gateway.debug(
+                f"[cid={resolved_correlation_id}] WhatsApp media download failed "
+                f"latency_ms={latency_ms:.2f}."
+            )
             self._logging_gateway.error(str(e))
             return None
         finally:
@@ -661,8 +737,21 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
     async def _send_message(self, data: dict) -> dict | None:
         """Utility for all message functions."""
+        correlation_id = None
+        context = data.get("context")
+        if isinstance(context, dict):
+            context_message_id = context.get("message_id")
+            if isinstance(context_message_id, str) and context_message_id != "":
+                correlation_id = context_message_id
+
+        if correlation_id is None and isinstance(data.get("reaction"), dict):
+            reaction_message_id = data["reaction"].get("message_id")
+            if isinstance(reaction_message_id, str) and reaction_message_id != "":
+                correlation_id = reaction_message_id
+
         return await self._call_api(
             path=self._api_messages_path,
             content_type="application/json",
             data=data,
+            correlation_id=correlation_id,
         )
