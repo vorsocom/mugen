@@ -501,12 +501,30 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.room_put_state.assert_awaited_once()
         client._user_service.add_known_user.assert_not_called()
 
-    async def test_cb_megolm_event_logs(self) -> None:
+    async def test_callback_skip_logging_for_stubbed_paths(self) -> None:
         client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        callback_invocations = [
+            ("_cb_megolm_event", (room, object())),
+            ("_cb_invite_alias_event", (object(),)),
+            ("_cb_invite_name_event", (room, object())),
+            ("_cb_room_create_event", (room, object())),
+            ("_cb_key_verification_event", (object(),)),
+            ("_cb_room_key_event", (object(),)),
+            ("_cb_room_key_request", (room, object())),
+            ("_cb_room_member_event", (room, object())),
+            ("_cb_tag_event", (object(),)),
+        ]
 
-        await client._cb_megolm_event(SimpleNamespace(room_id="!room:test"), object())
-
-        client._logging_gateway.debug.assert_any_call("MegolmEvent")
+        for callback_name, args in callback_invocations:
+            client._logging_gateway.debug.reset_mock()
+            callback = getattr(client, callback_name)
+            await callback(*args)
+            client._logging_gateway.debug.assert_called_once()
+            log_message = client._logging_gateway.debug.call_args.args[0]
+            self.assertIn("Matrix callback skipped.", log_message)
+            self.assertIn(f"callback={callback_name}", log_message)
+            self.assertIn("reason=unsupported_dm_scope", log_message)
 
     async def test_cb_room_message_dispatches_text_and_media_handlers(self) -> None:
         client = self._client()
