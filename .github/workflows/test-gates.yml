@@ -32,6 +32,8 @@ jobs:
           sed -i 's|^api\.region = ""$|api.region = "us-east-1"|' mugen.toml
 
       - name: Run Pre-Push Quality Gates
+        env:
+          ACP_E2E_STARTUP_TIMEOUT_SECS: "90"
         run: |
           gate_python="$(poetry run which python)"
           bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh \

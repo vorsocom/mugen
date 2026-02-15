@@ -67,6 +67,8 @@ jobs:
           sed -i 's|^api\.region = ""$|api.region = "us-east-1"|' mugen.toml
 
       - name: Run Release Automation
+        env:
+          ACP_E2E_STARTUP_TIMEOUT_SECS: "90"
         run: |
           set -euo pipefail
 

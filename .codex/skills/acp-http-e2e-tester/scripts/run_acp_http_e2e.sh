@@ -111,7 +111,14 @@ status_field="$(echo "$spec_json" | jq -r '.status_field // "Status"')"
 spawn_hypercorn="$(echo "$spec_json" | jq -r '.runtime.spawn_hypercorn // false')"
 hypercorn_cmd="$(echo "$spec_json" | jq -r '.runtime.hypercorn_cmd // empty')"
 health_url="$(echo "$spec_json" | jq -r '.runtime.health_url // (.base_url + "/auth/.well-known/jwks.json")')"
-startup_timeout_secs="$(echo "$spec_json" | jq -r '.runtime.startup_timeout_secs // 30')"
+spec_startup_timeout_secs="$(echo "$spec_json" | jq -r '.runtime.startup_timeout_secs // 30')"
+startup_timeout_secs="${ACP_E2E_STARTUP_TIMEOUT_SECS:-$spec_startup_timeout_secs}"
+
+if [[ ! "$startup_timeout_secs" =~ ^[0-9]+$ || "$startup_timeout_secs" -le 0 ]]; then
+  echo "ERROR: invalid startup timeout: $startup_timeout_secs" >&2
+  echo "Set runtime.startup_timeout_secs in the spec, or ACP_E2E_STARTUP_TIMEOUT_SECS to a positive integer." >&2
+  exit 1
+fi
 
 if [[ -z "$base_url" || "$base_url" == "null" ]]; then
   echo "ERROR: base_url is required" >&2
@@ -151,6 +158,12 @@ if [[ "$spawn_hypercorn" == "true" ]]; then
 
   started=0
   for _ in $(seq 1 "$startup_timeout_secs"); do
+    if ! kill -0 "$hypercorn_pid" >/dev/null 2>&1; then
+      echo "ERROR: Hypercorn process exited before becoming healthy." >&2
+      echo "See log: $log_file" >&2
+      tail -n 120 "$log_file" >&2 || true
+      exit 1
+    fi
     health_code="$(curl -sk -o /dev/null -w "%{http_code}" "$health_url" || true)"
     if [[ "$health_code" == "200" ]]; then
       started=1
@@ -161,6 +174,7 @@ if [[ "$spawn_hypercorn" == "true" ]]; then
   if [[ "$started" -ne 1 ]]; then
     echo "ERROR: Hypercorn did not become healthy within ${startup_timeout_secs}s" >&2
     echo "See log: $log_file" >&2
+    tail -n 120 "$log_file" >&2 || true
     exit 1
   fi
 fi
