@@ -103,7 +103,11 @@ if [[ ! -x "$RUNNER" ]]; then
 fi
 
 E2E_PYTHON_BIN="$(resolve_python_bin)"
-HYPERCORN_CMD="$(shell_join_quoted "$E2E_PYTHON_BIN" -m hypercorn -c hypercorn.e2e.toml quartman)"
+E2E_PYTHONPATH="$REPO_ROOT"
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  E2E_PYTHONPATH="$REPO_ROOT:$PYTHONPATH"
+fi
+HYPERCORN_CMD="$(shell_join_quoted env "PYTHONPATH=$E2E_PYTHONPATH" "$E2E_PYTHON_BIN" -m hypercorn --bind 127.0.0.1:8081 quartman)"
 HYPERCORN_CMD_ESCAPED="$(escape_sed_replacement "$HYPERCORN_CMD")"
 
 declare -a SPECS=(
