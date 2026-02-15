@@ -1031,6 +1031,41 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 case _:
                     pass
 
+    async def _room_send_with_unverified_self_device_fallback(
+        self,
+        room_id: str,
+        content: dict,
+    ) -> None:
+        try:
+            await self.room_send(
+                room_id=room_id,
+                message_type="m.room.message",
+                content=content,
+            )
+        except OlmUnverifiedDeviceError as exc:
+            unverified_device = getattr(exc, "device", None)
+            unverified_user_id = getattr(unverified_device, "user_id", None)
+            if unverified_user_id != self.user_id:
+                raise
+
+            unverified_device_id = getattr(unverified_device, "device_id", None)
+            if unverified_device_id is None:
+                unverified_device_id = getattr(unverified_device, "id", None)
+
+            self._logging_gateway.warning(
+                "Matrix send encountered unverified local device; retrying with"
+                " ignore_unverified_devices."
+                f" user_id={unverified_user_id}"
+                f" device_id={unverified_device_id}"
+                f" room_id={room_id}"
+            )
+            await self.room_send(
+                room_id=room_id,
+                message_type="m.room.message",
+                content=content,
+                ignore_unverified_devices=True,
+            )
+
     async def _send_audio_message(
         self,
         room_id: str,
@@ -1043,9 +1078,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return
 
             if isinstance(resp, UploadResponse):
-                await self.room_send(
+                await self._room_send_with_unverified_self_device_fallback(
                     room_id=room_id,
-                    message_type="m.room.message",
                     content={
                         "msgtype": "m.audio",
                         "file": {
@@ -1081,9 +1115,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return
 
             if isinstance(resp, UploadResponse):
-                await self.room_send(
+                await self._room_send_with_unverified_self_device_fallback(
                     room_id=room_id,
-                    message_type="m.room.message",
                     content={
                         "msgtype": "m.file",
                         "file": {
@@ -1119,9 +1152,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return
 
             if isinstance(resp, UploadResponse):
-                await self.room_send(
+                await self._room_send_with_unverified_self_device_fallback(
                     room_id=room_id,
-                    message_type="m.room.message",
                     content={
                         "msgtype": "m.image",
                         "file": {
@@ -1149,9 +1181,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     async def _send_text_message(self, room_id: str, body: str) -> None:
         try:
-            await self.room_send(
+            await self._room_send_with_unverified_self_device_fallback(
                 room_id=room_id,
-                message_type="m.room.message",
                 content={
                     "msgtype": "m.text",
                     "body": body,
@@ -1175,9 +1206,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return
 
             if isinstance(resp, UploadResponse):
-                await self.room_send(
+                await self._room_send_with_unverified_self_device_fallback(
                     room_id=room_id,
-                    message_type="m.room.message",
                     content={
                         "msgtype": "m.video",
                         "file": {
