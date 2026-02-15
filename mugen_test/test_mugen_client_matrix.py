@@ -103,6 +103,96 @@ class _MatrixClientForTests(DefaultMatrixClient):
 class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
     """Tests focused on direct unit coverage for DefaultMatrixClient."""
 
+    def test_init_wires_dependencies_and_callbacks(self) -> None:
+        config = SimpleNamespace(
+            basedir="/tmp",
+            matrix=SimpleNamespace(
+                homeserver="https://matrix.example.com",
+                client=SimpleNamespace(user="@assistant:example.com"),
+                storage=SimpleNamespace(olm=SimpleNamespace(path="olm")),
+            ),
+        )
+        ipc_service = Mock()
+        keyval_storage_gateway = Mock()
+        logging_gateway = Mock()
+        messaging_service = Mock()
+        user_service = Mock()
+
+        with (
+            patch.object(
+                matrix_mod.IMatrixClient, "__init__", autospec=True, return_value=None
+            ) as base_init,
+            patch.object(
+                DefaultMatrixClient, "add_event_callback", autospec=True
+            ) as add_event_callback,
+            patch.object(
+                DefaultMatrixClient, "add_to_device_callback", autospec=True
+            ) as add_to_device_callback,
+            patch.object(
+                DefaultMatrixClient, "add_response_callback", autospec=True
+            ) as add_response_callback,
+        ):
+            client = DefaultMatrixClient(
+                config=config,
+                ipc_service=ipc_service,
+                keyval_storage_gateway=keyval_storage_gateway,
+                logging_gateway=logging_gateway,
+                messaging_service=messaging_service,
+                user_service=user_service,
+            )
+
+        base_init.assert_called_once_with(
+            client,
+            homeserver="https://matrix.example.com",
+            user="@assistant:example.com",
+            store_path="/tmp/olm",
+        )
+        self.assertIs(
+            client._ipc_service, ipc_service
+        )  # pylint: disable=protected-access
+        self.assertIs(  # pylint: disable=protected-access
+            client._keyval_storage_gateway, keyval_storage_gateway
+        )
+        self.assertIs(  # pylint: disable=protected-access
+            client._logging_gateway, logging_gateway
+        )
+        self.assertIs(  # pylint: disable=protected-access
+            client._messaging_service, messaging_service
+        )
+        self.assertIs(
+            client._user_service, user_service
+        )  # pylint: disable=protected-access
+
+        self.assertEqual(add_event_callback.call_count, 7)
+        self.assertEqual(add_to_device_callback.call_count, 3)
+        add_response_callback.assert_called_once_with(
+            client,
+            client._cb_sync_response,  # pylint: disable=protected-access
+            matrix_mod.SyncResponse,
+        )
+
+        expected_event_types = [
+            matrix_mod.InviteAliasEvent,
+            matrix_mod.InviteMemberEvent,
+            matrix_mod.InviteNameEvent,
+            matrix_mod.MegolmEvent,
+            matrix_mod.RoomCreateEvent,
+            matrix_mod.RoomMemberEvent,
+            matrix_mod.RoomMessage,
+        ]
+        event_types = [call.args[2] for call in add_event_callback.call_args_list]
+        self.assertEqual(event_types, expected_event_types)
+
+        expected_to_device_event_types = [
+            matrix_mod.KeyVerificationEvent,
+            matrix_mod.RoomKeyEvent,
+            matrix_mod.RoomKeyRequest,
+        ]
+        to_device_event_types = [
+            call.args[2] for call in add_to_device_callback.call_args_list
+        ]
+        self.assertEqual(to_device_event_types, expected_to_device_event_types)
+
     def _client(self) -> DefaultMatrixClient:
         client = object.__new__(_MatrixClientForTests)
         client._config = SimpleNamespace(
@@ -259,12 +349,16 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._keyval_storage_gateway.has_key = Mock(return_value=True)
 
         client._keyval_storage_gateway.get = Mock(return_value=b"\xff")
-        self.assertEqual(client._load_known_devices(), {})  # pylint: disable=protected-access
+        self.assertEqual(
+            client._load_known_devices(), {}
+        )  # pylint: disable=protected-access
 
         client._keyval_storage_gateway.get = Mock(
             return_value=json.dumps(["not-a-dict"])
         )
-        self.assertEqual(client._load_known_devices(), {})  # pylint: disable=protected-access
+        self.assertEqual(
+            client._load_known_devices(), {}
+        )  # pylint: disable=protected-access
 
         client._keyval_storage_gateway.get = Mock(
             return_value=json.dumps(
@@ -387,7 +481,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             "!room:test",
         )
 
-    async def test_cb_invite_member_event_beta_user_without_profile_object(self) -> None:
+    async def test_cb_invite_member_event_beta_user_without_profile_object(
+        self,
+    ) -> None:
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
         client._config.mugen.beta.active = True
@@ -458,7 +554,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         client._process_message_responses.assert_not_called()
 
-    async def test_cb_room_message_media_without_download_and_unknown_type(self) -> None:
+    async def test_cb_room_message_media_without_download_and_unknown_type(
+        self,
+    ) -> None:
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
         client._validate_message = AsyncMock(return_value=True)
@@ -628,7 +726,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             patch.object(matrix_mod, "UploadResponse", _FakeUploadResponse),
             patch.object(matrix_mod.traceback, "print_exc"),
         ):
-            await client._send_audio_message("!room:test", file_payload, {"duration": 5})
+            await client._send_audio_message(
+                "!room:test", file_payload, {"duration": 5}
+            )
             await client._send_file_message("!room:test", file_payload)
             await client._send_image_message(
                 "!room:test",
