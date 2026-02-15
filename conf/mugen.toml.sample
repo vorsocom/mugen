@@ -259,6 +259,11 @@ domain = ""
 domains.allowed = []
 domains.denied = []
 homeserver = ""
+security.device_trust.mode = "strict_known"
+# Optional allowlist entries used when security.device_trust.mode = "allowlist".
+# [[matrix.security.device_trust.allowlist]]
+# user_id = "@user:example.com"
+# device_ids = ["DEVICEID1", "DEVICEID2"]
 storage.olm.path = "/absolute/path/to/data/.olmstore"
 
 # === Qdrant ===
