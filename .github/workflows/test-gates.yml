@@ -31,5 +31,18 @@ jobs:
           sed -i 's|^storage\.keyval\.dbm\.path = ".*"$|storage.keyval.dbm.path = ".tmp/ci/storage.db"|' mugen.toml
           sed -i 's|^api\.region = ""$|api.region = "us-east-1"|' mugen.toml
 
-      - name: Run Full Test Suite
-        run: poetry run pytest mugen_test -q
+      - name: Run Pre-Push Quality Gates
+        run: |
+          gate_python="$(poetry run which python)"
+          bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh \
+            --python "$gate_python" \
+            --update-coverage-badge
+
+      - name: Ensure Coverage Badge Is Committed
+        run: |
+          if ! git diff --quiet -- README.md; then
+            echo "README coverage badge is out of date in README.md." >&2
+            echo "Run pre-push quality gates locally with --update-coverage-badge and commit README.md." >&2
+            git --no-pager diff -- README.md
+            exit 1
+          fi

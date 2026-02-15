@@ -16,7 +16,8 @@ Run from repository root:
 
 ```bash
 bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh \
-  --python /home/sando/.cache/pypoetry/virtualenvs/mugen-9ZxLq8_f-py3.12/bin/python
+  --python /home/sando/.cache/pypoetry/virtualenvs/mugen-9ZxLq8_f-py3.12/bin/python \
+  --update-coverage-badge
 ```
 
 If `--python` is omitted, the script uses `python`.
