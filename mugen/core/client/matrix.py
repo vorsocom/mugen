@@ -57,6 +57,16 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 ):
     """A custom implementation of IMatrixClient."""
 
+    _default_media_allowed_mimetypes: list[str] = [
+        "audio/*",
+        "image/*",
+        "video/*",
+        "application/*",
+        "text/*",
+    ]
+
+    _default_media_max_download_bytes: int = 20 * 1024 * 1024
+
     _callback_skip_reason_dm_scope: str = "unsupported_dm_scope"
 
     _device_trust_mode_allowlist: str = "allowlist"
@@ -351,6 +361,77 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             )
         )
 
+    def _resolve_media_max_download_bytes(self) -> int:
+        max_download_bytes = getattr(
+            getattr(getattr(self._config, "matrix", SimpleNamespace()), "media", None),
+            "max_download_bytes",
+            self._default_media_max_download_bytes,
+        )
+        try:
+            max_download_bytes = int(max_download_bytes)
+        except (TypeError, ValueError):
+            self._logging_gateway.warning(
+                "Matrix media max download bytes invalid; using default."
+            )
+            return self._default_media_max_download_bytes
+
+        if max_download_bytes <= 0:
+            self._logging_gateway.warning(
+                "Matrix media max download bytes invalid; using default."
+            )
+            return self._default_media_max_download_bytes
+
+        return max_download_bytes
+
+    def _resolve_media_allowed_mimetypes(self) -> list[str]:
+        allowed_mimetypes = getattr(
+            getattr(getattr(self._config, "matrix", SimpleNamespace()), "media", None),
+            "allowed_mimetypes",
+            self._default_media_allowed_mimetypes,
+        )
+        if not isinstance(allowed_mimetypes, list):
+            self._logging_gateway.warning(
+                "Matrix media allowed mimetypes invalid; using defaults."
+            )
+            return list(self._default_media_allowed_mimetypes)
+
+        normalized = [
+            str(pattern).strip().lower()
+            for pattern in allowed_mimetypes
+            if str(pattern).strip() != ""
+        ]
+        if not normalized:
+            self._logging_gateway.warning(
+                "Matrix media allowed mimetypes empty; using defaults."
+            )
+            return list(self._default_media_allowed_mimetypes)
+
+        return normalized
+
+    def _media_mimetype_allowed(self, mimetype: str) -> bool:
+        normalized = mimetype.strip().lower()
+        allowed_mimetypes = self._resolve_media_allowed_mimetypes()
+        for pattern in allowed_mimetypes:
+            if pattern.endswith("/*"):
+                if normalized.startswith(pattern[:-1]):
+                    return True
+            elif normalized == pattern:
+                return True
+
+        return False
+
+    def _cleanup_temp_file(self, file_path: str | None) -> None:
+        if not isinstance(file_path, str) or file_path.strip() == "":
+            return
+
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        except OSError:
+            self._logging_gateway.warning(
+                f"Matrix media cleanup failed for temp file: {file_path}."
+            )
+
     def verify_user_devices(self, user_id: str) -> None:
         """Verify all of a user's devices."""
         self._logging_gateway.debug(f"Verifying all user devices ({user_id}).")
@@ -577,15 +658,20 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 message.source["content"]["info"],
             )
             if get_media:
-                message_responses = await self._messaging_service.handle_audio_message(
-                    platform="matrix",
-                    room_id=room.room_id,
-                    sender=message.sender,
-                    message={
-                        "message": message,
-                        "file": get_media,
-                    },
-                )
+                try:
+                    message_responses = (
+                        await self._messaging_service.handle_audio_message(
+                            platform="matrix",
+                            room_id=room.room_id,
+                            sender=message.sender,
+                            message={
+                                "message": message,
+                                "file": get_media,
+                            },
+                        )
+                    )
+                finally:
+                    self._cleanup_temp_file(get_media)
         # Handle file messages.
         elif isinstance(message, RoomEncryptedFile):
             get_media = await self._download_file(
@@ -593,15 +679,18 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 message.source["content"]["info"],
             )
             if get_media:
-                message_responses = await self._messaging_service.handle_file_message(
-                    platform="matrix",
-                    room_id=room.room_id,
-                    sender=message.sender,
-                    message={
-                        "message": message,
-                        "file": get_media,
-                    },
-                )
+                try:
+                    message_responses = await self._messaging_service.handle_file_message(
+                        platform="matrix",
+                        room_id=room.room_id,
+                        sender=message.sender,
+                        message={
+                            "message": message,
+                            "file": get_media,
+                        },
+                    )
+                finally:
+                    self._cleanup_temp_file(get_media)
         # Handle image messages.
         elif isinstance(message, RoomEncryptedImage):
             get_media = await self._download_file(
@@ -609,15 +698,20 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 message.source["content"]["info"],
             )
             if get_media:
-                message_responses = await self._messaging_service.handle_image_message(
-                    platform="matrix",
-                    room_id=room.room_id,
-                    sender=message.sender,
-                    message={
-                        "message": message,
-                        "file": get_media,
-                    },
-                )
+                try:
+                    message_responses = (
+                        await self._messaging_service.handle_image_message(
+                            platform="matrix",
+                            room_id=room.room_id,
+                            sender=message.sender,
+                            message={
+                                "message": message,
+                                "file": get_media,
+                            },
+                        )
+                    )
+                finally:
+                    self._cleanup_temp_file(get_media)
         # Handle text messages.
         elif isinstance(message, RoomMessageText):
             message_responses = await self._messaging_service.handle_text_message(
@@ -633,15 +727,20 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 message.source["content"]["info"],
             )
             if get_media:
-                message_responses = await self._messaging_service.handle_video_message(
-                    platform="matrix",
-                    room_id=room.room_id,
-                    sender=message.sender,
-                    message={
-                        "message": message,
-                        "file": get_media,
-                    },
-                )
+                try:
+                    message_responses = (
+                        await self._messaging_service.handle_video_message(
+                            platform="matrix",
+                            room_id=room.room_id,
+                            sender=message.sender,
+                            message={
+                                "message": message,
+                                "file": get_media,
+                            },
+                        )
+                    )
+                finally:
+                    self._cleanup_temp_file(get_media)
 
         await self._process_message_responses(
             room_id=room.room_id,
@@ -896,8 +995,38 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             traceback.print_exc()
 
     async def _download_file(self, file: dict, info: dict) -> str | None:
+        if not isinstance(info, dict):
+            self._logging_gateway.warning(
+                "Matrix media download rejected. Reason: Invalid metadata payload."
+            )
+            return None
+
+        mimetype = info.get("mimetype")
+        if not isinstance(mimetype, str) or mimetype.strip() == "":
+            self._logging_gateway.warning(
+                "Matrix media download rejected. Reason: Missing mimetype."
+            )
+            return None
+
+        mimetype = mimetype.strip().lower()
+        if not self._media_mimetype_allowed(mimetype):
+            self._logging_gateway.warning(
+                "Matrix media download rejected."
+                f" Reason: Mimetype not allowed ({mimetype})."
+            )
+            return None
+
+        max_download_bytes = self._resolve_media_max_download_bytes()
+        declared_size = info.get("size")
+        if isinstance(declared_size, int) and declared_size > max_download_bytes:
+            self._logging_gateway.warning(
+                "Matrix media download rejected."
+                f" Reason: Declared size exceeds limit ({declared_size} > {max_download_bytes})."
+            )
+            return None
+
         # Guess extension using mimetype.
-        extension = mimetypes.guess_extension(info["mimetype"])
+        extension = mimetypes.guess_extension(mimetype)
 
         # Successfully guessed extension.
         if extension:
@@ -912,27 +1041,37 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
                 # Download successful.
                 if isinstance(resp, DiskDownloadResponse):
+                    downloaded_size = os.path.getsize(tf.name)
+                    if downloaded_size > max_download_bytes:
+                        self._logging_gateway.warning(
+                            "Matrix media download rejected."
+                            f" Reason: Downloaded size exceeds limit ({downloaded_size} > {max_download_bytes})."
+                        )
+                        return None
 
                     # Open ecrypted file for reading.
                     with open(tf.name, "rb") as tfb:
+                        try:
+                            # Decrypt file.
+                            decrypted_file = nio.crypto.decrypt_attachment(
+                                tfb.read(),
+                                key=file["key"]["k"],
+                                hash=file["hashes"]["sha256"],
+                                iv=file["iv"],
+                            )
 
-                        # Decrypt file.
-                        decrypted_file = nio.crypto.decrypt_attachment(
-                            tfb.read(),
-                            key=file["key"]["k"],
-                            hash=file["hashes"]["sha256"],
-                            iv=file["iv"],
-                        )
-
-                        # Use tempfile for saving decrypted file.
-                        with tempfile.NamedTemporaryFile(
-                            suffix=extension, delete=False
-                        ) as df:
-
-                            # Open tempfile to save decrypted bytes.
-                            with open(df.name, "wb"):
+                            # Use tempfile for saving decrypted file.
+                            with tempfile.NamedTemporaryFile(
+                                suffix=extension, delete=False
+                            ) as df:
                                 df.write(decrypted_file)
                                 return df.name
+                        except Exception as exc:  # pylint: disable=broad-exception-caught
+                            self._logging_gateway.warning(
+                                "Matrix media decryption failed."
+                                f" error={type(exc).__name__}: {exc}"
+                            )
+                            return None
 
     async def _upload_file(self, file: dict):
         resp = None

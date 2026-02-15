@@ -3,6 +3,7 @@
 from io import BytesIO
 import json
 import os
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -795,6 +796,28 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._messaging_service.handle_video_message.assert_not_called()
         self.assertEqual(client._process_message_responses.await_count, 5)
 
+    async def test_cb_room_message_cleans_up_media_file_when_handler_raises(
+        self,
+    ) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        client._validate_message = AsyncMock(return_value=True)
+        client._download_file = AsyncMock(return_value="/tmp/file")
+        client._cleanup_temp_file = Mock()
+        client._process_message_responses = AsyncMock(return_value=None)
+        client._messaging_service.handle_audio_message = AsyncMock(
+            side_effect=RuntimeError("boom")
+        )
+
+        with (
+            patch.object(matrix_mod, "RoomEncryptedAudio", _FakeEncryptedAudio),
+            self.assertRaises(RuntimeError),
+        ):
+            await client._cb_room_message(room, _FakeEncryptedAudio())
+
+        client._cleanup_temp_file.assert_called_once_with("/tmp/file")
+        client._process_message_responses.assert_not_awaited()
+
     async def test_process_message_responses_dispatches_by_response_type(self) -> None:
         client = self._client()
         client._send_audio_message = AsyncMock()
@@ -1048,6 +1071,173 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIsNone(output_path)
+
+    async def test_media_config_resolution_and_mimetype_matching(self) -> None:
+        client = self._client()
+
+        client._config.matrix.media = SimpleNamespace(
+            max_download_bytes="invalid",
+            allowed_mimetypes="text/plain",
+        )
+        self.assertEqual(
+            client._resolve_media_max_download_bytes(),  # pylint: disable=protected-access
+            client._default_media_max_download_bytes,  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            client._resolve_media_allowed_mimetypes(),  # pylint: disable=protected-access
+            list(client._default_media_allowed_mimetypes),  # pylint: disable=protected-access
+        )
+
+        client._config.matrix.media.max_download_bytes = 0
+        self.assertEqual(
+            client._resolve_media_max_download_bytes(),  # pylint: disable=protected-access
+            client._default_media_max_download_bytes,  # pylint: disable=protected-access
+        )
+
+        client._config.matrix.media.max_download_bytes = 1024
+        self.assertEqual(
+            client._resolve_media_max_download_bytes(),  # pylint: disable=protected-access
+            1024,
+        )
+
+        client._config.matrix.media.allowed_mimetypes = []
+        self.assertEqual(
+            client._resolve_media_allowed_mimetypes(),  # pylint: disable=protected-access
+            list(client._default_media_allowed_mimetypes),  # pylint: disable=protected-access
+        )
+
+        client._config.matrix.media.allowed_mimetypes = ["application/pdf"]
+        self.assertTrue(
+            client._media_mimetype_allowed(  # pylint: disable=protected-access
+                "application/pdf"
+            )
+        )
+        self.assertFalse(
+            client._media_mimetype_allowed(  # pylint: disable=protected-access
+                "image/png"
+            )
+        )
+
+        client._config.matrix.media.allowed_mimetypes = [" image/* "]
+        self.assertTrue(
+            client._media_mimetype_allowed(  # pylint: disable=protected-access
+                "image/png"
+            )
+        )
+
+    async def test_cleanup_temp_file_handles_empty_missing_and_os_error(self) -> None:
+        client = self._client()
+
+        client._cleanup_temp_file(None)  # pylint: disable=protected-access
+        client._cleanup_temp_file("   ")  # pylint: disable=protected-access
+
+        with tempfile.NamedTemporaryFile(delete=False) as tf:
+            temp_path = tf.name
+
+        self.assertTrue(os.path.exists(temp_path))
+        client._cleanup_temp_file(temp_path)  # pylint: disable=protected-access
+        self.assertFalse(os.path.exists(temp_path))
+
+        with (
+            patch.object(matrix_mod.os.path, "isfile", return_value=True),
+            patch.object(matrix_mod.os, "unlink", side_effect=OSError("denied")),
+        ):
+            client._cleanup_temp_file("/tmp/blocked")  # pylint: disable=protected-access
+
+        self.assertGreaterEqual(client._logging_gateway.warning.call_count, 1)
+
+    async def test_download_file_rejects_invalid_metadata_mimetype_and_size(
+        self,
+    ) -> None:
+        client = self._client()
+        client._config.matrix.media = SimpleNamespace(
+            max_download_bytes=5,
+            allowed_mimetypes=["text/plain"],
+        )
+        file_meta = {
+            "url": "mxc://example/file",
+            "key": {"k": "k"},
+            "hashes": {"sha256": "sha"},
+            "iv": "iv",
+        }
+
+        self.assertIsNone(
+            await client._download_file(file=file_meta, info=["invalid"])  # pylint: disable=protected-access
+        )
+        self.assertIsNone(
+            await client._download_file(file=file_meta, info={})  # pylint: disable=protected-access
+        )
+
+        client._config.matrix.media.allowed_mimetypes = ["image/*"]
+        self.assertIsNone(
+            await client._download_file(  # pylint: disable=protected-access
+                file=file_meta,
+                info={"mimetype": "text/plain"},
+            )
+        )
+
+        client._config.matrix.media.allowed_mimetypes = ["text/plain"]
+        self.assertIsNone(
+            await client._download_file(  # pylint: disable=protected-access
+                file=file_meta,
+                info={"mimetype": "text/plain", "size": 6},
+            )
+        )
+
+        async def _fake_download(url: str, save_to: str):
+            with open(save_to, "wb") as f:
+                f.write(b"123456")
+            return _FakeDiskDownloadResponse()
+
+        client.download = AsyncMock(side_effect=_fake_download)
+        with (
+            patch.object(matrix_mod.mimetypes, "guess_extension", return_value=".txt"),
+            patch.object(matrix_mod, "DiskDownloadResponse", _FakeDiskDownloadResponse),
+        ):
+            self.assertIsNone(
+                await client._download_file(  # pylint: disable=protected-access
+                    file=file_meta,
+                    info={"mimetype": "text/plain", "size": 4},
+                )
+            )
+
+    async def test_download_file_returns_none_when_decryption_fails(self) -> None:
+        client = self._client()
+        client._config.matrix.media = SimpleNamespace(
+            max_download_bytes=1024,
+            allowed_mimetypes=["text/plain"],
+        )
+        file_meta = {
+            "url": "mxc://example/file",
+            "key": {"k": "k"},
+            "hashes": {"sha256": "sha"},
+            "iv": "iv",
+        }
+
+        async def _fake_download(url: str, save_to: str):
+            with open(save_to, "wb") as f:
+                f.write(b"encrypted")
+            return _FakeDiskDownloadResponse()
+
+        client.download = AsyncMock(side_effect=_fake_download)
+
+        with (
+            patch.object(matrix_mod.mimetypes, "guess_extension", return_value=".txt"),
+            patch.object(matrix_mod, "DiskDownloadResponse", _FakeDiskDownloadResponse),
+            patch.object(
+                matrix_mod.nio.crypto,
+                "decrypt_attachment",
+                side_effect=ValueError("bad decrypt"),
+            ),
+        ):
+            self.assertIsNone(
+                await client._download_file(  # pylint: disable=protected-access
+                    file=file_meta,
+                    info={"mimetype": "text/plain", "size": 4},
+                )
+            )
+
+        self.assertGreaterEqual(client._logging_gateway.warning.call_count, 1)
 
     async def test_cb_sync_response_persists_next_batch_token(self) -> None:
         client = self._client()
