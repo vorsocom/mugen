@@ -333,7 +333,11 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(uploaded_from_bytes["data"]["id"], "media-id")
         first_call = client._call_api.await_args
         self.assertEqual(first_call.args[0], "123456789/media")
-        self.assertIsInstance(first_call.kwargs["files"], aiohttp.FormData)
+        self.assertIsNone(first_call.kwargs.get("files"))
+        self.assertTrue(callable(first_call.kwargs["files_factory"]))
+        first_form, first_resources = first_call.kwargs["files_factory"]()
+        self.assertIsInstance(first_form, aiohttp.FormData)
+        self.assertEqual(first_resources, [])
 
         with tempfile.NamedTemporaryFile(delete=False) as tf:
             tf.write(b"hello")
@@ -343,7 +347,12 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(uploaded_from_file["data"]["id"], "media-id")
             second_call = client._call_api.await_args
             self.assertEqual(second_call.args[0], "123456789/media")
-            self.assertIsInstance(second_call.kwargs["files"], aiohttp.FormData)
+            self.assertIsNone(second_call.kwargs.get("files"))
+            self.assertTrue(callable(second_call.kwargs["files_factory"]))
+            second_form, second_resources = second_call.kwargs["files_factory"]()
+            self.assertIsInstance(second_form, aiohttp.FormData)
+            self.assertEqual(len(second_resources), 1)
+            second_resources[0].close()
         finally:
             os.remove(path)
 
@@ -409,6 +418,47 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
 
         put_kwargs = session.put.await_args.kwargs
         self.assertIs(put_kwargs["data"], form)
+
+    async def test_call_api_uses_files_factory_and_closes_resources(self) -> None:
+        client = self._new_client()
+        session = Mock()
+        session.post = AsyncMock(return_value=_Response(text="posted"))
+        client._client_session = session  # pylint: disable=protected-access
+        resource = Mock()
+
+        def files_factory() -> tuple[aiohttp.FormData, list]:
+            form = aiohttp.FormData()
+            form.add_field("file", b"x", filename="x.bin")
+            return form, [resource]
+
+        posted = await client._call_api(  # pylint: disable=protected-access
+            "path/post",
+            method=HTTPMethod.POST,
+            files_factory=files_factory,
+        )
+
+        self.assertTrue(posted["ok"])
+        resource.close.assert_called_once()
+
+    async def test_call_api_returns_error_when_files_factory_fails(self) -> None:
+        client = self._new_client()
+        session = Mock()
+        session.post = AsyncMock(return_value=_Response(text="posted"))
+        client._client_session = session  # pylint: disable=protected-access
+
+        def files_factory() -> tuple[aiohttp.FormData, list]:
+            raise OSError("missing-file")
+
+        result = await client._call_api(  # pylint: disable=protected-access
+            "path/post",
+            method=HTTPMethod.POST,
+            files_factory=files_factory,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "missing-file")
+        session.post.assert_not_awaited()
+        client._logging_gateway.error.assert_any_call("missing-file")
 
     async def test_call_api_unknown_method_raises_value_error(self) -> None:
         client = self._new_client()
