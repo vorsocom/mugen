@@ -9,7 +9,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 README_PATH = ROOT / "README.md"
 PYPROJECT_PATH = ROOT / "pyproject.toml"
@@ -199,7 +198,7 @@ def _prepare_release(args: argparse.Namespace) -> None:
     _update_coverage_badge(coverage_total)
 
     _run(["git", "add", str(PYPROJECT_PATH), str(QUARTMAN_PATH), str(README_PATH)])
-    _run(["git", "commit", "-m", f"Prepare release {target}"])
+    _run(["git", "commit", "-m", f"chore(release): prepare {target}"])
 
     if args.push:
         _run(["git", "push", "-u", "origin", release_branch])
@@ -267,7 +266,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Automate mugen release operations.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    prepare = subparsers.add_parser("prepare", help="Create release branch and bump files.")
+    prepare = subparsers.add_parser(
+        "prepare", help="Create release branch and bump files."
+    )
     prepare_group = prepare.add_mutually_exclusive_group(required=False)
     prepare_group.add_argument(
         "--bump",
@@ -301,7 +302,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     prepare.set_defaults(handler=_prepare_release)
 
-    finish = subparsers.add_parser("finish", help="Merge/tag/push and clean release branch.")
+    finish = subparsers.add_parser(
+        "finish", help="Merge/tag/push and clean release branch."
+    )
     finish.add_argument("--version", required=True, help="Release version (x.y.z).")
     finish.add_argument(
         "--keep-release-branch",
