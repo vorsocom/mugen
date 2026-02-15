@@ -103,7 +103,7 @@ async def whatsapp_wacapi_event(
     try:
         response = await asyncio.wait_for(response_queue.get(), timeout=10.0)
     except asyncio.TimeoutError:
-        logger.error("Timed out waiting for IPC response on 'matrix'.")
+        logger.error("Timed out waiting for IPC response on 'whatsapp'.")
         abort(504)
 
     return response

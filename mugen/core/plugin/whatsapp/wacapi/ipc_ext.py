@@ -200,6 +200,207 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         )
         return False
 
+    @staticmethod
+    def _get_contact_for_sender(contacts: list, sender: str | None) -> dict | None:
+        if not isinstance(contacts, list):
+            return None
+
+        for contact in contacts:
+            if (
+                isinstance(contact, dict)
+                and isinstance(sender, str)
+                and contact.get("wa_id") == sender
+            ):
+                return contact
+
+        for contact in contacts:
+            if isinstance(contact, dict):
+                return contact
+
+        return None
+
+    async def _process_message_event(self, event_value: dict, message: dict) -> None:
+        sender = message.get("from")
+        contact = self._get_contact_for_sender(event_value.get("contacts"), sender)
+
+        if not isinstance(sender, str) or sender == "":
+            candidate_sender = (
+                contact.get("wa_id") if isinstance(contact, dict) else None
+            )
+            sender = candidate_sender if isinstance(candidate_sender, str) else None
+
+        if not isinstance(sender, str) or sender == "":
+            self._logging_gateway.error("Malformed WhatsApp message payload.")
+            return
+
+        if self._is_duplicate_event("message", message):
+            self._logging_gateway.debug("Skip duplicate WhatsApp message event.")
+            return
+
+        if self._config.mugen.beta.active:
+            beta_users: list = self._config.whatsapp.beta.users
+            if sender not in beta_users:
+                await self._client.send_text_message(
+                    message=self._config.mugen.beta.message,
+                    recipient=sender,
+                )
+                return
+
+        known_users = self._user_service.get_known_users_list()
+        known_users = known_users if isinstance(known_users, dict) else {}
+        if sender not in known_users.keys():
+            profile_name = sender
+            if isinstance(contact, dict):
+                contact_profile = contact.get("profile")
+                if isinstance(contact_profile, dict):
+                    contact_name = contact_profile.get("name")
+                    if isinstance(contact_name, str) and contact_name != "":
+                        profile_name = contact_name
+            self._logging_gateway.debug(f"New WhatsApp contact: {sender}")
+            self._user_service.add_known_user(
+                sender,
+                profile_name,
+                sender,
+            )
+
+        message_responses: list[dict] | None = []
+        try:
+            match message["type"]:
+                case "audio":
+                    get_media_url = await self._client.retrieve_media_url(
+                        message["audio"]["id"],
+                    )
+                    media_url = self._extract_api_data(get_media_url, "audio media URL")
+                    if media_url and "url" in media_url.keys():
+                        get_media = await self._client.download_media(
+                            media_url["url"],
+                            message["audio"]["mime_type"],
+                        )
+
+                        if get_media is not None:
+                            message_responses = (
+                                await self._messaging_service.handle_audio_message(
+                                    "whatsapp",
+                                    room_id=sender,
+                                    sender=sender,
+                                    message={
+                                        "message": message,
+                                        "file": get_media,
+                                    },
+                                )
+                            )
+                case "document":
+                    get_media_url = await self._client.retrieve_media_url(
+                        message["document"]["id"],
+                    )
+                    media_url = self._extract_api_data(
+                        get_media_url, "document media URL"
+                    )
+                    if media_url and "url" in media_url.keys():
+                        get_media = await self._client.download_media(
+                            media_url["url"],
+                            message["document"]["mime_type"],
+                        )
+
+                        if get_media is not None:
+                            message_responses = (
+                                await self._messaging_service.handle_file_message(
+                                    "whatsapp",
+                                    room_id=sender,
+                                    sender=sender,
+                                    message={
+                                        "message": message,
+                                        "file": get_media,
+                                    },
+                                )
+                            )
+                case "image":
+                    get_media_url = await self._client.retrieve_media_url(
+                        message["image"]["id"],
+                    )
+                    media_url = self._extract_api_data(get_media_url, "image media URL")
+                    if media_url and "url" in media_url.keys():
+                        get_media = await self._client.download_media(
+                            media_url["url"],
+                            message["image"]["mime_type"],
+                        )
+
+                        if get_media is not None:
+                            message_responses = (
+                                await self._messaging_service.handle_image_message(
+                                    "whatsapp",
+                                    room_id=sender,
+                                    sender=sender,
+                                    message={
+                                        "message": message,
+                                        "file": get_media,
+                                    },
+                                )
+                            )
+                case "text" | "interactive" | "button":
+                    text_message = self._extract_user_text(message)
+                    if text_message is None:
+                        await self._call_message_handlers(
+                            message=message,
+                            message_type=message["type"],
+                            sender=sender,
+                        )
+                    else:
+                        message_responses = (
+                            await self._messaging_service.handle_text_message(
+                                "whatsapp",
+                                room_id=sender,
+                                sender=sender,
+                                message=text_message,
+                            )
+                        )
+                case "video":
+                    get_media_url = await self._client.retrieve_media_url(
+                        message["video"]["id"],
+                    )
+                    media_url = self._extract_api_data(get_media_url, "video media URL")
+                    if media_url and "url" in media_url.keys():
+                        get_media = await self._client.download_media(
+                            media_url["url"],
+                            message["video"]["mime_type"],
+                        )
+
+                        if get_media is not None:
+                            message_responses = (
+                                await self._messaging_service.handle_video_message(
+                                    "whatsapp",
+                                    room_id=sender,
+                                    sender=sender,
+                                    message={
+                                        "message": message,
+                                        "file": get_media,
+                                    },
+                                )
+                            )
+                case _:
+                    await self._call_message_handlers(
+                        message=message,
+                        message_type=message["type"],
+                        sender=sender,
+                    )
+        except (KeyError, TypeError):
+            self._logging_gateway.error("Malformed WhatsApp message payload.")
+            return
+
+        self._logging_gateway.debug("Send responses to user.")
+        for response in message_responses or []:
+            await self._send_response_to_user(response=response, sender=sender)
+
+    async def _process_status_event(self, status: dict) -> None:
+        if self._is_duplicate_event("status", status):
+            self._logging_gateway.debug("Skip duplicate WhatsApp status event.")
+            return
+
+        await self._call_message_handlers(
+            message=status,
+            message_type="status",
+        )
+
     async def _upload_response_media(self, response: dict, context: str) -> dict | None:
         file_data = response.get("file")
         if not isinstance(file_data, dict):
@@ -392,174 +593,51 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         response_queue = payload.get("response_queue")
         try:
             event = payload["data"]
-            event_value = event["entry"][0]["changes"][0]["value"]
-            if "messages" in event_value.keys():
-                contact = event_value["contacts"][0]
-                message = event_value["messages"][0]
-                sender = contact["wa_id"]
-                if self._is_duplicate_event("message", message):
-                    self._logging_gateway.debug(
-                        "Skip duplicate WhatsApp message event."
-                    )
-                    return
+            entries = event["entry"]
+            if not isinstance(entries, list):
+                raise TypeError
 
-                if self._config.mugen.beta.active:
-                    beta_users: list = self._config.whatsapp.beta.users
-                    if sender not in beta_users:
-                        await self._client.send_text_message(
-                            message=self._config.mugen.beta.message,
-                            recipient=sender,
-                        )
-                        return
+            found_event_payload = False
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                changes = entry.get("changes")
+                if not isinstance(changes, list):
+                    continue
 
-                known_users = self._user_service.get_known_users_list()
-                if sender not in known_users.keys():
-                    self._logging_gateway.debug(f"New WhatsApp contact: {sender}")
-                    self._user_service.add_known_user(
-                        sender,
-                        contact["profile"]["name"],
-                        sender,
-                    )
+                for change in changes:
+                    if not isinstance(change, dict):
+                        continue
 
-                message_responses: list[dict] | None = []
-                match message["type"]:
-                    case "audio":
-                        get_media_url = await self._client.retrieve_media_url(
-                            message["audio"]["id"],
-                        )
-                        media_url = self._extract_api_data(
-                            get_media_url, "audio media URL"
-                        )
-                        if media_url and "url" in media_url.keys():
-                            get_media = await self._client.download_media(
-                                media_url["url"],
-                                message["audio"]["mime_type"],
-                            )
+                    event_value = change.get("value")
+                    if not isinstance(event_value, dict):
+                        continue
 
-                            if get_media is not None:
-                                message_responses = (
-                                    await self._messaging_service.handle_audio_message(
-                                        "whatsapp",
-                                        room_id=sender,
-                                        sender=sender,
-                                        message={
-                                            "message": message,
-                                            "file": get_media,
-                                        },
-                                    )
+                    found_event_payload = True
+
+                    messages = event_value.get("messages")
+                    if isinstance(messages, list):
+                        for message in messages:
+                            if not isinstance(message, dict):
+                                self._logging_gateway.error(
+                                    "Malformed WhatsApp message payload."
                                 )
-                    case "document":
-                        get_media_url = await self._client.retrieve_media_url(
-                            message["document"]["id"],
-                        )
-                        media_url = self._extract_api_data(
-                            get_media_url, "document media URL"
-                        )
-                        if media_url and "url" in media_url.keys():
-                            get_media = await self._client.download_media(
-                                media_url["url"],
-                                message["document"]["mime_type"],
-                            )
+                                continue
+                            await self._process_message_event(event_value, message)
 
-                            if get_media is not None:
-                                message_responses = (
-                                    await self._messaging_service.handle_file_message(
-                                        "whatsapp",
-                                        room_id=sender,
-                                        sender=sender,
-                                        message={
-                                            "message": message,
-                                            "file": get_media,
-                                        },
-                                    )
+                    statuses = event_value.get("statuses")
+                    if isinstance(statuses, list):
+                        for status in statuses:
+                            if not isinstance(status, dict):
+                                self._logging_gateway.error(
+                                    "Malformed WhatsApp status payload."
                                 )
-                    case "image":
-                        get_media_url = await self._client.retrieve_media_url(
-                            message["image"]["id"],
-                        )
-                        media_url = self._extract_api_data(
-                            get_media_url, "image media URL"
-                        )
-                        if media_url and "url" in media_url.keys():
-                            get_media = await self._client.download_media(
-                                media_url["url"],
-                                message["image"]["mime_type"],
-                            )
+                                continue
+                            await self._process_status_event(status)
 
-                            if get_media is not None:
-                                message_responses = (
-                                    await self._messaging_service.handle_image_message(
-                                        "whatsapp",
-                                        room_id=sender,
-                                        sender=sender,
-                                        message={
-                                            "message": message,
-                                            "file": get_media,
-                                        },
-                                    )
-                                )
-                    case "text" | "interactive" | "button":
-                        text_message = self._extract_user_text(message)
-                        if text_message is None:
-                            await self._call_message_handlers(
-                                message=message,
-                                message_type=message["type"],
-                                sender=sender,
-                            )
-                        else:
-                            message_responses = (
-                                await self._messaging_service.handle_text_message(
-                                    "whatsapp",
-                                    room_id=sender,
-                                    sender=sender,
-                                    message=text_message,
-                                )
-                            )
-                    case "video":
-                        get_media_url = await self._client.retrieve_media_url(
-                            message["video"]["id"],
-                        )
-                        media_url = self._extract_api_data(
-                            get_media_url, "video media URL"
-                        )
-                        if media_url and "url" in media_url.keys():
-                            get_media = await self._client.download_media(
-                                media_url["url"],
-                                message["video"]["mime_type"],
-                            )
-
-                            if get_media is not None:
-                                message_responses = (
-                                    await self._messaging_service.handle_video_message(
-                                        "whatsapp",
-                                        room_id=sender,
-                                        sender=sender,
-                                        message={
-                                            "message": message,
-                                            "file": get_media,
-                                        },
-                                    )
-                                )
-                    case _:
-                        await self._call_message_handlers(
-                            message=message,
-                            message_type=message["type"],
-                            sender=sender,
-                        )
-
-                self._logging_gateway.debug("Send responses to user.")
-                for response in message_responses or []:
-                    await self._send_response_to_user(response=response, sender=sender)
-            elif "statuses" in event_value.keys():
-                status = event_value["statuses"][0]
-                if self._is_duplicate_event("status", status):
-                    self._logging_gateway.debug("Skip duplicate WhatsApp status event.")
-                    return
-                await self._call_message_handlers(
-                    message=status,
-                    message_type="status",
-                )
-        except (IndexError, KeyError, TypeError):
+            if not found_event_payload:
+                raise TypeError
+        except (KeyError, TypeError):
             self._logging_gateway.error("Malformed WhatsApp event payload.")
         finally:
             if response_queue is not None:

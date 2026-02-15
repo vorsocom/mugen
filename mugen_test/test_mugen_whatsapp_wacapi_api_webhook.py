@@ -1,0 +1,242 @@
+"""Unit tests for mugen.core.plugin.whatsapp.wacapi.api.webhook."""
+
+from inspect import unwrap
+from types import SimpleNamespace
+import unittest
+from unittest.mock import AsyncMock, Mock, patch
+
+from mugen.core.plugin.whatsapp.wacapi.api import webhook
+
+
+class _AbortCalled(Exception):
+    def __init__(self, code: int):
+        super().__init__(code)
+        self.code = code
+
+
+def _abort_raiser(code: int, *_args, **_kwargs):
+    raise _AbortCalled(code)
+
+
+def _make_config(verification_token: str = "token-1"):
+    return SimpleNamespace(
+        whatsapp=SimpleNamespace(
+            webhook=SimpleNamespace(verification_token=verification_token)
+        )
+    )
+
+
+class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
+    """Covers webhook subscription and event endpoint branches."""
+
+    async def test_provider_helpers_return_from_di_container(self) -> None:
+        container = SimpleNamespace(
+            config="cfg",
+            ipc_service="ipc",
+            logging_gateway="logger",
+        )
+        with patch.object(webhook.di, "container", new=container):
+            self.assertEqual(webhook._config_provider(), "cfg")
+            self.assertEqual(webhook._ipc_provider(), "ipc")
+            self.assertEqual(webhook._logger_provider(), "logger")
+
+    async def test_subscription_validation_paths(self) -> None:
+        endpoint = unwrap(webhook.whatsapp_wacapi_subscription)
+        logger = Mock()
+
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(webhook, "request", new=SimpleNamespace(args={})),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    config_provider=lambda: _make_config(),
+                    logger_provider=lambda: logger,
+                )
+            self.assertEqual(ex.exception.code, 400)
+            logger.error.assert_called_once_with("hub.mode incorrect.")
+
+        logger = Mock()
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(args={"hub.mode": "subscribe"}),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    config_provider=lambda: _make_config(),
+                    logger_provider=lambda: logger,
+                )
+            self.assertEqual(ex.exception.code, 400)
+            logger.error.assert_called_once_with(
+                "hub.verify_token not supplied or is empty."
+            )
+
+        logger = Mock()
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(
+                    args={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "bad-token",
+                        "hub.challenge": "1234",
+                    }
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    config_provider=lambda: _make_config(verification_token="expected"),
+                    logger_provider=lambda: logger,
+                )
+            self.assertEqual(ex.exception.code, 400)
+            logger.error.assert_called_once_with("Incorrect verification token.")
+
+        logger = Mock()
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(
+                    args={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "expected",
+                        "hub.challenge": "1234",
+                    }
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    config_provider=lambda: SimpleNamespace(whatsapp=SimpleNamespace()),
+                    logger_provider=lambda: logger,
+                )
+            self.assertEqual(ex.exception.code, 500)
+            logger.error.assert_called_once_with("Could not get verification token.")
+
+        logger = Mock()
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(
+                    args={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "expected",
+                    }
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    config_provider=lambda: _make_config(verification_token="expected"),
+                    logger_provider=lambda: logger,
+                )
+            self.assertEqual(ex.exception.code, 400)
+            logger.error.assert_called_once_with(
+                "hub.challenge not supplied or is empty."
+            )
+
+    async def test_subscription_success(self) -> None:
+        endpoint = unwrap(webhook.whatsapp_wacapi_subscription)
+        with patch.object(
+            webhook,
+            "request",
+            new=SimpleNamespace(
+                args={
+                    "hub.mode": "subscribe",
+                    "hub.verify_token": "expected",
+                    "hub.challenge": "abc123",
+                }
+            ),
+        ):
+            response = await endpoint(
+                config_provider=lambda: _make_config(verification_token="expected"),
+                logger_provider=lambda: Mock(),
+            )
+        self.assertEqual(response, "abc123")
+
+    async def test_event_validation_path_for_non_dict_payload(self) -> None:
+        endpoint = unwrap(webhook.whatsapp_wacapi_event)
+        logger = Mock()
+        ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock(return_value=None))
+
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(get_json=AsyncMock(return_value=[])),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    ipc_provider=lambda: ipc_service,
+                    logger_provider=lambda: logger,
+                )
+            self.assertEqual(ex.exception.code, 400)
+            logger.debug.assert_called_once_with("`data` is not a dict.")
+
+    async def test_event_success_path(self) -> None:
+        endpoint = unwrap(webhook.whatsapp_wacapi_event)
+
+        async def _enqueue_response(platform: str, payload: dict):
+            self.assertEqual(platform, "whatsapp")
+            self.assertEqual(payload["command"], "whatsapp_wacapi_event")
+            await payload["response_queue"].put({"response": "OK"})
+
+        ipc_service = SimpleNamespace(
+            handle_ipc_request=AsyncMock(side_effect=_enqueue_response)
+        )
+        with patch.object(
+            webhook,
+            "request",
+            new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
+        ):
+            response = await endpoint(
+                ipc_provider=lambda: ipc_service,
+                logger_provider=lambda: Mock(),
+            )
+
+        self.assertEqual(response, {"response": "OK"})
+        ipc_service.handle_ipc_request.assert_awaited_once()
+
+    async def test_event_timeout_path_logs_whatsapp_label(self) -> None:
+        endpoint = unwrap(webhook.whatsapp_wacapi_event)
+        ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock(return_value=None))
+        logger = Mock()
+
+        async def _timeout(_awaitable, timeout: float):
+            _ = timeout
+            _awaitable.close()
+            raise TimeoutError()
+
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
+            ),
+            patch(
+                "mugen.core.plugin.whatsapp.wacapi.api.webhook.asyncio.wait_for",
+                _timeout,
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    ipc_provider=lambda: ipc_service,
+                    logger_provider=lambda: logger,
+                )
+            self.assertEqual(ex.exception.code, 504)
+            logger.error.assert_called_once_with(
+                "Timed out waiting for IPC response on 'whatsapp'."
+            )
