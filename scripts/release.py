@@ -124,17 +124,6 @@ def _update_version_files(version: str) -> None:
         f'__version__ = "{version}"',
     )
 
-    _replace_once(
-        README_PATH,
-        re.compile(r"Latest_Release-v\d+\.\d+\.\d+-blue"),
-        f"Latest_Release-v{version}-blue",
-    )
-    _replace_once(
-        README_PATH,
-        re.compile(r"releases/tag/\d+\.\d+\.\d+"),
-        f"releases/tag/{version}",
-    )
-
 
 def _coverage_color(coverage_total: int) -> str:
     if coverage_total >= 90:
