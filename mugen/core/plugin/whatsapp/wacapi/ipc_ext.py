@@ -3,6 +3,7 @@
 __all__ = ["WhatsAppWACAPIIPCExtension"]
 
 import asyncio
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core import di
@@ -27,6 +29,10 @@ def _logging_gateway_provider():
     return di.container.logging_gateway
 
 
+def _keyval_storage_gateway_provider():
+    return di.container.keyval_storage_gateway
+
+
 def _messaging_service_provider():
     return di.container.messaging_service
 
@@ -38,12 +44,16 @@ def _user_service_provider():
 class WhatsAppWACAPIIPCExtension(IIPCExtension):
     """An implementation of IIPCExtension for WhatsApp Cloud API support."""
 
+    _seen_event_keys_key = "whatsapp_wacapi_seen_events"
+    _seen_event_keys_max = 1024
+
     # pylint: disable=too-many-arguments
     # # pylint: disable=too-many-positional-arguments
     def __init__(
         self,
         config: SimpleNamespace | None = None,
         logging_gateway: ILoggingGateway | None = None,
+        keyval_storage_gateway: IKeyValStorageGateway | None = None,
         messaging_service: IMessagingService | None = None,
         user_service: IUserService | None = None,
         whatsapp_client: IWhatsAppClient | None = None,
@@ -58,6 +68,11 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             logging_gateway
             if logging_gateway is not None
             else _logging_gateway_provider()
+        )
+        self._keyval_storage_gateway = (
+            keyval_storage_gateway
+            if keyval_storage_gateway is not None
+            else _keyval_storage_gateway_provider()
         )
         self._messaging_service = (
             messaging_service
@@ -154,6 +169,36 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 return json.dumps(response_json)
 
         return None
+
+    def _load_seen_event_keys(self) -> list[str]:
+        payload = self._keyval_storage_gateway.get(self._seen_event_keys_key)
+        if not isinstance(payload, str):
+            return []
+        try:
+            loaded = json.loads(payload)
+        except json.JSONDecodeError:
+            return []
+        return loaded if isinstance(loaded, list) else []
+
+    @staticmethod
+    def _build_event_dedupe_key(event_type: str, event_payload: dict) -> str:
+        payload = json.dumps(event_payload, sort_keys=True, separators=(",", ":"))
+        payload_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return f"{event_type}:{payload_hash}"
+
+    def _is_duplicate_event(self, event_type: str, event_payload: dict) -> bool:
+        dedupe_key = self._build_event_dedupe_key(event_type, event_payload)
+        seen_event_keys = self._load_seen_event_keys()
+        if dedupe_key in seen_event_keys:
+            return True
+        seen_event_keys.append(dedupe_key)
+        if len(seen_event_keys) > self._seen_event_keys_max:
+            seen_event_keys = seen_event_keys[-self._seen_event_keys_max :]
+        self._keyval_storage_gateway.put(
+            self._seen_event_keys_key,
+            json.dumps(seen_event_keys),
+        )
+        return False
 
     async def _upload_response_media(self, response: dict, context: str) -> dict | None:
         file_data = response.get("file")
@@ -352,6 +397,11 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 contact = event_value["contacts"][0]
                 message = event_value["messages"][0]
                 sender = contact["wa_id"]
+                if self._is_duplicate_event("message", message):
+                    self._logging_gateway.debug(
+                        "Skip duplicate WhatsApp message event."
+                    )
+                    return
 
                 if self._config.mugen.beta.active:
                     beta_users: list = self._config.whatsapp.beta.users
@@ -501,8 +551,12 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 for response in message_responses or []:
                     await self._send_response_to_user(response=response, sender=sender)
             elif "statuses" in event_value.keys():
+                status = event_value["statuses"][0]
+                if self._is_duplicate_event("status", status):
+                    self._logging_gateway.debug("Skip duplicate WhatsApp status event.")
+                    return
                 await self._call_message_handlers(
-                    message=event_value["statuses"][0],
+                    message=status,
                     message_type="status",
                 )
         except (IndexError, KeyError, TypeError):

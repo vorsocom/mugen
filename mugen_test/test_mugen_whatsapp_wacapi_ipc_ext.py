@@ -1,6 +1,7 @@
 """Unit tests for mugen.core.plugin.whatsapp.wacapi.ipc_ext."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -133,10 +134,34 @@ def _make_user_service(known_users=None):
     )
 
 
+class _MemoryKeyVal:
+    def __init__(self):
+        self.store = {}
+
+    def close(self) -> None:
+        return None
+
+    def get(self, key: str, _decode: bool = True):
+        return self.store.get(key)
+
+    def has_key(self, key: str) -> bool:
+        return key in self.store
+
+    def keys(self) -> list[str]:
+        return list(self.store.keys())
+
+    def put(self, key: str, value):
+        self.store[key] = value
+
+    def remove(self, key: str):
+        return self.store.pop(key, None)
+
+
 def _new_extension(
     *,
     config,
     client=None,
+    keyval_storage_gateway=None,
     messaging_service=None,
     user_service=None,
     logging_gateway=None,
@@ -144,6 +169,7 @@ def _new_extension(
     return WhatsAppWACAPIIPCExtension(
         config=config,
         logging_gateway=logging_gateway or Mock(),
+        keyval_storage_gateway=keyval_storage_gateway or _MemoryKeyVal(),
         messaging_service=messaging_service or _make_messaging_service(),
         user_service=user_service or _make_user_service(),
         whatsapp_client=client or _make_client(),
@@ -204,7 +230,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 {"ok": True, "data": []}, "ctx"
             )  # pylint: disable=protected-access
         )
-        self.assertIsNone(ext._extract_api_data("bad", "ctx"))  # pylint: disable=protected-access
+        self.assertIsNone(
+            ext._extract_api_data("bad", "ctx")
+        )  # pylint: disable=protected-access
         self.assertEqual(
             ext._extract_api_data({"ok": True, "data": None}, "ctx"), {}
         )  # pylint: disable=protected-access
@@ -279,11 +307,11 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     "type": "interactive",
                     "interactive": {
                         "type": "nfm_reply",
-                        "nfm_reply": {"response_json": "{\"a\":1}"},
+                        "nfm_reply": {"response_json": '{"a":1}'},
                     },
                 }
             ),
-            "{\"a\":1}",
+            '{"a":1}',
         )
         self.assertIsNone(
             WhatsAppWACAPIIPCExtension._extract_user_text(
@@ -524,7 +552,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     (await payload["response_queue"].get())["response"], "OK"
                 )
 
-    async def test_button_message_without_extractable_text_delegates_to_handlers(self) -> None:
+    async def test_button_message_without_extractable_text_delegates_to_handlers(
+        self,
+    ) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
         payload = _make_payload(
             _make_message_event(
@@ -562,7 +592,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNone(
-            await ext._upload_response_media({"type": "audio"}, "audio")  # pylint: disable=protected-access
+            await ext._upload_response_media(
+                {"type": "audio"}, "audio"
+            )  # pylint: disable=protected-access
         )
         self.assertIsNone(
             await ext._upload_response_media(  # pylint: disable=protected-access
@@ -570,10 +602,16 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 "audio",
             )
         )
-        logging_gateway.error.assert_any_call("Missing file payload for audio response.")
-        logging_gateway.error.assert_any_call("Invalid file payload for audio response.")
+        logging_gateway.error.assert_any_call(
+            "Missing file payload for audio response."
+        )
+        logging_gateway.error.assert_any_call(
+            "Invalid file payload for audio response."
+        )
 
-    async def test_send_response_to_user_handles_validation_and_unknown_types(self) -> None:
+    async def test_send_response_to_user_handles_validation_and_unknown_types(
+        self,
+    ) -> None:
         client = _make_client()
         logging_gateway = Mock()
         ext = _new_extension(
@@ -607,7 +645,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 "15550090",
             )
 
-        logging_gateway.error.assert_any_call("Missing text content in response payload.")
+        logging_gateway.error.assert_any_call(
+            "Missing text content in response payload."
+        )
         logging_gateway.error.assert_any_call("Missing location payload in response.")
         logging_gateway.error.assert_any_call(
             "Missing interactive payload in response."
@@ -764,6 +804,138 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             message_type="status",
         )
         self.assertEqual((await payload["response_queue"].get())["response"], "OK")
+
+    async def test_duplicate_message_event_is_acknowledged_without_reprocessing(
+        self,
+    ) -> None:
+        messaging_service = _make_messaging_service()
+        logging_gateway = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            keyval_storage_gateway=_MemoryKeyVal(),
+            messaging_service=messaging_service,
+            user_service=_make_user_service(known_users={"15550044": "known"}),
+            logging_gateway=logging_gateway,
+        )
+        first_payload = _make_payload(
+            _make_message_event(
+                {
+                    "id": "wamid-dupe-1",
+                    "type": "text",
+                    "text": {"body": "hello"},
+                },
+                sender="15550044",
+            )
+        )
+        second_payload = _make_payload(
+            _make_message_event(
+                {
+                    "id": "wamid-dupe-1",
+                    "type": "text",
+                    "text": {"body": "hello"},
+                },
+                sender="15550044",
+            )
+        )
+
+        await ext._wacapi_event(first_payload)  # pylint: disable=protected-access
+        await ext._wacapi_event(second_payload)  # pylint: disable=protected-access
+
+        messaging_service.handle_text_message.assert_awaited_once_with(
+            "whatsapp",
+            room_id="15550044",
+            sender="15550044",
+            message="hello",
+        )
+        logging_gateway.debug.assert_any_call(
+            "Skip duplicate WhatsApp message event."
+        )
+        self.assertEqual(
+            (await first_payload["response_queue"].get())["response"], "OK"
+        )
+        self.assertEqual(
+            (await second_payload["response_queue"].get())["response"], "OK"
+        )
+
+    async def test_duplicate_status_event_is_acknowledged_without_rerouting(
+        self,
+    ) -> None:
+        logging_gateway = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            keyval_storage_gateway=_MemoryKeyVal(),
+            logging_gateway=logging_gateway,
+        )
+        first_payload = _make_payload(
+            _make_status_event({"id": "st-dupe", "status": "delivered"})
+        )
+        second_payload = _make_payload(
+            _make_status_event({"id": "st-dupe", "status": "delivered"})
+        )
+
+        with patch.object(
+            ext, "_call_message_handlers", new=AsyncMock()
+        ) as route_handlers:
+            await ext._wacapi_event(first_payload)  # pylint: disable=protected-access
+            await ext._wacapi_event(second_payload)  # pylint: disable=protected-access
+
+        route_handlers.assert_awaited_once_with(
+            message={"id": "st-dupe", "status": "delivered"},
+            message_type="status",
+        )
+        logging_gateway.debug.assert_any_call(
+            "Skip duplicate WhatsApp status event."
+        )
+        self.assertEqual(
+            (await first_payload["response_queue"].get())["response"], "OK"
+        )
+        self.assertEqual(
+            (await second_payload["response_queue"].get())["response"], "OK"
+        )
+
+    def test_seen_event_key_helpers_handle_invalid_payloads_and_trim(self) -> None:
+        keyval = _MemoryKeyVal()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            keyval_storage_gateway=keyval,
+        )
+        self.assertEqual(
+            ext._load_seen_event_keys(), []
+        )  # pylint: disable=protected-access
+
+        keyval.put(ext._seen_event_keys_key, "{")
+        self.assertEqual(
+            ext._load_seen_event_keys(), []
+        )  # pylint: disable=protected-access
+
+        keyval.put(ext._seen_event_keys_key, json.dumps({"not": "a-list"}))
+        self.assertEqual(
+            ext._load_seen_event_keys(), []
+        )  # pylint: disable=protected-access
+
+        ext._seen_event_keys_max = 2  # pylint: disable=protected-access
+        self.assertFalse(
+            ext._is_duplicate_event(
+                "message", {"id": "evt-1"}
+            )  # pylint: disable=protected-access
+        )
+        self.assertFalse(
+            ext._is_duplicate_event(
+                "message", {"id": "evt-2"}
+            )  # pylint: disable=protected-access
+        )
+        self.assertFalse(
+            ext._is_duplicate_event(
+                "message", {"id": "evt-3"}
+            )  # pylint: disable=protected-access
+        )
+        self.assertTrue(
+            ext._is_duplicate_event(
+                "message", {"id": "evt-3"}
+            )  # pylint: disable=protected-access
+        )
+        saved_keys = json.loads(keyval.get(ext._seen_event_keys_key))
+        self.assertEqual(len(saved_keys), 2)
 
     async def test_event_with_no_messages_or_statuses_still_acknowledges(self) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
