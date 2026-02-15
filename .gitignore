@@ -189,3 +189,4 @@ data/*.sqlite3
 data/.olmstore/@*
 
 _dev*
+.tmp/
