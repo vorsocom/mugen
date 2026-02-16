@@ -91,6 +91,11 @@ def _parse_args() -> argparse.Namespace:
         help="Quart secret_key value for CI.",
     )
     parser.add_argument(
+        "--web-media-storage-path",
+        default=".tmp/ci/web_media",
+        help="Path for web.media.storage.path when --enable-web-platform is set.",
+    )
+    parser.add_argument(
         "--enable-web-platform",
         action="store_true",
         help=(
@@ -150,6 +155,7 @@ def main() -> int:
     if args.enable_web_platform:
         _ensure_platform_enabled(doc, _WEB_PLATFORM)
         _enable_web_framework_plugin(doc)
+        doc["web"]["media"]["storage"]["path"] = args.web_media_storage_path
 
     output_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
     return 0
