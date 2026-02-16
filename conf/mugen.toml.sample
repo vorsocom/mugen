@@ -229,6 +229,12 @@ pem = "-----BEGIN PRIVATE KEY-----\\n<replace-with-private-key>\\n-----END PRIVA
 # === AWS Bedrock ===
 [aws.bedrock]
 api.access_key_id = "<aws-access-key-id>"
+# Set model IDs per operation.
+# In auto mode, the Bedrock gateway tries Converse first and falls back to
+# InvokeModel when Converse is unsupported for the selected model.
+# Built-in InvokeModel serializers currently cover:
+# anthropic.*, meta.*, amazon.titan-text*, amazon.nova*, ai21.j2*,
+# ai21.jamba*, cohere.*, mistral.*, deepseek.*, openai.*, writer.*
 api.classification.model = ""
 api.classification.max_tokens = 1024
 api.classification.temp = 0.0

@@ -7,7 +7,11 @@ import json
 from types import SimpleNamespace
 
 from mugen.core import di
-from mugen.core.contract.gateway.completion import ICompletionGateway
+from mugen.core.contract.gateway.completion import (
+    CompletionGatewayError,
+    CompletionRequest,
+    ICompletionGateway,
+)
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
@@ -184,9 +188,25 @@ class DefaultTextMHExtension(IMHExtension):
         # Get assistant response based on conversation history, system context,
         # and augmented data.
         self._logging_gateway.debug("Get completion.")
-        completion = await self._completion_gateway.get_completion(
-            context=completion_context,
+        completion_request = CompletionRequest.from_context(
+            completion_context,
+            operation="completion",
         )
+        completion = None
+        try:
+            completion = await self._completion_gateway.get_completion(
+                completion_request
+            )
+        except CompletionGatewayError as e:
+            self._logging_gateway.warning(
+                "DefaultTextMHExtension.handle_message: "
+                f"Completion gateway error ({e.provider}:{e.operation}): {e}"
+            )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "DefaultTextMHExtension.handle_message: "
+                f"Unexpected completion gateway failure: {e}"
+            )
 
         # If the completion attempt failed, set response to "Error" so that the user
         # will be aware of the failure.

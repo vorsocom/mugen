@@ -100,7 +100,7 @@ muGen requires a configuration file named `mugen.toml` for its settings. Create 
 ~$ cp conf/mugen.toml.sample mugen.toml
 ```
 
-The default configurations can be used initially. However, you must configure access credentials for your chosen completion API provider (e.g., AWS Bedrock, Groq). The default configuration also enables a Telnet client for basic communication with the system.
+The default configurations can be used initially. However, you must configure access credentials for your chosen completion API provider (AWS Bedrock, Groq, or SambaNova). See `docs/gateways.md` for provider-specific options, including Bedrock `Converse`/`InvokeModel` behavior. The default configuration also enables a Telnet client for basic communication with the system.
 
 ### Step 6: Create the Hypercorn Configuration File
 
