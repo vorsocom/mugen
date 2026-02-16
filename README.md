@@ -92,7 +92,7 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 # At minimum, configure the completion gateway by
 # setting mugen.modules.core.gateway.completion.
 # Gateways are currently provided for AWS Bedrock,
-# Groq, and SambaNova.
+# Groq, OpenAI, and SambaNova.
 # See docs/gateways.md for provider-specific
 # options and Bedrock model-family behavior.
 # For example, to use AWS Bedrock:

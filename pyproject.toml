@@ -33,6 +33,7 @@ psycopg = "^3.3.2"
 argon2-cffi = "^25.1.0"
 pydantic = {extras = ["email"], version = "^2.12.5"}
 cryptography = "^46.0.3"
+openai = "^1.98.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
