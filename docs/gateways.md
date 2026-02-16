@@ -157,6 +157,56 @@ Groq compatibility notes:
 - Non-stream and stream responses both preserve structured assistant payloads,
   tool calls, and usage metadata in normalized response fields.
 
+### OpenAI
+
+Module: `mugen.core.gateway.completion.openai`
+
+Supports normalized inference fields:
+
+- `max_completion_tokens` (preferred token-limit field)
+- `max_tokens` compatibility alias (used only when explicitly requested)
+- `temperature`
+- `top_p`
+- `stop`
+- `stream`
+- `stream_options`
+
+OpenAI-specific optional keys are forwarded from
+`CompletionRequest.vendor_params`:
+
+- `audio`
+- `frequency_penalty`
+- `function_call`
+- `functions`
+- `logit_bias`
+- `logprobs`
+- `metadata`
+- `modalities`
+- `n`
+- `parallel_tool_calls`
+- `presence_penalty`
+- `reasoning_effort`
+- `response_format`
+- `seed`
+- `service_tier`
+- `store`
+- `tool_choice`
+- `tools`
+- `top_logprobs`
+- `user`
+
+OpenAI compatibility notes:
+
+- muGen targets OpenAI public Chat Completions API semantics.
+- By default, muGen sends `max_completion_tokens`.
+- To force deprecated `max_tokens` serialization for compatibility, set
+  `vendor_params["use_legacy_max_tokens"] = true`.
+- API key resolution is config-only (`[openai] api.key`).
+- Optional endpoint and timeout settings are supported via
+  `[openai] api.base_url` and `[openai] api.timeout_seconds`.
+- Non-stream and stream responses preserve tool calls and usage metadata in
+  normalized response fields.
+
 ### SambaNova
 
 Module: `mugen.core.gateway.completion.sambanova`
