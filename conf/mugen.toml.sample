@@ -248,10 +248,14 @@ api.secret_access_key = "<aws-secret-access-key>"
 
 # === Groq ===
 [groq]
+# Operation defaults for Groq chat completions.
+# top_p defaults to 1.0 when omitted; kept explicit here for readability.
 api.classification.model = ""
 api.classification.temp = 0.0
+api.classification.top_p = 1.0
 api.completion.model = ""
 api.completion.temp = 0.0
+api.completion.top_p = 1.0
 api.key = "<groq-api-key>"
 
 # === Matrix ===
@@ -301,10 +305,27 @@ url = "postgresql+psycopg://user:password@server/database"
 
 # === SambaNova ===
 [sambanova]
+# Operation defaults for SambaNova chat completions.
+# auth_scheme: bearer (default) or basic (legacy environments).
+# token_limit_field: max_tokens (default) or max_completion_tokens.
+# max_completion_tokens/max_tokens: fallback token limits when request
+# inference does not set them; keep both values aligned for compatibility.
+# stop: default stop sequences used only when request inference.stop is unset.
+# Repeat these operation knobs for both classification and completion.
 api.classification.model = ""
+api.classification.auth_scheme = "bearer"
+api.classification.token_limit_field = "max_tokens"
+api.classification.max_completion_tokens = 1024
+api.classification.max_tokens = 1024
 api.classification.temp = 0.0
+api.classification.stop = []
 api.completion.model = ""
+api.completion.auth_scheme = "bearer"
+api.completion.token_limit_field = "max_tokens"
+api.completion.max_completion_tokens = 1024
+api.completion.max_tokens = 1024
 api.completion.temp = 0.0
+api.completion.stop = []
 api.endpoint = ""
 api.key = "<sambanova-api-key>"
 
