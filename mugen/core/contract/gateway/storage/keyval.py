@@ -13,8 +13,12 @@ class IKeyValStorageGateway(ABC):
         """Close the storage instance."""
 
     @abstractmethod
-    def get(self, key: str, decode: bool = True) -> str | None:
-        """Gets the value stored at key in the key-value."""
+    def get(self, key: str, decode: bool = True) -> str | bytes | None:
+        """Get value at key.
+
+        If ``decode`` is True and the value is bytes, implementation should attempt
+        UTF-8 decoding. If decoding fails, implementation may return None.
+        """
 
     @abstractmethod
     def has_key(self, key: str) -> bool:
@@ -29,5 +33,5 @@ class IKeyValStorageGateway(ABC):
         """Stores a value at the specified key in the key-value store."""
 
     @abstractmethod
-    def remove(self, key: str) -> str | None:
+    def remove(self, key: str) -> str | bytes | None:
         """Remove the specified key from the key-value store."""
