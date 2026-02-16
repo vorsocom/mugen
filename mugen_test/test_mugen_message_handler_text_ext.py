@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from mugen.core.contract.gateway.completion import CompletionGatewayError
 from mugen.core.plugin.message_handler.text.mh_ext import DefaultTextMHExtension
 
 
@@ -202,13 +203,11 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response[1], {"type": "text", "content": "RAG response"})
         ext._completion_gateway.get_completion.assert_awaited_once()
 
-        completion_context = ext._completion_gateway.get_completion.await_args.kwargs[
-            "context"
-        ]
-        self.assertEqual(completion_context[0]["role"], "system")
-        self.assertIn("[CONTEXT]", completion_context[-1]["content"])
-        self.assertIn("Attached context", completion_context[-1]["content"])
-        self.assertIn("RAG fact", completion_context[-1]["content"])
+        completion_request = ext._completion_gateway.get_completion.await_args.args[0]
+        self.assertEqual(completion_request.messages[0].role, "system")
+        self.assertIn("[CONTEXT]", completion_request.messages[-1].content)
+        self.assertIn("Attached context", completion_request.messages[-1].content)
+        self.assertIn("RAG fact", completion_request.messages[-1].content)
 
         persisted = json.loads(keyval.store["chat_history:room-2"])
         self.assertEqual(persisted["messages"][-1]["content"], "Error")
@@ -270,7 +269,9 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             {"role": "assistant", "content": "assistant answer"},
         )
 
-    async def test_handle_message_logs_ct_extension_errors_without_failing(self) -> None:
+    async def test_handle_message_logs_ct_extension_errors_without_failing(
+        self,
+    ) -> None:
         keyval = _MemoryKeyVal()
         failing_ct = _CtExt(supported=True)
         failing_ct.process_message = AsyncMock(side_effect=RuntimeError("boom"))
@@ -291,3 +292,37 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response, [{"type": "text", "content": "assistant answer"}])
         ext._logging_gateway.warning.assert_called_once()
+
+    async def test_handle_message_handles_completion_gateway_failures(self) -> None:
+        keyval = _MemoryKeyVal()
+        messaging_service = _make_messaging_service()
+        ext = self._new_ext(
+            completion_result=SimpleNamespace(content="unused"),
+            messaging_service=messaging_service,
+            keyval=keyval,
+            debug_conversation=False,
+        )
+
+        ext._completion_gateway.get_completion = AsyncMock(
+            side_effect=CompletionGatewayError(
+                provider="bedrock",
+                operation="completion",
+                message="failed",
+            )
+        )
+        response = await ext.handle_message(
+            platform="matrix",
+            room_id="room-5",
+            sender="user-5",
+            message="hello",
+        )
+        self.assertEqual(response, [{"type": "text", "content": "Error"}])
+
+        ext._completion_gateway.get_completion = AsyncMock(side_effect=RuntimeError("boom"))
+        response = await ext.handle_message(
+            platform="matrix",
+            room_id="room-6",
+            sender="user-6",
+            message="hello",
+        )
+        self.assertEqual(response, [{"type": "text", "content": "Error"}])
