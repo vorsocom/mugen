@@ -169,6 +169,8 @@ path = "mugen.core.plugin.web.fw_ext"
 enabled = false
 name = "com.vorsocomputing.mugen.web"
 namespace = "com.vorsocomputing.mugen.web"
+models = "mugen.core.plugin.web.model"
+contrib = "mugen.core.plugin.web.contrib"
 
 # Context.
 [[mugen.modules.core.plugins]]

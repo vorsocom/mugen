@@ -22,7 +22,9 @@ class TestMuGenDiRuntimeImportRegression(unittest.TestCase):
             "mugen.core.plugin.whatsapp.wacapi.ipc_ext",
             "mugen.core.plugin.web.api.decorator",
             "mugen.core.plugin.web.api.chat",
+            "mugen.core.plugin.web.contrib",
             "mugen.core.plugin.web.fw_ext",
+            "mugen.core.plugin.web.model",
         ]
         script = "\n".join(
             [
