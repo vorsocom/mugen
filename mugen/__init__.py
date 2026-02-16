@@ -34,6 +34,7 @@ from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
@@ -61,6 +62,10 @@ def _logger_provider():
 
 def _whatsapp_provider():
     return di.container.whatsapp_client
+
+
+def _keyval_storage_gateway_provider():
+    return di.container.keyval_storage_gateway
 
 
 def _ipc_provider():
@@ -226,40 +231,53 @@ async def run_platform_clients(
     config_provider=_config_provider,
     logger_provider=_logger_provider,
     whatsapp_provider=_whatsapp_provider,
+    keyval_storage_gateway_provider=_keyval_storage_gateway_provider,
 ) -> None:
     """Phase B bootstrap for long-running platform clients."""
     config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
     whatsapp_client: IWhatsAppClient = whatsapp_provider()
-
-    # Do platform checks.
-    tasks = []
+    keyval_storage_gateway: IKeyValStorageGateway = keyval_storage_gateway_provider()
 
     try:
-        if "matrix" in config.mugen.platforms:
-            logger.debug("Running matrix client.")
-            # Create task to run Matrix client.
-            tasks.append(asyncio.create_task(run_matrix_client()))
+        # Do platform checks.
+        tasks = []
 
-        if "telnet" in config.mugen.platforms:
-            logger.debug("Running telnet client.")
-            # Create task to run Telnet client.
-            tasks.append(asyncio.create_task(run_telnet_client()))
+        try:
+            if "matrix" in config.mugen.platforms:
+                logger.debug("Running matrix client.")
+                # Create task to run Matrix client.
+                tasks.append(asyncio.create_task(run_matrix_client()))
 
-        if "whatsapp" in config.mugen.platforms:
-            logger.debug("Running whatsapp client.")
-            # Create task to run WhatsApp client.
-            tasks.append(asyncio.create_task(run_whatsapp_client()))
-    except AttributeError as exc:
-        logger.error("Invalid platform configuration.")
-        raise BootstrapConfigError("Invalid platform configuration.") from exc
+            if "telnet" in config.mugen.platforms:
+                logger.debug("Running telnet client.")
+                # Create task to run Telnet client.
+                tasks.append(asyncio.create_task(run_telnet_client()))
 
-    try:
-        await asyncio.gather(*tasks)
-    except asyncio.exceptions.CancelledError:
-        if whatsapp_client is not None:
-            logger.debug("Closing whatsapp client.")
-            await whatsapp_client.close()
+            if "whatsapp" in config.mugen.platforms:
+                logger.debug("Running whatsapp client.")
+                # Create task to run WhatsApp client.
+                tasks.append(asyncio.create_task(run_whatsapp_client()))
+        except AttributeError as exc:
+            logger.error("Invalid platform configuration.")
+            raise BootstrapConfigError("Invalid platform configuration.") from exc
+
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.exceptions.CancelledError:
+            if whatsapp_client is not None:
+                logger.debug("Closing whatsapp client.")
+                try:
+                    await whatsapp_client.close()
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logger.warning(f"Failed to close whatsapp client ({exc}).")
+    finally:
+        if keyval_storage_gateway is not None:
+            logger.debug("Closing keyval storage gateway.")
+            try:
+                keyval_storage_gateway.close()
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning(f"Failed to close keyval storage gateway ({exc}).")
 
 
 async def register_extensions(  # pylint: disable=too-many-positional-arguments
