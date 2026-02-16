@@ -8,6 +8,7 @@ logger.level = 10
 logger.name = "COM.VORSOCOMPUTING.MUGEN"
 platforms = [
   "telnet",
+  # "web",
   # "matrix",
   # "whatsapp",
 ]
@@ -28,6 +29,7 @@ ct_trigger_prefilter_enabled = true
 client.telnet = "mugen.core.client.telnet"
 client.matrix = "mugen.core.client.matrix"
 client.whatsapp = "mugen.core.client.whatsapp"
+client.web = "mugen.core.client.web"
 
 gateway.completion = "mugen.core.gateway.completion.bedrock"
 # gateway.knowledge = "mugen.core.gateway.knowledge.qdrant"
@@ -159,6 +161,14 @@ name = "com.vorsocomputing.mugen.whatsapp.wacapi"
 namespace = "com.vorsocomputing.mugen.whatsapp.wacapi"
 models = "mugen.core.plugin.whatsapp.wacapi.model"
 contrib = "mugen.core.plugin.whatsapp.wacapi.contrib"
+
+# Optional Web REST/SSE framework plugin.
+[[mugen.modules.core.plugins]]
+type = "fw"
+path = "mugen.core.plugin.web.fw_ext"
+enabled = false
+name = "com.vorsocomputing.mugen.web"
+namespace = "com.vorsocomputing.mugen.web"
 
 # Context.
 [[mugen.modules.core.plugins]]
@@ -393,3 +403,21 @@ graphapi.max_download_bytes = 20971520
 servers.allowed = ""
 servers.verify_ip = false
 webhook.verification_token = "<whatsapp-webhook-verification-token>"
+
+# === Web ===
+[web]
+sse.keepalive_seconds = 15
+sse.replay_max_events = 200
+queue.poll_interval_seconds = 0.25
+queue.processing_lease_seconds = 30
+queue.max_pending_jobs = 2000
+media.storage.path = "/absolute/path/to/data/web_media"
+media.max_upload_bytes = 20971520
+media.allowed_mimetypes = [
+  "audio/*",
+  "video/*",
+  "image/*",
+  "application/*",
+]
+media.download_token_ttl_seconds = 900
+media.retention_seconds = 86400

@@ -34,10 +34,12 @@ A muGen application consists of five layers, ranging from high-level platform in
 
 ### Platforms
 
-The platform layer includes communication platforms through which users interact with your application. These platforms can range from instant messaging services like Matrix and WhatsApp (currently supported by muGen core) to custom web applications. As muGen evolves, support for additional platforms will be added. A single muGen instance can handle multiple platforms concurrently, allowing for flexible multi-channel deployment.
+The platform layer includes communication platforms through which users interact with your application. These platforms can range from instant messaging services like Matrix and WhatsApp to web clients over REST + SSE (currently supported by muGen core). As muGen evolves, support for additional platforms will be added. A single muGen instance can handle multiple platforms concurrently, allowing for flexible multi-channel deployment.
 
 For the current Matrix core boundary (supported scope, intentional exclusions,
 and next planned scope), see [`docs/matrix-support-contract.md`](docs/matrix-support-contract.md).
+For Web platform REST/SSE contract details, see
+[`docs/web-support-contract.md`](docs/web-support-contract.md).
 
 ### API
 
@@ -114,7 +116,7 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 
 Bootstrap lifecycle at startup:
 1. **Phase A (blocking):** load/register extensions, then register the API blueprint.
-2. **Phase B (background):** start long-running platform clients (Matrix/Telnet/WhatsApp).
+2. **Phase B (background):** start long-running platform clients (Matrix/Telnet/WhatsApp/Web).
 
 The server does not begin serving requests until Phase A completes successfully.
 

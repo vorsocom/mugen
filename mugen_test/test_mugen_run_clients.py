@@ -121,6 +121,36 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 "DEBUG:test_app:Running whatsapp client.",
             )
 
+    async def test_web_platform_enabled(self) -> None:
+        """Test running web platform."""
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                platforms=["web"],
+            )
+        )
+
+        _run_web_client = unittest.mock.AsyncMock()
+
+        with (
+            self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            unittest.mock.patch(
+                target="mugen.run_web_client",
+                new=_run_web_client,
+            ),
+        ):
+            await run_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                whatsapp_provider=lambda: None,
+                web_provider=lambda: None,
+            )
+            self.assertEqual(
+                logger.output[0],
+                "DEBUG:test_app:Running web client.",
+            )
+
     async def test_cancelled_error_exception_client_none(self) -> None:
         """Test throwing CancelledError exception when WhatsApp client is not set."""
         # Create dummy app to get context.
@@ -248,6 +278,32 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         whatsapp_client.close.assert_awaited_once()
         keyval_storage_gateway.close.assert_called_once_with()
 
+    async def test_run_platform_clients_closes_web_client_on_cancellation(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        keyval_storage_gateway = unittest.mock.Mock()
+        web_client = unittest.mock.Mock()
+        web_client.close = unittest.mock.AsyncMock()
+        _run_web_client = unittest.mock.AsyncMock(
+            side_effect=asyncio.exceptions.CancelledError
+        )
+
+        with unittest.mock.patch(
+            target="mugen.run_web_client",
+            new=_run_web_client,
+        ):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                whatsapp_provider=lambda: None,
+                web_provider=lambda: web_client,
+                keyval_storage_gateway_provider=lambda: keyval_storage_gateway,
+            )
+
+        web_client.close.assert_awaited_once()
+        keyval_storage_gateway.close.assert_called_once_with()
+
     async def test_run_platform_clients_warns_when_whatsapp_close_fails(self) -> None:
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["whatsapp"]))
@@ -311,6 +367,36 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 "Failed to close keyval storage gateway (kv boom)." in entry
                 for entry in logs.output
             )
+        )
+
+    async def test_run_platform_clients_warns_when_web_close_fails(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        keyval_storage_gateway = unittest.mock.Mock()
+        web_client = unittest.mock.Mock()
+        web_client.close = unittest.mock.AsyncMock(side_effect=RuntimeError("boom web"))
+        _run_web_client = unittest.mock.AsyncMock(
+            side_effect=asyncio.exceptions.CancelledError
+        )
+
+        with (
+            self.assertLogs(logger="test_app", level="WARNING") as logs,
+            unittest.mock.patch(
+                target="mugen.run_web_client",
+                new=_run_web_client,
+            ),
+        ):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                whatsapp_provider=lambda: None,
+                web_provider=lambda: web_client,
+                keyval_storage_gateway_provider=lambda: keyval_storage_gateway,
+            )
+
+        self.assertTrue(
+            any("Failed to close web client (boom web)." in entry for entry in logs.output)
         )
 
     async def test_run_platform_clients_handles_absent_keyval_gateway(self) -> None:

@@ -39,11 +39,13 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
             config="cfg",
             telnet_client="telnet-client",
             matrix_client="matrix-client",
+            web_client="web-client",
         )
         with patch.object(mugen_mod.di, "container", fake_container):
             self.assertEqual(mugen_mod._config_provider(), "cfg")  # pylint: disable=protected-access
             self.assertEqual(mugen_mod._telnet_provider(), "telnet-client")  # pylint: disable=protected-access
             self.assertEqual(mugen_mod._matrix_provider(), "matrix-client")  # pylint: disable=protected-access
+            self.assertEqual(mugen_mod._web_provider(), "web-client")  # pylint: disable=protected-access
 
     async def test_register_extensions_registers_cp_extension_when_supported(
         self,

@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telnet import ITelnetClient
+from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
@@ -93,6 +94,11 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def whatsapp_client(self) -> IWhatsAppClient:
         """Get the global WhatsApp client."""
+
+    @property
+    @abstractmethod
+    def web_client(self) -> IWebClient:
+        """Get the global Web client."""
 
     @abstractmethod
     def register_ext_service(

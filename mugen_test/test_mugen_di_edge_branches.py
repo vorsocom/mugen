@@ -66,7 +66,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         config = {
             "mugen": {
                 "modules": {"core": {"gateway": {"knowledge": "knowledge.module"}}},
-                "platforms": ["matrix", "telnet", "whatsapp"],
+                "platforms": ["matrix", "telnet", "whatsapp", "web"],
             }
         }
 
@@ -77,6 +77,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         injector.logging_gateway.error.assert_any_call("Missing provider (matrix_client).")
         injector.logging_gateway.error.assert_any_call("Missing provider (telnet_client).")
         injector.logging_gateway.error.assert_any_call("Missing provider (whatsapp_client).")
+        injector.logging_gateway.error.assert_any_call("Missing provider (web_client).")
 
     def test_validate_container_uses_root_logger_when_injector_logger_is_missing(
         self,
