@@ -46,7 +46,8 @@ jobs:
             --output mugen.toml \
             --keyval-db-path .tmp/ci/storage.db \
             --rdbms-url postgresql+psycopg://mugen:mugen@127.0.0.1:5432/mugen \
-            --aws-region us-east-1
+            --aws-region us-east-1 \
+            --enable-web-platform
           poetry run python -m alembic upgrade head
 
       - name: Run Pre-Push Quality Gates

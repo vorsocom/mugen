@@ -24,6 +24,7 @@ To run the whole template suite with automatic unique placeholder injection:
 - `channel_orchestration`:
   - `channel_orchestration/channel-orchestration-e2e-conversation.template.json`
   - `channel_orchestration/channel-orchestration-e2e-blocklist.template.json`
+- `web`: `web/web-e2e-rest-sse-core.template.json`
 
 ## Usage Notes
 
@@ -48,3 +49,19 @@ To run the whole template suite with automatic unique placeholder injection:
   - `__BLOCK_SENDER_KEY__`
   - `__CODE__`
   - `__SNAP_NOTE__`
+  - `__WEB_CONVERSATION_ID__`
+  - `__WEB_TEXT__`
+
+## Web E2E Behavior
+
+- Web specs are executed by:
+  - `bash mugen_test/assets/e2e_specs/web/run_web_http_e2e.sh --spec <path>`
+- Web runner strict mode:
+  - enabled automatically when `CI=true`
+  - can be enabled manually with `WEB_E2E_STRICT=1`
+- Web runner exit codes:
+  - `0`: pass
+  - `1`: fail
+  - `2`: skipped (web unavailable in non-strict mode)
+- `run_all_e2e_templates.sh` summary reports `passed`, `failed`, and `skipped`.
+- Only `failed` specs fail the overall orchestrator exit status.
