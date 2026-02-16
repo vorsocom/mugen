@@ -260,16 +260,23 @@ api.key = "<groq-api-key>"
 
 # === OpenAI ===
 [openai]
-# Operation defaults for OpenAI Chat Completions.
+# Operation defaults for OpenAI gateway.
+# surface selects OpenAI API surface per operation:
+# - "chat_completions" (default)
+# - "responses"
+# Per-request override remains available through
+# CompletionRequest.vendor_params["openai_api"].
 # max_completion_tokens is preferred. max_tokens remains as compatibility alias.
 # stream behavior and provider-specific extras can be overridden per request
 # through CompletionRequest vendor_params.
 api.classification.model = ""
+api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
 api.classification.max_completion_tokens = 1024
 api.classification.max_tokens = 1024
 api.completion.model = ""
+api.completion.surface = "chat_completions"
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
 api.completion.max_completion_tokens = 1024
