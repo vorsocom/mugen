@@ -12,6 +12,10 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from werkzeug.security import generate_password_hash
 
 
+_WEB_PLATFORM = "web"
+_WEB_FRAMEWORK_PLUGIN_PATH = "mugen.core.plugin.web.fw_ext"
+
+
 def _generate_ed25519_private_pem() -> str:
     private_key = ed25519.Ed25519PrivateKey.generate()
     pem = private_key.private_bytes(
@@ -86,7 +90,37 @@ def _parse_args() -> argparse.Namespace:
         default="ci-quart-secret-key",
         help="Quart secret_key value for CI.",
     )
+    parser.add_argument(
+        "--web-media-storage-path",
+        default=".tmp/ci/web_media",
+        help="Path for web.media.storage.path when --enable-web-platform is set.",
+    )
+    parser.add_argument(
+        "--enable-web-platform",
+        action="store_true",
+        help=(
+            "Enable web platform in generated config and set the web framework "
+            "plugin enabled=true."
+        ),
+    )
     return parser.parse_args()
+
+
+def _ensure_platform_enabled(doc: tomlkit.TOMLDocument, platform: str) -> None:
+    platforms = doc["mugen"]["platforms"]
+    if platform not in [str(item) for item in platforms]:
+        platforms.append(platform)
+
+
+def _enable_web_framework_plugin(doc: tomlkit.TOMLDocument) -> None:
+    plugins = doc["mugen"]["modules"]["core"]["plugins"]
+    for plugin in plugins:
+        if (
+            str(plugin.get("type", "")).strip().lower() == "fw"
+            and str(plugin.get("path", "")).strip() == _WEB_FRAMEWORK_PLUGIN_PATH
+        ):
+            plugin["enabled"] = True
+            return
 
 
 def main() -> int:
@@ -117,6 +151,11 @@ def main() -> int:
     key_entry["kid"] = args.jwt_kid
     key_entry["alg"] = "EdDSA"
     key_entry["pem"] = _generate_ed25519_private_pem()
+
+    if args.enable_web_platform:
+        _ensure_platform_enabled(doc, _WEB_PLATFORM)
+        _enable_web_framework_plugin(doc)
+        doc["web"]["media"]["storage"]["path"] = args.web_media_storage_path
 
     output_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
     return 0

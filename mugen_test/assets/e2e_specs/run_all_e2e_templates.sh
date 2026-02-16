@@ -61,7 +61,8 @@ escape_sed_replacement() {
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-RUNNER="$REPO_ROOT/.codex/skills/acp-http-e2e-tester/scripts/run_acp_http_e2e.sh"
+ACP_RUNNER="$REPO_ROOT/.codex/skills/acp-http-e2e-tester/scripts/run_acp_http_e2e.sh"
+WEB_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/web/run_web_http_e2e.sh"
 
 PRINT_CONFIG=0
 ONLY_FILTER=""
@@ -97,8 +98,13 @@ require_cmd bash
 require_cmd sed
 require_cmd mktemp
 
-if [[ ! -x "$RUNNER" ]]; then
-  echo "ERROR: runner not found or not executable: $RUNNER" >&2
+if [[ ! -x "$ACP_RUNNER" ]]; then
+  echo "ERROR: runner not found or not executable: $ACP_RUNNER" >&2
+  exit 1
+fi
+
+if [[ ! -x "$WEB_RUNNER" ]]; then
+  echo "ERROR: runner not found or not executable: $WEB_RUNNER" >&2
   exit 1
 fi
 
@@ -123,6 +129,7 @@ declare -a SPECS=(
   "mugen_test/assets/e2e_specs/ops_reporting/ops-reporting-e2e-snapshot.template.json"
   "mugen_test/assets/e2e_specs/channel_orchestration/channel-orchestration-e2e-conversation.template.json"
   "mugen_test/assets/e2e_specs/channel_orchestration/channel-orchestration-e2e-blocklist.template.json"
+  "mugen_test/assets/e2e_specs/web/web-e2e-rest-sse-core.template.json"
 )
 
 render_spec() {
@@ -136,7 +143,7 @@ render_spec() {
 
   local case_title tracked_ref wf_key meter_code vendor_code
   local pack_key policy_code sender_key block_sender_key reporting_code snap_note
-  local billing_account_code billing_product_code
+  local billing_account_code billing_product_code web_conversation_id web_text
 
   case_title="E2E OpsCase ${run_id}"
   tracked_ref="OPS-SLA-${run_id}"
@@ -151,6 +158,8 @@ render_spec() {
   block_sender_key="E2E-CHORCH-BLOCK-${run_id}"
   reporting_code="ops_reporting_e2e_${run_id_flat}"
   snap_note="Ops reporting snapshot lifecycle e2e ${run_id}"
+  web_conversation_id="web_conv_${run_id_flat}"
+  web_text="Web e2e message ${run_id}"
 
   sed \
     -e "s|__HYPERCORN_CMD__|${hypercorn_cmd_escaped}|g" \
@@ -167,6 +176,8 @@ render_spec() {
     -e "s|__BLOCK_SENDER_KEY__|${block_sender_key}|g" \
     -e "s|__CODE__|${reporting_code}|g" \
     -e "s|__SNAP_NOTE__|${snap_note}|g" \
+    -e "s|__WEB_CONVERSATION_ID__|${web_conversation_id}|g" \
+    -e "s|__WEB_TEXT__|${web_text}|g" \
     "$template" > "$output"
 }
 
@@ -177,6 +188,7 @@ fi
 
 pass_count=0
 fail_count=0
+skip_count=0
 index=1
 
 for spec_rel in "${SPECS[@]}"; do
@@ -202,13 +214,24 @@ for spec_rel in "${SPECS[@]}"; do
   echo "=== RUNNING: $spec_rel ==="
   echo "rendered: $rendered_spec"
 
-  if bash "$RUNNER" --spec "$rendered_spec" "${RUNNER_ARGS[@]}"; then
+  runner="$ACP_RUNNER"
+  if [[ "$spec_rel" == *"/web/"* ]]; then
+    runner="$WEB_RUNNER"
+  fi
+
+  if bash "$runner" --spec "$rendered_spec" "${RUNNER_ARGS[@]}"; then
     ((pass_count += 1))
   else
-    ((fail_count += 1))
-    if [[ "$CONTINUE_ON_ERROR" -ne 1 ]]; then
-      rm -f "$rendered_spec"
-      break
+    run_exit_code="$?"
+    if [[ "$run_exit_code" -eq 2 ]]; then
+      ((skip_count += 1))
+      echo "SKIPPED: $spec_rel"
+    else
+      ((fail_count += 1))
+      if [[ "$CONTINUE_ON_ERROR" -ne 1 ]]; then
+        rm -f "$rendered_spec"
+        break
+      fi
     fi
   fi
 
@@ -217,7 +240,7 @@ for spec_rel in "${SPECS[@]}"; do
 done
 
 echo
-echo "SUMMARY: passed=$pass_count failed=$fail_count"
+echo "SUMMARY: passed=$pass_count failed=$fail_count skipped=$skip_count"
 if [[ "$fail_count" -gt 0 ]]; then
   exit 1
 fi
