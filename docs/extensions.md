@@ -95,6 +95,7 @@ The following is a listing of available clients, gateways, and services.
 * Clients:
     * [Matrix](/mugen/core/contract/client/matrix.py) (di.container.matrix_client)
     * [Telnet](/mugen/core/contract/client/telnet.py) (di.container.telnet_client)
+    * [Web](/mugen/core/contract/client/web.py) (di.container.web_client)
     * [WhatsApp](/mugen/core/contract/client/whatsapp.py) (di.container.whatsapp_client)
 * Gateways:
     * [Completion](/mugen/core/contract/gateway/completion.py) (di.container.completion_gateway)

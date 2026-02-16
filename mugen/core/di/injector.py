@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telnet import ITelnetClient
+from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.di.injector import IDependencyInjector
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -45,6 +46,7 @@ class DependencyInjector(IDependencyInjector):
         matrix_client: IMatrixClient = None,
         telnet_client: ITelnetClient = None,
         whatsapp_client: IWhatsAppClient = None,
+        web_client: IWebClient = None,
     ):
         self.__config = config
         self.__logging_gateway = logging_gateway
@@ -60,6 +62,7 @@ class DependencyInjector(IDependencyInjector):
         self.__matrix_client = matrix_client
         self.__telnet_client = telnet_client
         self.__whatsapp_client = whatsapp_client
+        self.__web_client = web_client
 
         self.__ext_services: dict[str, Any] = {}
 
@@ -174,6 +177,14 @@ class DependencyInjector(IDependencyInjector):
     @whatsapp_client.setter
     def whatsapp_client(self, value: IWhatsAppClient) -> None:
         self.__whatsapp_client = value
+
+    @property
+    def web_client(self) -> IWebClient:
+        return self.__web_client
+
+    @web_client.setter
+    def web_client(self, value: IWebClient) -> None:
+        self.__web_client = value
 
     @staticmethod
     def _normalise_ext_service_name(name: str) -> str:

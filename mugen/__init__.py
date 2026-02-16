@@ -8,6 +8,7 @@ __all__ = [
     "create_quart_app",
     "run_clients",
     "run_platform_clients",
+    "run_web_client",
 ]
 
 import asyncio
@@ -24,6 +25,7 @@ from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telnet import ITelnetClient
+from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
@@ -86,6 +88,10 @@ def _telnet_provider():
 
 def _matrix_provider():
     return di.container.matrix_client
+
+
+def _web_provider():
+    return di.container.web_client
 
 
 def _extension_enabled(ext: SimpleNamespace) -> bool:
@@ -201,6 +207,7 @@ async def run_clients(
     config_provider=_config_provider,
     logger_provider=_logger_provider,
     whatsapp_provider=_whatsapp_provider,
+    web_provider=_web_provider,
 ) -> None:
     """Entrypoint for assistants."""
     await bootstrap_app(app, config_provider=config_provider)
@@ -209,6 +216,7 @@ async def run_clients(
         config_provider=config_provider,
         logger_provider=logger_provider,
         whatsapp_provider=whatsapp_provider,
+        web_provider=web_provider,
     )
 
 
@@ -231,12 +239,14 @@ async def run_platform_clients(
     config_provider=_config_provider,
     logger_provider=_logger_provider,
     whatsapp_provider=_whatsapp_provider,
+    web_provider=_web_provider,
     keyval_storage_gateway_provider=_keyval_storage_gateway_provider,
 ) -> None:
     """Phase B bootstrap for long-running platform clients."""
     config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
-    whatsapp_client: IWhatsAppClient = whatsapp_provider()
+    whatsapp_client: IWhatsAppClient | None = None
+    web_client: IWebClient | None = None
     keyval_storage_gateway: IKeyValStorageGateway = keyval_storage_gateway_provider()
 
     try:
@@ -256,8 +266,15 @@ async def run_platform_clients(
 
             if "whatsapp" in config.mugen.platforms:
                 logger.debug("Running whatsapp client.")
+                whatsapp_client = whatsapp_provider()
                 # Create task to run WhatsApp client.
                 tasks.append(asyncio.create_task(run_whatsapp_client()))
+
+            if "web" in config.mugen.platforms:
+                logger.debug("Running web client.")
+                web_client = web_provider()
+                # Create task to run Web client.
+                tasks.append(asyncio.create_task(run_web_client()))
         except AttributeError as exc:
             logger.error("Invalid platform configuration.")
             raise BootstrapConfigError("Invalid platform configuration.") from exc
@@ -271,6 +288,12 @@ async def run_platform_clients(
                     await whatsapp_client.close()
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning(f"Failed to close whatsapp client ({exc}).")
+            if web_client is not None:
+                logger.debug("Closing web client.")
+                try:
+                    await web_client.close()
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logger.warning(f"Failed to close web client ({exc}).")
     finally:
         if keyval_storage_gateway is not None:
             logger.debug("Closing keyval storage gateway.")
@@ -621,3 +644,15 @@ async def run_whatsapp_client(
 
     await asyncio.gather(asyncio.create_task(whatsapp_client.init()))
     logger.debug("WhatsApp client started.")
+
+
+async def run_web_client(
+    logger_provider=_logger_provider,
+    web_provider=_web_provider,
+) -> None:
+    """Run assistant for the web platform."""
+    logger: ILoggingGateway = logger_provider()
+    web_client: IWebClient = web_provider()
+
+    await asyncio.gather(asyncio.create_task(web_client.init()))
+    logger.debug("Web client started.")

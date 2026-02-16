@@ -6,6 +6,7 @@ import unittest
 from mugen.core import di
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telnet import ITelnetClient
+from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
@@ -39,6 +40,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.matrix_client)
         self.assertIsNone(injector.telnet_client)
         self.assertIsNone(injector.whatsapp_client)
+        self.assertIsNone(injector.web_client)
 
     def test_with_init_parameters(self):
         """Test instantiation with all parameters."""
@@ -531,6 +533,68 @@ class TestDependencyInjector(unittest.TestCase):
             user_service=user_service,
         )
 
+        # Web Client
+        class DummyWebClientClass(IWebClient):
+            """Dummy Web client class."""
+
+            def __init__(  # pylint: disable=too-many-arguments
+                self,
+                config,
+                ipc_service,
+                keyval_storage_gateway,
+                logging_gateway,
+                messaging_service,
+                user_service,
+            ):
+                pass
+
+            async def init(self):
+                pass
+
+            async def close(self):
+                pass
+
+            async def enqueue_message(  # pylint: disable=too-many-arguments
+                self,
+                *,
+                auth_user: str,
+                conversation_id: str,
+                message_type: str,
+                text: str | None = None,
+                metadata: dict | None = None,
+                file_path: str | None = None,
+                mime_type: str | None = None,
+                original_filename: str | None = None,
+                client_message_id: str | None = None,
+            ) -> dict:
+                pass
+
+            async def stream_events(
+                self,
+                *,
+                auth_user: str,
+                conversation_id: str,
+                last_event_id: str | None = None,
+            ):
+                pass
+
+            async def resolve_media_download(
+                self,
+                *,
+                auth_user: str,
+                token: str,
+            ) -> dict | None:
+                pass
+
+        web_client = DummyWebClientClass(
+            config=config,
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+
         ## Create injector.
         injector = di.injector.DependencyInjector(
             config=config,
@@ -546,6 +610,7 @@ class TestDependencyInjector(unittest.TestCase):
             matrix_client=matrix_client,
             telnet_client=telnet_client,
             whatsapp_client=whatsapp_client,
+            web_client=web_client,
         )
 
         ## Assertions.
@@ -562,6 +627,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.matrix_client, matrix_client)
         self.assertEqual(injector.telnet_client, telnet_client)
         self.assertEqual(injector.whatsapp_client, whatsapp_client)
+        self.assertEqual(injector.web_client, web_client)
 
     def test_register_get_ext_service_round_trip(self):
         """Test extension service registration and retrieval."""

@@ -20,6 +20,7 @@ import tomlkit
 
 from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
@@ -171,6 +172,8 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         missing.append("telnet_client")
     if "whatsapp" in active_platforms and injector.whatsapp_client is None:
         missing.append("whatsapp_client")
+    if "web" in active_platforms and injector.web_client is None:
+        missing.append("web_client")
 
     if missing:
         logger = injector.logging_gateway
@@ -389,6 +392,23 @@ _PROVIDER_SPECS = {
         required_platform="whatsapp",
         inactive_platform_warning="WhatsApp platform not active. Client not loaded.",
     ),
+    "web_client": _ProviderSpec(
+        provider_name="web_client",
+        injector_attr="web_client",
+        interface=IWebClient,
+        module_path=("mugen", "modules", "core", "client", "web"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("ipc_service", "ipc_service"),
+            ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("logging_gateway", "logging_gateway"),
+            ("messaging_service", "messaging_service"),
+            ("user_service", "user_service"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required_platform="web",
+        inactive_platform_warning="Web platform not active. Client not loaded.",
+    ),
 }
 
 _PROVIDER_BUILD_ORDER = (
@@ -404,6 +424,7 @@ _PROVIDER_BUILD_ORDER = (
     "matrix_client",
     "telnet_client",
     "whatsapp_client",
+    "web_client",
 )
 
 

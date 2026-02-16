@@ -20,6 +20,9 @@ class TestMuGenDiRuntimeImportRegression(unittest.TestCase):
             "mugen.core.plugin.whatsapp.wacapi.api.webhook",
             "mugen.core.plugin.whatsapp.wacapi.fw_ext",
             "mugen.core.plugin.whatsapp.wacapi.ipc_ext",
+            "mugen.core.plugin.web.api.decorator",
+            "mugen.core.plugin.web.api.chat",
+            "mugen.core.plugin.web.fw_ext",
         ]
         script = "\n".join(
             [
