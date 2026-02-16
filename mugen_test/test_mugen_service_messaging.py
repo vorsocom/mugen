@@ -85,7 +85,7 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             room_id="!room",
             sender="@alice",
             message="hello",
-            message_context=["ctx"],
+            message_context=[{"type": "ctx", "content": "ctx"}],
         )
 
         self.assertEqual(

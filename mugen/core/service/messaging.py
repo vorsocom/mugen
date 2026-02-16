@@ -197,7 +197,7 @@ class DefaultMessagingService(IMessagingService):
         room_id: str,
         sender: str,
         message: str,
-        message_context: list[str] = None,
+        message_context: list[dict] | None = None,
     ) -> list[dict] | None:
         # Call message handlers.
         handler_responses: list[dict] = []

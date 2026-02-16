@@ -1411,6 +1411,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 self,
                 room_id: str,
                 user_id: str,
+                assistant_response: str,
             ) -> str:
                 """Preprocess the assistant response."""
 
@@ -1471,6 +1472,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 self,
                 room_id: str,
                 user_id: str,
+                assistant_response: str,
             ) -> str:
                 """Preprocess the assistant response."""
 
