@@ -161,18 +161,25 @@ Groq compatibility notes:
 
 Module: `mugen.core.gateway.completion.openai`
 
+OpenAI surface routing:
+
+- Operation default:
+  - `[openai] api.<operation>.surface = "chat_completions" | "responses"`
+- Per-request override:
+  - `CompletionRequest.vendor_params["openai_api"]`
+  - allowed values: `chat_completions`, `responses`
+
 Supports normalized inference fields:
 
-- `max_completion_tokens` (preferred token-limit field)
-- `max_tokens` compatibility alias (used only when explicitly requested)
+- `max_completion_tokens` (preferred request field)
+- `max_tokens` compatibility alias
 - `temperature`
 - `top_p`
-- `stop`
+- `stop` (chat mode only)
 - `stream`
 - `stream_options`
 
-OpenAI-specific optional keys are forwarded from
-`CompletionRequest.vendor_params`:
+Chat Completions passthrough keys from `CompletionRequest.vendor_params`:
 
 - `audio`
 - `frequency_penalty`
@@ -195,17 +202,48 @@ OpenAI-specific optional keys are forwarded from
 - `top_logprobs`
 - `user`
 
+Responses passthrough keys from `CompletionRequest.vendor_params`:
+
+- `include`
+- `max_tool_calls`
+- `previous_response_id`
+- `prompt`
+- `prompt_cache_key`
+- `reasoning`
+- `safety_identifier`
+- `text`
+- `truncation`
+- `conversation`
+- `metadata`
+- `parallel_tool_calls`
+- `service_tier`
+- `store`
+- `temperature`
+- `top_p`
+- `tool_choice`
+- `tools`
+- `top_logprobs`
+- `user`
+
 OpenAI compatibility notes:
 
-- muGen targets OpenAI public Chat Completions API semantics.
-- By default, muGen sends `max_completion_tokens`.
+- muGen targets OpenAI public API semantics (`api.openai.com`) for:
+  - Chat Completions
+  - Responses
+- Default surface remains `chat_completions`.
+- In Responses mode, system-role messages are joined into `instructions`; other
+  messages are sent as `input`.
+- In Responses mode, token limit is sent as `max_output_tokens`.
+- In Chat Completions mode, token limit defaults to `max_completion_tokens`.
 - To force deprecated `max_tokens` serialization for compatibility, set
-  `vendor_params["use_legacy_max_tokens"] = true`.
+  `vendor_params["use_legacy_max_tokens"] = true` (chat mode only).
+- Responses-mode validation/API failures are fail-fast; there is no implicit
+  fallback to Chat Completions.
 - API key resolution is config-only (`[openai] api.key`).
 - Optional endpoint and timeout settings are supported via
   `[openai] api.base_url` and `[openai] api.timeout_seconds`.
-- Non-stream and stream responses preserve tool calls and usage metadata in
-  normalized response fields.
+- Non-stream and stream responses preserve tool calls, usage metadata, and
+  structured output blocks in normalized response fields.
 
 ### SambaNova
 
