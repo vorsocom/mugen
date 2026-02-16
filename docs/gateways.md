@@ -161,17 +161,48 @@ Groq compatibility notes:
 
 Module: `mugen.core.gateway.completion.sambanova`
 
-Supports normalized inference fields plus optional vendor params:
+Supports normalized inference fields:
 
+- `max_completion_tokens` / `max_tokens` via `effective_max_tokens`
+- `temperature`
+- `top_p`
+- `stop`
 - `stream`
-- `include_usage`
+- `stream_options`
+
+SambaNova-specific optional keys are forwarded from
+`CompletionRequest.vendor_params`:
+
+- `chat_template_kwargs`
+- `do_sample`
 - `frequency_penalty`
+- `logprobs`
+- `n`
+- `parallel_tool_calls`
 - `presence_penalty`
+- `reasoning_effort`
 - `response_format`
 - `seed`
 - `tool_choice`
 - `tools`
+- `top_k`
+- `top_logprobs`
 - `user`
+
+SambaNova compatibility notes:
+
+- Authorization defaults to `Bearer` token.
+- For legacy environments that still require `Basic`, set
+  `vendor_params["sambanova_auth_scheme"] = "basic"` (or set
+  `auth_scheme = "basic"` in operation config).
+- Token-limit field defaults to `max_tokens`.
+- To emit `max_completion_tokens`, set
+  `vendor_params["sambanova_token_limit_field"] = "max_completion_tokens"`.
+- To emit both fields in the same request, set
+  `vendor_params["sambanova_emit_legacy_max_tokens"] = true`.
+- Streaming uses contract fields first (`inference.stream`,
+  `inference.stream_options`) and keeps legacy `vendor_params["stream"]` and
+  `vendor_params["include_usage"]` as compatibility fallbacks.
 
 ## Configuration Example
 
