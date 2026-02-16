@@ -26,6 +26,23 @@ class SambaNovaCompletionGateway(ICompletionGateway):
     """A SambaNova chat completion gateway."""
 
     _provider = "sambanova"
+    _vendor_passthrough_keys = (
+        "chat_template_kwargs",
+        "do_sample",
+        "frequency_penalty",
+        "logprobs",
+        "n",
+        "parallel_tool_calls",
+        "presence_penalty",
+        "reasoning_effort",
+        "response_format",
+        "seed",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "user",
+    )
 
     def __init__(
         self,
@@ -49,16 +66,30 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         if temperature is None:
             temperature = float(operation_config.get("temp", 0.0))
         top_p = completion_request.inference.top_p
-        max_tokens = completion_request.inference.max_tokens
-        stop = completion_request.inference.stop or ["<|eot_id|>"]
-
-        stream = bool(completion_request.vendor_params.get("stream", False))
-        include_usage = bool(
-            completion_request.vendor_params.get("include_usage", False)
+        max_tokens = completion_request.inference.effective_max_tokens
+        if max_tokens is None and "max_completion_tokens" in operation_config:
+            max_tokens = int(operation_config["max_completion_tokens"])
+        if max_tokens is None and "max_tokens" in operation_config:
+            max_tokens = int(operation_config["max_tokens"])
+        stop = self._resolve_stop_sequences(
+            completion_request,
+            operation_config=operation_config,
+        )
+        token_limit_field = self._resolve_token_limit_field(
+            completion_request,
+            operation_config=operation_config,
         )
 
+        stream = bool(completion_request.inference.stream)
+        if "stream" in completion_request.vendor_params:
+            stream = bool(completion_request.vendor_params["stream"])
+        stream_options = self._resolve_stream_options(completion_request)
+
         headers: list[str] = [
-            f"Authorization: Basic {self._config.sambanova.api.key}",
+            self._build_authorization_header(
+                completion_request,
+                operation_config=operation_config,
+            ),
             "Content-Type: application/json",
         ]
         data: dict[str, Any] = {
@@ -66,24 +97,22 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             "model": model,
             "stream": stream,
             "temperature": temperature,
-            "stop": stop,
         }
+        if stop:
+            data["stop"] = stop
         if top_p is not None:
             data["top_p"] = top_p
         if max_tokens is not None:
-            data["max_tokens"] = max_tokens
+            data[token_limit_field] = max_tokens
+            if (
+                token_limit_field == "max_completion_tokens"
+                and bool(completion_request.vendor_params.get("sambanova_emit_legacy_max_tokens"))
+            ):
+                data["max_tokens"] = max_tokens
         if stream:
-            data["stream_options"] = {"include_usage": include_usage}
+            data["stream_options"] = stream_options
 
-        for key in [
-            "frequency_penalty",
-            "presence_penalty",
-            "response_format",
-            "seed",
-            "tool_choice",
-            "tools",
-            "user",
-        ]:
+        for key in self._vendor_passthrough_keys:
             if key in completion_request.vendor_params:
                 data[key] = completion_request.vendor_params[key]
 
@@ -166,6 +195,94 @@ class SambaNovaCompletionGateway(ICompletionGateway):
 
         return cfg
 
+    def _build_authorization_header(
+        self,
+        request: CompletionRequest,
+        *,
+        operation_config: dict[str, Any],
+    ) -> str:
+        scheme = self._resolve_auth_scheme(request, operation_config=operation_config)
+        if scheme == "basic":
+            return f"Authorization: Basic {self._config.sambanova.api.key}"
+        return f"Authorization: Bearer {self._config.sambanova.api.key}"
+
+    @staticmethod
+    def _resolve_auth_scheme(
+        request: CompletionRequest,
+        *,
+        operation_config: dict[str, Any],
+    ) -> str:
+        raw_scheme = request.vendor_params.get(
+            "sambanova_auth_scheme",
+            operation_config.get("auth_scheme", "bearer"),
+        )
+        if not isinstance(raw_scheme, str):
+            return "bearer"
+
+        normalized = raw_scheme.strip().lower().replace("-", "_")
+        if normalized in {"basic", "legacy_basic"}:
+            return "basic"
+        return "bearer"
+
+    @staticmethod
+    def _resolve_token_limit_field(
+        request: CompletionRequest,
+        *,
+        operation_config: dict[str, Any],
+    ) -> str:
+        raw_field = request.vendor_params.get(
+            "sambanova_token_limit_field",
+            operation_config.get("token_limit_field", "max_tokens"),
+        )
+        if not isinstance(raw_field, str):
+            return "max_tokens"
+
+        normalized = raw_field.strip().lower()
+        if normalized == "max_completion_tokens":
+            return "max_completion_tokens"
+        return "max_tokens"
+
+    @staticmethod
+    def _resolve_stream_options(request: CompletionRequest) -> dict[str, Any]:
+        stream_options = request.inference.stream_options
+        resolved: dict[str, Any] = {}
+        if isinstance(stream_options, dict) and stream_options:
+            resolved = dict(stream_options)
+
+        vendor_stream_options = request.vendor_params.get("stream_options")
+        if isinstance(vendor_stream_options, dict) and vendor_stream_options:
+            resolved = dict(vendor_stream_options)
+
+        if "include_usage" in request.vendor_params:
+            resolved.setdefault(
+                "include_usage",
+                bool(request.vendor_params["include_usage"]),
+            )
+
+        if not resolved:
+            resolved = {"include_usage": False}
+
+        return resolved
+
+    @staticmethod
+    def _resolve_stop_sequences(
+        request: CompletionRequest,
+        *,
+        operation_config: dict[str, Any],
+    ) -> list[str]:
+        if request.inference.stop:
+            return request.inference.stop
+
+        configured_stop = operation_config.get("stop")
+        if isinstance(configured_stop, str) and configured_stop:
+            return [configured_stop]
+        if isinstance(configured_stop, list):
+            return [
+                item for item in configured_stop if isinstance(item, str) and item
+            ]
+
+        return []
+
     def _perform_request(
         self,
         *,
@@ -215,14 +332,22 @@ class SambaNovaCompletionGateway(ICompletionGateway):
     ) -> CompletionResponse:
         choices = payload["choices"]
         message = choices[0]["message"]
-        content = message.get("content", "")
+        content = self._normalize_content(message.get("content"))
+        if isinstance(content, str):
+            content = content.strip()
+        if content is None:
+            content = ""
         stop_reason = choices[0].get("finish_reason")
         usage = self._usage_from_payload(payload.get("usage"))
+        message_payload = self._normalize_dict(message)
+        tool_calls = self._normalize_list_of_dicts(message_payload.get("tool_calls"))
 
         return CompletionResponse(
-            content=content.strip() if isinstance(content, str) else "",
+            content=content,
             model=model,
             stop_reason=stop_reason,
+            message=message_payload,
+            tool_calls=tool_calls,
             usage=usage,
             raw=payload,
         )
@@ -235,6 +360,8 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         payload: str,
     ) -> CompletionResponse:
         content_parts: list[str] = []
+        rich_content_parts: list[dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = []
         stop_reason = None
         usage = None
 
@@ -254,6 +381,20 @@ class SambaNovaCompletionGateway(ICompletionGateway):
                 delta_content = delta.get("content")
                 if isinstance(delta_content, str):
                     content_parts.append(delta_content)
+                elif delta_content is not None:
+                    normalized_content = self._normalize_content(delta_content)
+                    if isinstance(normalized_content, dict):
+                        rich_content_parts.append(normalized_content)
+                    elif isinstance(normalized_content, list):
+                        rich_content_parts.extend(normalized_content)
+
+                delta_tool_calls = delta.get("tool_calls")
+                if isinstance(delta_tool_calls, list):
+                    for delta_tool_call in delta_tool_calls:
+                        normalized_tool_call = self._normalize_dict(delta_tool_call)
+                        if normalized_tool_call:
+                            tool_calls.append(normalized_tool_call)
+
                 if choice.get("finish_reason") is not None:
                     stop_reason = choice.get("finish_reason")
             if "usage" in json_payload:
@@ -267,11 +408,21 @@ class SambaNovaCompletionGateway(ICompletionGateway):
                     message=str(message),
                 )
 
+        content: Any = "".join(content_parts).strip()
+        if not content and rich_content_parts:
+            content = rich_content_parts
+
+        vendor_fields: dict[str, Any] = {}
+        if rich_content_parts:
+            vendor_fields["stream_content_deltas"] = rich_content_parts
+
         return CompletionResponse(
-            content="".join(content_parts).strip(),
+            content=content,
             model=model,
             stop_reason=stop_reason,
+            tool_calls=tool_calls,
             usage=usage,
+            vendor_fields=vendor_fields,
             raw=payload,
         )
 
@@ -280,8 +431,47 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         if not isinstance(payload, dict):
             return None
 
+        vendor_fields: dict[str, Any] = {}
+        for key, value in payload.items():
+            if key not in {"prompt_tokens", "completion_tokens", "total_tokens"}:
+                vendor_fields[key] = value
+
         return CompletionUsage(
             input_tokens=payload.get("prompt_tokens"),
             output_tokens=payload.get("completion_tokens"),
             total_tokens=payload.get("total_tokens"),
+            vendor_fields=vendor_fields,
         )
+
+    @staticmethod
+    def _normalize_dict(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if value is None:
+            return {}
+        return {}
+
+    @classmethod
+    def _normalize_content(cls, value: Any) -> Any:
+        if value is None or isinstance(value, (str, dict)):
+            return value
+        if isinstance(value, list):
+            normalized: list[dict[str, Any]] = []
+            for item in value:
+                item_payload = cls._normalize_dict(item)
+                if item_payload:
+                    normalized.append(item_payload)
+            return normalized
+        return None
+
+    @classmethod
+    def _normalize_list_of_dicts(cls, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for item in value:
+            item_payload = cls._normalize_dict(item)
+            if item_payload:
+                normalized.append(item_payload)
+        return normalized

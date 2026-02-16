@@ -57,6 +57,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.usage.input_tokens, 11)
         self.assertEqual(response.usage.output_tokens, 7)
         self.assertEqual(response.usage.total_tokens, 18)
+        self.assertEqual(response.usage.vendor_fields, {})
 
     async def test_get_completion_parses_stream_response(self) -> None:
         config = _make_config()
@@ -82,6 +83,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.content, "hello world")
         self.assertEqual(response.stop_reason, "stop")
+        self.assertEqual(response.tool_calls, [])
 
     async def test_get_completion_raises_gateway_error_on_http_error(self) -> None:
         config = _make_config()
@@ -141,6 +143,366 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["tool_choice"], "none")
         self.assertEqual(body["tools"], [{"type": "function"}])
         self.assertEqual(body["user"], "u-1")
+
+    async def test_get_completion_defaults_to_bearer_auth_header(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion([{"role": "user", "content": "hello"}])
+
+        _, kwargs = perform_request.call_args
+        headers = kwargs["headers"]
+        self.assertIn("Authorization: Bearer basic_key", headers)
+
+    async def test_get_completion_supports_basic_auth_compat_override(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            vendor_params={"sambanova_auth_scheme": "basic"},
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion(request)
+
+        _, kwargs = perform_request.call_args
+        headers = kwargs["headers"]
+        self.assertIn("Authorization: Basic basic_key", headers)
+
+    async def test_get_completion_uses_effective_max_tokens_precedence(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(
+                max_completion_tokens=64,
+                max_tokens=12,
+            ),
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion(request)
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertEqual(body["max_tokens"], 64)
+
+    async def test_get_completion_supports_max_completion_tokens_field(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(max_completion_tokens=50),
+            vendor_params={
+                "sambanova_token_limit_field": "max_completion_tokens",
+                "sambanova_emit_legacy_max_tokens": True,
+            },
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion(request)
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertEqual(body["max_completion_tokens"], 50)
+        self.assertEqual(body["max_tokens"], 50)
+
+    async def test_get_completion_uses_contract_stream_controls(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        stream_payload = (
+            'data: {"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(
+                stream=True,
+                stream_options={"include_usage": True, "trace": "x"},
+            ),
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, stream_payload),
+        ) as perform_request:
+            await gateway.get_completion(request)
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertTrue(body["stream"])
+        self.assertEqual(body["stream_options"], {"include_usage": True, "trace": "x"})
+
+    async def test_get_completion_omits_stop_by_default(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion(request)
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertNotIn("stop", body)
+
+    async def test_get_completion_forwards_additional_documented_params(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            vendor_params={
+                "top_k": 50,
+                "do_sample": True,
+                "reasoning_effort": "medium",
+                "chat_template_kwargs": {"tokenize": False},
+                "parallel_tool_calls": False,
+            },
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion(request)
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertEqual(body["top_k"], 50)
+        self.assertTrue(body["do_sample"])
+        self.assertEqual(body["reasoning_effort"], "medium")
+        self.assertEqual(body["chat_template_kwargs"], {"tokenize": False})
+        self.assertFalse(body["parallel_tool_calls"])
+
+    async def test_get_completion_uses_operation_token_defaults(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["completion"]["max_completion_tokens"] = "21"
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion([{"role": "user", "content": "hello"}])
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertEqual(body["max_tokens"], 21)
+
+        del config.sambanova.api.dict["completion"]["max_completion_tokens"]
+        config.sambanova.api.dict["completion"]["max_tokens"] = "17"
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion([{"role": "user", "content": "hello"}])
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertEqual(body["max_tokens"], 17)
+
+    async def test_get_completion_uses_operation_stop_default(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["completion"]["stop"] = "###"
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion([{"role": "user", "content": "hello"}])
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertEqual(body["stop"], ["###"])
+
+        config.sambanova.api.dict["completion"]["stop"] = ["A", 1, "B", ""]
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion([{"role": "user", "content": "hello"}])
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertEqual(body["stop"], ["A", "B"])
+
+    async def test_get_completion_preserves_structured_message_and_tool_calls(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = (
+            '{"choices":[{"message":{"content":[{"type":"output_text","text":"hello"}],'
+            '"tool_calls":[{"id":"call_1","type":"function"}]},'
+            '"finish_reason":"tool_calls"}],'
+            '"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"queue_time":0.1}}'
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ):
+            response = await gateway.get_completion(
+                [{"role": "user", "content": "hello"}],
+            )
+
+        self.assertEqual(response.content[0]["type"], "output_text")
+        self.assertEqual(response.tool_calls[0]["id"], "call_1")
+        self.assertEqual(response.message["tool_calls"][0]["id"], "call_1")
+        self.assertEqual(response.usage.vendor_fields["queue_time"], 0.1)
+
+    async def test_get_completion_handles_null_non_stream_content(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":null},"finish_reason":"stop"}]}'
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ):
+            response = await gateway.get_completion(
+                [{"role": "user", "content": "hello"}],
+            )
+
+        self.assertEqual(response.content, "")
+
+    async def test_get_completion_stream_preserves_structured_deltas_and_tool_calls(
+        self,
+    ) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        stream_payload = (
+            'data: {"choices":[{"delta":{"content":[{"type":"output_text","text":"hello"}],'
+            '"tool_calls":[{"id":"call_1","type":"function"}]},'
+            '"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(stream=True),
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, stream_payload),
+        ):
+            response = await gateway.get_completion(request)
+
+        self.assertEqual(response.content[0]["text"], "hello")
+        self.assertEqual(response.tool_calls[0]["id"], "call_1")
+        self.assertEqual(
+            response.vendor_fields["stream_content_deltas"][0]["type"],
+            "output_text",
+        )
+
+    async def test_get_completion_stream_preserves_structured_object_delta(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        stream_payload = (
+            'data: {"choices":[{"delta":{"content":{"type":"output_text","text":"hello"},'
+            '"tool_calls":[1,{"id":"call_1","type":"function"}]},'
+            '"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(stream=True),
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, stream_payload),
+        ):
+            response = await gateway.get_completion(request)
+
+        self.assertEqual(response.content[0]["type"], "output_text")
+        self.assertEqual(response.tool_calls[0]["id"], "call_1")
+
+    async def test_get_completion_stream_handles_missing_delta_content(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        stream_payload = (
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(stream=True),
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, stream_payload),
+        ):
+            response = await gateway.get_completion(request)
+
+        self.assertEqual(response.content, "")
+        self.assertEqual(response.stop_reason, "stop")
 
     async def test_get_completion_wraps_request_execution_failure(self) -> None:
         config = _make_config()
@@ -304,3 +666,83 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
 
     def test_usage_from_payload_handles_non_dict(self) -> None:
         self.assertIsNone(SambaNovaCompletionGateway._usage_from_payload(payload=None))
+
+    def test_resolve_helpers(self) -> None:
+        self.assertEqual(
+            SambaNovaCompletionGateway._resolve_auth_scheme(
+                CompletionRequest(
+                    messages=[CompletionMessage(role="user", content="x")],
+                    vendor_params={"sambanova_auth_scheme": 1},
+                ),
+                operation_config={},
+            ),
+            "bearer",
+        )
+        self.assertEqual(
+            SambaNovaCompletionGateway._resolve_token_limit_field(
+                CompletionRequest(messages=[CompletionMessage(role="user", content="x")]),
+                operation_config={},
+            ),
+            "max_tokens",
+        )
+        self.assertEqual(
+            SambaNovaCompletionGateway._resolve_token_limit_field(
+                CompletionRequest(
+                    messages=[CompletionMessage(role="user", content="x")],
+                    vendor_params={"sambanova_token_limit_field": 1},
+                ),
+                operation_config={},
+            ),
+            "max_tokens",
+        )
+        self.assertEqual(
+            SambaNovaCompletionGateway._resolve_token_limit_field(
+                CompletionRequest(
+                    messages=[CompletionMessage(role="user", content="x")],
+                    vendor_params={"sambanova_token_limit_field": "max_completion_tokens"},
+                ),
+                operation_config={},
+            ),
+            "max_completion_tokens",
+        )
+        self.assertEqual(
+            SambaNovaCompletionGateway._resolve_stream_options(
+                CompletionRequest(messages=[CompletionMessage(role="user", content="x")])
+            ),
+            {"include_usage": False},
+        )
+        self.assertEqual(
+            SambaNovaCompletionGateway._resolve_stream_options(
+                CompletionRequest(
+                    messages=[CompletionMessage(role="user", content="x")],
+                    vendor_params={
+                        "stream_options": {"include_usage": True},
+                        "include_usage": False,
+                    },
+                )
+            ),
+            {"include_usage": True},
+        )
+        self.assertEqual(
+            SambaNovaCompletionGateway._resolve_stop_sequences(
+                CompletionRequest(messages=[CompletionMessage(role="user", content="x")]),
+                operation_config={"stop": "###"},
+            ),
+            ["###"],
+        )
+        self.assertEqual(
+            SambaNovaCompletionGateway._resolve_stop_sequences(
+                CompletionRequest(messages=[CompletionMessage(role="user", content="x")]),
+                operation_config={"stop": ["A", 1, "B", ""]},
+            ),
+            ["A", "B"],
+        )
+        self.assertEqual(SambaNovaCompletionGateway._normalize_dict(None), {})
+        self.assertEqual(
+            SambaNovaCompletionGateway._normalize_content([{"a": 1}, 1]),
+            [{"a": 1}],
+        )
+        self.assertEqual(
+            SambaNovaCompletionGateway._normalize_list_of_dicts([{"a": 1}, 1]),
+            [{"a": 1}],
+        )
