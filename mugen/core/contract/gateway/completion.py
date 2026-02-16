@@ -6,13 +6,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+CompletionMessageContent = str | dict[str, Any] | list[dict[str, Any]] | None
+CompletionResponseContent = str | dict[str, Any] | list[dict[str, Any]] | None
+
 
 @dataclass(frozen=True)
 class CompletionMessage:
     """A normalised completion message."""
 
     role: str
-    content: str
+    content: CompletionMessageContent
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "CompletionMessage":
@@ -22,12 +25,17 @@ class CompletionMessage:
 
         if not isinstance(role, str):
             raise ValueError("Message role must be a string.")
-        if not isinstance(content, str):
-            raise ValueError("Message content must be a string.")
+        if content is not None and not isinstance(content, (str, dict, list)):
+            raise ValueError("Message content must be a string, object, list, or null.")
+
+        if isinstance(content, list) and not all(
+            isinstance(item, dict) for item in content
+        ):
+            raise ValueError("Message content list items must be objects.")
 
         return cls(role=role, content=content)
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert message to a plain dict."""
         return {"role": self.role, "content": self.content}
 
@@ -36,10 +44,20 @@ class CompletionMessage:
 class CompletionInferenceConfig:
     """Provider-agnostic inference controls."""
 
+    max_completion_tokens: int | None = None
     max_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None
     stop: list[str] = field(default_factory=list)
+    stream: bool = False
+    stream_options: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def effective_max_tokens(self) -> int | None:
+        """Unified token limit where max_completion_tokens wins over max_tokens."""
+        if self.max_completion_tokens is not None:
+            return self.max_completion_tokens
+        return self.max_tokens
 
 
 @dataclass(frozen=True)
@@ -67,7 +85,7 @@ class CompletionRequest:
         messages = [CompletionMessage.from_dict(item) for item in context]
         return cls(messages=messages, operation=operation)
 
-    def to_context(self) -> list[dict[str, str]]:
+    def to_context(self) -> list[dict[str, Any]]:
         """Convert request back to legacy context payloads."""
         return [message.to_dict() for message in self.messages]
 
@@ -79,15 +97,18 @@ class CompletionUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
+    vendor_fields: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class CompletionResponse:
     """Normalized completion response payload."""
 
-    content: str
+    content: CompletionResponseContent
     model: str | None = None
     stop_reason: str | None = None
+    message: dict[str, Any] | None = None
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
     usage: CompletionUsage | None = None
     vendor_fields: dict[str, Any] = field(default_factory=dict)
     raw: Any = None
