@@ -97,7 +97,7 @@ class IMessagingService(ABC):
         room_id: str,
         sender: str,
         message: str,
-        message_context: list[str] = None,
+        message_context: list[dict] | None = None,
     ) -> list[dict] | None:
         """Handle a text message from a chat."""
 

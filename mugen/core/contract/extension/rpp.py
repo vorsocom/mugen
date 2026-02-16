@@ -15,5 +15,6 @@ class IRPPExtension(IExtensionBase):  # pylint: disable=too-few-public-methods
         self,
         room_id: str,
         user_id: str,
+        assistant_response: str,
     ) -> str:
         """Preprocess the assistant response."""

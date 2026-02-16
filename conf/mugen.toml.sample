@@ -16,6 +16,14 @@ storage.keyval.dbm.path = "/absolute/path/to/data/storage.db"
 [mugen.commands]
 clear = "..."
 
+[mugen.messaging]
+# Max number of chat history messages persisted and forwarded to completion context.
+history_max_messages = 40
+# Timeout in seconds for extension callbacks (CP/CTX/RAG/RPP/CT).
+extension_timeout_seconds = 10.0
+# If true, CT extensions with non-empty triggers only run on trigger matches.
+ct_trigger_prefilter_enabled = true
+
 [mugen.modules.core]
 client.telnet = "mugen.core.client.telnet"
 client.matrix = "mugen.core.client.matrix"

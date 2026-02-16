@@ -304,6 +304,9 @@ class MyRAGExtension(IRAGExtension):
 ### Response Pre-processor (RPP) Extensions
 
 RPP extensions modify LLM responses before they are sent to the user. Implement the `IRPPExtension` interface to create an RPP extension.
+The preferred signature is `preprocess_response(room_id, user_id, assistant_response)`.
+For transition compatibility, the default text message handler also supports legacy
+two-argument implementations.
 
 **Setup Code:**
 
@@ -323,11 +326,16 @@ class MyRPPExtension(IRPPExtension):
         """Get the platforms this extension supports."""
         return []
 
-    async def preprocess_response(self, room_id: str, user_id: str) -> str:
+    async def preprocess_response(
+        self,
+        room_id: str,
+        user_id: str,
+        assistant_response: str,
+    ) -> str:
         """Modify the assistant response before it is delivered."""
         print(f"Preprocessing response for user {user_id} in room {room_id}")
         # Implement response preprocessing logic here
-        return "Modified response"
+        return f"Modified response: {assistant_response}"
 ```
 
 ### Conversational Trigger (CT) Extensions
