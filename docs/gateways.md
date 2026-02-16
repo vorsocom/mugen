@@ -19,9 +19,17 @@ Request and response payloads are normalized by
 `mugen/core/contract/gateway/completion.py`:
 
 - `CompletionMessage(role, content)`
-- `CompletionInferenceConfig(max_tokens, temperature, top_p, stop)`
+  - `content` supports string, object, list-of-objects, or null.
+- `CompletionInferenceConfig(max_completion_tokens, max_tokens, temperature, top_p, stop, stream, stream_options)`
+  - `max_completion_tokens` is preferred.
+  - `max_tokens` is a compatibility alias.
+  - `effective_max_tokens` applies precedence: `max_completion_tokens` then `max_tokens`.
 - `CompletionRequest(messages, operation, model, inference, vendor_params)`
-- `CompletionResponse(content, model, stop_reason, usage, vendor_fields, raw)`
+- `CompletionResponse(content, model, stop_reason, message, tool_calls, usage, vendor_fields, raw)`
+  - `content` may be structured (not string-only).
+  - `message` and `tool_calls` preserve richer assistant outputs.
+- `CompletionUsage(input_tokens, output_tokens, total_tokens, vendor_fields)`
+  - `vendor_fields` carries provider-specific usage/timing metadata.
 - `CompletionGatewayError(provider, operation, message, cause)`
 
 Legacy list-of-dicts context payloads are still accepted through
@@ -99,15 +107,55 @@ Supported Bedrock-specific keys in `CompletionRequest.vendor_params`:
 
 Module: `mugen.core.gateway.completion.groqq`
 
-Supports normalized inference fields plus optional vendor params:
+Supports normalized inference fields:
 
+- `max_completion_tokens` (preferred token-limit field)
+- `max_tokens` compatibility alias (used only when explicitly requested)
+- `temperature`
+- `top_p`
+- `stop`
+- `stream`
+- `stream_options`
+
+Groq-specific optional keys are forwarded from
+`CompletionRequest.vendor_params`:
+
+- `citation_options`
+- `compound_custom`
+- `disable_tool_validation`
+- `documents`
+- `exclude_domains`
 - `frequency_penalty`
+- `function_call`
+- `functions`
+- `include_domains`
+- `include_reasoning`
+- `logit_bias`
+- `logprobs`
+- `metadata`
+- `n`
+- `parallel_tool_calls`
 - `presence_penalty`
+- `reasoning_effort`
+- `reasoning_format`
 - `response_format`
+- `search_settings`
 - `seed`
+- `service_tier`
+- `store`
 - `tool_choice`
 - `tools`
+- `top_logprobs`
 - `user`
+- `verbosity`
+
+Groq compatibility notes:
+
+- By default, muGen sends `max_completion_tokens`.
+- To force deprecated `max_tokens` serialization for compatibility, set
+  `vendor_params["use_legacy_max_tokens"] = true`.
+- Non-stream and stream responses both preserve structured assistant payloads,
+  tool calls, and usage metadata in normalized response fields.
 
 ### SambaNova
 
