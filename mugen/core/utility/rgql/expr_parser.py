@@ -704,7 +704,10 @@ def parse_rgql_expr(expr_text: str) -> Expr:
     ParseError
         If ``expr_text`` is not a well-formed RGQL expression.
     """
-    lexer = RGQLLexer(expr_text)
-    tokens = lexer.tokenize()
-    parser = ExprParser(tokens)
-    return parser.parse()
+    try:
+        lexer = RGQLLexer(expr_text)
+        tokens = lexer.tokenize()
+        parser = ExprParser(tokens)
+        return parser.parse()
+    except ValueError as exc:
+        raise ParseError(str(exc)) from exc

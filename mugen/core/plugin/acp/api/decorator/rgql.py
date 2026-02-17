@@ -11,10 +11,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.gateway.storage.rdbms.types import FilterGroup, OrderBy
+from mugen.core.contract.gateway.storage.rdbms.types import (
+    FilterGroup,
+    OrderClause,
+    RelatedPathHop,
+)
 from mugen.core.plugin.acp.contract.service.authorization import IAuthorizationService
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.utility.ns import AdminNs
+from mugen.core.plugin.acp.utility.rgql.nav_filter_planner import plan_related_path
 from mugen.core.plugin.acp.utility.rgql.default_where import (
     make_default_where_provider,
 )
@@ -195,7 +200,7 @@ def rgql_enabled(
             query_columns: list[str] | None = None
             response_columns: list[str] | None = None
             filter_groups: Sequence[FilterGroup] | None = None
-            order_by: Sequence[OrderBy] | None = None
+            order_by: Sequence[OrderClause] | None = None
             limit: int | None = None
             offset: int | None = None
             expand_paths: set[str] = set()
@@ -216,12 +221,41 @@ def rgql_enabled(
             )
 
             max_filter_terms = getattr(config.acp, "rgql_max_filter_terms", 25)
+            max_filter_nav_depth = getattr(config.acp, "rgql_max_filter_nav_depth", 4)
 
             max_depth = (
                 resource.behavior.rgql_max_expand_depth
                 if resource.behavior.rgql_max_expand_depth is not None
                 else getattr(config.acp, "rgql_max_expand_depth", 3)
             )
+
+            table_name_cache: dict[str, str] = {}
+
+            def _table_name_for_edm_type(edm_type_name: str) -> str:
+                if edm_type_name in table_name_cache:
+                    return table_name_cache[edm_type_name]
+
+                target_resource = registry.get_resource_by_type(edm_type_name)
+                target_service = registry.get_edm_service(target_resource.service_key)
+                table_name = getattr(target_service, "table", None)
+                if not table_name:
+                    raise ValueError(
+                        f"No logical table name found for EDM type {edm_type_name!r}."
+                    )
+                table_name_cache[edm_type_name] = table_name
+                return table_name
+
+            def _plan_nav_path(
+                base_type_name: str,
+                prop_path: str,
+            ) -> tuple[list[RelatedPathHop], str] | None:
+                return plan_related_path(
+                    base_type_name=base_type_name,
+                    prop_path=prop_path,
+                    model=admin_edm_schema,
+                    table_resolver=_table_name_for_edm_type,
+                    max_nav_depth=max_filter_nav_depth,
+                )
 
             adapter: RGQLToRelationalAdapter = RGQLToRelationalAdapter()
             ctx: ExpansionContext = None
@@ -265,9 +299,17 @@ def rgql_enabled(
                             query_columns.append(col)
 
                 if entity_id is None:
-                    filter_groups, order_by, limit, offset = (
-                        adapter.build_relational_query(opts)
-                    )
+                    try:
+                        filter_groups, order_by, limit, offset = (
+                            adapter.build_relational_query(
+                                opts,
+                                path_planner=lambda path: _plan_nav_path(
+                                    edm_type.name, path
+                                ),
+                            )
+                        )
+                    except ValueError as exc:
+                        abort(400, str(exc))
 
                     if order_by and len(order_by) > max_orderby:
                         abort(400, f"Max $orderby ({max_orderby}) exceeded.")
@@ -301,6 +343,7 @@ def rgql_enabled(
                     max_orderby=max_orderby,
                     max_expand_paths=max_expand_paths,
                     max_filter_terms=max_filter_terms,
+                    nav_path_planner=_plan_nav_path,
                     default_where_provider=default_where_provider,
                 )
 
@@ -354,6 +397,8 @@ def rgql_enabled(
                         fg_sum += len(fg.where)
                         fg_sum += len(fg.scalar_filters)
                         fg_sum += len(fg.text_filters)
+                        fg_sum += len(getattr(fg, "related_scalar_filters", []))
+                        fg_sum += len(getattr(fg, "related_text_filters", []))
 
                     if fg_sum > max_filter_terms:
                         abort(

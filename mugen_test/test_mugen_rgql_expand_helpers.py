@@ -7,7 +7,11 @@ from unittest.mock import patch
 from mugen.core.contract.gateway.storage.rdbms.types import (
     FilterGroup,
     OrderBy,
+    RelatedPathHop,
+    RelatedScalarFilter,
+    RelatedTextFilter,
     ScalarFilterOp,
+    TextFilterOp,
 )
 from mugen.core.utility.rgql.model import (
     EdmModel,
@@ -49,7 +53,7 @@ class _FixedAdapter:
     def __init__(self, result):
         self._result = result
 
-    def build_relational_query(self, _opts):
+    def build_relational_query(self, _opts, **_kwargs):
         return self._result
 
 
@@ -146,6 +150,47 @@ class TestMugenRgqlExpandHelpers(unittest.TestCase):
         )
         self.assertEqual(len(merged_with_scalar_only), 1)
         self.assertEqual(merged_with_scalar_only[0].where, {"status": "open"})
+
+        related_group = FilterGroup(
+            where={"status": "open"},
+            related_text_filters=[
+                RelatedTextFilter(
+                    path_hops=[
+                        RelatedPathHop(
+                            source_table="admin_user",
+                            source_field="person_id",
+                            target_table="admin_person",
+                            target_field="id",
+                        )
+                    ],
+                    field="first_name",
+                    op=TextFilterOp.CONTAINS,
+                    value="a",
+                )
+            ],
+            related_scalar_filters=[
+                RelatedScalarFilter(
+                    path_hops=[
+                        RelatedPathHop(
+                            source_table="admin_user",
+                            source_field="person_id",
+                            target_table="admin_person",
+                            target_field="id",
+                        )
+                    ],
+                    field="first_name",
+                    op=ScalarFilterOp.EQ,
+                    value="Ada",
+                )
+            ],
+        )
+        merged_related = apply_to_filter_groups(
+            [related_group],
+            where={"tenant_id": "t1"},
+        )
+        self.assertEqual(len(merged_related), 1)
+        self.assertEqual(len(merged_related[0].related_text_filters), 1)
+        self.assertEqual(len(merged_related[0].related_scalar_filters), 1)
 
         self.assertEqual(apply_to_where({"id": 1}, {}), {"id": 1})
         self.assertEqual(
@@ -386,6 +431,23 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
                 depth=0,
                 levels_remaining=1,
             )
+
+    async def test_expand_navs_recursive_maps_adapter_value_error(self) -> None:
+        class _FailingAdapter:
+            def build_relational_query(self, _opts, **_kwargs):
+                raise ValueError("bad nested filter")
+
+        ctx = self._make_context(adapter=_FailingAdapter())
+        with self.assertRaises(RGQLExpandError) as ex:
+            await expand_navs_recursive(
+                root_entity=_Entity(id=1),
+                ctx=ctx,
+                expand_item=ExpandItem(path="Children"),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+        self.assertEqual(ex.exception.args, (400, "bad nested filter"))
 
     async def test_expand_navs_recursive_collection_materializes_children(self) -> None:
         child_service = _FakeNavService(
@@ -716,6 +778,23 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
                 depth=0,
                 levels_remaining=1,
             )
+
+    async def test_expand_navs_bulk_maps_adapter_value_error(self) -> None:
+        class _FailingAdapter:
+            def build_relational_query(self, _opts, **_kwargs):
+                raise ValueError("bad nested orderby")
+
+        ctx = self._make_context(adapter=_FailingAdapter())
+        with self.assertRaises(RGQLExpandError) as ex:
+            await expand_navs_bulk(
+                root_entities=[_Entity(id=1)],
+                ctx=ctx,
+                expand_item=ExpandItem(path="Children"),
+                current_type_name="NS.Parent",
+                depth=0,
+                levels_remaining=1,
+            )
+        self.assertEqual(ex.exception.args, (400, "bad nested orderby"))
 
     async def test_expand_navs_bulk_collection_materializes_children(self) -> None:
         child_service = _FakeNavService(

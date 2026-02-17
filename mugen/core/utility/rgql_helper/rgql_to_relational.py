@@ -26,11 +26,16 @@ different relational backends to consume RGQL queries in a uniform way.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 from mugen.core.contract.gateway.storage.rdbms.types import (
     FilterGroup,
+    OrderClause,
     OrderBy,
+    RelatedOrderBy,
+    RelatedPathHop,
+    RelatedScalarFilter,
+    RelatedTextFilter,
     ScalarFilter,
     ScalarFilterOp,
     TextFilter,
@@ -49,6 +54,8 @@ from mugen.core.utility.rgql.ast import (
 )
 from mugen.core.utility.rgql.boolean_normalizer import to_dnf_clauses
 from mugen.core.utility.rgql.url_parser import RGQLQueryOptions, OrderByItem
+
+PathPlanner = Callable[[str], tuple[Sequence[RelatedPathHop], str] | None]
 
 
 def _is_literal(expr: Expr) -> bool:
@@ -113,16 +120,24 @@ class RGQLToRelationalAdapter:
     def build_relational_query(
         self,
         opts: RGQLQueryOptions,
-    ) -> Tuple[Sequence[FilterGroup], Sequence[OrderBy], int | None, int | None]:
+        *,
+        path_planner: PathPlanner | None = None,
+    ) -> Tuple[Sequence[FilterGroup], Sequence[OrderClause], int | None, int | None]:
         """
         Convert RGQLQueryOptions into (filter_groups, order_by, limit, offset).
         """
         filter_groups: List[FilterGroup] = []
 
         if opts.filter is not None:
-            filter_groups = self._filter_to_groups(opts.filter)
+            filter_groups = self._filter_to_groups(
+                opts.filter,
+                path_planner=path_planner,
+            )
 
-        order_by = self._orderby_to_order_by(opts.orderby or [])
+        order_by = self._orderby_to_order_by(
+            opts.orderby or [],
+            path_planner=path_planner,
+        )
         limit = opts.top
         offset = opts.skip
 
@@ -132,7 +147,12 @@ class RGQLToRelationalAdapter:
     # Filters: RGQL boolean expr -> DNF -> FilterGroup sequence
     # ------------------------------------------------------------------ #
 
-    def _filter_to_groups(self, expr: Expr) -> List[FilterGroup]:
+    def _filter_to_groups(
+        self,
+        expr: Expr,
+        *,
+        path_planner: PathPlanner | None = None,
+    ) -> List[FilterGroup]:
         groups: List[FilterGroup] = []
 
         dnf_clauses = to_dnf_clauses(expr)
@@ -140,15 +160,27 @@ class RGQLToRelationalAdapter:
             where: Dict[str, Any] = {}
             text_filters: List[TextFilter] = []
             scalar_filters: List[ScalarFilter] = []
+            related_text_filters: List[RelatedTextFilter] = []
+            related_scalar_filters: List[RelatedScalarFilter] = []
 
             for atom in clause:
-                self._add_atom(atom, where, text_filters, scalar_filters)
+                self._add_atom(
+                    atom,
+                    where,
+                    text_filters,
+                    scalar_filters,
+                    related_text_filters,
+                    related_scalar_filters,
+                    path_planner=path_planner,
+                )
 
             groups.append(
                 FilterGroup(
                     where=where,
                     text_filters=text_filters,
                     scalar_filters=scalar_filters,
+                    related_text_filters=related_text_filters,
+                    related_scalar_filters=related_scalar_filters,
                 )
             )
 
@@ -160,6 +192,10 @@ class RGQLToRelationalAdapter:
         where: Dict[str, Any],
         text_filters: List[TextFilter],
         scalar_filters: List[ScalarFilter],
+        related_text_filters: List[RelatedTextFilter] | None = None,
+        related_scalar_filters: List[RelatedScalarFilter] | None = None,
+        *,
+        path_planner: PathPlanner | None = None,
     ) -> None:
         """
         Map a single atomic RGQL expression into predicates on one column.
@@ -176,11 +212,17 @@ class RGQLToRelationalAdapter:
             # You can implement NOT later via De Morgan normalization.
             raise ValueError("NOT filters are not supported yet in RGQL adapter")
 
+        if related_text_filters is None:
+            related_text_filters = []
+        if related_scalar_filters is None:
+            related_scalar_filters = []
+
         if isinstance(expr, BinaryOp):
             op = expr.op
 
             if op in {"eq", "ne", "gt", "ge", "lt", "le", "in"}:
                 prop_path = _prop_path(expr.left)
+                path_plan = path_planner(prop_path) if path_planner else None
                 col = _prop_path_to_column(prop_path)
 
                 rhs = expr.right
@@ -190,46 +232,78 @@ class RGQLToRelationalAdapter:
                     )
                 value = _literal_value(rhs)
 
-                if op == "eq":
-                    if col in where and where[col] != value:
-                        raise ValueError(
-                            f"Conflicting equality predicates for column {col!r}"
+                if path_plan is None:
+                    if op == "eq":
+                        if col in where and where[col] != value:
+                            raise ValueError(
+                                f"Conflicting equality predicates for column {col!r}"
+                            )
+                        where[col] = value
+                    elif op == "ne":
+                        scalar_filters.append(
+                            ScalarFilter(field=col, op=ScalarFilterOp.NE, value=value)
                         )
-                    where[col] = value
-                elif op == "ne":
-                    scalar_filters.append(
-                        ScalarFilter(field=col, op=ScalarFilterOp.NE, value=value)
-                    )
-                elif op == "gt":
-                    scalar_filters.append(
-                        ScalarFilter(field=col, op=ScalarFilterOp.GT, value=value)
-                    )
-                elif op == "ge":
-                    scalar_filters.append(
-                        ScalarFilter(field=col, op=ScalarFilterOp.GTE, value=value)
-                    )
-                elif op == "lt":
-                    scalar_filters.append(
-                        ScalarFilter(field=col, op=ScalarFilterOp.LT, value=value)
-                    )
-                elif op == "le":
-                    scalar_filters.append(
-                        ScalarFilter(field=col, op=ScalarFilterOp.LTE, value=value)
-                    )
-                else:
-                    # Remaining supported operator at this point is "in".
-                    if not isinstance(value, (list, tuple)):
-                        raise ValueError(
-                            "IN operator expects a collection literal on RHS"
+                    elif op == "gt":
+                        scalar_filters.append(
+                            ScalarFilter(field=col, op=ScalarFilterOp.GT, value=value)
                         )
-                    scalar_filters.append(
-                        ScalarFilter(
-                            field=col,
-                            op=ScalarFilterOp.IN,
-                            value=list(value),
+                    elif op == "ge":
+                        scalar_filters.append(
+                            ScalarFilter(field=col, op=ScalarFilterOp.GTE, value=value)
                         )
+                    elif op == "lt":
+                        scalar_filters.append(
+                            ScalarFilter(field=col, op=ScalarFilterOp.LT, value=value)
+                        )
+                    elif op == "le":
+                        scalar_filters.append(
+                            ScalarFilter(field=col, op=ScalarFilterOp.LTE, value=value)
+                        )
+                    else:
+                        # Remaining supported operator at this point is "in".
+                        if not isinstance(value, (list, tuple)):
+                            raise ValueError(
+                                "IN operator expects a collection literal on RHS"
+                            )
+                        scalar_filters.append(
+                            ScalarFilter(
+                                field=col,
+                                op=ScalarFilterOp.IN,
+                                value=list(value),
+                            )
+                        )
+                    return
+
+                hops, terminal_col = path_plan
+
+                if op == "in" and not isinstance(value, (list, tuple)):
+                    raise ValueError("IN operator expects a collection literal on RHS")
+
+                op_map = {
+                    "eq": ScalarFilterOp.EQ,
+                    "ne": ScalarFilterOp.NE,
+                    "gt": ScalarFilterOp.GT,
+                    "ge": ScalarFilterOp.GTE,
+                    "lt": ScalarFilterOp.LT,
+                    "le": ScalarFilterOp.LTE,
+                    "in": ScalarFilterOp.IN,
+                }
+                related_scalar_filters.append(
+                    RelatedScalarFilter(
+                        path_hops=list(hops),
+                        field=terminal_col,
+                        op=op_map[op],
+                        value=list(value) if op == "in" else value,
                     )
+                )
                 return
+
+            if path_planner is not None:
+                prop_path = _try_prop_path(expr.left)
+                if prop_path is not None and path_planner(prop_path) is not None:
+                    raise ValueError(
+                        f"Nested navigation paths are not supported for operator {op!r}."
+                    )
 
         if isinstance(expr, FunctionCall):
             name = expr.name.lower()
@@ -238,6 +312,7 @@ class RGQLToRelationalAdapter:
             if name in {"contains", "startswith", "endswith"} and len(args) == 2:
                 prop_expr, value_expr = args
                 prop_path = _prop_path(prop_expr)
+                path_plan = path_planner(prop_path) if path_planner else None
                 col = _prop_path_to_column(prop_path)
 
                 if not _is_literal(value_expr):
@@ -254,10 +329,30 @@ class RGQLToRelationalAdapter:
                 else:
                     op = TextFilterOp.ENDSWITH
 
-                text_filters.append(
-                    TextFilter(field=col, op=op, value=value, case_sensitive=False)
-                )
+                if path_plan is None:
+                    text_filters.append(
+                        TextFilter(field=col, op=op, value=value, case_sensitive=False)
+                    )
+                else:
+                    hops, terminal_col = path_plan
+                    related_text_filters.append(
+                        RelatedTextFilter(
+                            path_hops=list(hops),
+                            field=terminal_col,
+                            op=op,
+                            value=value,
+                            case_sensitive=False,
+                        )
+                    )
                 return
+
+            if path_planner is not None and args:
+                prop_path = _try_prop_path(args[0])
+                if prop_path is not None and path_planner(prop_path) is not None:
+                    raise ValueError(
+                        f"Nested navigation paths are not supported for function "
+                        f"{name}()."
+                    )
 
         raise ValueError(f"Unsupported filter atom in RGQL adapter: {expr!r}")
 
@@ -268,17 +363,39 @@ class RGQLToRelationalAdapter:
     def _orderby_to_order_by(
         self,
         items: Sequence[OrderByItem],
-    ) -> Sequence[OrderBy]:
-        result: List[OrderBy] = []
+        *,
+        path_planner: PathPlanner | None = None,
+    ) -> Sequence[OrderClause]:
+        result: List[OrderClause] = []
 
         for item in items:
             prop_path = _prop_path(item.expr)
-            col = _prop_path_to_column(prop_path)
+            path_plan = path_planner(prop_path) if path_planner else None
+            if path_plan is None:
+                col = _prop_path_to_column(prop_path)
+                result.append(
+                    OrderBy(
+                        field=col,
+                        descending=item.direction == "desc",
+                    )
+                )
+                continue
+
+            hops, terminal_col = path_plan
             result.append(
-                OrderBy(
-                    field=col,
+                RelatedOrderBy(
+                    path_hops=list(hops),
+                    field=terminal_col,
                     descending=item.direction == "desc",
+                    nulls_last=True,
                 )
             )
 
         return result
+
+
+def _try_prop_path(expr: Expr) -> str | None:
+    try:
+        return _prop_path(expr)
+    except ValueError:
+        return None

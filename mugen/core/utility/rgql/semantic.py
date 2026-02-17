@@ -936,6 +936,27 @@ class SemanticChecker:  # pylint: disable=too-few-public-methods
             if name_lower in {"tolower", "toupper", "trim", "concat"}:
                 return ValueType("Edm.String")
             if name_lower in {"contains", "startswith", "endswith"}:
+                if len(expr.args) != 2:
+                    raise SemanticError(
+                        f"{expr.name}() expects exactly 2 arguments"
+                    )
+                prop_expr, needle_expr = expr.args
+                if not isinstance(prop_expr, (Identifier, MemberAccess)):
+                    raise SemanticError(
+                        f"{expr.name}() first argument must be a property path"
+                    )
+
+                prop_t = self._infer_expr_type(prop_expr, base_type, env)
+                if prop_t.is_collection or prop_t.type_name != "Edm.String":
+                    raise SemanticError(
+                        f"{expr.name}() first argument must be Edm.String"
+                    )
+
+                needle_t = self._infer_expr_type(needle_expr, base_type, env)
+                if needle_t.is_collection or needle_t.type_name != "Edm.String":
+                    raise SemanticError(
+                        f"{expr.name}() second argument must be Edm.String"
+                    )
                 return ValueType("Edm.Boolean")
             if expr.args:
                 return self._infer_expr_type(expr.args[0], base_type, env)

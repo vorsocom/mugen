@@ -13,6 +13,7 @@ from mugen.core.contract.gateway.storage.rdbms.service_base import (
 )
 from mugen.core.contract.gateway.storage.rdbms.types import (
     FilterGroup,
+    RelatedPathHop,
     ScalarFilter,
     ScalarFilterOp,
     TextFilter,
@@ -35,6 +36,10 @@ EntitySerializationProvider = Callable[
 ]
 PathPermissionProvider = Callable[[object, str], bool]
 ServiceResolver = Callable[[str], IRelationalService[Any]]  # type_name -> service
+NavPathPlanner = Callable[
+    [str, str],
+    tuple[Sequence[RelatedPathHop], str] | None,
+]  # base_type_name, prop_path -> plan
 
 
 # pylint: disable=too-many-locals
@@ -77,6 +82,14 @@ def apply_to_filter_groups(
         existing_texts = list(getattr(g, "text_filters", None) or [])
         incoming_texts = list(texts or [])
         gcopy.text_filters = [*existing_texts, *incoming_texts]
+
+        existing_related_scalars = list(
+            getattr(g, "related_scalar_filters", None) or []
+        )
+        gcopy.related_scalar_filters = [*existing_related_scalars]
+
+        existing_related_texts = list(getattr(g, "related_text_filters", None) or [])
+        gcopy.related_text_filters = [*existing_related_texts]
 
         merged.append(gcopy)
     return merged
@@ -134,6 +147,8 @@ class ExpansionContext:
     max_expand_paths: int
 
     max_filter_terms: int
+
+    nav_path_planner: NavPathPlanner | None = None
 
     default_where_provider: DefaultWhereProvider = lambda _type_name: {}
 
@@ -268,9 +283,19 @@ async def expand_navs_recursive(
         deltatoken=None,
     )
 
-    child_filter_groups, child_order_by, child_limit, child_offset = (
-        ctx.adapter.build_relational_query(child_opts)
-    )
+    try:
+        child_filter_groups, child_order_by, child_limit, child_offset = (
+            ctx.adapter.build_relational_query(
+                child_opts,
+                path_planner=(
+                    lambda path: ctx.nav_path_planner(nav_type.name, path)
+                    if ctx.nav_path_planner is not None
+                    else None
+                ),
+            )
+        )
+    except ValueError as exc:
+        raise RGQLExpandError(400, str(exc)) from exc
 
     if child_order_by and len(child_order_by) > ctx.max_orderby:
         raise RGQLExpandError(
@@ -352,6 +377,8 @@ async def expand_navs_recursive(
                 fg_sum += len(fg.where)
                 fg_sum += len(fg.scalar_filters)
                 fg_sum += len(fg.text_filters)
+                fg_sum += len(getattr(fg, "related_scalar_filters", []))
+                fg_sum += len(getattr(fg, "related_text_filters", []))
 
             if fg_sum > ctx.max_filter_terms:
                 raise RGQLExpandError(
@@ -531,9 +558,19 @@ async def expand_navs_bulk(
         format=None,
     )
 
-    child_filter_groups, child_order_by, child_limit, child_offset = (
-        ctx.adapter.build_relational_query(child_opts)
-    )
+    try:
+        child_filter_groups, child_order_by, child_limit, child_offset = (
+            ctx.adapter.build_relational_query(
+                child_opts,
+                path_planner=(
+                    lambda path: ctx.nav_path_planner(nav_type.name, path)
+                    if ctx.nav_path_planner is not None
+                    else None
+                ),
+            )
+        )
+    except ValueError as exc:
+        raise RGQLExpandError(400, str(exc)) from exc
 
     if child_order_by and len(child_order_by) > ctx.max_orderby:
         raise RGQLExpandError(
@@ -630,6 +667,8 @@ async def expand_navs_bulk(
                 fg_sum += len(fg.where)
                 fg_sum += len(fg.scalar_filters)
                 fg_sum += len(fg.text_filters)
+                fg_sum += len(getattr(fg, "related_scalar_filters", []))
+                fg_sum += len(getattr(fg, "related_text_filters", []))
 
             if fg_sum > ctx.max_filter_terms:
                 raise RGQLExpandError(
@@ -721,6 +760,8 @@ async def expand_navs_bulk(
                 fg_sum += len(fg.where)
                 fg_sum += len(fg.scalar_filters)
                 fg_sum += len(fg.text_filters)
+                fg_sum += len(getattr(fg, "related_scalar_filters", []))
+                fg_sum += len(getattr(fg, "related_text_filters", []))
 
             if fg_sum > ctx.max_filter_terms:
                 raise RGQLExpandError(

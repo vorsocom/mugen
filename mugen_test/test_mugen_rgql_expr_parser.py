@@ -248,6 +248,8 @@ class TestMugenRgqlExprParser(unittest.TestCase):
             parse_rgql_expr("binary'ABC'")
         with self.assertRaises(ParseError):
             parse_rgql_expr("geography'SRID=4326'")
+        with self.assertRaises(ParseError):
+            parse_rgql_expr('contains(Name, "sys")')
 
     def test_internal_helpers_for_error_and_dot_token_branches(self) -> None:
         tokens = RGQLLexer("1").tokenize()

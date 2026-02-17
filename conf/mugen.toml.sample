@@ -221,6 +221,7 @@ rgql_allow_expand_wildcard = true
 rgql_default_top = 100
 rgql_max_expand_depth = 4
 rgql_max_expand_paths = 10
+rgql_max_filter_nav_depth = 4
 rgql_max_filter_terms = 25
 rgql_max_orderby = 5
 rgql_max_select = 50

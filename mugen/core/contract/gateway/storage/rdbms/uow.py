@@ -26,7 +26,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Mapping, Sequence
 
 from mugen.core.contract.gateway.storage.rdbms.types import (  # pylint: disable=unused-import
-    OrderBy,
+    OrderClause,
     Record,
     FilterGroup,
     RowVersionConflict,
@@ -89,7 +89,7 @@ class IRelationalUnitOfWork(ABC):
         *,
         columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
-        order_by: Sequence[OrderBy] | None = None,
+        order_by: Sequence[OrderClause] | None = None,
         limit: int | None = None,
         offset: int | None = None,
     ) -> Sequence[Record]:
@@ -104,7 +104,7 @@ class IRelationalUnitOfWork(ABC):
         fk_values: Sequence[Any],
         columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
-        order_by: Sequence[OrderBy] | None = None,
+        order_by: Sequence[OrderClause] | None = None,
         per_fk_limit: int | None = None,
         per_fk_offset: int | None = None,
         tie_breaker_field: str = "id",

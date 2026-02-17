@@ -2,7 +2,12 @@
 
 import unittest
 
-from mugen.core.contract.gateway.storage.rdbms.types import ScalarFilterOp, TextFilterOp
+from mugen.core.contract.gateway.storage.rdbms.types import (
+    RelatedOrderBy,
+    RelatedPathHop,
+    ScalarFilterOp,
+    TextFilterOp,
+)
 from mugen.core.utility.rgql.ast import Identifier, Literal, MemberAccess
 from mugen.core.utility.rgql.expr_parser import parse_rgql_expr
 from mugen.core.utility.rgql.orderby_parser import OrderByItem
@@ -13,6 +18,7 @@ from mugen.core.utility.rgql_helper.rgql_to_relational import (
     _literal_value,
     _prop_path,
     _prop_path_to_column,
+    _try_prop_path,
 )
 
 
@@ -161,6 +167,197 @@ class TestMugenRgqlToRelationalAdapter(unittest.TestCase):
             adapter._add_atom(parse_rgql_expr("length(Name)"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
         with self.assertRaises(ValueError):
             adapter._add_atom(parse_rgql_expr("Age add 1"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+
+    def test_add_atom_supports_related_paths_with_planner(self) -> None:
+        adapter = RGQLToRelationalAdapter()
+        where = {}
+        text_filters = []
+        scalar_filters = []
+        related_text_filters = []
+        related_scalar_filters = []
+
+        def _planner(path: str):
+            if path == "Person/FirstName":
+                return (
+                    [
+                        RelatedPathHop(
+                            source_table="admin_user",
+                            source_field="person_id",
+                            target_table="admin_person",
+                            target_field="id",
+                        )
+                    ],
+                    "first_name",
+                )
+            return None
+
+        adapter._add_atom(  # pylint: disable=protected-access
+            parse_rgql_expr("contains(Person/FirstName,'john')"),
+            where,
+            text_filters,
+            scalar_filters,
+            related_text_filters,
+            related_scalar_filters,
+            path_planner=_planner,
+        )
+        adapter._add_atom(  # pylint: disable=protected-access
+            parse_rgql_expr("Person/FirstName eq 'John'"),
+            where,
+            text_filters,
+            scalar_filters,
+            related_text_filters,
+            related_scalar_filters,
+            path_planner=_planner,
+        )
+        adapter._add_atom(  # pylint: disable=protected-access
+            parse_rgql_expr("Person/FirstName in ('John','Jane')"),
+            where,
+            text_filters,
+            scalar_filters,
+            related_text_filters,
+            related_scalar_filters,
+            path_planner=_planner,
+        )
+        adapter._add_atom(  # pylint: disable=protected-access
+            parse_rgql_expr("Name eq 'Root'"),
+            where,
+            text_filters,
+            scalar_filters,
+            related_text_filters,
+            related_scalar_filters,
+            path_planner=_planner,
+        )
+
+        self.assertEqual(where, {"name": "Root"})
+        self.assertEqual(len(related_text_filters), 1)
+        self.assertEqual(related_text_filters[0].field, "first_name")
+        self.assertEqual(len(related_scalar_filters), 2)
+        self.assertEqual(related_scalar_filters[0].op, ScalarFilterOp.EQ)
+        self.assertEqual(related_scalar_filters[1].op, ScalarFilterOp.IN)
+        self.assertEqual(related_scalar_filters[1].value, ["John", "Jane"])
+
+    def test_related_path_rejects_unsupported_nested_ops(self) -> None:
+        adapter = RGQLToRelationalAdapter()
+        where = {}
+        text_filters = []
+        scalar_filters = []
+        related_text_filters = []
+        related_scalar_filters = []
+
+        def _planner(_path: str):
+            return (
+                [
+                    RelatedPathHop(
+                        source_table="admin_user",
+                        source_field="person_id",
+                        target_table="admin_person",
+                        target_field="id",
+                    )
+                ],
+                "first_name",
+            )
+
+        with self.assertRaises(ValueError):
+            adapter._add_atom(  # pylint: disable=protected-access
+                parse_rgql_expr("Person/FirstName add 1"),
+                where,
+                text_filters,
+                scalar_filters,
+                related_text_filters,
+                related_scalar_filters,
+                path_planner=_planner,
+            )
+        with self.assertRaises(ValueError):
+            adapter._add_atom(  # pylint: disable=protected-access
+                parse_rgql_expr("length(Person/FirstName)"),
+                where,
+                text_filters,
+                scalar_filters,
+                related_text_filters,
+                related_scalar_filters,
+                path_planner=_planner,
+            )
+        with self.assertRaises(ValueError):
+            adapter._add_atom(  # pylint: disable=protected-access
+                parse_rgql_expr("Person/FirstName in 5"),
+                where,
+                text_filters,
+                scalar_filters,
+                related_text_filters,
+                related_scalar_filters,
+                path_planner=_planner,
+            )
+
+    def test_unsupported_atoms_with_non_nav_path_planner_fall_back_to_generic_error(self) -> None:
+        adapter = RGQLToRelationalAdapter()
+        where = {}
+        text_filters = []
+        scalar_filters = []
+        related_text_filters = []
+        related_scalar_filters = []
+
+        def _planner(_path: str):
+            return None
+
+        with self.assertRaises(ValueError):
+            adapter._add_atom(  # pylint: disable=protected-access
+                parse_rgql_expr("Name add 1"),
+                where,
+                text_filters,
+                scalar_filters,
+                related_text_filters,
+                related_scalar_filters,
+                path_planner=_planner,
+            )
+        with self.assertRaises(ValueError):
+            adapter._add_atom(  # pylint: disable=protected-access
+                parse_rgql_expr("length(Name)"),
+                where,
+                text_filters,
+                scalar_filters,
+                related_text_filters,
+                related_scalar_filters,
+                path_planner=_planner,
+            )
+
+    def test_try_prop_path_returns_none_for_non_property_expr(self) -> None:
+        self.assertIsNone(_try_prop_path(Literal(1)))
+
+    def test_orderby_supports_related_paths_with_planner(self) -> None:
+        adapter = RGQLToRelationalAdapter()
+
+        def _planner(path: str):
+            if path == "Person/FirstName":
+                return (
+                    [
+                        RelatedPathHop(
+                            source_table="admin_user",
+                            source_field="person_id",
+                            target_table="admin_person",
+                            target_field="id",
+                        )
+                    ],
+                    "first_name",
+                )
+            return None
+
+        opts = RGQLQueryOptions(
+            orderby=[
+                OrderByItem(expr=Identifier("Name"), direction="asc"),
+                OrderByItem(
+                    expr=MemberAccess(Identifier("Person"), "FirstName"),
+                    direction="desc",
+                ),
+            ]
+        )
+        _, order_by, _, _ = adapter.build_relational_query(opts, path_planner=_planner)
+
+        self.assertEqual(len(order_by), 2)
+        self.assertEqual(order_by[0].field, "name")
+        self.assertIsInstance(order_by[1], RelatedOrderBy)
+        self.assertEqual(order_by[1].field, "first_name")
+        self.assertTrue(order_by[1].descending)
+        self.assertTrue(order_by[1].nulls_last)
 
 
 if __name__ == "__main__":

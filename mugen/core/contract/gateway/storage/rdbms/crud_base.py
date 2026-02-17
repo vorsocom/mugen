@@ -21,7 +21,10 @@ __all__ = ["ICrudService", "ICrudServiceWithId", "ICrudServiceWithRowVersion"]
 from abc import ABC, abstractmethod
 from typing import Any, Generic, Mapping, Sequence, TypeVar
 
-from mugen.core.contract.gateway.storage.rdbms.types import FilterGroup, OrderBy
+from mugen.core.contract.gateway.storage.rdbms.types import (
+    FilterGroup,
+    OrderClause,
+)
 
 T = TypeVar("T")
 
@@ -61,7 +64,7 @@ class ICrudService(Generic[T], ABC):
         *,
         columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
-        order_by: Sequence[OrderBy] | None = None,
+        order_by: Sequence[OrderClause] | None = None,
         limit: int | None = None,
         offset: int | None = None,
     ) -> Sequence[T]:
@@ -75,7 +78,7 @@ class ICrudService(Generic[T], ABC):
         fk_values: Sequence[Any],
         columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
-        order_by: Sequence[OrderBy] | None = None,
+        order_by: Sequence[OrderClause] | None = None,
         per_fk_limit: int | None = None,
         per_fk_offset: int | None = None,
     ) -> Sequence[T]:

@@ -3,10 +3,15 @@
 __all__ = [
     "Record",
     "OrderBy",
+    "RelatedPathHop",
+    "RelatedOrderBy",
+    "OrderClause",
     "TextFilterOp",
     "TextFilter",
+    "RelatedTextFilter",
     "ScalarFilterOp",
     "ScalarFilter",
+    "RelatedScalarFilter",
     "FilterGroup",
     "RowVersionConflict",
 ]
@@ -80,6 +85,41 @@ class OrderBy:
     descending: bool = False
 
 
+@dataclass(frozen=True)
+class RelatedPathHop:
+    """One navigation hop between two logical tables.
+
+    Attributes
+    ----------
+    source_table:
+        Logical source table name (for validation/debugging).
+    source_field:
+        Field on the source table used in the join predicate.
+    target_table:
+        Logical target table name.
+    target_field:
+        Field on the target table used in the join predicate.
+    """
+
+    source_table: str
+    source_field: str
+    target_table: str
+    target_field: str
+
+
+@dataclass(frozen=True)
+class RelatedOrderBy:
+    """Ordering descriptor for a field reached through related-table hops."""
+
+    path_hops: Sequence[RelatedPathHop]
+    field: str
+    descending: bool = False
+    nulls_last: bool = True
+
+
+OrderClause = OrderBy | RelatedOrderBy
+
+
 class ScalarFilterOp(Enum):
     """Operations for scalar comparison filters.
 
@@ -89,6 +129,8 @@ class ScalarFilterOp(Enum):
 
     Members
     -------
+    EQ:
+        Equality comparison.
     LT, LTE, GT, GTE:
         Strict/loose less-than and greater-than comparisons.
     NE:
@@ -99,6 +141,7 @@ class ScalarFilterOp(Enum):
         Inclusive range comparison, similar to ``col BETWEEN low AND high`` in SQL.
     """
 
+    EQ = auto()
     LT = auto()
     LTE = auto()
     GT = auto()
@@ -123,11 +166,21 @@ class ScalarFilter:
 
         The expected shape depends on ``op``:
 
-        * ``LT``, ``LTE``, ``GT``, ``GTE``, ``NE`` – a single scalar value.
+        * ``EQ``, ``LT``, ``LTE``, ``GT``, ``GTE``, ``NE`` – a single scalar value.
         * ``IN`` – a non-string iterable of values.
         * ``BETWEEN`` – a pair ``(low, high)`` representing the inclusive bounds.
     """
 
+    field: str
+    op: ScalarFilterOp
+    value: Any
+
+
+@dataclass(frozen=True)
+class RelatedScalarFilter:
+    """Scalar comparison filter on a field reached through related-table hops."""
+
+    path_hops: Sequence[RelatedPathHop]
     field: str
     op: ScalarFilterOp
     value: Any
@@ -190,6 +243,17 @@ class TextFilter:
     case_sensitive: bool = False
 
 
+@dataclass(frozen=True)
+class RelatedTextFilter:
+    """Text filter on a field reached through related-table hops."""
+
+    path_hops: Sequence[RelatedPathHop]
+    field: str
+    op: TextFilterOp
+    value: Any
+    case_sensitive: bool = False
+
+
 @dataclass
 class FilterGroup:
     """Represents a conjunction (AND) of simple predicates on a single table.
@@ -214,3 +278,5 @@ class FilterGroup:
     where: Mapping[str, Any] = field(default_factory=dict)
     text_filters: Sequence[TextFilter] = field(default_factory=list)
     scalar_filters: Sequence[ScalarFilter] = field(default_factory=list)
+    related_text_filters: Sequence[RelatedTextFilter] = field(default_factory=list)
+    related_scalar_filters: Sequence[RelatedScalarFilter] = field(default_factory=list)
