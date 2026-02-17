@@ -10,6 +10,10 @@ from sqlalchemy import Column, Integer, MetaData, String, Table, select as sa_se
 from mugen.core.contract.gateway.storage.rdbms.types import (
     FilterGroup,
     OrderBy,
+    RelatedOrderBy,
+    RelatedPathHop,
+    RelatedScalarFilter,
+    RelatedTextFilter,
     RowVersionConflict,
     ScalarFilter,
     ScalarFilterOp,
@@ -82,14 +86,32 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
             metadata,
             Column("id", Integer, primary_key=True),
             Column("tenant_id", Integer),
+            Column("person_id", Integer),
             Column("name", String(64)),
             Column("score", Integer),
             Column("row_version", Integer),
         )
+        self.people_table = Table(
+            "people",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("department_id", Integer),
+            Column("first_name", String(64)),
+        )
+        self.departments_table = Table(
+            "departments",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("name", String(64)),
+        )
         self.session = AsyncMock()
         self.uow = SQLAlchemyRelationalUnitOfWork(
             session=self.session,
-            tables={"widgets": self.table},
+            tables={
+                "widgets": self.table,
+                "people": self.people_table,
+                "departments": self.departments_table,
+            },
         )
 
     async def test_count_insert_get_one_and_find_paths(self) -> None:
@@ -541,3 +563,189 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(KeyError):
             self.uow._get_table("missing")  # pylint: disable=protected-access
+
+    async def test_related_filters_and_related_orderby(self) -> None:
+        hop = RelatedPathHop(
+            source_table="widgets",
+            source_field="person_id",
+            target_table="people",
+            target_field="id",
+        )
+        self.session.execute = AsyncMock(
+            side_effect=[
+                _FakeResult(rows=[{"id": 1, "name": "Ada"}]),
+                _FakeResult(rows=[{"id": 1, "tenant_id": 10, "name": "Ada"}]),
+            ]
+        )
+
+        rows = await self.uow.find(
+            "widgets",
+            columns=["id", "name"],
+            filter_groups=[
+                FilterGroup(
+                    related_text_filters=[
+                        RelatedTextFilter(
+                            path_hops=[hop],
+                            field="first_name",
+                            op=TextFilterOp.CONTAINS,
+                            value="ad",
+                        )
+                    ],
+                    related_scalar_filters=[
+                        RelatedScalarFilter(
+                            path_hops=[hop],
+                            field="first_name",
+                            op=ScalarFilterOp.EQ,
+                            value="Ada",
+                        )
+                    ],
+                )
+            ],
+            order_by=[
+                RelatedOrderBy(
+                    path_hops=[hop],
+                    field="first_name",
+                    descending=False,
+                    nulls_last=True,
+                )
+            ],
+        )
+        self.assertEqual(rows, [{"id": 1, "name": "Ada"}])
+
+        find_stmt = str(self.session.execute.await_args_list[0].args[0]).upper()
+        self.assertIn("EXISTS", find_stmt)
+        self.assertIn("NULLS LAST", find_stmt)
+
+        by_fk = await self.uow.find_partitioned_by_fk(
+            "widgets",
+            fk_field="tenant_id",
+            fk_values=[10],
+            columns=["id", "name"],
+            order_by=[
+                RelatedOrderBy(
+                    path_hops=[hop],
+                    field="first_name",
+                    descending=True,
+                    nulls_last=True,
+                )
+            ],
+            per_fk_limit=1,
+            per_fk_offset=0,
+        )
+        self.assertEqual(by_fk, [{"id": 1, "tenant_id": 10, "name": "Ada"}])
+
+        by_fk_stmt = str(self.session.execute.await_args_list[1].args[0]).upper()
+        self.assertIn("NULLS LAST", by_fk_stmt)
+
+    async def test_related_path_branch_and_error_edges(self) -> None:
+        hop = RelatedPathHop(
+            source_table="widgets",
+            source_field="person_id",
+            target_table="people",
+            target_field="id",
+        )
+        multi_hop = [
+            hop,
+            RelatedPathHop(
+                source_table="people",
+                source_field="department_id",
+                target_table="departments",
+                target_field="id",
+            ),
+        ]
+
+        self.session.execute = AsyncMock(return_value=_FakeResult(rows=[{"id": 1}]))
+        await self.uow.find(
+            "widgets",
+            filter_groups=[
+                FilterGroup(
+                    related_text_filters=[
+                        RelatedTextFilter(
+                            path_hops=[hop],
+                            field="first_name",
+                            op=TextFilterOp.STARTSWITH,
+                            value="Ad",
+                            case_sensitive=True,
+                        ),
+                        RelatedTextFilter(
+                            path_hops=[hop],
+                            field="first_name",
+                            op=TextFilterOp.ENDSWITH,
+                            value="a",
+                        ),
+                    ]
+                )
+            ],
+            order_by=[
+                RelatedOrderBy(
+                    path_hops=multi_hop,
+                    field="name",
+                    descending=False,
+                    nulls_last=False,
+                )
+            ],
+        )
+        stmt = str(self.session.execute.await_args.args[0]).upper()
+        self.assertIn("LIKE", stmt)
+        self.assertNotIn("NULLS LAST", stmt)
+
+        with self.assertRaises(ValueError):
+            self.uow._build_predicates(  # pylint: disable=protected-access
+                self.table,
+                related_text_filters=[
+                    RelatedTextFilter(
+                        path_hops=[hop],
+                        field="first_name",
+                        op=object(),
+                        value="x",
+                    )
+                ],
+            )
+
+        with self.assertRaises(ValueError):
+            self.uow._resolve_related_path(  # pylint: disable=protected-access
+                table=self.table,
+                path_hops=[],
+                alias_prefix="x",
+            )
+
+        with self.assertRaises(ValueError):
+            self.uow._resolve_related_path(  # pylint: disable=protected-access
+                table=self.table,
+                path_hops=[
+                    RelatedPathHop(
+                        source_table="other_table",
+                        source_field="person_id",
+                        target_table="people",
+                        target_field="id",
+                    )
+                ],
+                alias_prefix="x",
+            )
+
+        with self.assertRaises(ValueError):
+            self.uow._resolve_related_path(  # pylint: disable=protected-access
+                table=self.table,
+                path_hops=[
+                    RelatedPathHop(
+                        source_table="widgets",
+                        source_field="missing_source",
+                        target_table="people",
+                        target_field="id",
+                    )
+                ],
+                alias_prefix="x",
+            )
+
+        with self.assertRaises(ValueError):
+            await self.uow.find(
+                "widgets",
+                order_by=[
+                    RelatedOrderBy(
+                        path_hops=[hop],
+                        field="missing_field",
+                        descending=False,
+                        nulls_last=True,
+                    )
+                ],
+            )

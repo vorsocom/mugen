@@ -216,6 +216,14 @@ class TestMugenRgqlSemantic(unittest.TestCase):
         with self.assertRaises(SemanticError):
             infer(parse_rgql_expr("Name/any()"), self.base, {})
         with self.assertRaises(SemanticError):
+            infer(parse_rgql_expr("contains('Name','A')"), self.base, {})
+        with self.assertRaises(SemanticError):
+            infer(parse_rgql_expr("contains(Name)"), self.base, {})
+        with self.assertRaises(SemanticError):
+            infer(parse_rgql_expr("contains(Name,1)"), self.base, {})
+        with self.assertRaises(SemanticError):
+            infer(parse_rgql_expr("contains(Orders,'A')"), self.base, {})
+        with self.assertRaises(SemanticError):
             infer(parse_rgql_expr("Tags in ('A')"), self.base, {})
         with self.assertRaises(SemanticError):
             infer(parse_rgql_expr("Name in 1"), self.base, {})

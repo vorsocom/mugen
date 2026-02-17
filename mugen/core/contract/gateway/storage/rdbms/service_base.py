@@ -10,7 +10,7 @@ from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorage
 from mugen.core.contract.gateway.storage.rdbms.types import (
     Record,
     FilterGroup,
-    OrderBy,
+    OrderClause,
 )
 
 T = TypeVar("T")
@@ -102,7 +102,7 @@ class IRelationalService(ICrudServiceWithRowVersion[T], Generic[T], ABC):
         *,
         columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
-        order_by: Sequence[OrderBy] | None = None,
+        order_by: Sequence[OrderClause] | None = None,
         limit: int | None = None,
         offset: int | None = None,
     ) -> Sequence[T]:
@@ -123,7 +123,7 @@ class IRelationalService(ICrudServiceWithRowVersion[T], Generic[T], ABC):
         fk_values: Sequence[Any],
         columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
-        order_by: Sequence[OrderBy] | None = None,
+        order_by: Sequence[OrderClause] | None = None,
         per_fk_limit: int | None = None,
         per_fk_offset: int | None = None,
     ) -> Sequence[T]:

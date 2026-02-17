@@ -23,12 +23,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mugen.core.contract.gateway.storage.rdbms.types import (
     FilterGroup,
+    OrderClause,
     OrderBy,
+    RelatedOrderBy,
+    RelatedPathHop,
+    RelatedScalarFilter,
+    RelatedTextFilter,
     Record,
-    TextFilter,
-    TextFilterOp,
     ScalarFilter,
     ScalarFilterOp,
+    TextFilter,
+    TextFilterOp,
 )
 from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
 from mugen.core.contract.gateway.storage.rdbms.uow import IRelationalUnitOfWork
@@ -154,7 +159,7 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         *,
         columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
-        order_by: Sequence[OrderBy] | None = None,
+        order_by: Sequence[OrderClause] | None = None,
         limit: int | None = None,
         offset: int | None = None,
     ) -> Sequence[Record]:
@@ -187,6 +192,9 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         if order_by:
             order_clauses = []
             for ob in order_by:
+                if isinstance(ob, RelatedOrderBy):
+                    order_clauses.append(self._related_order_clause(tbl, ob))
+                    continue
                 col = getattr(tbl.c, ob.field)
                 order_clauses.append(col.desc() if ob.descending else col.asc())
             stmt = stmt.order_by(*order_clauses)
@@ -208,7 +216,7 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         fk_values: Sequence[Any],
         columns: Sequence[str] | None = None,
         filter_groups: Sequence[FilterGroup] | None = None,
-        order_by: Sequence[OrderBy] | None = None,
+        order_by: Sequence[OrderClause] | None = None,
         per_fk_limit: int | None = None,
         per_fk_offset: int | None = None,
         tie_breaker_field: str = "id",
@@ -278,9 +286,12 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         order_fields: set[str] = set()
         if order_by:
             for ob in order_by:
-                col = getattr(tbl.c, ob.field)
-                order_exprs.append(col.desc() if ob.descending else col.asc())
-                order_fields.add(ob.field)
+                if isinstance(ob, RelatedOrderBy):
+                    order_exprs.append(self._related_order_clause(tbl, ob))
+                else:
+                    col = getattr(tbl.c, ob.field)
+                    order_exprs.append(col.desc() if ob.descending else col.asc())
+                    order_fields.add(ob.field)
 
         # Always add a deterministic tie-breaker for stable row_number ordering.
         if tie_breaker_field in tbl.c and tie_breaker_field not in order_fields:
@@ -454,6 +465,8 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         where: Mapping[str, Any] | None = None,
         text_filters: Sequence[TextFilter] | None = None,
         scalar_filters: Sequence[ScalarFilter] | None = None,
+        related_text_filters: Sequence[RelatedTextFilter] | None = None,
+        related_scalar_filters: Sequence[RelatedScalarFilter] | None = None,
     ) -> list[Any]:
         """Translate contract-level filter arguments into SQLAlchemy predicates.
 
@@ -499,39 +512,188 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         if scalar_filters:
             for sf in scalar_filters:
                 col = getattr(table.c, sf.field)
-                op = sf.op
-                val = sf.value
+                clauses.append(
+                    self._scalar_clause_for_op(
+                        col=col,
+                        op=sf.op,
+                        val=sf.value,
+                    )
+                )
 
-                if op is ScalarFilterOp.LT:
-                    clauses.append(col < val)
-                elif op is ScalarFilterOp.LTE:
-                    clauses.append(col <= val)
-                elif op is ScalarFilterOp.GT:
-                    clauses.append(col > val)
-                elif op is ScalarFilterOp.GTE:
-                    clauses.append(col >= val)
-                elif op is ScalarFilterOp.NE:
-                    clauses.append(col != val)
-                elif op is ScalarFilterOp.IN:
-                    # Defensive handling: require non-string iterable;
-                    # treat empty iterable as a predicate that's always false.
-                    if isinstance(val, str) or not isinstance(val, Iterable):
-                        raise TypeError(
-                            "ScalarFilterOp.IN value must be a non-string iterable; "
-                            f"got {type(val)!r}"
-                        )
-                    seq = list(val)
-                    if not seq:
-                        clauses.append(sa_false())
-                    else:
-                        clauses.append(col.in_(seq))
-                elif op is ScalarFilterOp.BETWEEN:
-                    low, high = val
-                    clauses.append(col.between(low, high))
+        if related_text_filters:
+            for idx, rtf in enumerate(related_text_filters):
+                from_clause, correlation_clause, terminal_alias = self._resolve_related_path(
+                    table=table,
+                    path_hops=rtf.path_hops,
+                    alias_prefix=f"rtf_{idx}",
+                )
+                col = getattr(terminal_alias.c, rtf.field)
+
+                if rtf.case_sensitive:
+                    col_expr = col
+                    pattern_value = str(rtf.value)
                 else:
-                    raise ValueError(f"Unsupported ScalarFilterOp: {op!r}")
+                    col_expr = sa_func.lower(col)
+                    pattern_value = str(rtf.value).lower()
+
+                if rtf.op is TextFilterOp.CONTAINS:
+                    pattern = f"%{pattern_value}%"
+                elif rtf.op is TextFilterOp.STARTSWITH:
+                    pattern = f"{pattern_value}%"
+                elif rtf.op is TextFilterOp.ENDSWITH:
+                    pattern = f"%{pattern_value}"
+                else:
+                    raise ValueError(f"Unsupported TextFilterOp: {rtf.op!r}")
+
+                terminal_predicate = col_expr.like(pattern)
+                clauses.append(
+                    self._related_exists_clause(
+                        from_clause=from_clause,
+                        correlation_clause=correlation_clause,
+                        terminal_predicate=terminal_predicate,
+                    )
+                )
+
+        if related_scalar_filters:
+            for idx, rsf in enumerate(related_scalar_filters):
+                from_clause, correlation_clause, terminal_alias = self._resolve_related_path(
+                    table=table,
+                    path_hops=rsf.path_hops,
+                    alias_prefix=f"rsf_{idx}",
+                )
+                col = getattr(terminal_alias.c, rsf.field)
+                terminal_predicate = self._scalar_clause_for_op(
+                    col=col,
+                    op=rsf.op,
+                    val=rsf.value,
+                )
+                clauses.append(
+                    self._related_exists_clause(
+                        from_clause=from_clause,
+                        correlation_clause=correlation_clause,
+                        terminal_predicate=terminal_predicate,
+                    )
+                )
 
         return clauses
+
+    def _scalar_clause_for_op(self, col: Any, op: ScalarFilterOp, val: Any) -> Any:
+        if op is ScalarFilterOp.EQ:
+            return col == val
+        if op is ScalarFilterOp.LT:
+            return col < val
+        if op is ScalarFilterOp.LTE:
+            return col <= val
+        if op is ScalarFilterOp.GT:
+            return col > val
+        if op is ScalarFilterOp.GTE:
+            return col >= val
+        if op is ScalarFilterOp.NE:
+            return col != val
+        if op is ScalarFilterOp.IN:
+            if isinstance(val, str) or not isinstance(val, Iterable):
+                raise TypeError(
+                    "ScalarFilterOp.IN value must be a non-string iterable; "
+                    f"got {type(val)!r}"
+                )
+            seq = list(val)
+            if not seq:
+                return sa_false()
+            return col.in_(seq)
+        if op is ScalarFilterOp.BETWEEN:
+            low, high = val
+            return col.between(low, high)
+        raise ValueError(f"Unsupported ScalarFilterOp: {op!r}")
+
+    def _resolve_related_path(
+        self,
+        *,
+        table: Table,
+        path_hops: Sequence[RelatedPathHop],
+        alias_prefix: str,
+    ) -> tuple[Any, Any, Any]:
+        if not path_hops:
+            raise ValueError("Related filters/ordering require at least one path hop.")
+
+        current_alias = table
+        target_aliases: list[Any] = []
+        join_clauses: list[Any] = []
+        correlation_clause = None
+
+        for idx, hop in enumerate(path_hops):
+            if idx == 0 and hop.source_table and hop.source_table != table.name:
+                raise ValueError(
+                    "Related path source table mismatch: expected "
+                    f"{table.name!r}, got {hop.source_table!r}."
+                )
+
+            target_table = self._get_table(hop.target_table)
+            target_alias = target_table.alias(f"{alias_prefix}_h{idx}")
+
+            try:
+                source_col = getattr(current_alias.c, hop.source_field)
+                target_col = getattr(target_alias.c, hop.target_field)
+            except AttributeError as exc:
+                raise ValueError(
+                    "Unknown join field in related path hop: "
+                    f"{hop.source_field!r} -> {hop.target_field!r}."
+                ) from exc
+
+            join_predicate = source_col == target_col
+            if idx == 0:
+                correlation_clause = join_predicate
+            else:
+                join_clauses.append(join_predicate)
+
+            target_aliases.append(target_alias)
+            current_alias = target_alias
+
+        from_clause = target_aliases[0]
+        for idx in range(1, len(target_aliases)):
+            from_clause = from_clause.join(target_aliases[idx], join_clauses[idx - 1])
+
+        return from_clause, correlation_clause, current_alias
+
+    def _related_exists_clause(
+        self,
+        *,
+        from_clause: Any,
+        correlation_clause: Any,
+        terminal_predicate: Any,
+    ) -> Any:
+        subquery = (
+            sa_select(1)
+            .select_from(from_clause)
+            .where(and_(correlation_clause, terminal_predicate))
+        )
+        return subquery.exists()
+
+    def _related_order_clause(self, table: Table, order_by: RelatedOrderBy) -> Any:
+        from_clause, correlation_clause, terminal_alias = self._resolve_related_path(
+            table=table,
+            path_hops=order_by.path_hops,
+            alias_prefix="rob",
+        )
+
+        try:
+            terminal_col = getattr(terminal_alias.c, order_by.field)
+        except AttributeError as exc:
+            raise ValueError(
+                f"Unknown field {order_by.field!r} in related order-by."
+            ) from exc
+
+        subquery = (
+            sa_select(terminal_col)
+            .select_from(from_clause)
+            .where(correlation_clause)
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        clause = subquery.desc() if order_by.descending else subquery.asc()
+        if order_by.nulls_last:
+            clause = clause.nulls_last()
+        return clause
 
     def _predicates_for_group(self, table: Table, group: FilterGroup) -> Any | None:
         """Build a SQLAlchemy boolean expression for a single FilterGroup.
@@ -544,6 +706,8 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
             where=group.where,
             text_filters=group.text_filters,
             scalar_filters=group.scalar_filters,
+            related_text_filters=getattr(group, "related_text_filters", []),
+            related_scalar_filters=getattr(group, "related_scalar_filters", []),
         )
 
         if not predicates:

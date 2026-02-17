@@ -401,7 +401,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
         )
 
         class _Adapter:
-            def build_relational_query(self, _opts):
+            def build_relational_query(self, _opts, **_kwargs):
                 return ([], [], None, None)
 
         wrapped = rgql_mod.rgql_enabled(
@@ -569,7 +569,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
         )
 
         class _Adapter:
-            def build_relational_query(self, _opts):
+            def build_relational_query(self, _opts, **_kwargs):
                 return ([], [], None, None)
 
         with (
@@ -628,7 +628,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
         )
 
         class _Adapter:
-            def build_relational_query(self, _opts):
+            def build_relational_query(self, _opts, **_kwargs):
                 return ([], [], None, None)
 
         class _Ctx:
@@ -708,7 +708,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             def __init__(self, payload):
                 self._payload = payload
 
-            def build_relational_query(self, _opts):
+            def build_relational_query(self, _opts, **_kwargs):
                 return self._payload
 
         with patch.object(rgql_mod, "abort", side_effect=_abort_raiser):
@@ -733,6 +733,25 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                                 where=[1, 2, 3],
                                 scalar_filters=[1, 2, 3],
                                 text_filters=[1],
+                                related_scalar_filters=[1],
+                                related_text_filters=[1],
+                            )
+                        ],
+                        [],
+                        1,
+                        0,
+                    ),
+                ),
+                (
+                    SimpleNamespace(select=[], expand=[], count=False),
+                    (
+                        [
+                            SimpleNamespace(
+                                where=[],
+                                scalar_filters=[],
+                                text_filters=[],
+                                related_scalar_filters=[1, 2, 3],
+                                related_text_filters=[1, 2, 3, 4],
                             )
                         ],
                         [],
@@ -907,51 +926,285 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                         )
                     self.assertEqual(ex.exception.code, 400)
 
-            bad_levels_opts = SimpleNamespace(
-                select=["Name"],
-                expand=[SimpleNamespace(path="Role", levels="bad")],
-                count=False,
-            )
-            with (
-                patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
-                patch.object(
-                    rgql_mod,
-                    "RGQLToRelationalAdapter",
-                    new=lambda: _Adapter(([], [], None, None)),
-                ),
-                patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
-                patch.object(
-                    rgql_mod,
-                    "parse_rgql_url",
-                    return_value=_rgql_url(opts=bad_levels_opts),
-                ),
-                patch.object(
-                    rgql_mod,
-                    "make_default_where_provider",
-                    return_value=lambda _edm_type_name: {},
-                ),
-                patch.object(
-                    rgql_mod,
-                    "apply_to_filter_groups",
-                    side_effect=lambda filter_groups, where: filter_groups,
-                ),
-                patch.object(
-                    rgql_mod,
-                    "normalise_expand_levels",
-                    side_effect=ValueError("bad levels"),
-                ),
+    async def test_adapter_value_error_returns_bad_request(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        service = SimpleNamespace(
+            list=AsyncMock(return_value=[_Entity(id=uuid.uuid4(), name="Alice")]),
+            count=AsyncMock(return_value=0),
+        )
+        registry = _FakeRegistry(service=service, rgql_enabled=True)
+
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        class _Adapter:
+            def build_relational_query(self, _opts, **_kwargs):
+                raise ValueError("Nested navigation depth exceeds max (4).")
+
+        opts = SimpleNamespace(select=[], expand=[], count=False)
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "RGQLToRelationalAdapter", new=lambda: _Adapter()),
+            patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
+            patch.object(
+                rgql_mod,
+                "parse_rgql_url",
+                return_value=_rgql_url(opts=opts),
+            ),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+            patch.object(
+                rgql_mod,
+                "apply_to_filter_groups",
+                side_effect=lambda filter_groups, where: filter_groups,
+            ),
+            patch.object(rgql_mod, "abort", side_effect=_abort_raiser),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users?$count=true",
+                method="GET",
             ):
-                async with self.app.test_request_context(
-                    "/api/core/acp/v1/Users?$expand=Role($levels=bad)",
-                    method="GET",
-                ):
-                    with self.assertRaises(_AbortCalled) as ex:
-                        await wrapped(
-                            entity_set="Users",
-                            entity_id=None,
-                            auth_user=str(user_id),
-                        )
-                    self.assertEqual(ex.exception.code, 400)
+                with self.assertRaises(_AbortCalled) as ex:
+                    await wrapped(
+                        entity_set="Users",
+                        entity_id=None,
+                        auth_user=str(uuid.uuid4()),
+                    )
+                self.assertEqual(ex.exception.code, 400)
+                self.assertIn("depth exceeds max", ex.exception.message)
+
+    async def test_nav_path_planner_uses_table_resolver_cache(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        user_service = SimpleNamespace(
+            table="admin_user",
+            list=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+        )
+        role_service = SimpleNamespace(table="admin_role")
+
+        class _Registry(_FakeRegistry):
+            def __init__(self):
+                super().__init__(service=user_service, rgql_enabled=True)
+                self._services = {
+                    "user_svc": user_service,
+                    "role_svc": role_service,
+                }
+
+            def get_edm_service(self, service_key: str):
+                return self._services[service_key]
+
+        registry = _Registry()
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        class _Adapter:
+            def build_relational_query(self, _opts, **kwargs):
+                kwargs["path_planner"]("Role/FirstName")
+                return ([], [], None, None)
+
+        seen = {"calls": 0}
+
+        def _fake_plan_related_path(**kwargs):
+            seen["calls"] += 1
+            resolver = kwargs["table_resolver"]
+            self.assertEqual(resolver("ACP.User"), "admin_user")
+            self.assertEqual(resolver("ACP.GlobalRole"), "admin_role")
+            self.assertEqual(resolver("ACP.GlobalRole"), "admin_role")
+            return ([], "first_name")
+
+        opts = SimpleNamespace(select=[], expand=[], count=False)
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "RGQLToRelationalAdapter", new=lambda: _Adapter()),
+            patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
+            patch.object(rgql_mod, "plan_related_path", side_effect=_fake_plan_related_path),
+            patch.object(
+                rgql_mod,
+                "parse_rgql_url",
+                return_value=_rgql_url(opts=opts),
+            ),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+            patch.object(
+                rgql_mod,
+                "apply_to_filter_groups",
+                side_effect=lambda filter_groups, where: filter_groups,
+            ),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users?$count=true",
+                method="GET",
+            ):
+                await wrapped(
+                    entity_set="Users",
+                    entity_id=None,
+                    auth_user=str(uuid.uuid4()),
+                )
+
+        self.assertEqual(seen["calls"], 1)
+
+    async def test_nav_path_planner_missing_table_maps_to_bad_request(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        user_service = SimpleNamespace(
+            table="admin_user",
+            list=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+        )
+        role_service = SimpleNamespace()
+
+        class _Registry(_FakeRegistry):
+            def __init__(self):
+                super().__init__(service=user_service, rgql_enabled=True)
+                self._services = {
+                    "user_svc": user_service,
+                    "role_svc": role_service,
+                }
+
+            def get_edm_service(self, service_key: str):
+                return self._services[service_key]
+
+        registry = _Registry()
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        class _Adapter:
+            def build_relational_query(self, _opts, **kwargs):
+                kwargs["path_planner"]("Role/FirstName")
+                return ([], [], None, None)
+
+        def _fake_plan_related_path(**kwargs):
+            kwargs["table_resolver"]("ACP.GlobalRole")
+            return ([], "first_name")
+
+        opts = SimpleNamespace(select=[], expand=[], count=False)
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "RGQLToRelationalAdapter", new=lambda: _Adapter()),
+            patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
+            patch.object(rgql_mod, "plan_related_path", side_effect=_fake_plan_related_path),
+            patch.object(
+                rgql_mod,
+                "parse_rgql_url",
+                return_value=_rgql_url(opts=opts),
+            ),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+            patch.object(
+                rgql_mod,
+                "apply_to_filter_groups",
+                side_effect=lambda filter_groups, where: filter_groups,
+            ),
+            patch.object(rgql_mod, "abort", side_effect=_abort_raiser),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users?$count=true",
+                method="GET",
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await wrapped(
+                        entity_set="Users",
+                        entity_id=None,
+                        auth_user=str(uuid.uuid4()),
+                    )
+                self.assertEqual(ex.exception.code, 400)
+                self.assertIn("No logical table name found", ex.exception.message)
+
+    async def test_list_path_rejects_invalid_expand_levels(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        service = SimpleNamespace(
+            list=AsyncMock(return_value=[_Entity(id=uuid.uuid4(), name="Alice")]),
+            count=AsyncMock(return_value=0),
+            table="admin_user",
+        )
+        registry = _FakeRegistry(service=service, rgql_enabled=True)
+
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        class _Adapter:
+            def build_relational_query(self, _opts, **_kwargs):
+                return ([], [], None, None)
+
+        opts = SimpleNamespace(
+            select=[],
+            expand=[SimpleNamespace(path="Role", levels="broken")],
+            count=False,
+        )
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "RGQLToRelationalAdapter", new=lambda: _Adapter()),
+            patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
+            patch.object(rgql_mod, "parse_rgql_url", return_value=_rgql_url(opts=opts)),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+            patch.object(
+                rgql_mod,
+                "apply_to_filter_groups",
+                side_effect=lambda filter_groups, where: filter_groups,
+            ),
+            patch.object(
+                rgql_mod,
+                "normalise_expand_levels",
+                side_effect=ValueError("bad levels"),
+            ),
+            patch.object(rgql_mod, "abort", side_effect=_abort_raiser),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users?$expand=Role",
+                method="GET",
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await wrapped(
+                        entity_set="Users",
+                        entity_id=None,
+                        auth_user=str(uuid.uuid4()),
+                    )
+                self.assertEqual(ex.exception.code, 400)
+                self.assertIn("Unsupported $levels value", ex.exception.message)
 
     async def test_entity_path_additional_error_branches(self) -> None:
         async def _endpoint(**kwargs):
@@ -1062,7 +1315,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
         )
 
         class _Adapter:
-            def build_relational_query(self, _opts):
+            def build_relational_query(self, _opts, **_kwargs):
                 return ([], [], None, None)
 
         with (
@@ -1148,7 +1401,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             def __init__(self, payload):
                 self._payload = payload
 
-            def build_relational_query(self, _opts):
+            def build_relational_query(self, _opts, **_kwargs):
                 return self._payload
 
         # Covers:
