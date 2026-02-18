@@ -282,6 +282,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.room_put_state = AsyncMock()
         client.room_get_state = AsyncMock()
         client.room_read_markers = AsyncMock()
+        client.room_typing = AsyncMock()
         client.room_send = AsyncMock()
         client.upload = AsyncMock()
         client.download = AsyncMock()
@@ -1157,6 +1158,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._messaging_service.handle_text_message.assert_awaited()
         client._messaging_service.handle_video_message.assert_awaited()
         self.assertEqual(client._process_message_responses.await_count, 5)
+        self.assertEqual(client.room_typing.await_count, 10)
 
     async def test_cb_room_message_returns_early_when_validation_fails(self) -> None:
         client = self._client()
@@ -1168,6 +1170,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             await client._cb_room_message(room, _FakeTextMessage())
 
         client._process_message_responses.assert_not_called()
+        client.room_typing.assert_not_awaited()
 
     async def test_cb_room_message_media_without_download_and_unknown_type(
         self,
@@ -1202,6 +1205,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._messaging_service.handle_image_message.assert_not_called()
         client._messaging_service.handle_video_message.assert_not_called()
         self.assertEqual(client._process_message_responses.await_count, 5)
+        self.assertEqual(client.room_typing.await_count, 10)
 
     async def test_cb_room_message_cleans_up_media_file_when_handler_raises(
         self,
@@ -1224,6 +1228,23 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         client._cleanup_temp_file.assert_called_once_with("/tmp/file")
         client._process_message_responses.assert_not_awaited()
+        self.assertEqual(client.room_typing.await_count, 2)
+        self.assertEqual(client.room_typing.await_args_list[0].args, ("!room:test", True))
+        self.assertEqual(client.room_typing.await_args_list[1].args, ("!room:test", False))
+
+    async def test_cb_room_message_ignores_typing_signal_errors(self) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        client._validate_message = AsyncMock(return_value=True)
+        client._process_message_responses = AsyncMock(return_value=None)
+        client._messaging_service.handle_text_message = AsyncMock(return_value=[])
+        client.room_typing = AsyncMock(side_effect=RuntimeError("typing boom"))
+
+        with patch.object(matrix_mod, "RoomMessageText", _FakeTextMessage):
+            await client._cb_room_message(room, _FakeTextMessage(body="hello"))
+
+        client._messaging_service.handle_text_message.assert_awaited_once()
+        client._process_message_responses.assert_awaited_once()
 
     async def test_process_message_responses_dispatches_by_response_type(self) -> None:
         client = self._client()

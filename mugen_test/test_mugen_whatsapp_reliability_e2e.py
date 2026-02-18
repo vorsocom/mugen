@@ -168,6 +168,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
 
     async def test_transient_graph_failure_recovers_via_retry(self) -> None:
         config = _make_config()
+        config.whatsapp.graphapi.typing_indicator_enabled = False
         keyval = _MemoryKeyVal()
         ext_logger = Mock()
         client_logger = Mock()

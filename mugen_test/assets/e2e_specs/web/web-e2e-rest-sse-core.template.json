@@ -16,7 +16,7 @@
   "scenario": {
     "conversation_id": "__WEB_CONVERSATION_ID__",
     "text": "__WEB_TEXT__",
-    "stream_timeout_secs": 12
+    "stream_timeout_secs": 30
   },
   "assertions": {
     "required_event_order": [

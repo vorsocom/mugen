@@ -124,6 +124,7 @@ def _make_client():
         send_video_message=AsyncMock(
             return_value=_ok_payload({"messages": [{"id": "m11"}]})
         ),
+        emit_processing_signal=AsyncMock(return_value=True),
     )
 
 
@@ -436,7 +437,119 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         client.send_image_message.assert_awaited_once()
         self.assertGreaterEqual(client.send_text_message.await_count, 1)
         client.send_video_message.assert_awaited_once()
+        client.emit_processing_signal.assert_any_await(
+            "15550003",
+            state="start",
+            message_id="wamid-2",
+        )
+        client.emit_processing_signal.assert_any_await(
+            "15550003",
+            state="stop",
+            message_id="wamid-2",
+        )
         self.assertEqual((await payload["response_queue"].get())["response"], "OK")
+
+    async def test_processing_signal_failure_does_not_block_message_processing(
+        self,
+    ) -> None:
+        client = _make_client()
+        client.emit_processing_signal = AsyncMock(side_effect=RuntimeError("boom"))
+        messaging_service = _make_messaging_service()
+        messaging_service.handle_text_message = AsyncMock(return_value=[])
+        logging_gateway = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+            messaging_service=messaging_service,
+            logging_gateway=logging_gateway,
+        )
+
+        await ext._process_message_event(  # pylint: disable=protected-access
+            {"contacts": [{"wa_id": "15550001"}]},
+            {
+                "id": "wamid-thinking-error",
+                "from": "15550001",
+                "type": "text",
+                "text": {"body": "hello"},
+            },
+        )
+
+        messaging_service.handle_text_message.assert_awaited_once_with(
+            "whatsapp",
+            room_id="15550001",
+            sender="15550001",
+            message="hello",
+        )
+        warning_messages = [
+            call.args[0] for call in logging_gateway.warning.call_args_list
+        ]
+        self.assertTrue(
+            any("thinking signal raised unexpectedly" in message for message in warning_messages)
+        )
+
+    async def test_processing_signal_false_result_logs_warning(self) -> None:
+        client = _make_client()
+        client.emit_processing_signal = AsyncMock(return_value=False)
+        messaging_service = _make_messaging_service()
+        messaging_service.handle_text_message = AsyncMock(return_value=[])
+        logging_gateway = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+            messaging_service=messaging_service,
+            logging_gateway=logging_gateway,
+        )
+
+        await ext._process_message_event(  # pylint: disable=protected-access
+            {"contacts": [{"wa_id": "15550001"}]},
+            {
+                "id": "wamid-thinking-false",
+                "from": "15550001",
+                "type": "text",
+                "text": {"body": "hello"},
+            },
+        )
+
+        warning_messages = [
+            call.args[0] for call in logging_gateway.warning.call_args_list
+        ]
+        self.assertTrue(
+            any("thinking signal reported failure" in message for message in warning_messages)
+        )
+
+    async def test_processing_signal_stop_emits_when_handler_raises(self) -> None:
+        client = _make_client()
+        messaging_service = _make_messaging_service()
+        messaging_service.handle_text_message = AsyncMock(
+            side_effect=RuntimeError("handler boom")
+        )
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+            messaging_service=messaging_service,
+        )
+
+        with self.assertRaises(RuntimeError):
+            await ext._process_message_event(  # pylint: disable=protected-access
+                {"contacts": [{"wa_id": "15550001"}]},
+                {
+                    "id": "wamid-handler-error",
+                    "from": "15550001",
+                    "type": "text",
+                    "text": {"body": "hello"},
+                },
+            )
+
+        client.emit_processing_signal.assert_any_await(
+            "15550001",
+            state="start",
+            message_id="wamid-handler-error",
+        )
+        client.emit_processing_signal.assert_any_await(
+            "15550001",
+            state="stop",
+            message_id="wamid-handler-error",
+        )
 
     async def test_text_event_processes_extended_response_types(self) -> None:
         client = _make_client()

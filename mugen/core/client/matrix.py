@@ -58,6 +58,11 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.utility.processing_signal import (
+    PROCESSING_STATE_START,
+    PROCESSING_STATE_STOP,
+    normalize_processing_state,
+)
 
 
 class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
@@ -856,103 +861,133 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if not await self._validate_message(room, message):
             return
 
-        message_responses: list[dict] = []
-
-        # Handle audio messages.
-        if isinstance(message, RoomEncryptedAudio):
-            get_media = await self._download_file(
-                message.source["content"]["file"],
-                message.source["content"]["info"],
-            )
-            if get_media:
-                try:
-                    message_responses = (
-                        await self._messaging_service.handle_audio_message(
-                            platform="matrix",
-                            room_id=room.room_id,
-                            sender=message.sender,
-                            message={
-                                "message": message,
-                                "file": get_media,
-                            },
-                        )
-                    )
-                finally:
-                    self._cleanup_temp_file(get_media)
-        # Handle file messages.
-        elif isinstance(message, RoomEncryptedFile):
-            get_media = await self._download_file(
-                message.source["content"]["file"],
-                message.source["content"]["info"],
-            )
-            if get_media:
-                try:
-                    message_responses = await self._messaging_service.handle_file_message(
-                        platform="matrix",
-                        room_id=room.room_id,
-                        sender=message.sender,
-                        message={
-                            "message": message,
-                            "file": get_media,
-                        },
-                    )
-                finally:
-                    self._cleanup_temp_file(get_media)
-        # Handle image messages.
-        elif isinstance(message, RoomEncryptedImage):
-            get_media = await self._download_file(
-                message.source["content"]["file"],
-                message.source["content"]["info"],
-            )
-            if get_media:
-                try:
-                    message_responses = (
-                        await self._messaging_service.handle_image_message(
-                            platform="matrix",
-                            room_id=room.room_id,
-                            sender=message.sender,
-                            message={
-                                "message": message,
-                                "file": get_media,
-                            },
-                        )
-                    )
-                finally:
-                    self._cleanup_temp_file(get_media)
-        # Handle text messages.
-        elif isinstance(message, RoomMessageText):
-            message_responses = await self._messaging_service.handle_text_message(
-                platform="matrix",
-                room_id=room.room_id,
-                sender=message.sender,
-                message=message.body,
-            )
-        # Handle video messages.
-        elif isinstance(message, RoomEncryptedVideo):
-            get_media = await self._download_file(
-                message.source["content"]["file"],
-                message.source["content"]["info"],
-            )
-            if get_media:
-                try:
-                    message_responses = (
-                        await self._messaging_service.handle_video_message(
-                            platform="matrix",
-                            room_id=room.room_id,
-                            sender=message.sender,
-                            message={
-                                "message": message,
-                                "file": get_media,
-                            },
-                        )
-                    )
-                finally:
-                    self._cleanup_temp_file(get_media)
-
-        await self._process_message_responses(
+        await self._emit_room_processing_signal(
             room_id=room.room_id,
-            message_responses=message_responses,
+            state=PROCESSING_STATE_START,
         )
+        try:
+            message_responses: list[dict] = []
+
+            # Handle audio messages.
+            if isinstance(message, RoomEncryptedAudio):
+                get_media = await self._download_file(
+                    message.source["content"]["file"],
+                    message.source["content"]["info"],
+                )
+                if get_media:
+                    try:
+                        message_responses = (
+                            await self._messaging_service.handle_audio_message(
+                                platform="matrix",
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message={
+                                    "message": message,
+                                    "file": get_media,
+                                },
+                            )
+                        )
+                    finally:
+                        self._cleanup_temp_file(get_media)
+            # Handle file messages.
+            elif isinstance(message, RoomEncryptedFile):
+                get_media = await self._download_file(
+                    message.source["content"]["file"],
+                    message.source["content"]["info"],
+                )
+                if get_media:
+                    try:
+                        message_responses = (
+                            await self._messaging_service.handle_file_message(
+                                platform="matrix",
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message={
+                                    "message": message,
+                                    "file": get_media,
+                                },
+                            )
+                        )
+                    finally:
+                        self._cleanup_temp_file(get_media)
+            # Handle image messages.
+            elif isinstance(message, RoomEncryptedImage):
+                get_media = await self._download_file(
+                    message.source["content"]["file"],
+                    message.source["content"]["info"],
+                )
+                if get_media:
+                    try:
+                        message_responses = (
+                            await self._messaging_service.handle_image_message(
+                                platform="matrix",
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message={
+                                    "message": message,
+                                    "file": get_media,
+                                },
+                            )
+                        )
+                    finally:
+                        self._cleanup_temp_file(get_media)
+            # Handle text messages.
+            elif isinstance(message, RoomMessageText):
+                message_responses = await self._messaging_service.handle_text_message(
+                    platform="matrix",
+                    room_id=room.room_id,
+                    sender=message.sender,
+                    message=message.body,
+                )
+            # Handle video messages.
+            elif isinstance(message, RoomEncryptedVideo):
+                get_media = await self._download_file(
+                    message.source["content"]["file"],
+                    message.source["content"]["info"],
+                )
+                if get_media:
+                    try:
+                        message_responses = (
+                            await self._messaging_service.handle_video_message(
+                                platform="matrix",
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message={
+                                    "message": message,
+                                    "file": get_media,
+                                },
+                            )
+                        )
+                    finally:
+                        self._cleanup_temp_file(get_media)
+
+            await self._process_message_responses(
+                room_id=room.room_id,
+                message_responses=message_responses,
+            )
+        finally:
+            await self._emit_room_processing_signal(
+                room_id=room.room_id,
+                state=PROCESSING_STATE_STOP,
+            )
+
+    async def _emit_room_processing_signal(
+        self,
+        *,
+        room_id: str,
+        state: str,
+    ) -> None:
+        try:
+            normalized_state = normalize_processing_state(state)
+            await self.room_typing(
+                room_id,
+                normalized_state == PROCESSING_STATE_START,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Failed to emit Matrix thinking signal "
+                f"(room_id={room_id} state={state}): {exc}"
+            )
 
     async def _cb_room_member_event(
         self, _room: MatrixRoom, _event: RoomMemberEvent

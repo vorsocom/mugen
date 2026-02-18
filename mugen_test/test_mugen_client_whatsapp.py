@@ -21,6 +21,7 @@ def _make_config() -> SimpleNamespace:
                 base_url="https://graph.example.com",
                 version="v19.0",
                 access_token="TOKEN_123",
+                typing_indicator_enabled=True,
             ),
             business=SimpleNamespace(phone_number_id="123456789"),
         )
@@ -143,6 +144,52 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             client._retry_backoff_seconds, 0.5
         )  # pylint: disable=protected-access
+
+    async def test_resolve_typing_indicator_enabled_string_variants(self) -> None:
+        config = _make_config()
+        config.whatsapp.graphapi.typing_indicator_enabled = "yes"
+        client_true = DefaultWhatsAppClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        self.assertTrue(client_true._typing_indicator_enabled)  # pylint: disable=protected-access
+
+        config.whatsapp.graphapi.typing_indicator_enabled = "off"
+        client_false = DefaultWhatsAppClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        self.assertFalse(client_false._typing_indicator_enabled)  # pylint: disable=protected-access
+
+        config.whatsapp.graphapi.typing_indicator_enabled = "unexpected"
+        client_default = DefaultWhatsAppClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        self.assertTrue(client_default._typing_indicator_enabled)  # pylint: disable=protected-access
+
+        config.whatsapp.graphapi.typing_indicator_enabled = 123
+        client_non_string = DefaultWhatsAppClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        self.assertTrue(client_non_string._typing_indicator_enabled)  # pylint: disable=protected-access
 
         config.whatsapp.graphapi.timeout_seconds = -1
         config.whatsapp.graphapi.max_download_bytes = 0
@@ -316,6 +363,105 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
 
         text_data = client._send_message.await_args.kwargs["data"]
         self.assertEqual(text_data["to"], "+15550002")
+
+    async def test_emit_processing_signal_start_calls_graph_api(self) -> None:
+        client = self._new_client()
+        client._call_api = AsyncMock(  # pylint: disable=protected-access
+            return_value={"ok": True, "status": 200}
+        )
+
+        emitted = await client.emit_processing_signal(
+            "15550009",
+            state="start",
+            message_id="wamid-1",
+        )
+
+        self.assertTrue(emitted)
+        kwargs = client._call_api.await_args.kwargs  # pylint: disable=protected-access
+        self.assertEqual(kwargs["path"], "123456789/messages")
+        self.assertEqual(kwargs["correlation_id"], "wamid-1")
+        self.assertEqual(kwargs["data"]["to"], "+15550009")
+        self.assertEqual(kwargs["data"]["status"], "read")
+        self.assertEqual(kwargs["data"]["message_id"], "wamid-1")
+        self.assertEqual(kwargs["data"]["typing_indicator"], {"type": "text"})
+
+    async def test_emit_processing_signal_stop_is_noop(self) -> None:
+        client = self._new_client()
+        client._call_api = AsyncMock()  # pylint: disable=protected-access
+
+        emitted = await client.emit_processing_signal(
+            "15550009",
+            state="stop",
+            message_id="wamid-1",
+        )
+
+        self.assertTrue(emitted)
+        client._call_api.assert_not_awaited()  # pylint: disable=protected-access
+
+    async def test_emit_processing_signal_disabled_short_circuits(self) -> None:
+        config = _make_config()
+        config.whatsapp.graphapi.typing_indicator_enabled = False
+        client = DefaultWhatsAppClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        client._call_api = AsyncMock()  # pylint: disable=protected-access
+
+        emitted = await client.emit_processing_signal(
+            "15550009",
+            state="start",
+            message_id="wamid-1",
+        )
+
+        self.assertIsNone(emitted)
+        client._call_api.assert_not_awaited()  # pylint: disable=protected-access
+
+    async def test_emit_processing_signal_failure_returns_false(self) -> None:
+        client = self._new_client()
+        client._call_api = AsyncMock(  # pylint: disable=protected-access
+            return_value={"ok": False, "status": 500}
+        )
+
+        invalid_state = await client.emit_processing_signal(
+            "15550009",
+            state="invalid",
+            message_id="wamid-bad-state",
+        )
+        self.assertFalse(invalid_state)
+
+        missing_recipient = await client.emit_processing_signal(
+            "",
+            state="start",
+            message_id="wamid-bad-recipient",
+        )
+        self.assertFalse(missing_recipient)
+
+        missing_message_id = await client.emit_processing_signal(
+            "15550009",
+            state="start",
+            message_id=None,
+        )
+        self.assertFalse(missing_message_id)
+
+        emitted = await client.emit_processing_signal(
+            "15550009",
+            state="start",
+            message_id="wamid-2",
+        )
+
+        self.assertFalse(emitted)
+
+        client._call_api = AsyncMock(side_effect=RuntimeError("api boom"))  # pylint: disable=protected-access
+        api_exception = await client.emit_processing_signal(
+            "15550009",
+            state="start",
+            message_id="wamid-3",
+        )
+        self.assertFalse(api_exception)
 
     async def test_upload_media_bytesio_and_file_path(self) -> None:
         client = self._new_client()

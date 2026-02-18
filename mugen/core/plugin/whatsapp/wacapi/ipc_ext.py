@@ -16,6 +16,11 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core import di
+from mugen.core.utility.processing_signal import (
+    PROCESSING_STATE_START,
+    PROCESSING_STATE_STOP,
+    normalize_processing_state,
+)
 
 
 def _whatsapp_client_provider():
@@ -220,6 +225,35 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
 
         return None
 
+    async def _emit_processing_signal(
+        self,
+        *,
+        sender: str,
+        message_id: str | None,
+        state: str,
+    ) -> None:
+        emitter = getattr(self._client, "emit_processing_signal", None)
+        if not callable(emitter):
+            return
+
+        try:
+            normalized_state = normalize_processing_state(state)
+            result = await emitter(
+                sender,
+                state=normalized_state,
+                message_id=message_id,
+            )
+            if result is False:
+                self._logging_gateway.warning(
+                    "WhatsApp thinking signal reported failure "
+                    f"(sender={sender} state={normalized_state})."
+                )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "WhatsApp thinking signal raised unexpectedly "
+                f"(sender={sender} state={state}): {exc}"
+            )
+
     async def _process_message_event(self, event_value: dict, message: dict) -> None:
         started = time.perf_counter()
         correlation_id = message.get("id")
@@ -270,138 +304,157 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 sender,
             )
 
-        message_responses: list[dict] | None = []
+        message_id = message["id"] if isinstance(message.get("id"), str) else None
+        await self._emit_processing_signal(
+            sender=sender,
+            message_id=message_id,
+            state=PROCESSING_STATE_START,
+        )
         try:
-            match message["type"]:
-                case "audio":
-                    get_media_url = await self._client.retrieve_media_url(
-                        message["audio"]["id"],
-                    )
-                    media_url = self._extract_api_data(get_media_url, "audio media URL")
-                    if media_url and "url" in media_url.keys():
-                        get_media = await self._client.download_media(
-                            media_url["url"],
-                            message["audio"]["mime_type"],
+            message_responses: list[dict] | None = []
+            try:
+                match message["type"]:
+                    case "audio":
+                        get_media_url = await self._client.retrieve_media_url(
+                            message["audio"]["id"],
                         )
+                        media_url = self._extract_api_data(
+                            get_media_url, "audio media URL"
+                        )
+                        if media_url and "url" in media_url.keys():
+                            get_media = await self._client.download_media(
+                                media_url["url"],
+                                message["audio"]["mime_type"],
+                            )
 
-                        if get_media is not None:
+                            if get_media is not None:
+                                message_responses = (
+                                    await self._messaging_service.handle_audio_message(
+                                        "whatsapp",
+                                        room_id=sender,
+                                        sender=sender,
+                                        message={
+                                            "message": message,
+                                            "file": get_media,
+                                        },
+                                    )
+                                )
+                    case "document":
+                        get_media_url = await self._client.retrieve_media_url(
+                            message["document"]["id"],
+                        )
+                        media_url = self._extract_api_data(
+                            get_media_url, "document media URL"
+                        )
+                        if media_url and "url" in media_url.keys():
+                            get_media = await self._client.download_media(
+                                media_url["url"],
+                                message["document"]["mime_type"],
+                            )
+
+                            if get_media is not None:
+                                message_responses = (
+                                    await self._messaging_service.handle_file_message(
+                                        "whatsapp",
+                                        room_id=sender,
+                                        sender=sender,
+                                        message={
+                                            "message": message,
+                                            "file": get_media,
+                                        },
+                                    )
+                                )
+                    case "image":
+                        get_media_url = await self._client.retrieve_media_url(
+                            message["image"]["id"],
+                        )
+                        media_url = self._extract_api_data(
+                            get_media_url, "image media URL"
+                        )
+                        if media_url and "url" in media_url.keys():
+                            get_media = await self._client.download_media(
+                                media_url["url"],
+                                message["image"]["mime_type"],
+                            )
+
+                            if get_media is not None:
+                                message_responses = (
+                                    await self._messaging_service.handle_image_message(
+                                        "whatsapp",
+                                        room_id=sender,
+                                        sender=sender,
+                                        message={
+                                            "message": message,
+                                            "file": get_media,
+                                        },
+                                    )
+                                )
+                    case "text" | "interactive" | "button":
+                        text_message = self._extract_user_text(message)
+                        if text_message is None:
+                            await self._call_message_handlers(
+                                message=message,
+                                message_type=message["type"],
+                                sender=sender,
+                            )
+                        else:
                             message_responses = (
-                                await self._messaging_service.handle_audio_message(
+                                await self._messaging_service.handle_text_message(
                                     "whatsapp",
                                     room_id=sender,
                                     sender=sender,
-                                    message={
-                                        "message": message,
-                                        "file": get_media,
-                                    },
+                                    message=text_message,
                                 )
                             )
-                case "document":
-                    get_media_url = await self._client.retrieve_media_url(
-                        message["document"]["id"],
-                    )
-                    media_url = self._extract_api_data(
-                        get_media_url, "document media URL"
-                    )
-                    if media_url and "url" in media_url.keys():
-                        get_media = await self._client.download_media(
-                            media_url["url"],
-                            message["document"]["mime_type"],
+                    case "video":
+                        get_media_url = await self._client.retrieve_media_url(
+                            message["video"]["id"],
                         )
-
-                        if get_media is not None:
-                            message_responses = (
-                                await self._messaging_service.handle_file_message(
-                                    "whatsapp",
-                                    room_id=sender,
-                                    sender=sender,
-                                    message={
-                                        "message": message,
-                                        "file": get_media,
-                                    },
-                                )
-                            )
-                case "image":
-                    get_media_url = await self._client.retrieve_media_url(
-                        message["image"]["id"],
-                    )
-                    media_url = self._extract_api_data(get_media_url, "image media URL")
-                    if media_url and "url" in media_url.keys():
-                        get_media = await self._client.download_media(
-                            media_url["url"],
-                            message["image"]["mime_type"],
+                        media_url = self._extract_api_data(
+                            get_media_url, "video media URL"
                         )
-
-                        if get_media is not None:
-                            message_responses = (
-                                await self._messaging_service.handle_image_message(
-                                    "whatsapp",
-                                    room_id=sender,
-                                    sender=sender,
-                                    message={
-                                        "message": message,
-                                        "file": get_media,
-                                    },
-                                )
+                        if media_url and "url" in media_url.keys():
+                            get_media = await self._client.download_media(
+                                media_url["url"],
+                                message["video"]["mime_type"],
                             )
-                case "text" | "interactive" | "button":
-                    text_message = self._extract_user_text(message)
-                    if text_message is None:
+
+                            if get_media is not None:
+                                message_responses = (
+                                    await self._messaging_service.handle_video_message(
+                                        "whatsapp",
+                                        room_id=sender,
+                                        sender=sender,
+                                        message={
+                                            "message": message,
+                                            "file": get_media,
+                                        },
+                                    )
+                                )
+                    case _:
                         await self._call_message_handlers(
                             message=message,
                             message_type=message["type"],
                             sender=sender,
                         )
-                    else:
-                        message_responses = (
-                            await self._messaging_service.handle_text_message(
-                                "whatsapp",
-                                room_id=sender,
-                                sender=sender,
-                                message=text_message,
-                            )
-                        )
-                case "video":
-                    get_media_url = await self._client.retrieve_media_url(
-                        message["video"]["id"],
-                    )
-                    media_url = self._extract_api_data(get_media_url, "video media URL")
-                    if media_url and "url" in media_url.keys():
-                        get_media = await self._client.download_media(
-                            media_url["url"],
-                            message["video"]["mime_type"],
-                        )
+            except (KeyError, TypeError):
+                self._logging_gateway.error("Malformed WhatsApp message payload.")
+                return
 
-                        if get_media is not None:
-                            message_responses = (
-                                await self._messaging_service.handle_video_message(
-                                    "whatsapp",
-                                    room_id=sender,
-                                    sender=sender,
-                                    message={
-                                        "message": message,
-                                        "file": get_media,
-                                    },
-                                )
-                            )
-                case _:
-                    await self._call_message_handlers(
-                        message=message,
-                        message_type=message["type"],
-                        sender=sender,
-                    )
-        except (KeyError, TypeError):
-            self._logging_gateway.error("Malformed WhatsApp message payload.")
-            return
-
-        self._logging_gateway.debug("Send responses to user.")
-        for response in message_responses or []:
-            await self._send_response_to_user(response=response, sender=sender)
-        latency_ms = (time.perf_counter() - started) * 1000
-        self._logging_gateway.debug(
-            f"[cid={correlation_id}] WhatsApp message event completed "
-            f"latency_ms={latency_ms:.2f}."
-        )
+            self._logging_gateway.debug("Send responses to user.")
+            for response in message_responses or []:
+                await self._send_response_to_user(response=response, sender=sender)
+            latency_ms = (time.perf_counter() - started) * 1000
+            self._logging_gateway.debug(
+                f"[cid={correlation_id}] WhatsApp message event completed "
+                f"latency_ms={latency_ms:.2f}."
+            )
+        finally:
+            await self._emit_processing_signal(
+                sender=sender,
+                message_id=message_id,
+                state=PROCESSING_STATE_STOP,
+            )
 
     async def _process_status_event(self, status: dict) -> None:
         started = time.perf_counter()

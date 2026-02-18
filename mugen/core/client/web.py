@@ -20,6 +20,12 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.utility.processing_signal import (
+    PROCESSING_SIGNAL_THINKING,
+    PROCESSING_STATE_START,
+    PROCESSING_STATE_STOP,
+    build_thinking_signal_payload,
+)
 
 
 # pylint: disable=too-many-instance-attributes
@@ -444,6 +450,14 @@ class DefaultWebClient(IWebClient):
         sender = str(job.get("sender"))
         client_message_id = job.get("client_message_id")
 
+        await self._emit_thinking_signal(
+            conversation_id=conversation_id,
+            job_id=job_id,
+            client_message_id=client_message_id,
+            sender=sender,
+            state=PROCESSING_STATE_START,
+        )
+
         try:
             responses = await self._dispatch_job_to_messaging(job)
 
@@ -490,6 +504,42 @@ class DefaultWebClient(IWebClient):
                 },
             )
             await self._mark_job_failed(job_id, str(exc))
+        finally:
+            await self._emit_thinking_signal(
+                conversation_id=conversation_id,
+                job_id=job_id,
+                client_message_id=client_message_id,
+                sender=sender,
+                state=PROCESSING_STATE_STOP,
+            )
+
+    async def _emit_thinking_signal(
+        self,
+        *,
+        conversation_id: str,
+        job_id: str,
+        client_message_id: str | None,
+        sender: str,
+        state: str,
+    ) -> None:
+        payload = build_thinking_signal_payload(
+            state=state,
+            job_id=job_id,
+            conversation_id=conversation_id,
+            client_message_id=client_message_id,
+            sender=sender,
+        )
+        try:
+            await self._append_event(
+                conversation_id=conversation_id,
+                event_type=PROCESSING_SIGNAL_THINKING,
+                data=payload,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Failed to emit web thinking signal "
+                f"(conversation_id={conversation_id} job_id={job_id}): {exc}"
+            )
 
     async def _dispatch_job_to_messaging(self, job: dict[str, Any]) -> list[dict] | None:
         message_type = str(job.get("message_type", "")).strip().lower()
@@ -581,12 +631,15 @@ class DefaultWebClient(IWebClient):
 
         content = response.get("content")
         if response_type == "text":
+            text_content = "" if content is None else str(content)
+            if text_content.strip() == "":
+                text_content = "No response generated."
             return {
                 "event_type": "message",
                 "payload": {
                     "message": {
                         "type": "text",
-                        "content": "" if content is None else str(content),
+                        "content": text_content,
                     }
                 },
             }
