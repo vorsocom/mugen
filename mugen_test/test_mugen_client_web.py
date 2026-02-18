@@ -116,7 +116,13 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(events[0]["event"], "ack")
-        self.assertEqual(events[1]["event"], "message")
+        self.assertEqual(events[1]["event"], "thinking")
+        self.assertEqual(events[1]["data"]["signal"], "thinking")
+        self.assertEqual(events[1]["data"]["state"], "start")
+        self.assertEqual(events[2]["event"], "message")
+        self.assertEqual(events[3]["event"], "thinking")
+        self.assertEqual(events[3]["data"]["signal"], "thinking")
+        self.assertEqual(events[3]["data"]["state"], "stop")
 
         self.assertGreater(self.client.media_max_upload_bytes, 0)
 
@@ -141,6 +147,24 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["platform"], "web")
         self.assertEqual(kwargs["room_id"], "conv-2")
         self.assertEqual(kwargs["sender"], "user-1")
+
+    async def test_emit_thinking_signal_warns_when_append_event_fails(self) -> None:
+        self.client._append_event = AsyncMock(  # pylint: disable=protected-access
+            side_effect=RuntimeError("append boom")
+        )
+
+        await self.client._emit_thinking_signal(  # pylint: disable=protected-access
+            conversation_id="conv-1",
+            job_id="job-1",
+            client_message_id="client-1",
+            sender="user-1",
+            state="start",
+        )
+
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any("Failed to emit web thinking signal" in message for message in warning_messages)
+        )
 
     async def test_conversation_ownership_enforced(self) -> None:
         await self.client.enqueue_message(
@@ -634,6 +658,10 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             conversation_id="conv-d",
         )
         self.assertEqual(text_event["event_type"], "message")
+        self.assertEqual(
+            text_event["payload"]["message"]["content"],
+            "No response generated.",
+        )
 
         # media dict URL passthrough path
         media_event = await self.client._response_to_event(  # pylint: disable=protected-access
@@ -706,6 +734,18 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         claimed = await failing._claim_next_job()  # pylint: disable=protected-access
         failing._dispatch_job_to_messaging = AsyncMock(side_effect=RuntimeError("boom"))  # pylint: disable=protected-access
         await failing._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        async with failing._storage_lock:  # pylint: disable=protected-access
+            failure_events = failing._read_replay_events_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-f",
+                last_event_id=None,
+            )
+
+        self.assertEqual(failure_events[1]["event"], "thinking")
+        self.assertEqual(failure_events[1]["data"]["state"], "start")
+        self.assertEqual(failure_events[2]["event"], "error")
+        self.assertEqual(failure_events[3]["event"], "thinking")
+        self.assertEqual(failure_events[3]["data"]["state"], "stop")
         await failing.close()
 
     async def test_claim_and_subscriber_edge_branches(self) -> None:

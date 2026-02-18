@@ -403,6 +403,8 @@ graphapi.version = "v20.0"
 graphapi.timeout_seconds = 10.0
 # Maximum bytes allowed when downloading media from Graph API.
 graphapi.max_download_bytes = 20971520
+# Enables best-effort typing indicators for processing messages.
+graphapi.typing_indicator_enabled = true
 servers.allowed = ""
 servers.verify_ip = false
 webhook.verification_token = "<whatsapp-webhook-verification-token>"

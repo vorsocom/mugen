@@ -517,6 +517,15 @@ class TestDependencyInjector(unittest.TestCase):
             ):
                 pass
 
+            async def emit_processing_signal(
+                self,
+                recipient: str,
+                *,
+                state: str,
+                message_id: str | None = None,
+            ) -> bool | None:
+                return True
+
             async def upload_media(
                 self,
                 file_path: str,

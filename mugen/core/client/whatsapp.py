@@ -23,6 +23,11 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.utility.processing_signal import (
+    PROCESSING_STATE_START,
+    PROCESSING_STATE_STOP,
+    normalize_processing_state,
+)
 
 
 class WhatsAppAPIResponse(TypedDict):
@@ -46,6 +51,8 @@ class DefaultWhatsAppClient(IWhatsAppClient):
     _default_max_api_retries: int = 2
 
     _default_retry_backoff_seconds: float = 0.5
+
+    _default_typing_indicator_enabled: bool = True
 
     _api_base_path: str
 
@@ -73,6 +80,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         self._max_download_bytes = self._resolve_max_download_bytes()
         self._max_api_retries = self._resolve_max_api_retries()
         self._retry_backoff_seconds = self._resolve_retry_backoff_seconds()
+        self._typing_indicator_enabled = self._resolve_typing_indicator_enabled()
 
         self._api_base_path = (
             f"{self._config.whatsapp.graphapi.base_url}/"
@@ -148,6 +156,22 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             return self._default_retry_backoff_seconds
 
         return backoff
+
+    def _resolve_typing_indicator_enabled(self) -> bool:
+        raw_enabled = getattr(
+            getattr(getattr(self._config, "whatsapp", None), "graphapi", None),
+            "typing_indicator_enabled",
+            self._default_typing_indicator_enabled,
+        )
+        if isinstance(raw_enabled, bool):
+            return raw_enabled
+        if isinstance(raw_enabled, str):
+            normalized = raw_enabled.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return self._default_typing_indicator_enabled
 
     @staticmethod
     def _format_recipient(recipient: str) -> str:
@@ -481,6 +505,72 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             }
 
         return await self._send_message(data=data)
+
+    async def emit_processing_signal(
+        self,
+        recipient: str,
+        *,
+        state: str,
+        message_id: str | None = None,
+    ) -> bool | None:
+        if not self._typing_indicator_enabled:
+            return None
+
+        try:
+            normalized_state = normalize_processing_state(state)
+        except ValueError as exc:
+            self._logging_gateway.warning(str(exc))
+            return False
+
+        if normalized_state == PROCESSING_STATE_STOP:
+            return True
+
+        if not isinstance(recipient, str) or recipient.strip() == "":
+            self._logging_gateway.warning(
+                "Cannot emit WhatsApp thinking signal without a recipient."
+            )
+            return False
+
+        if not isinstance(message_id, str) or message_id.strip() == "":
+            self._logging_gateway.warning(
+                "Cannot emit WhatsApp thinking start signal without message_id."
+            )
+            return False
+
+        data = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": self._format_recipient(recipient),
+            "status": "read",
+            "message_id": message_id,
+            "typing_indicator": {
+                "type": "text",
+            },
+        }
+
+        try:
+            response = await self._call_api(
+                path=self._api_messages_path,
+                content_type="application/json",
+                data=data,
+                correlation_id=message_id,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Failed to emit WhatsApp thinking signal "
+                f"(recipient={recipient} state={normalized_state}): {exc}"
+            )
+            return False
+
+        ok = isinstance(response, dict) and response.get("ok") is True
+        if not ok:
+            self._logging_gateway.warning(
+                "WhatsApp thinking signal did not succeed "
+                f"(recipient={recipient} state={normalized_state})."
+            )
+            return False
+
+        return True
 
     async def upload_media(
         self,

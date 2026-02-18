@@ -144,6 +144,16 @@ class IWhatsAppClient(ABC):
         """Send a Video message to a WhatsApp user."""
 
     @abstractmethod
+    async def emit_processing_signal(
+        self,
+        recipient: str,
+        *,
+        state: str,
+        message_id: str | None = None,
+    ) -> bool | None:
+        """Emit a best-effort processing signal to a WhatsApp user."""
+
+    @abstractmethod
     async def upload_media(
         self,
         file_path: str | BytesIO,
