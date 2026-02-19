@@ -39,7 +39,8 @@ The platform layer includes communication platforms through which users interact
 For the current Matrix core boundary (supported scope, intentional exclusions,
 and next planned scope), see [`docs/matrix-support-contract.md`](docs/matrix-support-contract.md).
 For Web platform REST/SSE contract details, see
-[`docs/web-support-contract.md`](docs/web-support-contract.md).
+[`docs/web-support-contract.md`](docs/web-support-contract.md), including
+resume cursor reset semantics and event correlation guarantees.
 
 ### API
 

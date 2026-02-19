@@ -218,6 +218,7 @@ web_base_url="${web_base_url%/}"
 conversation_id="$(echo "$spec_json" | jq -r '.scenario.conversation_id // empty')"
 message_text="$(echo "$spec_json" | jq -r '.scenario.text // empty')"
 stream_timeout_secs="$(echo "$spec_json" | jq -r '.scenario.stream_timeout_secs // 12')"
+client_message_id="e2e-${conversation_id}-$(date +%s)-$$"
 
 required_ack_event="$(echo "$spec_json" | jq -r '.assertions.required_event_order[0] // "ack"')"
 required_message_event="$(echo "$spec_json" | jq -r '.assertions.required_event_order[1] // "message"')"
@@ -348,6 +349,7 @@ tmp_files+=("$preflight_out")
 preflight_code="$(curl -sk -o "$preflight_out" -w "%{http_code}" \
   -H "$auth_header" \
   -X POST "$web_base_url/messages" \
+  --data-urlencode "client_message_id=$client_message_id" \
   --data-urlencode "message_type=text" \
   --data-urlencode "text=availability-check")"
 echo "PREFLIGHT WEB ENDPOINT: $preflight_code"
@@ -374,6 +376,7 @@ tmp_files+=("$negative_unauth_out")
 negative_unauth_code="$(curl -sk -o "$negative_unauth_out" -w "%{http_code}" \
   -X POST "$web_base_url/messages" \
   --data-urlencode "conversation_id=$conversation_id" \
+  --data-urlencode "client_message_id=$client_message_id" \
   --data-urlencode "message_type=text" \
   --data-urlencode "text=$message_text")"
 echo "NEGATIVE unauthenticated message: $negative_unauth_code"
@@ -388,6 +391,7 @@ tmp_files+=("$negative_missing_conversation_out")
 negative_missing_conversation_code="$(curl -sk -o "$negative_missing_conversation_out" -w "%{http_code}" \
   -H "$auth_header" \
   -X POST "$web_base_url/messages" \
+  --data-urlencode "client_message_id=$client_message_id" \
   --data-urlencode "message_type=text" \
   --data-urlencode "text=$message_text")"
 echo "NEGATIVE missing conversation_id: $negative_missing_conversation_code"
@@ -403,6 +407,7 @@ create_code="$(curl -sk -o "$create_out" -w "%{http_code}" \
   -H "$auth_header" \
   -X POST "$web_base_url/messages" \
   --data-urlencode "conversation_id=$conversation_id" \
+  --data-urlencode "client_message_id=$client_message_id" \
   --data-urlencode "message_type=text" \
   --data-urlencode "text=$message_text")"
 echo "CREATE MESSAGE: $create_code"
@@ -522,13 +527,21 @@ if [[ "${replay_content_type,,}" != *"text/event-stream"* ]]; then
 fi
 
 replay_events_json="$(parse_sse_events_file "$replay_body_file")"
-if [[ "$(echo "$replay_events_json" | jq -r 'any(.[]; .id == "1")')" == "true" ]]; then
+if [[ "$(echo "$replay_events_json" | jq -r '
+  def event_num:
+    ((.id // "") | capture("(?<n>[0-9]+)$")? | .n | tonumber?);
+  any(.[]; (event_num == 1))
+')" == "true" ]]; then
   echo "ERROR: replay stream unexpectedly included event id=1" >&2
   echo "$replay_events_json" | jq . >&2
   exit 1
 fi
 
-if [[ "$(echo "$replay_events_json" | jq -r 'any(.[]; ((.id // "") | test("^[0-9]+$")) and ((.id | tonumber) > 1))')" != "true" ]]; then
+if [[ "$(echo "$replay_events_json" | jq -r '
+  def event_num:
+    ((.id // "") | capture("(?<n>[0-9]+)$")? | .n | tonumber?);
+  any(.[]; ((event_num // 0) > 1))
+')" != "true" ]]; then
   echo "ERROR: replay stream did not include any event with id > 1" >&2
   echo "$replay_events_json" | jq . >&2
   exit 1

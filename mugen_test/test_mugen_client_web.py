@@ -587,7 +587,8 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             self.client._write_event_log_unlocked(  # pylint: disable=protected-access
                 "conv-stream",
                 {
-                    "version": 1,
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "stream-gen-skip",
                     "next_event_id": 3,
                     "events": [
                         {"id": "0", "event": "system", "data": {}, "created_at": "t0"},
@@ -601,7 +602,8 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             last_event_id=None,
         )
         skipped_output = await replay_skip_stream.__anext__()
-        self.assertIn("id: 1", skipped_output)
+        self.assertIn("id: v", skipped_output)
+        self.assertIn(":1", skipped_output)
         await replay_skip_stream.aclose()
 
         # Cover event_id None branches in replay/live paths.
@@ -609,7 +611,8 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             self.client._write_event_log_unlocked(  # pylint: disable=protected-access
                 "conv-stream",
                 {
-                    "version": 1,
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "stream-gen-none-id",
                     "next_event_id": 2,
                     "events": [
                         {"id": "bad", "event": "system", "data": {}, "created_at": "t0"},
@@ -637,6 +640,387 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 auth_user="user-1",
                 conversation_id="conv-missing",
             )
+
+    async def test_stream_events_resets_stale_cursor_and_emits_low_live_ids(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-reset",
+            message_type="text",
+            text="hello",
+            client_message_id="cid-reset",
+        )
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+                "conv-reset",
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "restart-gen",
+                    "next_event_id": 1,
+                    "events": [],
+                },
+            )
+
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-reset",
+            last_event_id="999",
+        )
+
+        reset_chunk = await stream.__anext__()
+        self.assertIn("event: system", reset_chunk)
+        reset_data_lines = [
+            line[6:] for line in reset_chunk.splitlines() if line.startswith("data: ")
+        ]
+        reset_payload = json.loads("\n".join(reset_data_lines))
+        self.assertEqual(reset_payload["signal"], "stream_reset")
+        self.assertEqual(reset_payload["reason"], "legacy_cursor_ahead_of_stream")
+
+        await self.client._publish_event(  # pylint: disable=protected-access
+            "conv-reset",
+            {
+                "id": "1",
+                "event": "system",
+                "data": {
+                    "conversation_id": "conv-reset",
+                    "job_id": "job-1",
+                    "client_message_id": "cid-reset",
+                    "message": "after restart",
+                },
+                "stream_generation": "restart-gen",
+                "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+            },
+        )
+        live_chunk = await stream.__anext__()
+        self.assertIn(
+            f"id: v{self.client._event_log_version}:restart-gen:1",  # pylint: disable=protected-access
+            live_chunk,
+        )
+        await stream.aclose()
+
+    async def test_append_event_adds_missing_correlation_keys(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-corr",
+            message_type="text",
+            text="hello",
+            client_message_id="cid-corr",
+        )
+
+        await self.client._append_event(  # pylint: disable=protected-access
+            conversation_id="conv-corr",
+            event_type="system",
+            data={"conversation_id": "conv-corr", "message": "state"},
+        )
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            events = self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-corr",
+                last_event_id=None,
+            )
+
+        state_event = next(
+            event
+            for event in events
+            if event["event"] == "system" and event["data"].get("message") == "state"
+        )
+        self.assertIn("job_id", state_event["data"])
+        self.assertIn("client_message_id", state_event["data"])
+        self.assertIsNone(state_event["data"]["job_id"])
+        self.assertIsNone(state_event["data"]["client_message_id"])
+
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "Web event correlation keys missing; defaulted to null" in message
+                and "event_type=system" in message
+                for message in warning_messages
+            )
+        )
+
+    async def test_publish_event_logs_dropped_event_diagnostics(self) -> None:
+        class _AlwaysFullQueue:
+            def put_nowait(self, _item):
+                raise asyncio.QueueFull()
+
+            def get_nowait(self):
+                return {"id": "1"}
+
+        async with self.client._subscriber_lock:  # pylint: disable=protected-access
+            self.client._subscribers["conv-drop"] = {  # pylint: disable=protected-access
+                _AlwaysFullQueue()
+            }
+
+        await self.client._publish_event(  # pylint: disable=protected-access
+            "conv-drop",
+            {"id": "2", "event": "system", "data": {}},
+        )
+
+        debug_messages = [call.args[0] for call in self.logger.debug.call_args_list]
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "Web SSE event skipped/dropped" in message
+                and "conversation_id='conv-drop'" in message
+                and "incoming_event_id='2'" in message
+                and "last_event_id='1'" in message
+                and "reason='subscriber_queue_full_drop_oldest'" in message
+                for message in debug_messages
+            )
+        )
+        self.assertTrue(
+            any(
+                "Web SSE event skipped/dropped" in message
+                and "conversation_id='conv-drop'" in message
+                and "incoming_event_id='2'" in message
+                and "reason='subscriber_queue_full_drop_new'" in message
+                for message in warning_messages
+            )
+        )
+
+    async def test_stream_events_handles_non_positive_next_event_id(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-next-zero",
+            message_type="text",
+            text="hello",
+            client_message_id="cid-next-zero",
+        )
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+                "conv-next-zero",
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "gen-zero",
+                    "next_event_id": 0,
+                    "events": [],
+                },
+            )
+
+        self.client._sse_keepalive_seconds = 0.001  # pylint: disable=protected-access
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-next-zero",
+            last_event_id=None,
+        )
+        self.assertEqual(await stream.__anext__(), ": ping\n\n")
+        await stream.aclose()
+
+    async def test_stream_events_replay_and_live_generation_change_paths(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-gen-change",
+            message_type="text",
+            text="hello",
+            client_message_id="cid-gen-change",
+        )
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+                "conv-gen-change",
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "gen-a",
+                    "next_event_id": 3,
+                    "events": [
+                        {
+                            "id": "2",
+                            "event": "system",
+                            "data": {
+                                "conversation_id": "conv-gen-change",
+                                "job_id": "job-1",
+                                "client_message_id": "cid-gen-change",
+                                "message": "first",
+                            },
+                            "created_at": "t1",
+                            "stream_generation": "gen-b",
+                        },
+                        {
+                            "id": "2",
+                            "event": "system",
+                            "data": {
+                                "conversation_id": "conv-gen-change",
+                                "job_id": "job-1",
+                                "client_message_id": "cid-gen-change",
+                                "message": "duplicate",
+                            },
+                            "created_at": "t2",
+                            "stream_generation": "gen-b",
+                        },
+                    ],
+                },
+            )
+
+        self.client._sse_keepalive_seconds = 0.001  # pylint: disable=protected-access
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-gen-change",
+            last_event_id=None,
+        )
+
+        replay_reset_chunk = await stream.__anext__()
+        self.assertIn('"reason":"replay_generation_changed"', replay_reset_chunk)
+        replay_event_chunk = await stream.__anext__()
+        self.assertIn(":gen-b:2", replay_event_chunk)
+
+        await self.client._publish_event(  # pylint: disable=protected-access
+            "conv-gen-change",
+            {
+                "id": "1",
+                "event": "system",
+                "data": {
+                    "conversation_id": "conv-gen-change",
+                    "job_id": "job-2",
+                    "client_message_id": "cid-gen-change",
+                    "message": "live",
+                },
+                "stream_generation": "gen-c",
+                "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+            },
+        )
+        live_reset_chunk = await stream.__anext__()
+        self.assertIn('"reason":"live_generation_changed"', live_reset_chunk)
+        live_event_chunk = await stream.__anext__()
+        self.assertIn(":gen-c:1", live_event_chunk)
+        await stream.aclose()
+
+        debug_messages = [call.args[0] for call in self.logger.debug.call_args_list]
+        self.assertTrue(
+            any(
+                "reason='replay_event_id_not_greater_than_cursor'" in message
+                for message in debug_messages
+            )
+        )
+
+    async def test_stream_cursor_and_correlation_helper_branches(self) -> None:
+        event_log_key = self.client._event_log_key("conv-helper")  # pylint: disable=protected-access
+        self.keyval.put(
+            event_log_key,
+            json.dumps(
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "gen-helper",
+                    "events": {},
+                    "next_event_id": "bad",
+                }
+            ),
+        )
+        malformed_events = self.client._read_event_log_unlocked("conv-helper")  # pylint: disable=protected-access
+        self.assertEqual(malformed_events["events"], [])
+        self.assertEqual(malformed_events["next_event_id"], 1)
+
+        self.keyval.put(
+            event_log_key,
+            json.dumps(
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "gen-helper",
+                    "events": [],
+                    "next_event_id": -9,
+                }
+            ),
+        )
+        non_positive_next = self.client._read_event_log_unlocked("conv-helper")  # pylint: disable=protected-access
+        self.assertEqual(non_positive_next["next_event_id"], 1)
+
+        fallback_client_message_id = self.client._normalize_client_message_id(  # pylint: disable=protected-access
+            client_message_id=" ",
+            job_id="job-x",
+            conversation_id="conv-helper",
+            source="test",
+            event_type="ack",
+        )
+        self.assertEqual(fallback_client_message_id, "auto-job-x")
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_event_payload_with_correlation(  # pylint: disable=protected-access
+                conversation_id="conv-helper",
+                event_type="system",
+                data=[],  # type: ignore[arg-type]
+            )
+
+        passthrough = self.client._normalize_event_payload_with_correlation(  # pylint: disable=protected-access
+            conversation_id="conv-helper",
+            event_type="custom",
+            data={"x": 1},
+        )
+        self.assertEqual(passthrough, {"x": 1})
+
+        normalized = self.client._normalize_event_payload_with_correlation(  # pylint: disable=protected-access
+            conversation_id="conv-helper",
+            event_type="system",
+            data={"job_id": " ", "client_message_id": 123},
+        )
+        self.assertIsNone(normalized["job_id"])
+        self.assertEqual(normalized["client_message_id"], "123")
+
+        no_id_stream_event = self.client._build_stream_sse_event(  # pylint: disable=protected-access
+            event={"event": "system", "data": "payload"},
+            stream_generation="gen-helper",
+        )
+        self.assertEqual(no_id_stream_event["id"], "")
+        self.assertEqual(no_id_stream_event["data"]["payload"], "payload")
+
+        invalid_cursor = self.client._resolve_stream_cursor(  # pylint: disable=protected-access
+            conversation_id="conv-helper",
+            incoming_last_event_id="bad-cursor",
+            stream_generation="gen-helper",
+            max_event_id=0,
+        )
+        self.assertIsNotNone(invalid_cursor["reset_event"])
+
+        version_mismatch_cursor = self.client._resolve_stream_cursor(  # pylint: disable=protected-access
+            conversation_id="conv-helper",
+            incoming_last_event_id="v999:gen-helper:1",
+            stream_generation="gen-helper",
+            max_event_id=10,
+        )
+        self.assertIsNotNone(version_mismatch_cursor["reset_event"])
+
+        generation_mismatch_cursor = self.client._resolve_stream_cursor(  # pylint: disable=protected-access
+            conversation_id="conv-helper",
+            incoming_last_event_id=(
+                f"v{self.client._event_log_version}:other-generation:1"  # pylint: disable=protected-access
+            ),
+            stream_generation="gen-helper",
+            max_event_id=10,
+        )
+        self.assertIsNotNone(generation_mismatch_cursor["reset_event"])
+
+        matching_cursor = self.client._resolve_stream_cursor(  # pylint: disable=protected-access
+            conversation_id="conv-helper",
+            incoming_last_event_id=(
+                f"v{self.client._event_log_version}:gen-helper:1"  # pylint: disable=protected-access
+            ),
+            stream_generation="gen-helper",
+            max_event_id=10,
+        )
+        self.assertIsNone(matching_cursor["reset_event"])
+        self.assertEqual(matching_cursor["effective_last_event_id"], 1)
+
+        parsed_empty = self.client._parse_stream_cursor(" ")  # pylint: disable=protected-access
+        self.assertFalse(parsed_empty["invalid"])
+
+        parsed_bad_version = self.client._parse_stream_cursor("vx:gen:1")  # pylint: disable=protected-access
+        self.assertTrue(parsed_bad_version["invalid"])
+
+        parsed_bad_triplet = self.client._parse_stream_cursor("v0:gen:x")  # pylint: disable=protected-access
+        self.assertTrue(parsed_bad_triplet["invalid"])
+
+        parsed_valid = self.client._parse_stream_cursor(  # pylint: disable=protected-access
+            f"v{self.client._event_log_version}:gen:7"  # pylint: disable=protected-access
+        )
+        self.assertEqual(parsed_valid["event_id"], 7)
+        self.assertFalse(parsed_valid["invalid"])
+
+        parsed_invalid_legacy = self.client._parse_stream_cursor("legacy:bad")  # pylint: disable=protected-access
+        self.assertTrue(parsed_invalid_legacy["invalid"])
+
+        self.assertEqual(
+            self.client._normalize_stream_generation("", fallback="fallback"),  # pylint: disable=protected-access
+            "fallback",
+        )
 
     async def test_resolve_media_download_invalid_branches(self) -> None:
         self.assertIsNone(

@@ -39,6 +39,13 @@ class DefaultWebClient(IWebClient):
         "file",
         "image",
     }
+    _required_correlation_event_types = {
+        "ack",
+        "message",
+        "system",
+        "error",
+        PROCESSING_SIGNAL_THINKING,
+    }
 
     _queue_state_key = "web:queue"
     _queue_state_version = 1
@@ -46,7 +53,9 @@ class DefaultWebClient(IWebClient):
     _conversation_key_prefix = "web:conversation:"
 
     _event_log_key_prefix = "web:events:"
-    _event_log_version = 1
+    _event_log_version = 3
+
+    _stream_reset_signal = "stream_reset"
 
     _media_token_key_prefix = "web:media_token:"
 
@@ -208,6 +217,13 @@ class DefaultWebClient(IWebClient):
 
         now_iso = self._utc_now_iso()
         job_id = uuid.uuid4().hex
+        normalized_client_message_id = self._normalize_client_message_id(
+            client_message_id=client_message_id,
+            job_id=job_id,
+            conversation_id=conversation,
+            source="enqueue_message",
+            event_type="ack",
+        )
         job = {
             "id": job_id,
             "conversation_id": conversation,
@@ -218,7 +234,7 @@ class DefaultWebClient(IWebClient):
             "file_path": file_path,
             "mime_type": mime_type,
             "original_filename": original_filename,
-            "client_message_id": client_message_id,
+            "client_message_id": normalized_client_message_id,
             "status": "pending",
             "attempts": 0,
             "created_at": now_iso,
@@ -249,7 +265,7 @@ class DefaultWebClient(IWebClient):
         ack_payload = {
             "job_id": job_id,
             "conversation_id": conversation,
-            "client_message_id": client_message_id,
+            "client_message_id": normalized_client_message_id,
             "status": "accepted",
             "accepted_at": now_iso,
         }
@@ -282,24 +298,81 @@ class DefaultWebClient(IWebClient):
                 auth_user=auth_user_id,
                 create_if_missing=False,
             )
-            replay_events = self._read_replay_events_unlocked(
-                conversation_id=conversation,
-                last_event_id=last_event_id,
+            log = self._read_event_log_unlocked(conversation)
+            stream_generation = self._normalize_stream_generation(
+                log.get("generation"),
+                fallback=self._new_stream_generation(),
             )
+            max_event_id = max(int(log["next_event_id"]) - 1, 0)
+
+            cursor = self._resolve_stream_cursor(
+                conversation_id=conversation,
+                incoming_last_event_id=last_event_id,
+                stream_generation=stream_generation,
+                max_event_id=max_event_id,
+            )
+            replay_events = [
+                event
+                for event in list(log["events"])
+                if (
+                    self._parse_event_id(event.get("id")) is None
+                    or (self._parse_event_id(event.get("id")) or 0)
+                    > int(cursor["effective_last_event_id"])
+                )
+            ]
 
         subscriber_queue: asyncio.Queue = asyncio.Queue(maxsize=self._sse_queue_size)
         await self._register_subscriber(conversation, subscriber_queue)
 
         async def _event_stream() -> AsyncIterator[str]:
-            highest_event_id = self._parse_event_id(last_event_id) or 0
+            highest_event_id = int(cursor["effective_last_event_id"])
+            active_generation = stream_generation
             try:
+                reset_event = cursor.get("reset_event")
+                if isinstance(reset_event, dict):
+                    yield self._format_sse_event(reset_event)
+
                 for event in replay_events:
+                    event_generation = self._normalize_stream_generation(
+                        event.get("stream_generation"),
+                        fallback=active_generation,
+                    )
+                    if event_generation != active_generation:
+                        self._log_sse_diagnostic(
+                            conversation_id=conversation,
+                            incoming_event_id=event.get("id"),
+                            last_event_id=highest_event_id,
+                            reason="replay_generation_changed",
+                        )
+                        active_generation = event_generation
+                        highest_event_id = 0
+                        yield self._format_sse_event(
+                            self._build_stream_reset_event(
+                                conversation_id=conversation,
+                                reason="replay_generation_changed",
+                                incoming_last_event_id=last_event_id,
+                                incoming_event_id=self._parse_event_id(event.get("id")),
+                                stream_generation=active_generation,
+                            )
+                        )
+
                     event_id = self._parse_event_id(event.get("id"))
                     if event_id is not None and event_id <= highest_event_id:
+                        self._log_sse_diagnostic(
+                            conversation_id=conversation,
+                            incoming_event_id=event.get("id"),
+                            last_event_id=highest_event_id,
+                            reason="replay_event_id_not_greater_than_cursor",
+                        )
                         continue
                     if event_id is not None:
                         highest_event_id = event_id
-                    yield self._format_sse_event(event)
+                    yield self._format_sse_event(
+                        self._build_stream_sse_event(
+                            event=event,
+                            stream_generation=event_generation,
+                        )
+                    )
 
                 while True:
                     try:
@@ -311,12 +384,46 @@ class DefaultWebClient(IWebClient):
                         yield ": ping\n\n"
                         continue
 
+                    event_generation = self._normalize_stream_generation(
+                        event.get("stream_generation"),
+                        fallback=active_generation,
+                    )
+                    if event_generation != active_generation:
+                        self._log_sse_diagnostic(
+                            conversation_id=conversation,
+                            incoming_event_id=event.get("id"),
+                            last_event_id=highest_event_id,
+                            reason="live_generation_changed",
+                        )
+                        active_generation = event_generation
+                        highest_event_id = 0
+                        yield self._format_sse_event(
+                            self._build_stream_reset_event(
+                                conversation_id=conversation,
+                                reason="live_generation_changed",
+                                incoming_last_event_id=last_event_id,
+                                incoming_event_id=self._parse_event_id(event.get("id")),
+                                stream_generation=active_generation,
+                            )
+                        )
+
                     event_id = self._parse_event_id(event.get("id"))
                     if event_id is not None and event_id <= highest_event_id:
+                        self._log_sse_diagnostic(
+                            conversation_id=conversation,
+                            incoming_event_id=event.get("id"),
+                            last_event_id=highest_event_id,
+                            reason="live_event_id_not_greater_than_cursor",
+                        )
                         continue
                     if event_id is not None:
                         highest_event_id = event_id
-                    yield self._format_sse_event(event)
+                    yield self._format_sse_event(
+                        self._build_stream_sse_event(
+                            event=event,
+                            stream_generation=event_generation,
+                        )
+                    )
             finally:
                 await self._unregister_subscriber(conversation, subscriber_queue)
 
@@ -805,15 +912,27 @@ class DefaultWebClient(IWebClient):
 
         async with self._storage_lock:
             log = self._read_event_log_unlocked(conversation_id)
+            stream_generation = self._normalize_stream_generation(
+                log.get("generation"),
+                fallback=self._new_stream_generation(),
+            )
             event_id = int(log["next_event_id"])
+            normalized_data = self._normalize_event_payload_with_correlation(
+                conversation_id=conversation_id,
+                event_type=event_type,
+                data=data,
+            )
             event_entry = {
                 "id": str(event_id),
                 "event": event_type,
-                "data": data,
+                "data": normalized_data,
                 "created_at": self._utc_now_iso(),
+                "stream_generation": stream_generation,
+                "stream_version": self._event_log_version,
             }
 
             log["next_event_id"] = event_id + 1
+            log["generation"] = stream_generation
             events = list(log["events"])
             events.append(event_entry)
             if len(events) > self._sse_replay_max_events:
@@ -836,13 +955,31 @@ class DefaultWebClient(IWebClient):
             try:
                 subscriber.put_nowait(event_entry)
             except asyncio.QueueFull:
+                dropped_event: Any = None
                 try:
-                    subscriber.get_nowait()
+                    dropped_event = subscriber.get_nowait()
                 except asyncio.QueueEmpty:
                     ...
+                self._log_sse_diagnostic(
+                    conversation_id=conversation_id,
+                    incoming_event_id=event_entry.get("id"),
+                    last_event_id=(
+                        dropped_event.get("id")
+                        if isinstance(dropped_event, dict)
+                        else dropped_event
+                    ),
+                    reason="subscriber_queue_full_drop_oldest",
+                )
                 try:
                     subscriber.put_nowait(event_entry)
                 except asyncio.QueueFull:
+                    self._log_sse_diagnostic(
+                        conversation_id=conversation_id,
+                        incoming_event_id=event_entry.get("id"),
+                        last_event_id=None,
+                        reason="subscriber_queue_full_drop_new",
+                        warning=True,
+                    )
                     ...
 
     async def _register_subscriber(
@@ -1035,6 +1172,20 @@ class DefaultWebClient(IWebClient):
         if not isinstance(payload, dict):
             return self._new_event_log_state()
 
+        raw_version = payload.get("version")
+        try:
+            parsed_version = int(raw_version)
+        except (TypeError, ValueError):
+            parsed_version = None
+
+        if parsed_version != self._event_log_version:
+            self._logging_gateway.warning(
+                "Web event log version mismatch; resetting conversation stream log "
+                f"(conversation_id={conversation_id} stored_version={raw_version!r} "
+                f"expected_version={self._event_log_version})."
+            )
+            return self._new_event_log_state()
+
         events = payload.get("events")
         if not isinstance(events, list):
             events = []
@@ -1048,8 +1199,14 @@ class DefaultWebClient(IWebClient):
         if next_id <= 0:
             next_id = 1
 
+        generation = self._normalize_stream_generation(
+            payload.get("generation"),
+            fallback=self._new_stream_generation(),
+        )
+
         return {
             "version": self._event_log_version,
+            "generation": generation,
             "next_event_id": next_id,
             "events": events,
         }
@@ -1196,6 +1353,288 @@ class DefaultWebClient(IWebClient):
             raise ValueError(f"Unsupported message_type: {normalized}")
         return normalized
 
+    def _normalize_client_message_id(
+        self,
+        *,
+        client_message_id: str | None,
+        job_id: str,
+        conversation_id: str,
+        source: str,
+        event_type: str,
+    ) -> str:
+        if isinstance(client_message_id, str):
+            normalized = client_message_id.strip()
+            if normalized != "":
+                return normalized
+
+        fallback_client_message_id = f"auto-{job_id}"
+        self._logging_gateway.warning(
+            "Web event correlation defaulted missing client_message_id "
+            f"(source={source} event_type={event_type} "
+            f"conversation_id={conversation_id} job_id={job_id} "
+            f"fallback_client_message_id={fallback_client_message_id})."
+        )
+        return fallback_client_message_id
+
+    def _normalize_event_payload_with_correlation(
+        self,
+        *,
+        conversation_id: str,
+        event_type: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            raise ValueError("event data must be an object")
+
+        normalized_data = dict(data)
+        if event_type not in self._required_correlation_event_types:
+            return normalized_data
+
+        missing_keys: list[str] = []
+        for key in ("job_id", "client_message_id"):
+            if key not in normalized_data:
+                normalized_data[key] = None
+                missing_keys.append(key)
+
+        if missing_keys:
+            self._logging_gateway.warning(
+                "Web event correlation keys missing; defaulted to null "
+                f"(conversation_id={conversation_id} event_type={event_type} "
+                f"missing_keys={missing_keys})."
+            )
+
+        for key in ("job_id", "client_message_id"):
+            value = normalized_data.get(key)
+            if value is None:
+                continue
+
+            if isinstance(value, str):
+                stripped_value = value.strip()
+                if stripped_value == "":
+                    normalized_data[key] = None
+                    self._logging_gateway.warning(
+                        "Web event correlation value blank; defaulted to null "
+                        f"(conversation_id={conversation_id} event_type={event_type} "
+                        f"correlation_key={key})."
+                    )
+                else:
+                    normalized_data[key] = stripped_value
+                continue
+
+            normalized_data[key] = str(value)
+            self._logging_gateway.warning(
+                "Web event correlation value coerced to string "
+                f"(conversation_id={conversation_id} event_type={event_type} "
+                f"correlation_key={key})."
+            )
+
+        return normalized_data
+
+    def _build_stream_sse_event(
+        self,
+        *,
+        event: dict[str, Any],
+        stream_generation: str,
+    ) -> dict[str, Any]:
+        stream_event = copy.deepcopy(event)
+        event_type = str(stream_event.get("event", "message"))
+        event_data = stream_event.get("data")
+        if not isinstance(event_data, dict):
+            event_data = {"payload": event_data}
+        conversation_id = event_data.get("conversation_id")
+        if not isinstance(conversation_id, str):
+            conversation_id = ""
+
+        normalized_data = self._normalize_event_payload_with_correlation(
+            conversation_id=conversation_id,
+            event_type=event_type,
+            data=event_data,
+        )
+        normalized_data["_stream"] = {
+            "version": self._event_log_version,
+            "generation": stream_generation,
+        }
+        stream_event["data"] = normalized_data
+
+        numeric_event_id = self._parse_event_id(stream_event.get("id"))
+        if numeric_event_id is not None:
+            stream_event["id"] = self._format_stream_cursor_id(
+                stream_generation=stream_generation,
+                event_id=numeric_event_id,
+            )
+        elif "id" in stream_event and stream_event["id"] is not None:
+            stream_event["id"] = str(stream_event["id"])
+        else:
+            stream_event["id"] = ""
+
+        stream_event["stream_generation"] = stream_generation
+        stream_event["stream_version"] = self._event_log_version
+        return stream_event
+
+    def _build_stream_reset_event(
+        self,
+        *,
+        conversation_id: str,
+        reason: str,
+        incoming_last_event_id: str | None,
+        incoming_event_id: int | None,
+        stream_generation: str,
+    ) -> dict[str, Any]:
+        reset_event = {
+            "id": "0",
+            "event": "system",
+            "data": {
+                "job_id": None,
+                "client_message_id": None,
+                "signal": self._stream_reset_signal,
+                "message": "Event stream cursor reset.",
+                "conversation_id": conversation_id,
+                "incoming_last_event_id": incoming_last_event_id,
+                "incoming_event_id": incoming_event_id,
+                "reason": reason,
+                "event_log_version": self._event_log_version,
+                "event_log_generation": stream_generation,
+            },
+            "created_at": self._utc_now_iso(),
+            "stream_generation": stream_generation,
+            "stream_version": self._event_log_version,
+        }
+        return self._build_stream_sse_event(
+            event=reset_event,
+            stream_generation=stream_generation,
+        )
+
+    def _resolve_stream_cursor(
+        self,
+        *,
+        conversation_id: str,
+        incoming_last_event_id: str | None,
+        stream_generation: str,
+        max_event_id: int,
+    ) -> dict[str, Any]:
+        parsed_cursor = self._parse_stream_cursor(incoming_last_event_id)
+
+        incoming_event_id = parsed_cursor.get("event_id")
+        effective_last_event_id = int(incoming_event_id or 0)
+        reset_reason: str | None = None
+
+        if parsed_cursor.get("invalid"):
+            reset_reason = "invalid_last_event_id"
+        elif parsed_cursor.get("stream_generation") is not None:
+            if parsed_cursor.get("stream_version") != self._event_log_version:
+                reset_reason = "cursor_event_log_version_mismatch"
+            elif parsed_cursor.get("stream_generation") != stream_generation:
+                reset_reason = "cursor_stream_generation_mismatch"
+        elif incoming_event_id is not None and incoming_event_id > max_event_id:
+            reset_reason = "legacy_cursor_ahead_of_stream"
+
+        if reset_reason is None:
+            return {
+                "effective_last_event_id": effective_last_event_id,
+                "incoming_event_id": incoming_event_id,
+                "reset_event": None,
+            }
+
+        self._log_sse_diagnostic(
+            conversation_id=conversation_id,
+            incoming_event_id=incoming_event_id,
+            last_event_id=incoming_last_event_id,
+            reason=reset_reason,
+            warning=True,
+        )
+
+        return {
+            "effective_last_event_id": 0,
+            "incoming_event_id": incoming_event_id,
+            "reset_event": self._build_stream_reset_event(
+                conversation_id=conversation_id,
+                reason=reset_reason,
+                incoming_last_event_id=incoming_last_event_id,
+                incoming_event_id=incoming_event_id,
+                stream_generation=stream_generation,
+            ),
+        }
+
+    def _parse_stream_cursor(self, last_event_id: str | None) -> dict[str, Any]:
+        parsed: dict[str, Any] = {
+            "raw": last_event_id,
+            "stream_version": None,
+            "stream_generation": None,
+            "event_id": None,
+            "invalid": False,
+        }
+        if not isinstance(last_event_id, str):
+            return parsed
+
+        raw_cursor = last_event_id.strip()
+        parsed["raw"] = raw_cursor
+        if raw_cursor == "":
+            return parsed
+
+        cursor_parts = raw_cursor.split(":", 2)
+        if len(cursor_parts) == 3 and cursor_parts[0].startswith("v"):
+            try:
+                stream_version = int(cursor_parts[0][1:])
+            except (TypeError, ValueError):
+                parsed["invalid"] = True
+                return parsed
+
+            stream_generation = cursor_parts[1].strip()
+            stream_event_id = self._parse_event_id(cursor_parts[2])
+            if stream_version <= 0 or stream_generation == "" or stream_event_id is None:
+                parsed["invalid"] = True
+                return parsed
+
+            parsed["stream_version"] = stream_version
+            parsed["stream_generation"] = stream_generation
+            parsed["event_id"] = stream_event_id
+            return parsed
+
+        parsed_event_id = self._parse_event_id(raw_cursor)
+        if parsed_event_id is None:
+            parsed["invalid"] = True
+            return parsed
+
+        parsed["event_id"] = parsed_event_id
+        return parsed
+
+    def _format_stream_cursor_id(
+        self,
+        *,
+        stream_generation: str,
+        event_id: int,
+    ) -> str:
+        return f"v{self._event_log_version}:{stream_generation}:{event_id}"
+
+    @staticmethod
+    def _normalize_stream_generation(value: Any, *, fallback: str) -> str:
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized != "":
+                return normalized.replace(":", "-")
+        return fallback
+
+    def _log_sse_diagnostic(
+        self,
+        *,
+        conversation_id: str,
+        incoming_event_id: Any,
+        last_event_id: Any,
+        reason: str,
+        warning: bool = False,
+    ) -> None:
+        message = (
+            "Web SSE event skipped/dropped "
+            f"(conversation_id={conversation_id!r} "
+            f"incoming_event_id={incoming_event_id!r} "
+            f"last_event_id={last_event_id!r} "
+            f"reason={reason!r})."
+        )
+        if warning:
+            self._logging_gateway.warning(message)
+        else:
+            self._logging_gateway.debug(message)
+
     @staticmethod
     def _parse_event_id(value: Any) -> int | None:
         if value in [None, ""]:
@@ -1241,6 +1680,10 @@ class DefaultWebClient(IWebClient):
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _new_stream_generation() -> str:
+        return uuid.uuid4().hex
+
     @classmethod
     def _conversation_key(cls, conversation_id: str) -> str:
         return f"{cls._conversation_key_prefix}{conversation_id}"
@@ -1264,6 +1707,7 @@ class DefaultWebClient(IWebClient):
     def _new_event_log_state(cls) -> dict[str, Any]:
         return {
             "version": cls._event_log_version,
+            "generation": cls._new_stream_generation(),
             "next_event_id": 1,
             "events": [],
         }

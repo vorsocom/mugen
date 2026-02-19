@@ -174,6 +174,11 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                 chat._normalize_message_type("")
             with self.assertRaises(ValueError):
                 chat._normalize_message_type("unsupported")
+            self.assertEqual(chat._normalize_client_message_id(" c-1 "), "c-1")
+            with self.assertRaises(ValueError):
+                chat._normalize_client_message_id(None)
+            with self.assertRaises(ValueError):
+                chat._normalize_client_message_id("")
 
             self.assertIsNone(chat._parse_metadata(None))
             with self.assertRaises(ValueError):
@@ -221,6 +226,43 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["metadata"], {"k": "v"})
         self.assertEqual(response.status_code, 200)
 
+    async def test_messages_create_requires_client_message_id(self) -> None:
+        endpoint = unwrap(chat.web_messages_create)
+        base_form = {
+            "conversation_id": "conv-1",
+            "message_type": "text",
+            "text": "hello",
+        }
+        invalid_forms = [
+            dict(base_form),
+            {**base_form, "client_message_id": " "},
+            {**base_form, "client_message_id": 123},
+        ]
+
+        for form in invalid_forms:
+            with (
+                patch.object(chat, "abort", side_effect=_abort_raiser),
+                patch.object(
+                    chat,
+                    "request",
+                    new=SimpleNamespace(
+                        form=_AwaitableValue(form),
+                        files=_AwaitableValue({}),
+                    ),
+                ),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await endpoint(
+                        auth_user="user-1",
+                        config_provider=lambda: _make_config(basedir=tempfile.gettempdir()),
+                        logger_provider=lambda: Mock(),
+                        web_client_provider=lambda: SimpleNamespace(
+                            enqueue_message=AsyncMock()
+                        ),
+                    )
+                self.assertEqual(ex.exception.code, 400)
+                self.assertEqual(ex.exception.message, "client_message_id is required")
+
     async def test_messages_create_validation_and_error_paths(self) -> None:
         endpoint = unwrap(chat.web_messages_create)
         logger = Mock()
@@ -256,6 +298,7 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                         {
                             "conversation_id": "conv-1",
                             "message_type": "text",
+                            "client_message_id": "c-metadata",
                             "text": "hello",
                             "metadata": "not-json",
                         }
@@ -284,6 +327,7 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                         {
                             "conversation_id": "conv-1",
                             "message_type": "text",
+                            "client_message_id": "c-permission",
                             "text": "hello",
                         }
                     ),
@@ -311,6 +355,7 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                         {
                             "conversation_id": "conv-1",
                             "message_type": "text",
+                            "client_message_id": "c-runtime",
                             "text": "hello",
                         }
                     ),
@@ -351,6 +396,7 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                             {
                                 "conversation_id": "conv-1",
                                 "message_type": "file",
+                                "client_message_id": "c-file-1",
                             }
                         ),
                         files=_AwaitableValue({"file": disallowed_upload}),
@@ -382,6 +428,7 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                             {
                                 "conversation_id": "conv-1",
                                 "message_type": "image",
+                                "client_message_id": "c-image-1",
                             }
                         ),
                         files=_AwaitableValue({"file": oversized_upload}),
@@ -412,7 +459,11 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                     "request",
                     new=SimpleNamespace(
                         form=_AwaitableValue(
-                            {"conversation_id": "c1", "message_type": "bad-type"}
+                            {
+                                "conversation_id": "c1",
+                                "message_type": "bad-type",
+                                "client_message_id": "c-bad-type",
+                            }
                         ),
                         files=_AwaitableValue({}),
                     ),
@@ -437,7 +488,11 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                     "request",
                     new=SimpleNamespace(
                         form=_AwaitableValue(
-                            {"conversation_id": "c1", "message_type": "text"}
+                            {
+                                "conversation_id": "c1",
+                                "message_type": "text",
+                                "client_message_id": "c-missing-text",
+                            }
                         ),
                         files=_AwaitableValue({}),
                     ),
@@ -462,7 +517,11 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                     "request",
                     new=SimpleNamespace(
                         form=_AwaitableValue(
-                            {"conversation_id": "c1", "message_type": "image"}
+                            {
+                                "conversation_id": "c1",
+                                "message_type": "image",
+                                "client_message_id": "c-missing-file",
+                            }
                         ),
                         files=_AwaitableValue({}),
                     ),
@@ -496,6 +555,7 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                             {
                                 "conversation_id": "c1",
                                 "message_type": "text",
+                                "client_message_id": "c-text-with-file",
                                 "text": "ok",
                             }
                         ),
@@ -528,7 +588,11 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                     "request",
                     new=SimpleNamespace(
                         form=_AwaitableValue(
-                            {"conversation_id": "c2", "message_type": "image"}
+                            {
+                                "conversation_id": "c2",
+                                "message_type": "image",
+                                "client_message_id": "c-post-size",
+                            }
                         ),
                         files=_AwaitableValue({"file": oversized_after_save}),
                     ),
@@ -560,7 +624,11 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                     "request",
                     new=SimpleNamespace(
                         form=_AwaitableValue(
-                            {"conversation_id": "c3", "message_type": "image"}
+                            {
+                                "conversation_id": "c3",
+                                "message_type": "image",
+                                "client_message_id": "c-getsize-error",
+                            }
                         ),
                         files=_AwaitableValue({"file": upload_getsize_error}),
                     ),
@@ -594,7 +662,11 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                         "request",
                         new=SimpleNamespace(
                             form=_AwaitableValue(
-                                {"conversation_id": "c4", "message_type": "image"}
+                                {
+                                    "conversation_id": "c4",
+                                    "message_type": "image",
+                                    "client_message_id": "c-enqueue-error",
+                                }
                             ),
                             files=_AwaitableValue({"file": upload_ok}),
                         ),
@@ -632,7 +704,11 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                         "request",
                         new=SimpleNamespace(
                             form=_AwaitableValue(
-                                {"conversation_id": "c5", "message_type": "image"}
+                                {
+                                    "conversation_id": "c5",
+                                    "message_type": "image",
+                                    "client_message_id": "c-long-ext",
+                                }
                             ),
                             files=_AwaitableValue({"file": upload_variant}),
                         ),

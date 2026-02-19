@@ -14,7 +14,7 @@ Inbound events are routed through `IMessagingService` as:
 Delivery semantics are **at-least-once**.
 - Durable queue state survives restart.
 - A job marked `processing` can be replayed after lease expiry.
-- Duplicate deliveries are possible; frontend should dedupe by `job_id` and optional `client_message_id`.
+- Duplicate deliveries are possible; frontend should dedupe by `job_id` + `client_message_id`.
 
 ## Auth
 All web endpoints require ACP bearer access token via `Authorization: Bearer <token>` and use `global_auth_required`.
@@ -26,10 +26,10 @@ Accepts `multipart/form-data` and always returns async acceptance (`202`).
 
 Required form fields:
 - `conversation_id` (string)
+- `client_message_id` (string)
 - `message_type` (`text|audio|video|file|image`)
 
 Optional form fields:
-- `client_message_id` (string)
 - `text` (required when `message_type=text`)
 - `metadata` (JSON object encoded as string)
 - `file` (required when `message_type` is media/file)
@@ -55,13 +55,21 @@ Streams `text/event-stream`.
 Replay behavior:
 - Prefer `Last-Event-ID` header.
 - Fallback query string: `last_event_id`.
-- Server replays events with id greater than provided value.
+- Server replays events with ID greater than provided value.
+- SSE IDs are emitted as `v<event_log_version>:<event_log_generation>:<event_id>`.
+- Clients should persist and resend the full SSE `id` value (not just numeric suffix).
+- If the resume cursor is stale/invalid, server emits a `system` event with `signal="stream_reset"` and resets replay baseline to current stream generation.
 
 Event types:
 - `ack`
 - `message`
 - `error`
 - `system`
+- `thinking`
+
+Correlation guarantees:
+- `ack`, `message`, `error`, `system`, and `thinking` events always include `job_id` and `client_message_id` keys in payload data.
+- Stream metadata is included as `data._stream = {version, generation}`.
 
 Keepalive:
 - SSE comment heartbeat: `: ping`
