@@ -173,6 +173,17 @@ def _normalize_message_type(value: Any) -> str:
     return normalized
 
 
+def _normalize_client_message_id(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("client_message_id is required")
+
+    normalized = value.strip()
+    if normalized == "":
+        raise ValueError("client_message_id is required")
+
+    return normalized
+
+
 def _parse_metadata(value: Any) -> dict[str, Any] | None:
     if value in [None, ""]:
         return None
@@ -217,7 +228,10 @@ async def web_messages_create(  # pylint: disable=too-many-locals
     except ValueError as exc:
         abort(400, str(exc))
 
-    client_message_id = form.get("client_message_id")
+    try:
+        client_message_id = _normalize_client_message_id(form.get("client_message_id"))
+    except ValueError as exc:
+        abort(400, str(exc))
     text = form.get("text")
     try:
         metadata = _parse_metadata(form.get("metadata"))
