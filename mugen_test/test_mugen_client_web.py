@@ -166,6 +166,87 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             any("Failed to emit web thinking signal" in message for message in warning_messages)
         )
 
+    async def test_process_claimed_job_logs_when_messaging_returns_no_responses(self) -> None:
+        self.messaging.handle_text_message = AsyncMock(return_value=[])
+
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-noresp",
+            message_type="text",
+            text="hello",
+            client_message_id="cid-noresp",
+        )
+
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "fallback 'No response generated.' emitted" in message
+                and "messaging service returned no responses" in message
+                and "reason=empty-list" in message
+                and "conversation_id=conv-noresp" in message
+                and "client_message_id=cid-noresp" in message
+                and "message_type=text" in message
+                for message in warning_messages
+            )
+        )
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            events = self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-noresp",
+                last_event_id=None,
+            )
+
+        system_events = [event for event in events if event["event"] == "system"]
+        self.assertEqual(len(system_events), 1)
+        self.assertEqual(system_events[0]["data"]["message"], "No response generated.")
+
+    async def test_process_claimed_job_logs_when_text_response_is_blank(self) -> None:
+        self.messaging.handle_text_message = AsyncMock(
+            return_value=[{"type": "text", "content": None}]
+        )
+
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-blank",
+            message_type="text",
+            text="hello",
+            client_message_id="cid-blank",
+        )
+
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "fallback 'No response generated.' emitted" in message
+                and "blank text response content" in message
+                and "conversation_id=conv-blank" in message
+                and "client_message_id=cid-blank" in message
+                and "response_index=0" in message
+                and "content_type=NoneType" in message
+                for message in warning_messages
+            )
+        )
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            events = self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-blank",
+                last_event_id=None,
+            )
+
+        message_events = [event for event in events if event["event"] == "message"]
+        self.assertEqual(len(message_events), 1)
+        self.assertEqual(
+            message_events[0]["data"]["message"]["content"],
+            "No response generated.",
+        )
+
     async def test_conversation_ownership_enforced(self) -> None:
         await self.client.enqueue_message(
             auth_user="user-1",
@@ -677,6 +758,8 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             conversation_id="conv-d",
         )
         self.assertEqual(bad_media["event_type"], "error")
+
+        self.assertFalse(self.client._is_blank_text_response(123))  # pylint: disable=protected-access
 
         self.assertIsNone(
             await self.client._build_media_payload(  # pylint: disable=protected-access

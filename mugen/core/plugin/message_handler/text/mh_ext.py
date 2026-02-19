@@ -178,6 +178,7 @@ class DefaultTextMHExtension(IMHExtension):
 
             completion_succeeded = False
             assistant_response = self._completion_error_message
+            completion = None
             completion_request = self._build_completion_request(completion_context)
             if completion_request is not None:
                 completion = await self._get_completion_response(completion_request)
@@ -193,6 +194,15 @@ class DefaultTextMHExtension(IMHExtension):
                 sender=sender,
                 assistant_response=assistant_response,
             )
+            if completion_succeeded and assistant_response.strip() == "":
+                self._logging_gateway.warning(
+                    "DefaultTextMHExtension.handle_message: "
+                    "Assistant response is blank; this may surface as "
+                    "'No response generated.' "
+                    f"(platform={platform} room_id={room_id} sender={sender}). "
+                    "Completion gateway response payload: "
+                    f"{self._format_completion_response_for_log(completion)}"
+                )
 
             if completion_succeeded:
                 self._logging_gateway.debug("Persist attention thread.")
@@ -656,6 +666,34 @@ class DefaultTextMHExtension(IMHExtension):
             return ""
 
         return str(value)
+
+    def _format_completion_response_for_log(self, response: Any) -> str:
+        if response is None:
+            return "null"
+
+        payload = response
+        model_dump = getattr(response, "model_dump", None)
+        to_dict = getattr(response, "to_dict", None)
+        if callable(model_dump):
+            try:
+                payload = model_dump()
+            except Exception:  # pylint: disable=broad-exception-caught
+                payload = response
+        elif callable(to_dict):
+            try:
+                payload = to_dict()
+            except Exception:  # pylint: disable=broad-exception-caught
+                payload = response
+        elif hasattr(response, "__dict__"):
+            try:
+                payload = vars(response)
+            except TypeError:
+                payload = response
+
+        try:
+            return json.dumps(payload, ensure_ascii=True, default=str)
+        except (TypeError, ValueError):
+            return str(payload)
 
     def _load_chat_history(self, room_id: str) -> dict | None:
         history_key = f"chat_history:{room_id}"

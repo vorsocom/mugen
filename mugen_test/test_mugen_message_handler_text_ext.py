@@ -4,7 +4,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from mugen.core.contract.gateway.completion import CompletionGatewayError
 from mugen.core.plugin.message_handler.text.mh_ext import DefaultTextMHExtension
@@ -682,6 +682,136 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(response)
         ext._logging_gateway.warning.assert_called()
+
+    async def test_get_completion_response_success_does_not_log_full_payload(self) -> None:
+        keyval = _MemoryKeyVal()
+        completion_result = SimpleNamespace(
+            content="assistant response",
+            model="gpt-test",
+            usage={"total_tokens": 123},
+        )
+        ext = self._new_ext(
+            completion_result=completion_result,
+            messaging_service=_make_messaging_service(),
+            keyval=keyval,
+            debug_conversation=False,
+        )
+
+        completion_request = ext._build_completion_request(
+            [{"role": "user", "content": "hello"}]
+        )
+        response = await ext._get_completion_response(completion_request)
+
+        self.assertIs(response, completion_result)
+        ext._logging_gateway.debug.assert_called_once_with("Get completion.")
+
+    async def test_handle_message_logs_full_payload_only_for_blank_assistant_response(
+        self,
+    ) -> None:
+        keyval = _MemoryKeyVal()
+        completion_result = SimpleNamespace(
+            content=None,
+            model="gpt-test",
+            usage={"total_tokens": 123},
+        )
+        ext = self._new_ext(
+            completion_result=completion_result,
+            messaging_service=_make_messaging_service(),
+            keyval=keyval,
+            debug_conversation=False,
+        )
+
+        response = await ext.handle_message(
+            platform="web",
+            room_id="room-blank",
+            sender="user-blank",
+            message="hello",
+        )
+
+        self.assertEqual(response, [{"type": "text", "content": ""}])
+        warning_messages = [call.args[0] for call in ext._logging_gateway.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "Assistant response is blank" in message
+                and "'No response generated.'" in message
+                and "room_id=room-blank" in message
+                and '"model": "gpt-test"' in message
+                and '"total_tokens": 123' in message
+                for message in warning_messages
+            )
+        )
+
+    async def test_format_completion_response_for_log_branch_coverage(self) -> None:
+        keyval = _MemoryKeyVal()
+        ext = self._new_ext(
+            completion_result=SimpleNamespace(content="assistant response"),
+            messaging_service=_make_messaging_service(),
+            keyval=keyval,
+            debug_conversation=False,
+        )
+
+        self.assertEqual(ext._format_completion_response_for_log(None), "null")
+
+        class _ModelDumpOk:
+            def model_dump(self):
+                return {"model": "ok"}
+
+        class _ModelDumpFail:
+            def model_dump(self):
+                raise RuntimeError("boom")
+
+            def __str__(self) -> str:
+                return "model-dump-failed"
+
+        class _ToDictOk:
+            def to_dict(self):
+                return {"dict": "ok"}
+
+        class _ToDictFail:
+            def to_dict(self):
+                raise RuntimeError("boom")
+
+            def __str__(self) -> str:
+                return "to-dict-failed"
+
+        class _VarsCarrier:
+            pass
+
+        self.assertIn(
+            '"model": "ok"',
+            ext._format_completion_response_for_log(_ModelDumpOk()),
+        )
+        self.assertIn(
+            "model-dump-failed",
+            ext._format_completion_response_for_log(_ModelDumpFail()),
+        )
+        self.assertIn(
+            '"dict": "ok"',
+            ext._format_completion_response_for_log(_ToDictOk()),
+        )
+        self.assertIn(
+            "to-dict-failed",
+            ext._format_completion_response_for_log(_ToDictFail()),
+        )
+
+        vars_carrier = _VarsCarrier()
+        vars_carrier.field = "value"
+        self.assertIn(
+            '"field": "value"',
+            ext._format_completion_response_for_log(vars_carrier),
+        )
+
+        with patch("builtins.vars", side_effect=TypeError("vars boom")):
+            self.assertIn(
+                "_VarsCarrier",
+                ext._format_completion_response_for_log(_VarsCarrier()),
+            )
+
+        with patch("mugen.core.plugin.message_handler.text.mh_ext.json.dumps", side_effect=TypeError("dumps boom")):
+            self.assertEqual(
+                ext._format_completion_response_for_log({"k": "v"}),
+                "{'k': 'v'}",
+            )
 
     async def test_helpers_cover_validation_and_fallback_paths(self) -> None:
         keyval = _MemoryKeyVal()

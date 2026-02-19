@@ -448,6 +448,7 @@ class DefaultWebClient(IWebClient):
         job_id = str(job.get("id"))
         conversation_id = str(job.get("conversation_id"))
         sender = str(job.get("sender"))
+        message_type = str(job.get("message_type", "")).strip().lower()
         client_message_id = job.get("client_message_id")
 
         await self._emit_thinking_signal(
@@ -462,6 +463,15 @@ class DefaultWebClient(IWebClient):
             responses = await self._dispatch_job_to_messaging(job)
 
             if not responses:
+                reason = "none" if responses is None else "empty-list"
+                self._logging_gateway.warning(
+                    "Web client fallback 'No response generated.' emitted: "
+                    "messaging service returned no responses "
+                    f"(reason={reason} job_id={job_id} "
+                    f"conversation_id={conversation_id} "
+                    f"client_message_id={client_message_id} "
+                    f"message_type={message_type})."
+                )
                 await self._append_event(
                     conversation_id=conversation_id,
                     event_type="system",
@@ -473,7 +483,18 @@ class DefaultWebClient(IWebClient):
                     },
                 )
             else:
-                for response in responses:
+                for response_index, response in enumerate(responses):
+                    if self._is_blank_text_response(response):
+                        content_type = type(response.get("content")).__name__
+                        self._logging_gateway.warning(
+                            "Web client fallback 'No response generated.' emitted: "
+                            "blank text response content "
+                            f"(job_id={job_id} conversation_id={conversation_id} "
+                            f"client_message_id={client_message_id} "
+                            f"response_index={response_index} "
+                            f"content_type={content_type})."
+                        )
+
                     event = await self._response_to_event(
                         response=response,
                         sender=sender,
@@ -512,6 +533,19 @@ class DefaultWebClient(IWebClient):
                 sender=sender,
                 state=PROCESSING_STATE_STOP,
             )
+
+    @staticmethod
+    def _is_blank_text_response(response: Any) -> bool:
+        if not isinstance(response, dict):
+            return False
+
+        response_type = str(response.get("type", "")).strip().lower()
+        if response_type != "text":
+            return False
+
+        content = response.get("content")
+        text_content = "" if content is None else str(content)
+        return text_content.strip() == ""
 
     async def _emit_thinking_signal(
         self,
