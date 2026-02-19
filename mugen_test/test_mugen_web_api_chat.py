@@ -1,6 +1,7 @@
 """Unit tests for mugen.core.plugin.web.api.chat."""
 
 from inspect import unwrap
+import json
 import os
 from types import SimpleNamespace
 import tempfile
@@ -51,13 +52,19 @@ class _DummyUpload:
             handle.write(self._payload_bytes)
 
 
-def _make_config(*, basedir: str, max_upload: int = 1024) -> SimpleNamespace:
+def _make_config(
+    *,
+    basedir: str,
+    max_upload: int = 1024,
+    max_attachments: int = 10,
+) -> SimpleNamespace:
     return SimpleNamespace(
         basedir=basedir,
         web=SimpleNamespace(
             media=SimpleNamespace(
                 storage=SimpleNamespace(path="web_media"),
                 max_upload_bytes=max_upload,
+                max_attachments_per_message=max_attachments,
                 allowed_mimetypes=["image/*", "application/*"],
             )
         ),
@@ -109,6 +116,38 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 chat._resolve_media_max_upload_bytes(config, SimpleNamespace()),
                 chat._DEFAULT_MEDIA_MAX_UPLOAD_BYTES,
+            )
+
+            wc = SimpleNamespace(media_max_attachments_per_message="4")
+            self.assertEqual(
+                chat._resolve_media_max_attachments_per_message(config, wc),
+                4,
+            )
+            wc = SimpleNamespace(media_max_attachments_per_message=0)
+            self.assertEqual(
+                chat._resolve_media_max_attachments_per_message(config, wc),
+                10,
+            )
+            wc = SimpleNamespace(media_max_attachments_per_message="bad")
+            self.assertEqual(
+                chat._resolve_media_max_attachments_per_message(config, wc),
+                10,
+            )
+            config.web.media.max_attachments_per_message = "bad"
+            self.assertEqual(
+                chat._resolve_media_max_attachments_per_message(
+                    config,
+                    SimpleNamespace(),
+                ),
+                chat._DEFAULT_MEDIA_MAX_ATTACHMENTS_PER_MESSAGE,
+            )
+            config.web.media.max_attachments_per_message = 0
+            self.assertEqual(
+                chat._resolve_media_max_attachments_per_message(
+                    config,
+                    SimpleNamespace(),
+                ),
+                chat._DEFAULT_MEDIA_MAX_ATTACHMENTS_PER_MESSAGE,
             )
 
             wc = SimpleNamespace(media_allowed_mimetypes=[" image/* ", 123, ""])
@@ -167,6 +206,7 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                 handle.write(b"x")
             with patch("mugen.core.plugin.web.api.chat.os.remove", side_effect=OSError()):
                 chat._remove_file_if_exists(existing_path)
+            chat._remove_files_if_exist([bogus_path, existing_path])
             self.assertEqual(chat._normalize_message_type("TEXT"), "text")
             with self.assertRaises(ValueError):
                 chat._normalize_message_type(None)
@@ -187,6 +227,93 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                 chat._parse_metadata("{bad")
             with self.assertRaises(ValueError):
                 chat._parse_metadata("[]")
+
+            self.assertEqual(chat._mapping_keys({"a": 1}), {"a"})
+            class _KeysOnly:
+                def keys(self):
+                    return ["k1", 2]
+
+            self.assertEqual(chat._mapping_keys(_KeysOnly()), {"k1"})
+            self.assertEqual(chat._mapping_keys(SimpleNamespace()), set())
+            self.assertEqual(chat._iter_file_items({"files[a]": "x"}), [("files[a]", "x")])
+
+            class _MultiFiles:
+                def keys(self):
+                    return ["files[a]"]
+
+                def items(self, multi=False):
+                    if multi:
+                        return [("files[a]", "x")]
+                    return [("files[a]", "y")]
+
+            self.assertEqual(chat._iter_file_items(_MultiFiles()), [("files[a]", "x")])
+            class _ItemsNoMulti:
+                def items(self):
+                    return [("files[a]", "z")]
+
+            self.assertEqual(chat._iter_file_items(_ItemsNoMulti()), [("files[a]", "z")])
+            self.assertEqual(chat._iter_file_items(SimpleNamespace()), [])
+            self.assertTrue(chat._structured_payload_present({"parts": "[]"}, {}))
+            self.assertFalse(chat._structured_payload_present({}, {}))
+            self.assertTrue(chat._legacy_payload_present({"message_type": "text"}, {}))
+            self.assertFalse(chat._legacy_payload_present({}, {}))
+
+            self.assertEqual(
+                chat._normalize_composition_mode("message_with_attachments"),
+                "message_with_attachments",
+            )
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._normalize_composition_mode(None)
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._normalize_composition_mode("")
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._normalize_composition_mode("bad-mode")
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._parse_structured_parts(None)
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._parse_structured_parts("")
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._parse_structured_parts("not-json")
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._parse_structured_parts("{}")
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._parse_structured_parts('[{"type":1}]')
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._parse_structured_parts("[1]")
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._parse_structured_parts('[{"type":"bad"}]')
+            parsed_parts = chat._parse_structured_parts('[{"type":"text"}]')
+            self.assertEqual(parsed_parts[0]["text"], "")
+            parsed_attachment_parts = chat._parse_structured_parts(
+                '[{"type":"attachment","id":"a1"}]'
+            )
+            self.assertEqual(parsed_attachment_parts[0]["metadata"], {})
+            parsed_attachment_with_metadata = chat._parse_structured_parts(
+                '[{"type":"attachment","id":"a1","metadata":{"k":"v"}}]'
+            )
+            self.assertEqual(
+                parsed_attachment_with_metadata[0]["metadata"],
+                {"k": "v"},
+            )
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._parse_structured_parts(
+                    '[{"type":"attachment","id":"a1","metadata":"bad"}]'
+                )
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._normalize_structured_uploads({"bad": object()})
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._normalize_structured_uploads({"files[]": object()})
+            class _DuplicateStructuredUploads:
+                def items(self, multi=False):
+                    if multi:
+                        return [("files[a1]", object()), ("files[a1]", object())]
+                    return [("files[a1]", object())]
+
+            with self.assertRaises(chat._StructuredPayloadError):
+                chat._normalize_structured_uploads(_DuplicateStructuredUploads())
+            self.assertEqual(chat._infer_upload_extension("f.txt"), ".txt")
+            self.assertEqual(chat._infer_upload_extension("x." + ("1" * 20)), "")
+            self.assertEqual(chat._infer_upload_extension(None), "")
 
     async def test_messages_create_happy_path_with_text(self) -> None:
         endpoint = unwrap(chat.web_messages_create)
@@ -225,6 +352,47 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["message_type"], "text")
         self.assertEqual(kwargs["metadata"], {"k": "v"})
         self.assertEqual(response.status_code, 200)
+
+    async def test_structured_upload_helper_error_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _make_config(basedir=tmpdir, max_upload=4)
+            web_client = SimpleNamespace(mimetype_allowed=lambda _: True)
+
+            with (
+                patch(
+                    "mugen.core.plugin.web.api.chat.os.path.getsize",
+                    side_effect=OSError(),
+                ),
+            ):
+                with self.assertRaises(chat._StructuredPayloadError) as ex:
+                    await chat._persist_structured_upload(
+                        uploaded_file=_DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="a.png",
+                            payload_bytes=b"1234",
+                        ),
+                        config=config,
+                        web_client=web_client,
+                        max_upload_bytes=4,
+                        allowed_mimetypes=["image/*"],
+                    )
+                self.assertEqual(ex.exception.status_code, 500)
+
+            with self.assertRaises(chat._StructuredPayloadError) as ex:
+                await chat._persist_structured_upload(
+                    uploaded_file=_DummyUpload(
+                        mimetype="image/png",
+                        content_length=1,
+                        filename="a.png",
+                        payload_bytes=b"12345",
+                    ),
+                    config=config,
+                    web_client=web_client,
+                    max_upload_bytes=4,
+                    allowed_mimetypes=["image/*"],
+                )
+            self.assertEqual(ex.exception.status_code, 413)
 
     async def test_messages_create_requires_client_message_id(self) -> None:
         endpoint = unwrap(chat.web_messages_create)
@@ -724,6 +892,558 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                             ),
                         )
                     self.assertEqual(ex.exception.code, 429)
+
+    async def test_messages_create_structured_happy_paths(self) -> None:
+        endpoint = unwrap(chat.web_messages_create)
+        fake_response = SimpleNamespace(status_code=200)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _make_config(basedir=tmpdir, max_upload=128, max_attachments=10)
+            web_client = SimpleNamespace(enqueue_message=AsyncMock(return_value={"job_id": "j1"}))
+
+            scenarios = [
+                (
+                    # C1 text only
+                    {
+                        "conversation_id": "conv-c1",
+                        "client_message_id": "cid-c1",
+                        "metadata": '{"source":"c1"}',
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps([{"type": "text", "text": "hello"}]),
+                    },
+                    {},
+                    "message_with_attachments",
+                ),
+                (
+                    # C3 one attachment with caption
+                    {
+                        "conversation_id": "conv-c3",
+                        "client_message_id": "cid-c3",
+                        "composition_mode": "attachment_with_caption",
+                        "parts": json.dumps(
+                            [{"type": "attachment", "id": "a1", "caption": "cap-1"}]
+                        ),
+                    },
+                    {
+                        "files[a1]": _DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="img.png",
+                            payload_bytes=b"1234",
+                        )
+                    },
+                    "attachment_with_caption",
+                ),
+                (
+                    # C6/C7 multiple attachments
+                    {
+                        "conversation_id": "conv-c6",
+                        "client_message_id": "cid-c6",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps(
+                            [
+                                {"type": "attachment", "id": "a1"},
+                                {"type": "attachment", "id": "a2", "caption": "cap-2"},
+                            ]
+                        ),
+                    },
+                    {
+                        "files[a1]": _DummyUpload(
+                            mimetype="application/pdf",
+                            content_length=4,
+                            filename="f1.pdf",
+                            payload_bytes=b"abcd",
+                        ),
+                        "files[a2]": _DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="f2.png",
+                            payload_bytes=b"wxyz",
+                        ),
+                    },
+                    "message_with_attachments",
+                ),
+                (
+                    # C8/C9 text + attachments
+                    {
+                        "conversation_id": "conv-c8",
+                        "client_message_id": "cid-c8",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps(
+                            [
+                                {"type": "text", "text": "prefix"},
+                                {"type": "attachment", "id": "a1"},
+                                {"type": "attachment", "id": "a2", "caption": "cap-2"},
+                            ]
+                        ),
+                    },
+                    {
+                        "files[a1]": _DummyUpload(
+                            mimetype="application/octet-stream",
+                            content_length=4,
+                            filename="f1.bin",
+                            payload_bytes=b"1234",
+                        ),
+                        "files[a2]": _DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="f2.png",
+                            payload_bytes=b"5678",
+                        ),
+                    },
+                    "message_with_attachments",
+                ),
+                (
+                    # C10 interleaved ordered parts
+                    {
+                        "conversation_id": "conv-c10",
+                        "client_message_id": "cid-c10",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps(
+                            [
+                                {"type": "text", "text": "first"},
+                                {"type": "attachment", "id": "a1", "caption": "cap-1"},
+                                {"type": "text", "text": "second"},
+                            ]
+                        ),
+                    },
+                    {
+                        "files[a1]": _DummyUpload(
+                            mimetype="application/pdf",
+                            content_length=4,
+                            filename="f1.pdf",
+                            payload_bytes=b"ijkl",
+                        )
+                    },
+                    "message_with_attachments",
+                ),
+            ]
+
+            for form_payload, file_payload, expected_mode in scenarios:
+                request_obj = SimpleNamespace(
+                    form=_AwaitableValue(form_payload),
+                    files=_AwaitableValue(file_payload),
+                )
+                with (
+                    patch.object(chat, "request", new=request_obj),
+                    patch.object(chat, "jsonify", return_value=fake_response),
+                ):
+                    response, status = await endpoint(
+                        auth_user="user-1",
+                        config_provider=lambda: config,
+                        logger_provider=lambda: Mock(),
+                        web_client_provider=lambda: web_client,
+                    )
+
+                self.assertEqual(status, 202)
+                self.assertEqual(response.status_code, 200)
+                web_client.enqueue_message.assert_awaited()
+                kwargs = web_client.enqueue_message.await_args.kwargs
+                self.assertEqual(kwargs["message_type"], "composed")
+                self.assertEqual(kwargs["metadata"]["composition_mode"], expected_mode)
+                self.assertTrue(isinstance(kwargs["metadata"]["parts"], list))
+                self.assertTrue(isinstance(kwargs["metadata"]["attachments"], list))
+                if "metadata" in form_payload:
+                    self.assertEqual(kwargs["metadata"]["metadata"], {"source": "c1"})
+                web_client.enqueue_message.reset_mock()
+
+    async def test_messages_create_structured_invalid_matrix_paths(self) -> None:
+        endpoint = unwrap(chat.web_messages_create)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config = _make_config(basedir=tmpdir, max_upload=8, max_attachments=10)
+
+            invalid_cases = [
+                # R1 no text and no attachments.
+                (
+                    {
+                        "conversation_id": "conv-r1",
+                        "client_message_id": "cid-r1",
+                        "composition_mode": "message_with_attachments",
+                        "parts": "[]",
+                    },
+                    {},
+                    400,
+                ),
+                # R2 caption without a valid attachment target.
+                (
+                    {
+                        "conversation_id": "conv-r2",
+                        "client_message_id": "cid-r2",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps(
+                            [{"type": "text", "text": "t", "caption": "bad"}]
+                        ),
+                    },
+                    {},
+                    400,
+                ),
+                # R3 attachment part missing id/blob linkage.
+                (
+                    {
+                        "conversation_id": "conv-r3",
+                        "client_message_id": "cid-r3",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps([{"type": "attachment"}]),
+                    },
+                    {},
+                    400,
+                ),
+                # attachment_with_caption with no attachment parts.
+                (
+                    {
+                        "conversation_id": "conv-r2-mode-empty",
+                        "client_message_id": "cid-r2-mode-empty",
+                        "composition_mode": "attachment_with_caption",
+                        "parts": json.dumps([{"type": "text", "text": "hello"}]),
+                    },
+                    {},
+                    400,
+                ),
+                # attachment_with_caption contains text part (invalid caption target).
+                (
+                    {
+                        "conversation_id": "conv-r2-mode-text",
+                        "client_message_id": "cid-r2-mode-text",
+                        "composition_mode": "attachment_with_caption",
+                        "parts": json.dumps(
+                            [
+                                {"type": "text", "text": "hello"},
+                                {"type": "attachment", "id": "a1", "caption": "cap"},
+                            ]
+                        ),
+                    },
+                    {
+                        "files[a1]": _DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="f.png",
+                            payload_bytes=b"1234",
+                        )
+                    },
+                    400,
+                ),
+                # attachment_with_caption requires non-empty caption for each attachment.
+                (
+                    {
+                        "conversation_id": "conv-r2-mode-caption",
+                        "client_message_id": "cid-r2-mode-caption",
+                        "composition_mode": "attachment_with_caption",
+                        "parts": json.dumps([{"type": "attachment", "id": "a1"}]),
+                    },
+                    {
+                        "files[a1]": _DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="f.png",
+                            payload_bytes=b"1234",
+                        )
+                    },
+                    400,
+                ),
+                # attachment id exists in parts but upload mapping is missing.
+                (
+                    {
+                        "conversation_id": "conv-r3-missing-upload",
+                        "client_message_id": "cid-r3-missing-upload",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps([{"type": "attachment", "id": "a1"}]),
+                    },
+                    {},
+                    400,
+                ),
+                # R4 unsupported media type.
+                (
+                    {
+                        "conversation_id": "conv-r4",
+                        "client_message_id": "cid-r4",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps([{"type": "attachment", "id": "a1"}]),
+                    },
+                    {
+                        "files[a1]": _DummyUpload(
+                            mimetype="audio/ogg",
+                            content_length=4,
+                            filename="f.ogg",
+                            payload_bytes=b"1234",
+                        )
+                    },
+                    415,
+                ),
+                # R6 duplicate attachment ids.
+                (
+                    {
+                        "conversation_id": "conv-r6",
+                        "client_message_id": "cid-r6",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps(
+                            [
+                                {"type": "attachment", "id": "dup"},
+                                {"type": "attachment", "id": "dup"},
+                            ]
+                        ),
+                    },
+                    {
+                        "files[dup]": _DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="f.png",
+                            payload_bytes=b"1234",
+                        )
+                    },
+                    422,
+                ),
+                # R6 orphan uploads.
+                (
+                    {
+                        "conversation_id": "conv-r6b",
+                        "client_message_id": "cid-r6b",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps([{"type": "attachment", "id": "a1"}]),
+                    },
+                    {
+                        "files[a1]": _DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="f1.png",
+                            payload_bytes=b"1234",
+                        ),
+                        "files[a2]": _DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="f2.png",
+                            payload_bytes=b"5678",
+                        ),
+                    },
+                    422,
+                ),
+                # Mixed legacy + structured is rejected.
+                (
+                    {
+                        "conversation_id": "conv-mixed",
+                        "client_message_id": "cid-mixed",
+                        "message_type": "text",
+                        "text": "legacy",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps([{"type": "text", "text": "structured"}]),
+                    },
+                    {},
+                    400,
+                ),
+            ]
+
+            for form_payload, file_payload, expected_code in invalid_cases:
+                request_obj = SimpleNamespace(
+                    form=_AwaitableValue(form_payload),
+                    files=_AwaitableValue(file_payload),
+                )
+                with (
+                    patch.object(chat, "abort", side_effect=_abort_raiser),
+                    patch.object(chat, "request", new=request_obj),
+                ):
+                    with self.assertRaises(_AbortCalled) as ex:
+                        await endpoint(
+                            auth_user="user-1",
+                            config_provider=lambda: base_config,
+                            logger_provider=lambda: Mock(),
+                            web_client_provider=lambda: SimpleNamespace(
+                                enqueue_message=AsyncMock()
+                            ),
+                        )
+                self.assertEqual(ex.exception.code, expected_code)
+
+            # R5 max attachments / size limits.
+            max_count_config = _make_config(basedir=tmpdir, max_upload=8, max_attachments=1)
+            with (
+                patch.object(chat, "abort", side_effect=_abort_raiser),
+                patch.object(
+                    chat,
+                    "request",
+                    new=SimpleNamespace(
+                        form=_AwaitableValue(
+                            {
+                                "conversation_id": "conv-r5",
+                                "client_message_id": "cid-r5",
+                                "composition_mode": "message_with_attachments",
+                                "parts": json.dumps(
+                                    [
+                                        {"type": "attachment", "id": "a1"},
+                                        {"type": "attachment", "id": "a2"},
+                                    ]
+                                ),
+                            }
+                        ),
+                        files=_AwaitableValue(
+                            {
+                                "files[a1]": _DummyUpload(
+                                    mimetype="image/png",
+                                    content_length=4,
+                                    filename="f1.png",
+                                    payload_bytes=b"1234",
+                                ),
+                                "files[a2]": _DummyUpload(
+                                    mimetype="image/png",
+                                    content_length=4,
+                                    filename="f2.png",
+                                    payload_bytes=b"5678",
+                                ),
+                            }
+                        ),
+                    ),
+                ),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await endpoint(
+                        auth_user="user-1",
+                        config_provider=lambda: max_count_config,
+                        logger_provider=lambda: Mock(),
+                        web_client_provider=lambda: SimpleNamespace(
+                            enqueue_message=AsyncMock()
+                        ),
+                    )
+            self.assertEqual(ex.exception.code, 413)
+
+            with (
+                patch.object(chat, "abort", side_effect=_abort_raiser),
+                patch.object(
+                    chat,
+                    "request",
+                    new=SimpleNamespace(
+                        form=_AwaitableValue(
+                            {
+                                "conversation_id": "conv-r5-size",
+                                "client_message_id": "cid-r5-size",
+                                "composition_mode": "message_with_attachments",
+                                "parts": json.dumps([{"type": "attachment", "id": "a1"}]),
+                            }
+                        ),
+                        files=_AwaitableValue(
+                            {
+                                "files[a1]": _DummyUpload(
+                                    mimetype="image/png",
+                                    content_length=9,
+                                    filename="f.png",
+                                    payload_bytes=b"123456789",
+                                )
+                            }
+                        ),
+                    ),
+                ),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await endpoint(
+                        auth_user="user-1",
+                        config_provider=lambda: base_config,
+                        logger_provider=lambda: Mock(),
+                        web_client_provider=lambda: SimpleNamespace(
+                            enqueue_message=AsyncMock()
+                        ),
+                    )
+            self.assertEqual(ex.exception.code, 413)
+
+    async def test_messages_create_structured_cleanup_on_enqueue_error(self) -> None:
+        endpoint = unwrap(chat.web_messages_create)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _make_config(basedir=tmpdir, max_upload=1024, max_attachments=10)
+            request_obj = SimpleNamespace(
+                form=_AwaitableValue(
+                    {
+                        "conversation_id": "conv-cleanup",
+                        "client_message_id": "cid-cleanup",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps(
+                            [
+                                {"type": "attachment", "id": "a1"},
+                                {"type": "attachment", "id": "a2"},
+                            ]
+                        ),
+                    }
+                ),
+                files=_AwaitableValue(
+                    {
+                        "files[a1]": _DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="f1.png",
+                            payload_bytes=b"1234",
+                        ),
+                        "files[a2]": _DummyUpload(
+                            mimetype="application/pdf",
+                            content_length=4,
+                            filename="f2.pdf",
+                            payload_bytes=b"5678",
+                        ),
+                    }
+                ),
+            )
+
+            with (
+                patch.object(chat, "abort", side_effect=_abort_raiser),
+                patch.object(chat, "request", new=request_obj),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await endpoint(
+                        auth_user="user-1",
+                        config_provider=lambda: config,
+                        logger_provider=lambda: Mock(),
+                        web_client_provider=lambda: SimpleNamespace(
+                            enqueue_message=AsyncMock(side_effect=OverflowError())
+                        ),
+                    )
+            self.assertEqual(ex.exception.code, 429)
+            media_dir = os.path.join(tmpdir, "web_media")
+            self.assertTrue(os.path.isdir(media_dir))
+            self.assertEqual(os.listdir(media_dir), [])
+
+    async def test_messages_create_structured_enqueue_error_branches(self) -> None:
+        endpoint = unwrap(chat.web_messages_create)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _make_config(basedir=tmpdir, max_upload=1024, max_attachments=10)
+            base_request = SimpleNamespace(
+                form=_AwaitableValue(
+                    {
+                        "conversation_id": "conv-structured-errors",
+                        "client_message_id": "cid-structured-errors",
+                        "composition_mode": "message_with_attachments",
+                        "parts": json.dumps([{"type": "attachment", "id": "a1"}]),
+                    }
+                ),
+                files=_AwaitableValue(
+                    {
+                        "files[a1]": _DummyUpload(
+                            mimetype="image/png",
+                            content_length=4,
+                            filename="f.png",
+                            payload_bytes=b"1234",
+                        )
+                    }
+                ),
+            )
+
+            for expected_code, side_effect in (
+                (403, PermissionError()),
+                (400, ValueError("bad structured enqueue")),
+                (500, RuntimeError("boom")),
+            ):
+                logger = Mock()
+                with (
+                    patch.object(chat, "abort", side_effect=_abort_raiser),
+                    patch.object(chat, "request", new=base_request),
+                ):
+                    with self.assertRaises(_AbortCalled) as ex:
+                        await endpoint(
+                            auth_user="user-1",
+                            config_provider=lambda: config,
+                            logger_provider=lambda: logger,
+                            web_client_provider=lambda: SimpleNamespace(
+                                enqueue_message=AsyncMock(side_effect=side_effect)
+                            ),
+                        )
+                self.assertEqual(ex.exception.code, expected_code)
+                if expected_code == 500:
+                    logger.exception.assert_called()
 
     async def test_events_stream_uses_last_event_id_header_precedence(self) -> None:
         endpoint = unwrap(chat.web_events_stream)

@@ -53,6 +53,7 @@ def _build_config(*, basedir: str, replay_max_events: int = 5) -> SimpleNamespac
             media=SimpleNamespace(
                 storage=SimpleNamespace(path="web_media"),
                 max_upload_bytes=1024 * 1024,
+                max_attachments_per_message=10,
                 allowed_mimetypes=["image/*", "application/*", "text/*"],
                 download_token_ttl_seconds=10,
                 retention_seconds=1,
@@ -289,6 +290,46 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 metadata=[],
             )
 
+        with self.assertRaises(ValueError):
+            await self.client.enqueue_message(
+                auth_user="user-1",
+                conversation_id="conv-v",
+                message_type="composed",
+                metadata={},
+            )
+
+        with self.assertRaises(ValueError):
+            await self.client.enqueue_message(
+                auth_user="user-1",
+                conversation_id="conv-v",
+                message_type="composed",
+                metadata={
+                    "composition_mode": "message_with_attachments",
+                    "parts": [{"type": "attachment", "id": "a1"}],
+                    "attachments": [],
+                },
+            )
+
+        with self.assertRaises(ValueError):
+            await self.client.enqueue_message(
+                auth_user="user-1",
+                conversation_id="conv-v",
+                message_type="composed",
+                metadata={
+                    "composition_mode": "attachment_with_caption",
+                    "parts": [{"type": "attachment", "id": "a1"}],
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "file_path": "/tmp/file.bin",
+                            "mime_type": "application/octet-stream",
+                            "metadata": {},
+                            "caption": "",
+                        }
+                    ],
+                },
+            )
+
         await self.client.enqueue_message(
             auth_user="user-1",
             conversation_id="conv-v-meta",
@@ -311,6 +352,18 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 message_type="text",
                 text="second",
             )
+
+        self.client._queue_max_pending_jobs = 100  # pylint: disable=protected-access
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-v-composed",
+            message_type="composed",
+            metadata={
+                "composition_mode": "message_with_attachments",
+                "parts": [{"type": "text", "text": "hello"}],
+                "attachments": [],
+            },
+        )
 
     async def test_replay_ordering_and_truncation(self) -> None:
         small_client = DefaultWebClient(
@@ -1143,6 +1196,13 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(bad_media["event_type"], "error")
 
+        composed_response = await self.client._response_to_event(  # pylint: disable=protected-access
+            response={"type": "composed", "content": {"x": 1}},
+            sender="user-1",
+            conversation_id="conv-d",
+        )
+        self.assertEqual(composed_response["event_type"], "error")
+
         self.assertFalse(self.client._is_blank_text_response(123))  # pylint: disable=protected-access
 
         self.assertIsNone(
@@ -1214,6 +1274,392 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failure_events[3]["event"], "thinking")
         self.assertEqual(failure_events[3]["data"]["state"], "stop")
         await failing.close()
+
+    async def test_dispatch_composed_paths(self) -> None:
+        composed_text_job = {
+            "conversation_id": "conv-composed-text",
+            "sender": "user-1",
+            "client_message_id": "cid-composed-text",
+            "message_type": "composed",
+            "metadata": {
+                "composition_mode": "message_with_attachments",
+                "parts": [
+                    {"type": "text", "text": "first"},
+                    {"type": "attachment", "id": "a1", "caption": "cap-1"},
+                    {"type": "text", "text": "second"},
+                ],
+                "attachments": [
+                    {
+                        "id": "a1",
+                        "file_path": "/tmp/a1.bin",
+                        "mime_type": "application/octet-stream",
+                        "original_filename": "a1.bin",
+                        "metadata": {"k": "v"},
+                        "caption": "cap-1",
+                    }
+                ],
+            },
+        }
+
+        self.messaging.handle_text_message = AsyncMock(
+            return_value=[{"type": "text", "content": "ok"}]
+        )
+        text_responses = await self.client._dispatch_job_to_messaging(  # pylint: disable=protected-access
+            composed_text_job
+        )
+        self.assertEqual(text_responses, [{"type": "text", "content": "ok"}])
+        self.messaging.handle_text_message.assert_awaited_once()
+        text_kwargs = self.messaging.handle_text_message.await_args.kwargs
+        self.assertEqual(text_kwargs["message"], "first\n[attachment:a1] caption=cap-1\nsecond")
+        self.assertEqual(text_kwargs["message_context"][0]["content"]["id"], "a1")
+
+        self.messaging.handle_text_message.reset_mock()
+        self.messaging.handle_audio_message = AsyncMock(
+            return_value=[{"type": "text", "content": "audio"}]
+        )
+        audio_responses = await self.client._dispatch_job_to_messaging(  # pylint: disable=protected-access
+            {
+                **composed_text_job,
+                "conversation_id": "conv-composed-audio",
+                "client_message_id": "cid-composed-audio",
+                "metadata": {
+                    "composition_mode": "attachment_with_caption",
+                    "parts": [{"type": "attachment", "id": "a1", "caption": "audio-cap"}],
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "file_path": "/tmp/a1.ogg",
+                            "mime_type": "audio/ogg",
+                            "original_filename": "a1.ogg",
+                            "metadata": {},
+                            "caption": "audio-cap",
+                        }
+                    ],
+                },
+            }
+        )
+        self.assertEqual(audio_responses, [{"type": "text", "content": "audio"}])
+        self.messaging.handle_audio_message.assert_awaited_once()
+
+        self.messaging.handle_audio_message = AsyncMock(
+            return_value=[{"type": "text", "content": "audio-1"}]
+        )
+        self.messaging.handle_video_message = AsyncMock(return_value=None)
+        self.messaging.handle_image_message = AsyncMock(
+            return_value=[{"type": "text", "content": "image-1"}]
+        )
+        self.messaging.handle_file_message = AsyncMock(
+            return_value=[{"type": "text", "content": "file-1"}]
+        )
+        multi_responses = await self.client._dispatch_job_to_messaging(  # pylint: disable=protected-access
+            {
+                **composed_text_job,
+                "conversation_id": "conv-composed-multi",
+                "client_message_id": "cid-composed-multi",
+                "metadata": {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [
+                        {"type": "attachment", "id": "a1"},
+                        {"type": "attachment", "id": "a2"},
+                        {"type": "attachment", "id": "a3"},
+                        {"type": "attachment", "id": "a4"},
+                    ],
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "file_path": "/tmp/a1.ogg",
+                            "mime_type": "audio/ogg",
+                            "original_filename": "a1.ogg",
+                            "metadata": {},
+                            "caption": None,
+                        },
+                        {
+                            "id": "a2",
+                            "file_path": "/tmp/a2.mp4",
+                            "mime_type": "video/mp4",
+                            "original_filename": "a2.mp4",
+                            "metadata": {},
+                            "caption": None,
+                        },
+                        {
+                            "id": "a3",
+                            "file_path": "/tmp/a3.png",
+                            "mime_type": "image/png",
+                            "original_filename": "a3.png",
+                            "metadata": {},
+                            "caption": None,
+                        },
+                        {
+                            "id": "a4",
+                            "file_path": "/tmp/a4.pdf",
+                            "mime_type": "application/pdf",
+                            "original_filename": "a4.pdf",
+                            "metadata": {},
+                            "caption": None,
+                        },
+                    ],
+                },
+            }
+        )
+        self.assertEqual(
+            [item["content"] for item in multi_responses],
+            ["audio-1", "image-1", "file-1"],
+        )
+        self.assertEqual(self.client._build_composed_text_prompt(parts=[]), "")  # pylint: disable=protected-access
+        self.assertEqual(
+            self.client._build_composed_text_prompt(  # pylint: disable=protected-access
+                parts=[
+                    {"type": "unknown"},
+                    {"type": "attachment", "id": " ", "caption": ""},
+                ]
+            ),
+            "[attachment:unknown]",
+        )
+        self.assertIsNone(  # pylint: disable=protected-access
+            self.client._build_composed_attachment_context(attachments=[], composition_mode="x")
+        )
+        self.assertEqual(
+            self.client._infer_media_message_type("application/octet-stream"),  # pylint: disable=protected-access
+            "file",
+        )
+
+    async def test_composed_metadata_helper_branches(self) -> None:
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(None)  # pylint: disable=protected-access
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "bad",
+                    "parts": [],
+                    "attachments": [],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [],
+                    "attachments": {},
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [],
+                    "attachments": [1],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [],
+                    "attachments": [
+                        {"id": "a1", "file_path": "/tmp/a1.bin"},
+                        {"id": "a1", "file_path": "/tmp/a2.bin"},
+                    ],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [],
+                    "attachments": [{"id": "a1", "file_path": "/tmp/x", "metadata": []}],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": {},
+                    "attachments": [],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [1],
+                    "attachments": [],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [{"type": "attachment", "id": "a1"}],
+                    "attachments": [],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [{"type": "bad"}],
+                    "attachments": [],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [{"type": "text", "text": " "}],
+                    "attachments": [],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "attachment_with_caption",
+                    "parts": [{"type": "text", "text": "bad"}],
+                    "attachments": [],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "attachment_with_caption",
+                    "parts": [{"type": "attachment", "id": "a1"}],
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "file_path": "/tmp/a1.bin",
+                            "mime_type": "application/octet-stream",
+                            "metadata": {},
+                            "caption": None,
+                        }
+                    ],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "attachment_with_caption",
+                    "parts": [],
+                    "attachments": [],
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [
+                        {
+                            "type": "attachment",
+                            "id": "a1",
+                            "metadata": [],
+                        }
+                    ],
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "file_path": "/tmp/a1.bin",
+                            "mime_type": "application/octet-stream",
+                            "metadata": {},
+                            "caption": None,
+                        }
+                    ],
+                }
+            )
+
+        self.client._media_max_attachments_per_message = 1  # pylint: disable=protected-access
+        with self.assertRaises(ValueError):
+            self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [
+                        {"type": "attachment", "id": "a1"},
+                        {"type": "attachment", "id": "a2"},
+                    ],
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "file_path": "/tmp/a1.bin",
+                            "mime_type": "application/octet-stream",
+                            "metadata": {},
+                            "caption": None,
+                        },
+                        {
+                            "id": "a2",
+                            "file_path": "/tmp/a2.bin",
+                            "mime_type": "application/octet-stream",
+                            "metadata": {},
+                            "caption": None,
+                        },
+                    ],
+                }
+            )
+
+        self.client._media_max_attachments_per_message = 10  # pylint: disable=protected-access
+        normalized_with_none_metadata = self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+            {
+                "composition_mode": "message_with_attachments",
+                "parts": [{"type": "attachment", "id": "a1"}],
+                "attachments": [
+                    {
+                        "id": "a1",
+                        "file_path": "/tmp/a1.bin",
+                        "mime_type": "application/octet-stream",
+                        "metadata": None,
+                        "caption": None,
+                    }
+                ],
+            }
+        )
+        self.assertEqual(normalized_with_none_metadata["attachments"][0]["metadata"], {})
+
+        normalized_with_part_metadata = self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+            {
+                "composition_mode": "message_with_attachments",
+                "parts": [
+                    {
+                        "type": "attachment",
+                        "id": "a1",
+                        "metadata": {"p": "v"},
+                    }
+                ],
+                "attachments": [
+                    {
+                        "id": "a1",
+                        "file_path": "/tmp/a1.bin",
+                        "mime_type": "application/octet-stream",
+                        "metadata": {"a": "b"},
+                        "caption": None,
+                    }
+                ],
+            }
+        )
+        self.assertEqual(
+            normalized_with_part_metadata["parts"][0]["metadata"],
+            {"p": "v"},
+        )
+
+        normalized = self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+            {
+                "composition_mode": "message_with_attachments",
+                "parts": [{"type": "text", "text": "ok"}],
+                "attachments": [],
+                "metadata": {"k": "v"},
+            }
+        )
+        self.assertEqual(normalized["metadata"], {"k": "v"})
+        self.assertGreater(self.client.media_max_attachments_per_message, 0)
 
     async def test_claim_and_subscriber_edge_branches(self) -> None:
         async with self.client._storage_lock:  # pylint: disable=protected-access

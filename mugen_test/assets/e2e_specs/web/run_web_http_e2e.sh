@@ -425,6 +425,57 @@ if [[ -z "$job_id" ]]; then
 fi
 echo "JOB ID: $job_id"
 
+structured_attachment_path="$(mktemp /tmp/web_http_e2e_structured_attachment_XXXXXX.bin)"
+tmp_files+=("$structured_attachment_path")
+printf 'structured-attachment-payload' > "$structured_attachment_path"
+structured_client_message_id="${client_message_id}-structured"
+structured_parts_json="$(jq -cn --arg text "$message_text" '
+  [
+    {"type":"text","text":$text},
+    {"type":"attachment","id":"a1","caption":"structured-e2e-caption"}
+  ]
+')"
+structured_create_out="$(mktemp /tmp/web_http_e2e_create_structured_XXXXXX.json)"
+tmp_files+=("$structured_create_out")
+structured_create_code="$(curl -sk -o "$structured_create_out" -w "%{http_code}" \
+  -H "$auth_header" \
+  -X POST "$web_base_url/messages" \
+  -F "conversation_id=$conversation_id" \
+  -F "client_message_id=$structured_client_message_id" \
+  -F "composition_mode=message_with_attachments" \
+  -F "parts=$structured_parts_json" \
+  -F "files[a1]=@${structured_attachment_path};type=application/octet-stream")"
+echo "CREATE STRUCTURED MESSAGE: $structured_create_code"
+if [[ "$structured_create_code" != "$message_create_expect_code" ]]; then
+  echo "ERROR: structured message create expected $message_create_expect_code got $structured_create_code" >&2
+  cat "$structured_create_out" >&2
+  exit 1
+fi
+structured_job_id="$(jq -r '.job_id // empty' "$structured_create_out")"
+if [[ -z "$structured_job_id" ]]; then
+  echo "ERROR: structured message create response missing job_id" >&2
+  cat "$structured_create_out" >&2
+  exit 1
+fi
+echo "STRUCTURED JOB ID: $structured_job_id"
+
+structured_negative_out="$(mktemp /tmp/web_http_e2e_negative_structured_empty_XXXXXX.out)"
+tmp_files+=("$structured_negative_out")
+structured_negative_client_message_id="${client_message_id}-structured-empty"
+structured_negative_code="$(curl -sk -o "$structured_negative_out" -w "%{http_code}" \
+  -H "$auth_header" \
+  -X POST "$web_base_url/messages" \
+  --data-urlencode "conversation_id=$conversation_id" \
+  --data-urlencode "client_message_id=$structured_negative_client_message_id" \
+  --data-urlencode "composition_mode=message_with_attachments" \
+  --data-urlencode "parts=[]")"
+echo "NEGATIVE structured empty payload: $structured_negative_code"
+if [[ "$structured_negative_code" != "400" ]]; then
+  echo "ERROR: structured empty payload expected 400 got $structured_negative_code" >&2
+  cat "$structured_negative_out" >&2
+  exit 1
+fi
+
 encoded_conversation_id="$(jq -rn --arg value "$conversation_id" '$value | @uri')"
 events_url="$web_base_url/events?conversation_id=$encoded_conversation_id"
 

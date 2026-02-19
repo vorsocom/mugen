@@ -38,6 +38,14 @@ class DefaultWebClient(IWebClient):
         "video",
         "file",
         "image",
+        "composed",
+    }
+    _accepted_response_types = {
+        "text",
+        "audio",
+        "video",
+        "file",
+        "image",
     }
     _required_correlation_event_types = {
         "ack",
@@ -66,6 +74,7 @@ class DefaultWebClient(IWebClient):
     _default_queue_max_pending_jobs: int = 2000
     _default_media_storage_path: str = "data/web_media"
     _default_media_max_upload_bytes: int = 20 * 1024 * 1024
+    _default_media_max_attachments_per_message: int = 10
     _default_media_allowed_mimetypes: list[str] = [
         "audio/*",
         "video/*",
@@ -139,6 +148,11 @@ class DefaultWebClient(IWebClient):
             self._default_media_max_upload_bytes,
             minimum=1,
         )
+        self._media_max_attachments_per_message = self._resolve_int_config(
+            ("web", "media", "max_attachments_per_message"),
+            self._default_media_max_attachments_per_message,
+            minimum=1,
+        )
         self._media_allowed_mimetypes = self._resolve_allowed_mimetypes()
         self._media_download_token_ttl_seconds = self._resolve_int_config(
             ("web", "media", "download_token_ttl_seconds"),
@@ -203,17 +217,19 @@ class DefaultWebClient(IWebClient):
         conversation = self._require_non_empty(conversation_id, "conversation_id")
         normalized_type = self._normalize_message_type(message_type)
 
-        if normalized_type == "text":
-            if text is None or str(text).strip() == "":
-                raise ValueError("text is required for message_type=text")
-        elif file_path in [None, ""]:
-            raise ValueError(f"file is required for message_type={normalized_type}")
-
         payload_metadata: dict[str, Any] = {}
         if metadata is not None:
             if not isinstance(metadata, dict):
                 raise ValueError("metadata must be an object")
             payload_metadata = dict(metadata)
+
+        if normalized_type == "text":
+            if text is None or str(text).strip() == "":
+                raise ValueError("text is required for message_type=text")
+        elif normalized_type == "composed":
+            payload_metadata = self._normalize_composed_metadata(payload_metadata)
+        elif file_path in [None, ""]:
+            raise ValueError(f"file is required for message_type={normalized_type}")
 
         now_iso = self._utc_now_iso()
         job_id = uuid.uuid4().hex
@@ -477,6 +493,11 @@ class DefaultWebClient(IWebClient):
         """Expose configured upload mime allow-list for API validators."""
         return list(self._media_allowed_mimetypes)
 
+    @property
+    def media_max_attachments_per_message(self) -> int:
+        """Expose max structured upload count for API validators."""
+        return self._media_max_attachments_per_message
+
     def mimetype_allowed(self, mime_type: str | None) -> bool:
         """Validate mime type against configured allow-list."""
         if not isinstance(mime_type, str) or mime_type == "":
@@ -697,6 +718,14 @@ class DefaultWebClient(IWebClient):
                 message=str(job.get("text", "")),
             )
 
+        if message_type == "composed":
+            return await self._dispatch_composed_job(
+                job=job,
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+            )
+
         message_payload = {
             "file_path": job.get("file_path"),
             "mime_type": job.get("mime_type"),
@@ -739,6 +768,177 @@ class DefaultWebClient(IWebClient):
 
         raise ValueError(f"Unsupported message type: {message_type}.")
 
+    async def _dispatch_composed_job(
+        self,
+        *,
+        job: dict[str, Any],
+        platform: str,
+        room_id: str,
+        sender: str,
+    ) -> list[dict] | None:
+        normalized_metadata = self._normalize_composed_metadata(job.get("metadata"))
+        parts = list(normalized_metadata["parts"])
+        attachments = list(normalized_metadata["attachments"])
+        composition_mode = str(normalized_metadata["composition_mode"])
+
+        if any(part.get("type") == "text" for part in parts):
+            prompt = self._build_composed_text_prompt(parts=parts)
+            attachment_context = self._build_composed_attachment_context(
+                attachments=attachments,
+                composition_mode=composition_mode,
+            )
+            return await self._messaging_service.handle_text_message(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=prompt,
+                message_context=attachment_context,
+            )
+
+        if len(attachments) == 1:
+            return await self._dispatch_composed_media_attachment(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                attachment=attachments[0],
+                composition_mode=composition_mode,
+                client_message_id=job.get("client_message_id"),
+            )
+
+        aggregated_responses: list[dict] = []
+        for attachment in attachments:
+            media_responses = await self._dispatch_composed_media_attachment(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                attachment=attachment,
+                composition_mode=composition_mode,
+                client_message_id=job.get("client_message_id"),
+            )
+            if media_responses:
+                aggregated_responses += media_responses
+
+        return aggregated_responses
+
+    async def _dispatch_composed_media_attachment(
+        self,
+        *,
+        platform: str,
+        room_id: str,
+        sender: str,
+        attachment: dict[str, Any],
+        composition_mode: str,
+        client_message_id: Any,
+    ) -> list[dict] | None:
+        message_payload = {
+            "file_path": attachment.get("file_path"),
+            "mime_type": attachment.get("mime_type"),
+            "filename": attachment.get("original_filename"),
+            "metadata": dict(attachment.get("metadata") or {}),
+            "client_message_id": client_message_id,
+            "attachment_id": attachment.get("id"),
+            "caption": attachment.get("caption"),
+            "composition_mode": composition_mode,
+        }
+        inferred_type = self._infer_media_message_type(message_payload.get("mime_type"))
+        if inferred_type == "audio":
+            return await self._messaging_service.handle_audio_message(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message_payload,
+            )
+
+        if inferred_type == "video":
+            return await self._messaging_service.handle_video_message(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message_payload,
+            )
+
+        if inferred_type == "image":
+            return await self._messaging_service.handle_image_message(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message_payload,
+            )
+
+        return await self._messaging_service.handle_file_message(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message=message_payload,
+        )
+
+    @staticmethod
+    def _build_composed_text_prompt(*, parts: list[dict[str, Any]]) -> str:
+        segments: list[str] = []
+        for part in parts:
+            part_type = str(part.get("type", "")).strip().lower()
+            if part_type == "text":
+                segments.append(str(part.get("text", "")))
+                continue
+
+            if part_type != "attachment":
+                continue
+
+            attachment_id = str(part.get("id", "")).strip()
+            if attachment_id == "":
+                attachment_id = "unknown"
+            placeholder = f"[attachment:{attachment_id}]"
+
+            caption = str(part.get("caption") or "").strip()
+            if caption != "":
+                placeholder = f"{placeholder} caption={caption}"
+
+            segments.append(placeholder)
+
+        if not segments:
+            return ""
+
+        return "\n".join(segments)
+
+    @staticmethod
+    def _build_composed_attachment_context(
+        *,
+        attachments: list[dict[str, Any]],
+        composition_mode: str,
+    ) -> list[dict] | None:
+        if not attachments:
+            return None
+
+        context: list[dict] = []
+        for index, attachment in enumerate(attachments, start=1):
+            context.append(
+                {
+                    "type": "attachment",
+                    "content": {
+                        "index": index,
+                        "id": attachment.get("id"),
+                        "mime_type": attachment.get("mime_type"),
+                        "filename": attachment.get("original_filename"),
+                        "caption": attachment.get("caption"),
+                        "metadata": dict(attachment.get("metadata") or {}),
+                        "composition_mode": composition_mode,
+                    },
+                }
+            )
+
+        return context
+
+    @staticmethod
+    def _infer_media_message_type(mime_type: Any) -> str:
+        normalized_mime = str(mime_type or "").strip().lower()
+        if normalized_mime.startswith("audio/"):
+            return "audio"
+        if normalized_mime.startswith("video/"):
+            return "video"
+        if normalized_mime.startswith("image/"):
+            return "image"
+        return "file"
+
     async def _response_to_event(
         self,
         *,
@@ -764,7 +964,7 @@ class DefaultWebClient(IWebClient):
                 "payload": {"error": "Unsupported response type: <missing>."},
             }
 
-        if response_type not in self._accepted_message_types:
+        if response_type not in self._accepted_response_types:
             return {
                 "event_type": "error",
                 "payload": {"error": f"Unsupported response type: {response_type}."},
@@ -1351,6 +1551,159 @@ class DefaultWebClient(IWebClient):
         normalized = self._require_non_empty(message_type, "message_type").lower()
         if normalized not in self._accepted_message_types:
             raise ValueError(f"Unsupported message_type: {normalized}")
+        return normalized
+
+    def _normalize_composed_metadata(self, metadata: Any) -> dict[str, Any]:
+        if not isinstance(metadata, dict):
+            raise ValueError("metadata is required for message_type=composed")
+
+        composition_mode = self._require_non_empty(
+            metadata.get("composition_mode"),
+            "metadata.composition_mode",
+        ).lower()
+        if composition_mode not in {
+            "message_with_attachments",
+            "attachment_with_caption",
+        }:
+            raise ValueError(
+                "metadata.composition_mode must be one of "
+                "message_with_attachments or attachment_with_caption"
+            )
+
+        raw_attachments = metadata.get("attachments")
+        if not isinstance(raw_attachments, list):
+            raise ValueError("metadata.attachments must be a list")
+
+        normalized_attachments: list[dict[str, Any]] = []
+        attachments_by_id: dict[str, dict[str, Any]] = {}
+        for raw_attachment in raw_attachments:
+            if not isinstance(raw_attachment, dict):
+                raise ValueError("metadata.attachments items must be objects")
+
+            attachment_id = self._require_non_empty(
+                raw_attachment.get("id"),
+                "metadata.attachments[].id",
+            )
+            if attachment_id in attachments_by_id:
+                raise ValueError("metadata.attachments contains duplicate ids")
+
+            file_path = self._require_non_empty(
+                raw_attachment.get("file_path"),
+                "metadata.attachments[].file_path",
+            )
+            mime_type = str(raw_attachment.get("mime_type") or "").strip().lower()
+            original_filename = raw_attachment.get("original_filename")
+            if original_filename is not None:
+                original_filename = str(original_filename)
+
+            attachment_metadata = raw_attachment.get("metadata")
+            if attachment_metadata is None:
+                attachment_metadata = {}
+            elif not isinstance(attachment_metadata, dict):
+                raise ValueError("metadata.attachments[].metadata must be an object")
+
+            caption = raw_attachment.get("caption")
+            normalized_caption = None
+            if caption is not None:
+                normalized_caption = str(caption).strip()
+
+            normalized_attachment = {
+                "id": attachment_id,
+                "file_path": file_path,
+                "mime_type": mime_type,
+                "original_filename": original_filename,
+                "metadata": dict(attachment_metadata),
+                "caption": normalized_caption,
+            }
+            attachments_by_id[attachment_id] = normalized_attachment
+            normalized_attachments.append(dict(normalized_attachment))
+
+        if len(normalized_attachments) > self._media_max_attachments_per_message:
+            raise ValueError("metadata.attachments exceeds max attachments per message")
+
+        raw_parts = metadata.get("parts")
+        if not isinstance(raw_parts, list):
+            raise ValueError("metadata.parts must be a list")
+
+        normalized_parts: list[dict[str, Any]] = []
+        has_non_empty_text = False
+        for raw_part in raw_parts:
+            if not isinstance(raw_part, dict):
+                raise ValueError("metadata.parts items must be objects")
+
+            part_type = self._require_non_empty(
+                raw_part.get("type"),
+                "metadata.parts[].type",
+            ).lower()
+            if part_type == "text":
+                text_value = str(raw_part.get("text", ""))
+                if text_value.strip() != "":
+                    has_non_empty_text = True
+                normalized_parts.append({"type": "text", "text": text_value})
+                continue
+
+            if part_type != "attachment":
+                raise ValueError(f"Unsupported composed part type: {part_type}")
+
+            attachment_id = self._require_non_empty(
+                raw_part.get("id"),
+                "metadata.parts[].id",
+            )
+            attachment = attachments_by_id.get(attachment_id)
+            if attachment is None:
+                raise ValueError(
+                    "metadata.parts includes attachment id not found in metadata.attachments"
+                )
+
+            caption = raw_part.get("caption")
+            normalized_caption = attachment.get("caption")
+            if caption is not None:
+                normalized_caption = str(caption).strip()
+
+            part_metadata = raw_part.get("metadata")
+            normalized_part_metadata = dict(attachment.get("metadata") or {})
+            if part_metadata is not None:
+                if not isinstance(part_metadata, dict):
+                    raise ValueError("metadata.parts[].metadata must be an object")
+                normalized_part_metadata = dict(part_metadata)
+
+            normalized_parts.append(
+                {
+                    "type": "attachment",
+                    "id": attachment_id,
+                    "caption": normalized_caption,
+                    "metadata": normalized_part_metadata,
+                    "mime_type": attachment.get("mime_type"),
+                    "original_filename": attachment.get("original_filename"),
+                }
+            )
+
+        if composition_mode == "attachment_with_caption":
+            if any(part.get("type") == "text" for part in normalized_parts):
+                raise ValueError(
+                    "metadata.parts text entries are not allowed for attachment_with_caption"
+                )
+            if not normalized_attachments:
+                raise ValueError(
+                    "metadata.attachments requires at least one attachment for "
+                    "attachment_with_caption"
+                )
+            if any(str(attachment.get("caption") or "").strip() == "" for attachment in normalized_attachments):
+                raise ValueError(
+                    "metadata.attachments caption is required for attachment_with_caption"
+                )
+        elif not has_non_empty_text and not normalized_attachments:
+            raise ValueError("metadata.parts must include text content or attachments")
+
+        normalized: dict[str, Any] = {
+            "composition_mode": composition_mode,
+            "parts": normalized_parts,
+            "attachments": normalized_attachments,
+        }
+        request_metadata = metadata.get("metadata")
+        if isinstance(request_metadata, dict):
+            normalized["metadata"] = dict(request_metadata)
+
         return normalized
 
     def _normalize_client_message_id(
