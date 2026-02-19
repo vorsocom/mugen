@@ -418,6 +418,8 @@ queue.processing_lease_seconds = 30
 queue.max_pending_jobs = 2000
 media.storage.path = "/absolute/path/to/data/web_media"
 media.max_upload_bytes = 20971520
+# Max attachments per structured message payload.
+media.max_attachments_per_message = 10
 media.allowed_mimetypes = [
   "audio/*",
   "video/*",

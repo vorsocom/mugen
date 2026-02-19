@@ -24,21 +24,73 @@ All web endpoints require ACP bearer access token via `Authorization: Bearer <to
 ### `POST /api/core/web/v1/messages`
 Accepts `multipart/form-data` and always returns async acceptance (`202`).
 
-Required form fields:
+All requests require:
 - `conversation_id` (string)
 - `client_message_id` (string)
+
+The endpoint supports two mutually exclusive request contracts.
+
+Legacy contract (backward compatible):
 - `message_type` (`text|audio|video|file|image`)
+- `text` (required for `message_type=text`)
+- `file` (required for `message_type=audio|video|file|image`)
+- `metadata` (optional JSON object encoded as string)
 
-Optional form fields:
-- `text` (required when `message_type=text`)
-- `metadata` (JSON object encoded as string)
-- `file` (required when `message_type` is media/file)
+Structured contract:
+- `composition_mode` (`message_with_attachments|attachment_with_caption`)
+- `parts` (JSON array encoded as string)
+- files uploaded as multipart keys `files[<attachment_id>]`
+- `metadata` (optional JSON object encoded as string)
 
-Validation:
-- `text` required for `message_type=text`
-- `file` required for `audio|video|file|image`
+Structured `parts[]` items:
+- text part: `{"type":"text","text":"..."}`
+- attachment part:
+  - `{"type":"attachment","id":"a1","caption":"optional","metadata":{...}}`
+
+Structured semantics:
+- `message_with_attachments`:
+  - supports text-only, attachment-only, or mixed/interleaved text+attachments.
+  - attachment captions are optional.
+- `attachment_with_caption`:
+  - attachment-only mode (no text parts).
+  - every attachment must include a non-empty `caption`.
+
+Routing behavior for structured payloads:
+- if one or more text parts exist:
+  - one text turn is sent to messaging with ordered inline attachment placeholders.
+  - attachments are added as `message_context`.
+- if no text parts and exactly one attachment:
+  - routed to inferred media handler from MIME family.
+- if no text parts and multiple attachments:
+  - processed as ordered media batch and responses are flattened in order.
+
+MIME inference:
+- `audio/*` -> `audio`
+- `video/*` -> `video`
+- `image/*` -> `image`
+- otherwise -> `file`
+
+Validation and error mapping for structured contract:
+- `400` `invalid empty message`:
+  - no text content and no attachments.
+- `400` `invalid caption target`:
+  - caption field on non-attachment part, or `attachment_with_caption` without valid captioned attachments.
+- `400` `invalid attachment part`:
+  - missing/blank attachment `id`, or attachment part missing uploaded blob mapping.
+- `415` `unsupported media type`:
+  - attachment MIME type not in `web.media.allowed_mimetypes`.
+- `413` `payload too large`:
+  - attachment count exceeds `web.media.max_attachments_per_message`,
+  - or any file exceeds `web.media.max_upload_bytes`.
+- `422` `invalid structure`:
+  - duplicate attachment ids, orphan uploads, malformed structure.
+- `400` `mixed legacy and structured payload fields`:
+  - legacy and structured fields in one request.
+
+Limits:
 - upload size checked against `web.media.max_upload_bytes`
-- mime type checked against `web.media.allowed_mimetypes`
+- attachment count checked against `web.media.max_attachments_per_message`
+- MIME allow-list checked against `web.media.allowed_mimetypes`
 
 Success response (`202`):
 ```json
