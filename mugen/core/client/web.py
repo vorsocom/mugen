@@ -719,11 +719,16 @@ class DefaultWebClient(IWebClient):
             )
 
         if message_type == "composed":
-            return await self._dispatch_composed_job(
-                job=job,
+            normalized_metadata = self._normalize_composed_metadata(job.get("metadata"))
+            composed_message_payload: dict[str, Any] = {
+                **normalized_metadata,
+                "client_message_id": job.get("client_message_id"),
+            }
+            return await self._messaging_service.handle_composed_message(
                 platform=platform,
                 room_id=room_id,
                 sender=sender,
+                message=composed_message_payload,
             )
 
         message_payload = {
@@ -767,177 +772,6 @@ class DefaultWebClient(IWebClient):
             )
 
         raise ValueError(f"Unsupported message type: {message_type}.")
-
-    async def _dispatch_composed_job(
-        self,
-        *,
-        job: dict[str, Any],
-        platform: str,
-        room_id: str,
-        sender: str,
-    ) -> list[dict] | None:
-        normalized_metadata = self._normalize_composed_metadata(job.get("metadata"))
-        parts = list(normalized_metadata["parts"])
-        attachments = list(normalized_metadata["attachments"])
-        composition_mode = str(normalized_metadata["composition_mode"])
-
-        if any(part.get("type") == "text" for part in parts):
-            prompt = self._build_composed_text_prompt(parts=parts)
-            attachment_context = self._build_composed_attachment_context(
-                attachments=attachments,
-                composition_mode=composition_mode,
-            )
-            return await self._messaging_service.handle_text_message(
-                platform=platform,
-                room_id=room_id,
-                sender=sender,
-                message=prompt,
-                message_context=attachment_context,
-            )
-
-        if len(attachments) == 1:
-            return await self._dispatch_composed_media_attachment(
-                platform=platform,
-                room_id=room_id,
-                sender=sender,
-                attachment=attachments[0],
-                composition_mode=composition_mode,
-                client_message_id=job.get("client_message_id"),
-            )
-
-        aggregated_responses: list[dict] = []
-        for attachment in attachments:
-            media_responses = await self._dispatch_composed_media_attachment(
-                platform=platform,
-                room_id=room_id,
-                sender=sender,
-                attachment=attachment,
-                composition_mode=composition_mode,
-                client_message_id=job.get("client_message_id"),
-            )
-            if media_responses:
-                aggregated_responses += media_responses
-
-        return aggregated_responses
-
-    async def _dispatch_composed_media_attachment(
-        self,
-        *,
-        platform: str,
-        room_id: str,
-        sender: str,
-        attachment: dict[str, Any],
-        composition_mode: str,
-        client_message_id: Any,
-    ) -> list[dict] | None:
-        message_payload = {
-            "file_path": attachment.get("file_path"),
-            "mime_type": attachment.get("mime_type"),
-            "filename": attachment.get("original_filename"),
-            "metadata": dict(attachment.get("metadata") or {}),
-            "client_message_id": client_message_id,
-            "attachment_id": attachment.get("id"),
-            "caption": attachment.get("caption"),
-            "composition_mode": composition_mode,
-        }
-        inferred_type = self._infer_media_message_type(message_payload.get("mime_type"))
-        if inferred_type == "audio":
-            return await self._messaging_service.handle_audio_message(
-                platform=platform,
-                room_id=room_id,
-                sender=sender,
-                message=message_payload,
-            )
-
-        if inferred_type == "video":
-            return await self._messaging_service.handle_video_message(
-                platform=platform,
-                room_id=room_id,
-                sender=sender,
-                message=message_payload,
-            )
-
-        if inferred_type == "image":
-            return await self._messaging_service.handle_image_message(
-                platform=platform,
-                room_id=room_id,
-                sender=sender,
-                message=message_payload,
-            )
-
-        return await self._messaging_service.handle_file_message(
-            platform=platform,
-            room_id=room_id,
-            sender=sender,
-            message=message_payload,
-        )
-
-    @staticmethod
-    def _build_composed_text_prompt(*, parts: list[dict[str, Any]]) -> str:
-        segments: list[str] = []
-        for part in parts:
-            part_type = str(part.get("type", "")).strip().lower()
-            if part_type == "text":
-                segments.append(str(part.get("text", "")))
-                continue
-
-            if part_type != "attachment":
-                continue
-
-            attachment_id = str(part.get("id", "")).strip()
-            if attachment_id == "":
-                attachment_id = "unknown"
-            placeholder = f"[attachment:{attachment_id}]"
-
-            caption = str(part.get("caption") or "").strip()
-            if caption != "":
-                placeholder = f"{placeholder} caption={caption}"
-
-            segments.append(placeholder)
-
-        if not segments:
-            return ""
-
-        return "\n".join(segments)
-
-    @staticmethod
-    def _build_composed_attachment_context(
-        *,
-        attachments: list[dict[str, Any]],
-        composition_mode: str,
-    ) -> list[dict] | None:
-        if not attachments:
-            return None
-
-        context: list[dict] = []
-        for index, attachment in enumerate(attachments, start=1):
-            context.append(
-                {
-                    "type": "attachment",
-                    "content": {
-                        "index": index,
-                        "id": attachment.get("id"),
-                        "mime_type": attachment.get("mime_type"),
-                        "filename": attachment.get("original_filename"),
-                        "caption": attachment.get("caption"),
-                        "metadata": dict(attachment.get("metadata") or {}),
-                        "composition_mode": composition_mode,
-                    },
-                }
-            )
-
-        return context
-
-    @staticmethod
-    def _infer_media_message_type(mime_type: Any) -> str:
-        normalized_mime = str(mime_type or "").strip().lower()
-        if normalized_mime.startswith("audio/"):
-            return "audio"
-        if normalized_mime.startswith("video/"):
-            return "video"
-        if normalized_mime.startswith("image/"):
-            return "image"
-        return "file"
 
     async def _response_to_event(
         self,

@@ -289,6 +289,15 @@ class TestDIBuildMessagingService(unittest.TestCase):
                     ) -> list[dict] | None:
                         pass
 
+                    async def handle_composed_message(
+                        self,
+                        platform: str,
+                        room_id: str,
+                        sender: str,
+                        message: dict,
+                    ) -> list[dict] | None:
+                        pass
+
                     async def handle_file_message(
                         self,
                         platform: str,

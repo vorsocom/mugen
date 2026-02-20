@@ -56,13 +56,13 @@ Structured semantics:
   - every attachment must include a non-empty `caption`.
 
 Routing behavior for structured payloads:
-- if one or more text parts exist:
-  - one text turn is sent to messaging with ordered inline attachment placeholders.
-  - attachments are added as `message_context`.
-- if no text parts and exactly one attachment:
-  - routed to inferred media handler from MIME family.
-- if no text parts and multiple attachments:
-  - processed as ordered media batch and responses are flattened in order.
+- composed payloads are routed to messaging as a single composed unit.
+- messaging preprocesses attachments through inferred media handlers to gather attachment evidence.
+- messaging then executes one final text synthesis pass using:
+  - ordered inline attachment placeholders derived from `parts`,
+  - structured attachment context,
+  - media-derived evidence context.
+- standard text pipeline semantics still apply, so extensions may emit additional side responses.
 
 MIME inference:
 - `audio/*` -> `audio`

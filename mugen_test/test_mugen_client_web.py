@@ -75,6 +75,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             handle_video_message=AsyncMock(return_value=[]),
             handle_file_message=AsyncMock(return_value=[]),
             handle_image_message=AsyncMock(return_value=[]),
+            handle_composed_message=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
         )
 
         self.client = DefaultWebClient(
@@ -1301,127 +1302,33 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             },
         }
 
-        self.messaging.handle_text_message = AsyncMock(
-            return_value=[{"type": "text", "content": "ok"}]
+        self.messaging.handle_composed_message = AsyncMock(
+            return_value=[{"type": "text", "content": "composed"}]
         )
         text_responses = await self.client._dispatch_job_to_messaging(  # pylint: disable=protected-access
             composed_text_job
         )
-        self.assertEqual(text_responses, [{"type": "text", "content": "ok"}])
-        self.messaging.handle_text_message.assert_awaited_once()
-        text_kwargs = self.messaging.handle_text_message.await_args.kwargs
-        self.assertEqual(text_kwargs["message"], "first\n[attachment:a1] caption=cap-1\nsecond")
-        self.assertEqual(text_kwargs["message_context"][0]["content"]["id"], "a1")
+        self.assertEqual(text_responses, [{"type": "text", "content": "composed"}])
+        self.messaging.handle_composed_message.assert_awaited_once()
+        composed_kwargs = self.messaging.handle_composed_message.await_args.kwargs
+        self.assertEqual(composed_kwargs["platform"], "web")
+        self.assertEqual(composed_kwargs["room_id"], "conv-composed-text")
+        self.assertEqual(composed_kwargs["sender"], "user-1")
+        self.assertEqual(composed_kwargs["message"]["client_message_id"], "cid-composed-text")
+        self.assertEqual(composed_kwargs["message"]["parts"][1]["id"], "a1")
+        self.assertEqual(composed_kwargs["message"]["parts"][1]["caption"], "cap-1")
 
-        self.messaging.handle_text_message.reset_mock()
-        self.messaging.handle_audio_message = AsyncMock(
-            return_value=[{"type": "text", "content": "audio"}]
-        )
-        audio_responses = await self.client._dispatch_job_to_messaging(  # pylint: disable=protected-access
-            {
-                **composed_text_job,
-                "conversation_id": "conv-composed-audio",
-                "client_message_id": "cid-composed-audio",
-                "metadata": {
-                    "composition_mode": "attachment_with_caption",
-                    "parts": [{"type": "attachment", "id": "a1", "caption": "audio-cap"}],
-                    "attachments": [
-                        {
-                            "id": "a1",
-                            "file_path": "/tmp/a1.ogg",
-                            "mime_type": "audio/ogg",
-                            "original_filename": "a1.ogg",
-                            "metadata": {},
-                            "caption": "audio-cap",
-                        }
-                    ],
-                },
-            }
-        )
-        self.assertEqual(audio_responses, [{"type": "text", "content": "audio"}])
-        self.messaging.handle_audio_message.assert_awaited_once()
-
-        self.messaging.handle_audio_message = AsyncMock(
-            return_value=[{"type": "text", "content": "audio-1"}]
-        )
-        self.messaging.handle_video_message = AsyncMock(return_value=None)
-        self.messaging.handle_image_message = AsyncMock(
-            return_value=[{"type": "text", "content": "image-1"}]
-        )
-        self.messaging.handle_file_message = AsyncMock(
-            return_value=[{"type": "text", "content": "file-1"}]
-        )
-        multi_responses = await self.client._dispatch_job_to_messaging(  # pylint: disable=protected-access
-            {
-                **composed_text_job,
-                "conversation_id": "conv-composed-multi",
-                "client_message_id": "cid-composed-multi",
-                "metadata": {
-                    "composition_mode": "message_with_attachments",
-                    "parts": [
-                        {"type": "attachment", "id": "a1"},
-                        {"type": "attachment", "id": "a2"},
-                        {"type": "attachment", "id": "a3"},
-                        {"type": "attachment", "id": "a4"},
-                    ],
-                    "attachments": [
-                        {
-                            "id": "a1",
-                            "file_path": "/tmp/a1.ogg",
-                            "mime_type": "audio/ogg",
-                            "original_filename": "a1.ogg",
-                            "metadata": {},
-                            "caption": None,
-                        },
-                        {
-                            "id": "a2",
-                            "file_path": "/tmp/a2.mp4",
-                            "mime_type": "video/mp4",
-                            "original_filename": "a2.mp4",
-                            "metadata": {},
-                            "caption": None,
-                        },
-                        {
-                            "id": "a3",
-                            "file_path": "/tmp/a3.png",
-                            "mime_type": "image/png",
-                            "original_filename": "a3.png",
-                            "metadata": {},
-                            "caption": None,
-                        },
-                        {
-                            "id": "a4",
-                            "file_path": "/tmp/a4.pdf",
-                            "mime_type": "application/pdf",
-                            "original_filename": "a4.pdf",
-                            "metadata": {},
-                            "caption": None,
-                        },
-                    ],
-                },
-            }
-        )
-        self.assertEqual(
-            [item["content"] for item in multi_responses],
-            ["audio-1", "image-1", "file-1"],
-        )
-        self.assertEqual(self.client._build_composed_text_prompt(parts=[]), "")  # pylint: disable=protected-access
-        self.assertEqual(
-            self.client._build_composed_text_prompt(  # pylint: disable=protected-access
-                parts=[
-                    {"type": "unknown"},
-                    {"type": "attachment", "id": " ", "caption": ""},
-                ]
-            ),
-            "[attachment:unknown]",
-        )
-        self.assertIsNone(  # pylint: disable=protected-access
-            self.client._build_composed_attachment_context(attachments=[], composition_mode="x")
-        )
-        self.assertEqual(
-            self.client._infer_media_message_type("application/octet-stream"),  # pylint: disable=protected-access
-            "file",
-        )
+        with self.assertRaises(ValueError):
+            await self.client._dispatch_job_to_messaging(  # pylint: disable=protected-access
+                {
+                    **composed_text_job,
+                    "metadata": {
+                        "composition_mode": "message_with_attachments",
+                        "parts": [],
+                        "attachments": [],
+                    },
+                }
+            )
 
     async def test_composed_metadata_helper_branches(self) -> None:
         with self.assertRaises(ValueError):
@@ -1648,6 +1555,26 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             normalized_with_part_metadata["parts"][0]["metadata"],
             {"p": "v"},
+        )
+
+        normalized_attachment_with_caption = self.client._normalize_composed_metadata(  # pylint: disable=protected-access
+            {
+                "composition_mode": "attachment_with_caption",
+                "parts": [{"type": "attachment", "id": "a1", "caption": "caption"}],
+                "attachments": [
+                    {
+                        "id": "a1",
+                        "file_path": "/tmp/a1.bin",
+                        "mime_type": "application/octet-stream",
+                        "metadata": {},
+                        "caption": "caption",
+                    }
+                ],
+            }
+        )
+        self.assertEqual(
+            normalized_attachment_with_caption["attachments"][0]["caption"],
+            "caption",
         )
 
         normalized = self.client._normalize_composed_metadata(  # pylint: disable=protected-access
