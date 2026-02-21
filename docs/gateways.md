@@ -332,6 +332,29 @@ Behavior:
   - optional `username`/`password` login when both are configured.
 - Transport/config/attachment failures raise `EmailGatewayError`.
 
+### Amazon SES
+
+Module: `mugen.core.gateway.email.ses`
+
+Behavior:
+
+- Outbound-only sending (`send_email`) via AWS SES `send_raw_email`, wrapped in
+  `asyncio.to_thread(...)`.
+- Uses MIME/raw email payloads, so the same contract body and attachment
+  semantics apply as SMTP:
+  - text-only, html-only, and multipart text+html
+  - file-path and in-memory-byte attachments
+- Sender policy:
+  - request-level `from_address` overrides config.
+  - fallback is `[aws.ses].default_from`.
+- AWS auth/config:
+  - region is required (`[aws.ses] api.region`)
+  - static credentials are optional; when set, access key and secret key must
+    be provided together
+  - optional session token and endpoint URL are supported
+  - optional `configuration_set_name` is forwarded to SES.
+- Transport/config/attachment failures raise `EmailGatewayError`.
+
 ## Configuration Example
 
 ```toml
@@ -339,6 +362,7 @@ Behavior:
 gateway.completion = "mugen.core.gateway.completion.bedrock"
 # Optional outbound email gateway.
 # gateway.email = "mugen.core.gateway.email.smtp"
+# gateway.email = "mugen.core.gateway.email.ses"
 
 [aws.bedrock]
 api.region = "us-east-1"
@@ -359,4 +383,13 @@ timeout_seconds = 30.0
 use_ssl = false
 starttls = true
 starttls_required = true
+
+[aws.ses]
+api.region = "us-east-1"
+api.access_key_id = "<aws-access-key-id>"
+api.secret_access_key = "<aws-secret-access-key>"
+api.session_token = ""
+api.endpoint_url = ""
+default_from = "noreply@example.com"
+configuration_set_name = ""
 ```
