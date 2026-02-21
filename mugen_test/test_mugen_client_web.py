@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 from pathlib import Path
@@ -1190,6 +1191,79 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(media_event["event_type"], "message")
 
+        audio_file = Path(self.tmpdir.name) / "audio.ogg"
+        audio_file.write_bytes(b"ogg")
+        audio_event = await self.client._response_to_event(  # pylint: disable=protected-access
+            response={
+                "type": "audio",
+                "file": {
+                    "uri": str(audio_file),
+                    "type": "audio/ogg",
+                    "name": "audio.ogg",
+                },
+            },
+            sender="user-1",
+            conversation_id="conv-d",
+        )
+        self.assertEqual(audio_event["event_type"], "message")
+        self.assertEqual(audio_event["payload"]["message"]["type"], "audio")
+        self.assertEqual(
+            audio_event["payload"]["message"]["content"]["mime_type"],
+            "audio/ogg",
+        )
+        audio_token = audio_event["payload"]["message"]["content"]["token"]
+        resolved_audio = await self.client.resolve_media_download(
+            auth_user="user-1",
+            token=audio_token,
+        )
+        self.assertIsNotNone(resolved_audio)
+        self.assertEqual(
+            resolved_audio["file_path"],
+            os.path.abspath(str(audio_file)),
+        )
+
+        nested_audio_event = await self.client._response_to_event(  # pylint: disable=protected-access
+            response={
+                "type": "audio",
+                "content": {
+                    "file": {
+                        "uri": str(audio_file),
+                        "type": "audio/ogg",
+                        "name": "nested.ogg",
+                    }
+                },
+            },
+            sender="user-1",
+            conversation_id="conv-d",
+        )
+        self.assertEqual(nested_audio_event["event_type"], "message")
+
+        buffer_audio_event = await self.client._response_to_event(  # pylint: disable=protected-access
+            response={
+                "type": "audio",
+                "file": {
+                    "uri": io.BytesIO(b"buffer-audio-bytes"),
+                    "type": "audio/mpeg",
+                    "name": "buffer-audio.mp3",
+                },
+            },
+            sender="user-1",
+            conversation_id="conv-d",
+        )
+        self.assertEqual(buffer_audio_event["event_type"], "message")
+        buffer_token = buffer_audio_event["payload"]["message"]["content"]["token"]
+        resolved_buffer_audio = await self.client.resolve_media_download(
+            auth_user="user-1",
+            token=buffer_token,
+        )
+        self.assertIsNotNone(resolved_buffer_audio)
+        self.assertEqual(resolved_buffer_audio["mime_type"], "audio/mpeg")
+        self.assertTrue(
+            resolved_buffer_audio["file_path"].endswith(".mp3"),
+        )
+        with open(resolved_buffer_audio["file_path"], "rb") as handle:
+            self.assertEqual(handle.read(), b"buffer-audio-bytes")
+
         bad_media = await self.client._response_to_event(  # pylint: disable=protected-access
             response={"type": "image", "content": {"file_path": "missing"}},
             sender="user-1",
@@ -1857,3 +1931,121 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         formatted = self.client._format_sse_event({"id": "1", "event": "ack", "data": {"a": 1}})  # pylint: disable=protected-access
         self.assertIn("event: ack", formatted)
         self.assertIsNone(self.client._coerce_float("x"))  # pylint: disable=protected-access
+
+        self.assertIsNone(self.client._coerce_media_mime("no-slash"))  # pylint: disable=protected-access
+        self.assertEqual(
+            self.client._read_media_bytes(b"raw-bytes"),  # pylint: disable=protected-access
+            b"raw-bytes",
+        )
+        self.assertEqual(
+            self.client._read_media_bytes(bytearray(b"byte-array")),  # pylint: disable=protected-access
+            b"byte-array",
+        )
+        self.assertEqual(
+            self.client._read_media_bytes(memoryview(b"memory-view")),  # pylint: disable=protected-access
+            b"memory-view",
+        )
+
+        class _NoRead(io.IOBase):
+            read = None
+
+        class _TellBad(io.IOBase):
+            def read(self):
+                return b"tell-bad"
+
+            def tell(self):
+                return "bad"
+
+        class _ReadRaises(io.IOBase):
+            def read(self):
+                raise OSError("boom")
+
+            def tell(self):
+                return 0
+
+        class _SeekRaises(io.IOBase):
+            def read(self):
+                return b"seek-raises"
+
+            def tell(self):
+                return 0
+
+            def seek(self, _pos):
+                raise OSError("seek")
+
+        class _ReadByteArray(io.IOBase):
+            def read(self):
+                return bytearray(b"buffer")
+
+        class _ReadMemoryView(io.IOBase):
+            def read(self):
+                return memoryview(b"mv")
+
+        class _ReadStr(io.IOBase):
+            def read(self):
+                return "txt"
+
+        class _ReadUnknown(io.IOBase):
+            def read(self):
+                return object()
+
+        class _TellNotCallable(io.IOBase):
+            tell = None
+
+            def read(self):
+                return b"tell-none"
+
+        self.assertIsNone(
+            self.client._read_media_bytes(_NoRead()),  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            self.client._read_media_bytes(_TellBad()),  # pylint: disable=protected-access
+            b"tell-bad",
+        )
+        self.assertIsNone(
+            self.client._read_media_bytes(_ReadRaises()),  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            self.client._read_media_bytes(_SeekRaises()),  # pylint: disable=protected-access
+            b"seek-raises",
+        )
+        self.assertEqual(
+            self.client._read_media_bytes(_ReadByteArray()),  # pylint: disable=protected-access
+            b"buffer",
+        )
+        self.assertEqual(
+            self.client._read_media_bytes(_ReadMemoryView()),  # pylint: disable=protected-access
+            b"mv",
+        )
+        self.assertEqual(
+            self.client._read_media_bytes(_ReadStr()),  # pylint: disable=protected-access
+            b"txt",
+        )
+        self.assertIsNone(
+            self.client._read_media_bytes(_ReadUnknown()),  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            self.client._read_media_bytes(_TellNotCallable()),  # pylint: disable=protected-access
+            b"tell-none",
+        )
+
+        with patch("builtins.open", side_effect=OSError()):
+            self.assertIsNone(
+                self.client._resolve_media_source_path(  # pylint: disable=protected-access
+                    file_path=b"payload",
+                    filename="payload.bin",
+                )
+            )
+
+        self.assertEqual(
+            self.client._infer_media_extension(None),  # pylint: disable=protected-access
+            "",
+        )
+        self.assertEqual(
+            self.client._infer_media_extension("no-extension"),  # pylint: disable=protected-access
+            "",
+        )
+        self.assertEqual(
+            self.client._infer_media_extension("name.12345678901234567"),  # pylint: disable=protected-access
+            "",
+        )
