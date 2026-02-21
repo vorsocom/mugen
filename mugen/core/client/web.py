@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 import copy
 from datetime import datetime, timezone
 import fnmatch
+import io
 import json
 import os
 from pathlib import Path
@@ -703,7 +704,9 @@ class DefaultWebClient(IWebClient):
                 f"(conversation_id={conversation_id} job_id={job_id}): {exc}"
             )
 
-    async def _dispatch_job_to_messaging(self, job: dict[str, Any]) -> list[dict] | None:
+    async def _dispatch_job_to_messaging(
+        self, job: dict[str, Any]
+    ) -> list[dict] | None:
         message_type = str(job.get("message_type", "")).strip().lower()
 
         platform = "web"
@@ -805,6 +808,11 @@ class DefaultWebClient(IWebClient):
             }
 
         content = response.get("content")
+        if content in [None, ""]:
+            file_payload = response.get("file")
+            if isinstance(file_payload, dict):
+                content = file_payload
+
         if response_type == "text":
             text_content = "" if content is None else str(content)
             if text_content.strip() == "":
@@ -832,8 +840,7 @@ class DefaultWebClient(IWebClient):
                 "event_type": "error",
                 "payload": {
                     "error": (
-                        "Unsupported media response payload "
-                        f"for type={response_type}."
+                        f"Unsupported media response payload for type={response_type}."
                     )
                 },
             }
@@ -862,13 +869,28 @@ class DefaultWebClient(IWebClient):
             if isinstance(media_url, str) and media_url != "":
                 return content
 
-            file_path = content.get("file_path") or content.get("path")
+            file_payload = content.get("file")
+            if isinstance(file_payload, dict):
+                content_source = file_payload
+            else:
+                content_source = content
+
+            file_path = (
+                content_source.get("file_path")
+                or content_source.get("path")
+                or content_source.get("uri")
+            )
             mime_type = (
-                content.get("mime_type")
-                or content.get("mimetype")
+                content_source.get("mime_type")
+                or content_source.get("mimetype")
+                or self._coerce_media_mime(content_source.get("type"))
                 or fallback_mime_type
             )
-            filename = content.get("filename") or content.get("name") or fallback_filename
+            filename = (
+                content_source.get("filename")
+                or content_source.get("name")
+                or fallback_filename
+            )
             return await self._create_media_token_payload(
                 file_path=file_path,
                 owner_user_id=owner_user_id,
@@ -888,6 +910,17 @@ class DefaultWebClient(IWebClient):
 
         return None
 
+    @staticmethod
+    def _coerce_media_mime(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+
+        normalized = value.strip().lower()
+        if normalized == "" or "/" not in normalized:
+            return None
+
+        return normalized
+
     async def _create_media_token_payload(
         self,
         *,
@@ -897,11 +930,11 @@ class DefaultWebClient(IWebClient):
         mime_type: Any,
         filename: Any,
     ) -> dict[str, Any] | None:
-        if not isinstance(file_path, str) or file_path == "":
-            return None
-
-        normalized_path = os.path.abspath(file_path)
-        if not os.path.exists(normalized_path):
+        normalized_path = self._resolve_media_source_path(
+            file_path=file_path,
+            filename=filename,
+        )
+        if normalized_path is None:
             return None
 
         token = uuid.uuid4().hex
@@ -934,6 +967,100 @@ class DefaultWebClient(IWebClient):
             "filename": normalized_filename,
             "expires_at": expires_at,
         }
+
+    def _resolve_media_source_path(
+        self,
+        *,
+        file_path: Any,
+        filename: Any,
+    ) -> str | None:
+        if isinstance(file_path, str) and file_path != "":
+            normalized_path = os.path.abspath(file_path)
+            if os.path.exists(normalized_path):
+                return normalized_path
+            return None
+
+        payload_bytes = self._read_media_bytes(file_path)
+        if payload_bytes is None:
+            return None
+
+        extension = self._infer_media_extension(filename)
+        generated_name = f"{uuid.uuid4().hex}{extension}"
+        Path(self._media_storage_path).mkdir(parents=True, exist_ok=True)
+        normalized_path = os.path.abspath(
+            os.path.join(self._media_storage_path, generated_name)
+        )
+
+        try:
+            with open(normalized_path, "wb") as handle:
+                handle.write(payload_bytes)
+        except OSError:
+            return None
+
+        return normalized_path
+
+    @staticmethod
+    def _read_media_bytes(value: Any) -> bytes | None:
+        if isinstance(value, bytes):
+            return value
+
+        if isinstance(value, bytearray):
+            return bytes(value)
+
+        if isinstance(value, memoryview):
+            return value.tobytes()
+
+        if not isinstance(value, io.IOBase):
+            return None
+
+        read_fn = getattr(value, "read", None)
+        if not callable(read_fn):
+            return None
+
+        seek_fn = getattr(value, "seek", None)
+        tell_fn = getattr(value, "tell", None)
+        start_pos: int | None = None
+        if callable(tell_fn):
+            try:
+                start_pos = int(tell_fn())
+            except (TypeError, ValueError, OSError):
+                start_pos = None
+
+        try:
+            raw_data = read_fn()
+        except (OSError, ValueError):
+            return None
+        finally:
+            if start_pos is not None and callable(seek_fn):
+                try:
+                    seek_fn(start_pos)
+                except (OSError, ValueError):
+                    ...
+
+        if isinstance(raw_data, bytes):
+            return raw_data
+
+        if isinstance(raw_data, bytearray):
+            return bytes(raw_data)
+
+        if isinstance(raw_data, memoryview):
+            return raw_data.tobytes()
+
+        if isinstance(raw_data, str):
+            return raw_data.encode("utf-8")
+
+        return None
+
+    @staticmethod
+    def _infer_media_extension(filename: Any) -> str:
+        if not isinstance(filename, str):
+            return ""
+
+        _, extension = os.path.splitext(filename.strip())
+        if extension == "" or len(extension) > 16:
+            return ""
+
+        return extension.lower()
 
     async def _append_event(
         self,
@@ -1014,7 +1141,6 @@ class DefaultWebClient(IWebClient):
                         reason="subscriber_queue_full_drop_new",
                         warning=True,
                     )
-                    ...
 
     async def _register_subscriber(
         self,
@@ -1069,7 +1195,9 @@ class DefaultWebClient(IWebClient):
             return
 
         for file_name in file_names:
-            candidate = os.path.abspath(os.path.join(self._media_storage_path, file_name))
+            candidate = os.path.abspath(
+                os.path.join(self._media_storage_path, file_name)
+            )
             if not os.path.isfile(candidate):
                 continue
 
@@ -1269,7 +1397,9 @@ class DefaultWebClient(IWebClient):
         try:
             payload = json.loads(raw)
         except (TypeError, json.JSONDecodeError):
-            self._logging_gateway.warning(f"Web client state is invalid for key {key!r}.")
+            self._logging_gateway.warning(
+                f"Web client state is invalid for key {key!r}."
+            )
             return None
 
         if isinstance(payload, (dict, list)):
@@ -1486,7 +1616,8 @@ class DefaultWebClient(IWebClient):
             attachment = attachments_by_id.get(attachment_id)
             if attachment is None:
                 raise ValueError(
-                    "metadata.parts includes attachment id not found in metadata.attachments"
+                    "metadata.parts includes attachment id not found in"
+                    " metadata.attachments"
                 )
 
             caption = raw_part.get("caption")
@@ -1515,16 +1646,21 @@ class DefaultWebClient(IWebClient):
         if composition_mode == "attachment_with_caption":
             if any(part.get("type") == "text" for part in normalized_parts):
                 raise ValueError(
-                    "metadata.parts text entries are not allowed for attachment_with_caption"
+                    "metadata.parts text entries are not allowed for"
+                    " attachment_with_caption"
                 )
             if not normalized_attachments:
                 raise ValueError(
                     "metadata.attachments requires at least one attachment for "
                     "attachment_with_caption"
                 )
-            if any(str(attachment.get("caption") or "").strip() == "" for attachment in normalized_attachments):
+            if any(
+                str(attachment.get("caption") or "").strip() == ""
+                for attachment in normalized_attachments
+            ):
                 raise ValueError(
-                    "metadata.attachments caption is required for attachment_with_caption"
+                    "metadata.attachments caption is required for"
+                    " attachment_with_caption"
                 )
         elif not has_non_empty_text and not normalized_attachments:
             raise ValueError("metadata.parts must include text content or attachments")
@@ -1768,7 +1904,11 @@ class DefaultWebClient(IWebClient):
 
             stream_generation = cursor_parts[1].strip()
             stream_event_id = self._parse_event_id(cursor_parts[2])
-            if stream_version <= 0 or stream_generation == "" or stream_event_id is None:
+            if (
+                stream_version <= 0
+                or stream_generation == ""
+                or stream_event_id is None
+            ):
                 parsed["invalid"] = True
                 return parsed
 
