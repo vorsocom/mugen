@@ -33,6 +33,7 @@ client.web = "mugen.core.client.web"
 
 gateway.completion = "mugen.core.gateway.completion.bedrock"
 # gateway.email = "mugen.core.gateway.email.smtp"
+# gateway.email = "mugen.core.gateway.email.ses"
 # gateway.knowledge = "mugen.core.gateway.knowledge.qdrant"
 gateway.logging = "mugen.core.gateway.logging.standard"
 gateway.storage.keyval = "mugen.core.gateway.storage.keyval.dbm"
@@ -267,6 +268,19 @@ api.completion.temp = 0.0
 api.completion.top_p = 0.9
 api.region = ""
 api.secret_access_key = "<aws-secret-access-key>"
+
+# === AWS SES (optional outbound email gateway) ===
+[aws.ses]
+api.region = "us-east-1"
+# Optional: leave blank to use environment/instance profile credentials.
+api.access_key_id = ""
+api.secret_access_key = ""
+# Optional temporary-session credential token.
+api.session_token = ""
+# Optional endpoint override (for testing/emulation).
+api.endpoint_url = ""
+default_from = "noreply@example.com"
+configuration_set_name = ""
 
 # === Groq ===
 [groq]
