@@ -32,6 +32,7 @@ client.whatsapp = "mugen.core.client.whatsapp"
 client.web = "mugen.core.client.web"
 
 gateway.completion = "mugen.core.gateway.completion.bedrock"
+# gateway.email = "mugen.core.gateway.email.smtp"
 # gateway.knowledge = "mugen.core.gateway.knowledge.qdrant"
 gateway.logging = "mugen.core.gateway.logging.standard"
 gateway.storage.keyval = "mugen.core.gateway.storage.keyval.dbm"
@@ -376,6 +377,18 @@ api.completion.temp = 0.0
 api.completion.stop = []
 api.endpoint = ""
 api.key = "<sambanova-api-key>"
+
+# === SMTP (optional outbound email gateway) ===
+[smtp]
+host = "smtp.example.com"
+port = 587
+username = ""
+password = ""
+default_from = "noreply@example.com"
+timeout_seconds = 30.0
+use_ssl = false
+starttls = true
+starttls_required = true
 
 # === Telnet ===
 [telnet]

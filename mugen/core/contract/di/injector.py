@@ -11,6 +11,7 @@ from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
+from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
@@ -39,6 +40,11 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def completion_gateway(self) -> ICompletionGateway:
         """Get the global completion gateway."""
+
+    @property
+    @abstractmethod
+    def email_gateway(self) -> IEmailGateway:
+        """Get the global email gateway."""
 
     @property
     @abstractmethod

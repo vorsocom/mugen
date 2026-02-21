@@ -9,6 +9,7 @@ from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
+from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
@@ -30,6 +31,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.config)
         self.assertIsNone(injector.logging_gateway)
         self.assertIsNone(injector.completion_gateway)
+        self.assertIsNone(injector.email_gateway)
         self.assertIsNone(injector.ipc_service)
         self.assertIsNone(injector.keyval_storage_gateway)
         self.assertIsNone(injector.nlp_service)
@@ -84,6 +86,22 @@ class TestDependencyInjector(unittest.TestCase):
                 pass
 
         completion_gateway = DummyCompletionGatewayClass(
+            config=config,
+            logging_gateway=logging_gateway,
+        )
+
+        # Email Gateway
+        # pylint: disable=too-few-public-methods
+        class DummyEmailGatewayClass(IEmailGateway):
+            """Dummy email class."""
+
+            def __init__(self, config, logging_gateway):
+                pass
+
+            async def send_email(self, request):
+                pass
+
+        email_gateway = DummyEmailGatewayClass(
             config=config,
             logging_gateway=logging_gateway,
         )
@@ -618,6 +636,7 @@ class TestDependencyInjector(unittest.TestCase):
             config=config,
             logging_gateway=logging_gateway,
             completion_gateway=completion_gateway,
+            email_gateway=email_gateway,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
             nlp_service=nlp_service,
@@ -635,6 +654,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.config, config)
         self.assertEqual(injector.logging_gateway, logging_gateway)
         self.assertEqual(injector.completion_gateway, completion_gateway)
+        self.assertEqual(injector.email_gateway, email_gateway)
         self.assertEqual(injector.ipc_service, ipc_service)
         self.assertEqual(injector.keyval_storage_gateway, keyval_storage_gateway)
         self.assertEqual(injector.nlp_service, nlp_service)

@@ -23,6 +23,7 @@ from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
+from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
@@ -165,6 +166,10 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         if injector.knowledge_gateway is None:
             missing.append("knowledge_gateway")
 
+    if _config_path_exists(config, "mugen", "modules", "core", "gateway", "email"):
+        if injector.email_gateway is None:
+            missing.append("email_gateway")
+
     active_platforms = config.get("mugen", {}).get("platforms", [])
     if "matrix" in active_platforms and injector.matrix_client is None:
         missing.append("matrix_client")
@@ -262,6 +267,17 @@ _PROVIDER_SPECS = {
             ("config", "config"),
             ("logging_gateway", "logging_gateway"),
         ),
+    ),
+    "email_gateway": _ProviderSpec(
+        provider_name="email_gateway",
+        injector_attr="email_gateway",
+        interface=IEmailGateway,
+        module_path=("mugen", "modules", "core", "gateway", "email"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
     ),
     "ipc_service": _ProviderSpec(
         provider_name="ipc_service",
@@ -413,6 +429,7 @@ _PROVIDER_SPECS = {
 
 _PROVIDER_BUILD_ORDER = (
     "completion_gateway",
+    "email_gateway",
     "ipc_service",
     "keyval_storage_gateway",
     "relational_storage_gateway",
