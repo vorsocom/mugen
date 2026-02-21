@@ -65,7 +65,14 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         config = {
             "mugen": {
-                "modules": {"core": {"gateway": {"knowledge": "knowledge.module"}}},
+                "modules": {
+                    "core": {
+                        "gateway": {
+                            "knowledge": "knowledge.module",
+                            "email": "email.module",
+                        }
+                    }
+                },
                 "platforms": ["matrix", "telnet", "whatsapp", "web"],
             }
         }
@@ -74,6 +81,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._validate_container(config, injector)
 
         injector.logging_gateway.error.assert_any_call("Missing provider (knowledge_gateway).")
+        injector.logging_gateway.error.assert_any_call("Missing provider (email_gateway).")
         injector.logging_gateway.error.assert_any_call("Missing provider (matrix_client).")
         injector.logging_gateway.error.assert_any_call("Missing provider (telnet_client).")
         injector.logging_gateway.error.assert_any_call("Missing provider (whatsapp_client).")
@@ -121,6 +129,29 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         config = {
             "mugen": {
                 "modules": {"core": {"gateway": {"knowledge": "knowledge.module"}}},
+                "platforms": [],
+            }
+        }
+
+        di._validate_container(config, injector)
+
+    def test_validate_container_accepts_present_optional_email_provider(self) -> None:
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=Mock(),
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            relational_storage_gateway=object(),
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+            email_gateway=object(),
+        )
+        config = {
+            "mugen": {
+                "modules": {"core": {"gateway": {"email": "email.module"}}},
                 "platforms": [],
             }
         }

@@ -1,13 +1,13 @@
 # Working with muGen Gateways
 
 Status: Draft  
-Last Updated: 2026-02-16  
+Last Updated: 2026-02-21  
 Audience: Core and downstream plugin teams
 
 ## Purpose
 
-This document explains the gateway contract and the currently supported
-completion gateway implementations in muGen.
+This document explains gateway contracts and currently supported completion
+and email gateway implementations in muGen.
 
 ## Completion Gateway Contract
 
@@ -35,7 +35,26 @@ Request and response payloads are normalized by
 Legacy list-of-dicts context payloads are still accepted through
 `normalise_completion_request(...)`.
 
-## Provider Gateways
+## Email Gateway Contract
+
+Outbound email gateways implement:
+
+- `IEmailGateway.send_email(request)`
+
+Request and response payloads are normalized by
+`mugen/core/contract/gateway/email.py`:
+
+- `EmailAttachment(path, content_bytes, filename, mime_type)`
+  - Exactly one source must be set: `path` xor `content_bytes`.
+  - `filename` is required for in-memory content.
+- `EmailSendRequest(to, cc, bcc, subject, text_body, html_body, from_address, reply_to, headers, attachments)`
+  - At least one recipient in `to`/`cc`/`bcc`.
+  - At least one body variant in `text_body` or `html_body`.
+  - Optional strings are normalized and defaults are materialized.
+- `EmailSendResult(message_id, accepted_recipients, rejected_recipients)`
+- `EmailGatewayError(provider, operation, message, cause)`
+
+## Completion Provider Gateways
 
 ### AWS Bedrock
 
@@ -292,11 +311,34 @@ SambaNova compatibility notes:
   `inference.stream_options`) and keeps legacy `vendor_params["stream"]` and
   `vendor_params["include_usage"]` as compatibility fallbacks.
 
+## Email Provider Gateways
+
+### SMTP
+
+Module: `mugen.core.gateway.email.smtp`
+
+Behavior:
+
+- Outbound-only sending (`send_email`) using blocking SMTP I/O wrapped in
+  `asyncio.to_thread(...)`.
+- Supports text-only, html-only, and multipart text+html MIME bodies.
+- Supports attachments from local file paths and in-memory bytes.
+- Sender policy:
+  - request-level `from_address` overrides config.
+  - fallback is `[smtp].default_from`.
+- TLS/auth controls:
+  - `use_ssl` for implicit TLS.
+  - `starttls` / `starttls_required` for explicit TLS upgrade.
+  - optional `username`/`password` login when both are configured.
+- Transport/config/attachment failures raise `EmailGatewayError`.
+
 ## Configuration Example
 
 ```toml
 [mugen.modules.core]
 gateway.completion = "mugen.core.gateway.completion.bedrock"
+# Optional outbound email gateway.
+# gateway.email = "mugen.core.gateway.email.smtp"
 
 [aws.bedrock]
 api.region = "us-east-1"
@@ -306,4 +348,15 @@ api.completion.model = "amazon.nova-lite-v1:0"
 api.completion.max_tokens = 1024
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+
+[smtp]
+host = "smtp.example.com"
+port = 587
+username = "<smtp-username>"
+password = "<smtp-password>"
+default_from = "noreply@example.com"
+timeout_seconds = 30.0
+use_ssl = false
+starttls = true
+starttls_required = true
 ```

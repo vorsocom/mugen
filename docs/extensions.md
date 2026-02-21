@@ -99,6 +99,7 @@ The following is a listing of available clients, gateways, and services.
     * [WhatsApp](/mugen/core/contract/client/whatsapp.py) (di.container.whatsapp_client)
 * Gateways:
     * [Completion](/mugen/core/contract/gateway/completion.py) (di.container.completion_gateway)
+    * [Email](/mugen/core/contract/gateway/email.py) (di.container.email_gateway)
     * [Knowledge](/mugen/core/contract/gateway/knowledge.py) (di.container.knowledge_gateway)
     * [Logging](/mugen/core/contract/gateway/logging.py) (di.container.logging_gateway)
     * Storage:
