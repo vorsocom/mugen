@@ -215,6 +215,8 @@ enforce_password_policy = true
 login_access_expiry = 300   # 5 minutes
 login_dummy_hash = ""
 login_refresh_expiry = 604800   # 7 days
+tenant_invitation_ttl_seconds = 604800   # 7 days
+tenant_invitation_invite_base_url = "https://example.com/invite"
 
 password_policy = "^(?=.*[A-Z])(?=.*[a-z])(?=.*\\d)(?=.*[!@#\\$&*~,]).{8,}$"
 refresh_token_pepper = "<set-refresh-token-pepper>"

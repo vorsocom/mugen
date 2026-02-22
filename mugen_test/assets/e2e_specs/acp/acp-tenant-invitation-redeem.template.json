@@ -1,0 +1,85 @@
+{
+  "runtime": {
+    "spawn_hypercorn": false,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "__ACP_USERNAME__",
+    "password": "__ACP_PASSWORD__"
+  },
+  "tenant_id": null,
+  "entity_set": "TenantInvitations",
+  "create_payload": {
+    "Email": "__INVITEE_EMAIL__"
+  },
+  "lookup": {
+    "field": "Email",
+    "value": "__INVITEE_EMAIL__"
+  },
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "resend",
+      "target": "entity",
+      "expect_code": 200,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": "invited",
+    "event_entity_set": "TenantInvitations",
+    "event_entity_id_field": "Id",
+    "event_type_field": "Status",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [],
+  "positive_creates": [],
+  "redeem_scenarios": [
+    {
+      "name": "redeem_success",
+      "method": "POST",
+      "path": "/auth/tenants/__TENANT_ID__/invitations/__ENTITY_ID__/redeem",
+      "auth": "bearer_invitee",
+      "body": {
+        "Token": "__TOKEN_FROM_EMAIL__"
+      },
+      "expect_code": 204
+    },
+    {
+      "name": "redeem_replay_conflict",
+      "method": "POST",
+      "path": "/auth/tenants/__TENANT_ID__/invitations/__ENTITY_ID__/redeem",
+      "auth": "bearer_invitee",
+      "body": {
+        "Token": "__TOKEN_FROM_EMAIL__"
+      },
+      "expect_code": 409
+    },
+    {
+      "name": "redeem_expired_conflict",
+      "method": "POST",
+      "path": "/auth/tenants/__TENANT_ID__/invitations/__ENTITY_ID__/redeem",
+      "auth": "bearer_invitee",
+      "body": {
+        "Token": "__EXPIRED_TOKEN_FROM_EMAIL__"
+      },
+      "expect_code": 409,
+      "expect_status_after": "expired"
+    },
+    {
+      "name": "redeem_email_mismatch_forbidden",
+      "method": "POST",
+      "path": "/auth/tenants/__TENANT_ID__/invitations/__ENTITY_ID__/redeem",
+      "auth": "bearer_non_matching_user",
+      "body": {
+        "Token": "__TOKEN_FROM_EMAIL__"
+      },
+      "expect_code": 403
+    }
+  ]
+}

@@ -71,6 +71,14 @@ from mugen.core.plugin.acp.api.validation.generic import (
     NoValidationSchema,
     RowVersionValidation,
 )
+from mugen.core.plugin.acp.api.validation.tenant import (
+    TenantDomainCreateValidation,
+    TenantDomainUpdateValidation,
+    TenantInvitationCreateValidation,
+    TenantInvitationUpdateValidation,
+    TenantMembershipCreateValidation,
+    TenantMembershipUpdateValidation,
+)
 from mugen.core.plugin.acp.contract.sdk.binding import (
     TableSpec,
     EdmTypeSpec,
@@ -339,16 +347,16 @@ def contribute(
             "actions": {
                 "deactivate": {
                     "perm": admin_ns.verb("manage"),
-                    "schema": NoValidationSchema,
+                    "schema": RowVersionValidation,
                 },
                 "reactivate": {
                     "perm": admin_ns.verb("manage"),
-                    "schema": NoValidationSchema,
+                    "schema": RowVersionValidation,
                 },
             },
             "crud": CrudPolicy(
                 create_schema=("Name", "Slug"),
-                update_schema=("Name", "Slug", "Status"),
+                update_schema=("Name", "Slug"),
             ),
         },
         {
@@ -362,6 +370,10 @@ def contribute(
             "allow_delete": True,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "crud": CrudPolicy(
+                create_schema=TenantDomainCreateValidation,
+                update_schema=TenantDomainUpdateValidation,
+            ),
         },
         {
             "set": "TenantInvitations",
@@ -377,13 +389,17 @@ def contribute(
             "actions": {
                 "resend": {
                     "perm": admin_ns.verb("manage"),
-                    "schema": NoValidationSchema,
+                    "schema": RowVersionValidation,
                 },
                 "revoke": {
                     "perm": admin_ns.verb("manage"),
-                    "schema": NoValidationSchema,
+                    "schema": RowVersionValidation,
                 },
             },
+            "crud": CrudPolicy(
+                create_schema=TenantInvitationCreateValidation,
+                update_schema=TenantInvitationUpdateValidation,
+            ),
         },
         {
             "set": "TenantMemberships",
@@ -399,17 +415,21 @@ def contribute(
             "actions": {
                 "suspend": {
                     "perm": admin_ns.verb("manage"),
-                    "schema": NoValidationSchema,
+                    "schema": RowVersionValidation,
                 },
                 "unsuspend": {
                     "perm": admin_ns.verb("manage"),
-                    "schema": NoValidationSchema,
+                    "schema": RowVersionValidation,
                 },
                 "remove": {
                     "perm": admin_ns.verb("manage"),
-                    "schema": NoValidationSchema,
+                    "schema": RowVersionValidation,
                 },
             },
+            "crud": CrudPolicy(
+                create_schema=TenantMembershipCreateValidation,
+                update_schema=TenantMembershipUpdateValidation,
+            ),
         },
         {
             "set": "Users",

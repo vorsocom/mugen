@@ -19,6 +19,9 @@ shared service control plane for downstream orchestration.
 - contributor-based runtime binding for plugin resources;
 - reusable admin HTTP/API surface used by core plugins.
 
+For tenant invitation lifecycle and authenticated redeem contracts, see
+`docs/acp-tenant-invitations.md`.
+
 Downstream plugins should compose business orchestration on top of ACP-exposed
 resources/actions rather than bypassing them with direct table writes.
 

@@ -70,6 +70,18 @@ class _FakeService:
         self.calls.append(("entity_action_do", kwargs))
         return {"status": "ok-entity"}
 
+    async def entity_action_deactivate(self, **kwargs):
+        if self.raise_db_error:
+            raise SQLAlchemyError("db")
+        self.calls.append(("entity_action_deactivate", kwargs))
+        return {"status": "tenant-deactivated"}
+
+    async def action_suspend(self, **kwargs):
+        if self.raise_db_error:
+            raise SQLAlchemyError("db")
+        self.calls.append(("action_suspend", kwargs))
+        return {"status": "membership-suspended"}
+
 
 class _FakeRegistry:
     def __init__(
@@ -78,6 +90,7 @@ class _FakeRegistry:
         has_tenant: bool,
         service: _FakeService,
         schema=_ActionPayload,
+        actions=None,
     ):
         self.schema = _FakeSchema(has_tenant=has_tenant)
         self._service = service
@@ -85,7 +98,9 @@ class _FakeRegistry:
             edm_type_name="ACP.Thing",
             service_key="thing_svc",
             namespace="com.test.plugin",
-            capabilities=SimpleNamespace(actions={"do": {"schema": schema}}),
+            capabilities=SimpleNamespace(
+                actions=actions or {"do": {"schema": schema}}
+            ),
         )
 
     def get_resource(self, _entity_set: str):
@@ -333,6 +348,62 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
                         registry_provider=lambda: tenant_registry,
                     )
                 self.assertEqual(ex.exception.code, 500)
+
+    async def test_dispatch_resolves_tenant_lifecycle_handler_names(self) -> None:
+        app = Quart("action_lifecycle_handlers")
+        tenant_id = uuid.uuid4()
+        entity_id = uuid.uuid4()
+        auth_user = uuid.uuid4()
+        service = _FakeService()
+        logger = Mock()
+
+        tenant_registry = _FakeRegistry(
+            has_tenant=False,
+            service=service,
+            actions={"deactivate": {"schema": _ActionPayload}},
+        )
+        async with app.test_request_context(
+            f"/api/core/acp/v1/Tenants/{entity_id}/$action/deactivate",
+            method="POST",
+            json={"row_version": 1},
+        ):
+            with patch.object(action_api, "emit_audit_event", new=AsyncMock()):
+                result = await action_api.dispatch_entity_action.__wrapped__(
+                    entity_set="Tenants",
+                    entity_id=str(entity_id),
+                    action="deactivate",
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: tenant_registry,
+                )
+        self.assertEqual(result, {"status": "tenant-deactivated"})
+        self.assertEqual(service.calls[-1][0], "entity_action_deactivate")
+
+        membership_registry = _FakeRegistry(
+            has_tenant=True,
+            service=service,
+            actions={"suspend": {"schema": _ActionPayload}},
+        )
+        async with app.test_request_context(
+            (
+                f"/api/core/acp/v1/tenants/{tenant_id}/TenantMemberships/"
+                f"{entity_id}/$action/suspend"
+            ),
+            method="POST",
+            json={"row_version": 2},
+        ):
+            with patch.object(action_api, "emit_audit_event", new=AsyncMock()):
+                result = await action_api.dispatch_entity_action_tenant.__wrapped__(
+                    tenant_id=str(tenant_id),
+                    entity_set="TenantMemberships",
+                    entity_id=str(entity_id),
+                    action="suspend",
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: membership_registry,
+                )
+        self.assertEqual(result, {"status": "membership-suspended"})
+        self.assertEqual(service.calls[-1][0], "action_suspend")
 
     async def test_dispatch_entity_set_action_error_branches(self) -> None:
         app = Quart("action_set_dispatch_errors")

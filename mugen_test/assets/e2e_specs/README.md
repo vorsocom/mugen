@@ -10,6 +10,7 @@ To run the whole template suite with automatic unique placeholder injection:
 
 ## Plugin Coverage
 
+- `acp`: `acp/acp-tenant-invitation-redeem.template.json`
 - `ops_case`: `ops_case/ops-case-e2e-lifecycle.template.json`
 - `ops_sla`: `ops_sla/ops-sla-e2e-clock-lifecycle.template.json`
 - `ops_workflow`: `ops_workflow/ops-workflow-e2e-definition-smoke.template.json`
@@ -51,6 +52,10 @@ To run the whole template suite with automatic unique placeholder injection:
   - `__SNAP_NOTE__`
   - `__WEB_CONVERSATION_ID__`
   - `__WEB_TEXT__`
+- ACP invitation-redeem template notes:
+  - `redeem_scenarios` captures authenticated redeem checks (success/replay/expired/email-mismatch).
+  - those custom steps are for focused ACP redeem validation workflows and are not auto-run by
+    `run_all_e2e_templates.sh`.
 
 ## Web E2E Behavior
 
