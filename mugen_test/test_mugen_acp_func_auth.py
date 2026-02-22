@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from sqlalchemy.exc import SQLAlchemyError
 
+from mugen.core.plugin.acp.api.decorator import auth as auth_decorator
 from mugen.core.plugin.acp.api import func_auth
 
 
@@ -667,3 +668,172 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["refresh_token"], "ok-refresh")
         self.assertEqual(body["user_id"], str(active_user.id))
         self.assertEqual(body["roles"], ["com.test:admin"])
+
+    async def test_tenant_invitation_redeem_authenticated_paths(self) -> None:
+        endpoint = func_auth.tenant_invitation_redeem_authenticated.__wrapped__
+        logger = Mock()
+        tenant_id = uuid.uuid4()
+        invitation_id = uuid.uuid4()
+        auth_user = uuid.uuid4()
+        invitation_svc = SimpleNamespace(
+            redeem_authenticated=AsyncMock(return_value=("", 204))
+        )
+        registry = SimpleNamespace(
+            get_resource_by_type=Mock(return_value=SimpleNamespace(service_key="svc")),
+            get_edm_service=Mock(return_value=invitation_svc),
+        )
+
+        with (
+            patch.object(func_auth, "abort", side_effect=_abort_raiser),
+            patch.object(
+                func_auth,
+                "request",
+                new=SimpleNamespace(get_json=AsyncMock(return_value=[])),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    tenant_id=str(tenant_id),
+                    invitation_id=str(invitation_id),
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: registry,
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+        with (
+            patch.object(func_auth, "abort", side_effect=_abort_raiser),
+            patch.object(
+                func_auth,
+                "request",
+                new=SimpleNamespace(get_json=AsyncMock(return_value={})),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    tenant_id=str(tenant_id),
+                    invitation_id=str(invitation_id),
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: registry,
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+        with (
+            patch.object(func_auth, "abort", side_effect=_abort_raiser),
+            patch.object(
+                func_auth,
+                "request",
+                new=SimpleNamespace(get_json=AsyncMock(return_value={"Token": "x"})),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    tenant_id="bad-tenant",
+                    invitation_id=str(invitation_id),
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: registry,
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    tenant_id=str(tenant_id),
+                    invitation_id="bad-invitation",
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: registry,
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    tenant_id=str(tenant_id),
+                    invitation_id=str(invitation_id),
+                    auth_user="bad-user",
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: registry,
+                )
+            self.assertEqual(ex.exception.code, 500)
+
+        with patch.object(
+            func_auth,
+            "request",
+            new=SimpleNamespace(get_json=AsyncMock(return_value={"Token": "abc"})),
+        ):
+            body, status = await endpoint(
+                tenant_id=str(tenant_id),
+                invitation_id=str(invitation_id),
+                auth_user=str(auth_user),
+                logger_provider=lambda: logger,
+                registry_provider=lambda: registry,
+            )
+        self.assertEqual((body, status), ("", 204))
+        invitation_svc.redeem_authenticated.assert_awaited_once_with(
+            tenant_id=tenant_id,
+            invitation_id=invitation_id,
+            auth_user_id=auth_user,
+            token="abc",
+        )
+
+        invitation_svc.redeem_authenticated = AsyncMock(side_effect=SQLAlchemyError("db"))
+        with (
+            patch.object(func_auth, "abort", side_effect=_abort_raiser),
+            patch.object(
+                func_auth,
+                "request",
+                new=SimpleNamespace(get_json=AsyncMock(return_value={"Token": "abc"})),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    tenant_id=str(tenant_id),
+                    invitation_id=str(invitation_id),
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: registry,
+                )
+            self.assertEqual(ex.exception.code, 500)
+
+    async def test_tenant_invitation_redeem_authenticated_decorator(self) -> None:
+        endpoint = func_auth.tenant_invitation_redeem_authenticated
+        logger = Mock()
+        tenant_id = uuid.uuid4()
+        invitation_id = uuid.uuid4()
+        auth_user = uuid.uuid4()
+        invitation_svc = SimpleNamespace(
+            redeem_authenticated=AsyncMock(return_value=("", 204))
+        )
+        registry = SimpleNamespace(
+            get_resource_by_type=Mock(return_value=SimpleNamespace(service_key="svc")),
+            get_edm_service=Mock(return_value=invitation_svc),
+        )
+
+        with (
+            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(auth_user)}),
+            patch.object(
+                auth_decorator,
+                "_require_user_from_token",
+                new=AsyncMock(return_value=SimpleNamespace(id=auth_user)),
+            ),
+            patch.object(
+                func_auth,
+                "request",
+                new=SimpleNamespace(get_json=AsyncMock(return_value={"Token": "abc"})),
+            ),
+        ):
+            body, status = await endpoint(
+                tenant_id=str(tenant_id),
+                invitation_id=str(invitation_id),
+                logger_provider=lambda: logger,
+                registry_provider=lambda: registry,
+            )
+
+        self.assertEqual((body, status), ("", 204))
+        invitation_svc.redeem_authenticated.assert_awaited_once_with(
+            tenant_id=tenant_id,
+            invitation_id=invitation_id,
+            auth_user_id=auth_user,
+            token="abc",
+        )

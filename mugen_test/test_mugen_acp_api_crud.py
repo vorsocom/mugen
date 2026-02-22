@@ -70,6 +70,11 @@ class _CreateSchema(BaseModel):
     tenant_id: uuid.UUID | None = None
 
 
+class _UpdateSchema(BaseModel):
+    display_name: str | None = None
+    tenant_id: uuid.UUID | None = None
+
+
 class _FakeEdmType:
     def __init__(self, *, tenant_scoped: bool):
         self._tenant_scoped = tenant_scoped
@@ -92,12 +97,13 @@ def _resource(
     *,
     create_schema=None,
     update_schema=None,
+    edm_type_name: str = "ACP.User",
     soft_delete_mode: SoftDeleteMode = SoftDeleteMode.TIMESTAMP,
     allow_restore: bool = True,
     soft_delete_column: str = "DeletedAt",
 ):
     return SimpleNamespace(
-        edm_type_name="ACP.User",
+        edm_type_name=edm_type_name,
         service_key="user_svc",
         namespace="com.test.acp",
         crud=SimpleNamespace(
@@ -209,6 +215,55 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 crud_mod._build_create_data({}, _CreateSchema, tenant_scoped=False)
             self.assertEqual(ex.exception.code, 400)
+
+        update_data = crud_mod._build_update_data(
+            {"DisplayName": "Alice"},
+            ("DisplayName",),
+            tenant_scoped=False,
+        )
+        self.assertEqual(update_data, {"display_name": "Alice"})
+
+        typed_update = crud_mod._build_update_data(
+            {"display_name": "Alice", "tenant_id": str(uuid.uuid4())},
+            _UpdateSchema,
+            tenant_scoped=True,
+        )
+        self.assertEqual(typed_update, {"display_name": "Alice"})
+
+        typed_update_non_tenant = crud_mod._build_update_data(
+            {"display_name": "Alice"},
+            _UpdateSchema,
+            tenant_scoped=False,
+        )
+        self.assertEqual(typed_update_non_tenant, {"display_name": "Alice"})
+
+        with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._build_update_data(
+                    {"tenant_id": "bad-uuid"},
+                    _UpdateSchema,
+                    tenant_scoped=False,
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._reject_action_only_status_patch(
+                    resource=_resource(edm_type_name="ACP.Tenant"),
+                    data={"Status": "suspended"},
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._reject_action_only_status_patch(
+                    resource=_resource(edm_type_name="ACP.TenantMembership"),
+                    data={"status": "active"},
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            crud_mod._reject_action_only_status_patch(
+                resource=_resource(edm_type_name="ACP.User"),
+                data={"Status": "active"},
+            )
 
     async def test_get_entities_and_get_entities_tenant_paths(self) -> None:
         logger = _logger()
@@ -464,6 +519,37 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(ex.exception.code, 400)
 
+        invitation_svc = SimpleNamespace(
+            create=AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+        )
+        invitation_registry = _FakeRegistry(
+            resource=_resource(
+                create_schema=("TenantId", "Email"),
+                edm_type_name="ACP.TenantInvitation",
+            ),
+            service=invitation_svc,
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/TenantInvitations",
+            method="POST",
+            json={"Email": "invitee@example.com"},
+        ):
+            with patch.object(
+                crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+            ):
+                _, status = await create_fn(
+                    tenant_id=str(tenant_id),
+                    entity_set="TenantInvitations",
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: invitation_registry,
+                )
+        self.assertEqual(status, 201)
+        payload = invitation_svc.create.await_args.args[0]
+        self.assertEqual(payload["tenant_id"], tenant_id)
+        self.assertEqual(payload["invited_by_user_id"], actor_id)
+
         bad_registry = _FakeRegistry(
             resource=_resource(create_schema=("TenantId", "Name")),
             service=svc,
@@ -601,6 +687,55 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                         auth_user=str(actor_id),
                         logger_provider=_logger,
                         registry_provider=lambda: registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        tenant_resource_registry = _FakeRegistry(
+            resource=_resource(
+                update_schema=("Name", "Status"),
+                edm_type_name="ACP.Tenant",
+            ),
+            service=svc,
+            tenant_scoped=False,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Tenants/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 7, "Status": "suspended"},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="Tenants",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: tenant_resource_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        membership_resource_registry = _FakeRegistry(
+            resource=_resource(
+                update_schema=("RoleInTenant", "Status"),
+                edm_type_name="ACP.TenantMembership",
+            ),
+            service=svc,
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/TenantMemberships/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 8, "Status": "active"},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="TenantMemberships",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: membership_resource_registry,
                     )
                 self.assertEqual(ex.exception.code, 400)
 

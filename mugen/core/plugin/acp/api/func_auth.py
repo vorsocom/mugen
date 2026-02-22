@@ -13,7 +13,11 @@ from mugen.core.api import api
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.api.decorator.auth import global_auth_required
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
-from mugen.core.plugin.acp.contract.service import IRefreshTokenService, IUserService
+from mugen.core.plugin.acp.contract.service import (
+    IRefreshTokenService,
+    ITenantInvitationService,
+    IUserService,
+)
 from mugen.core.plugin.acp.contract.service.jwt import (
     IJwtService,
     JwtVerifyParams,
@@ -22,6 +26,7 @@ from mugen.core.plugin.acp.contract.service.jwt import (
 from mugen.core.plugin.acp.utility.ns import AdminNs
 
 _EDM_REFRESH_TOKEN = "ACP.RefreshToken"
+_EDM_TENANT_INVITATION = "ACP.TenantInvitation"
 _EDM_USER = "ACP.User"
 
 
@@ -175,6 +180,61 @@ async def user_login(  # pylint: disable=too-many-locals
         "user_id": str(user.id),
         "roles": [f"{r.namespace}:{r.name}" for r in user.global_roles],
     }, 200
+
+
+@api.post("core/acp/v1/auth/tenants/<tenant_id>/invitations/<invitation_id>/redeem")
+@global_auth_required
+async def tenant_invitation_redeem_authenticated(
+    tenant_id: str,
+    invitation_id: str,
+    auth_user: str,
+    logger_provider=_logger_provider,
+    registry_provider=_registry_provider,
+    **_,
+):
+    """Redeem an invitation with an authenticated ACP user session."""
+    logger: ILoggingGateway = logger_provider()
+    registry: IAdminRegistry = registry_provider()
+
+    data = await request.get_json()
+    if not isinstance(data, dict):
+        logger.debug("`data` is not a dict.")
+        abort(400)
+
+    token = data.get("Token")
+    if not isinstance(token, str) or token.strip() == "":
+        logger.debug("Request parameter(s) missing.")
+        abort(400, "Request parameter Token is required.")
+
+    try:
+        tenant_uuid = uuid.UUID(str(tenant_id))
+    except ValueError:
+        abort(400, f"Invalid UUID for path parameter: {tenant_id}.")
+
+    try:
+        invitation_uuid = uuid.UUID(str(invitation_id))
+    except ValueError:
+        abort(400, f"Invalid UUID for path parameter: {invitation_id}.")
+
+    try:
+        auth_user_uuid = uuid.UUID(str(auth_user))
+    except ValueError as e:
+        logger.error(e)
+        abort(500)
+
+    svc: ITenantInvitationService = registry.get_edm_service(
+        registry.get_resource_by_type(_EDM_TENANT_INVITATION).service_key
+    )
+    try:
+        return await svc.redeem_authenticated(
+            tenant_id=tenant_uuid,
+            invitation_id=invitation_uuid,
+            auth_user_id=auth_user_uuid,
+            token=token,
+        )
+    except SQLAlchemyError as e:
+        logger.error(e)
+        abort(500)
 
 
 @api.post("core/acp/v1/auth/logout")

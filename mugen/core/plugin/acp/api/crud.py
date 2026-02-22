@@ -97,6 +97,68 @@ def _build_create_data(
     return create_data
 
 
+def _build_update_data(
+    data: dict[str, Any],
+    update_schema: Any,
+    *,
+    tenant_scoped: bool,
+) -> dict[str, Any]:
+    """Build update payload from tuple/list schemas or Pydantic schema classes."""
+    if update_schema is None:
+        return {}
+
+    if isinstance(update_schema, type) and issubclass(update_schema, BaseModel):
+        try:
+            validated = update_schema.model_validate(data)
+        except ValidationError as e:
+            abort(400, str(e))
+
+        update_data = validated.model_dump(by_alias=False, exclude_none=True)
+        if tenant_scoped:
+            update_data.pop("tenant_id", None)
+        return update_data
+
+    update_data: dict[str, Any] = {}
+    for item in update_schema:
+        if tenant_scoped and item == "TenantId":
+            continue
+
+        content = data.get(item)
+        if content is None:
+            continue
+        update_data[title_to_snake(item)] = content
+
+    return update_data
+
+
+def _reject_action_only_status_patch(
+    *,
+    resource: Any,
+    data: dict[str, Any],
+) -> None:
+    """Block PATCH status updates for ACP entities that require lifecycle actions."""
+    if "Status" not in data and "status" not in data:
+        return
+
+    if resource.edm_type_name == "ACP.Tenant":
+        abort(
+            400,
+            (
+                "Status is action-managed for Tenant. Use "
+                "$action/deactivate or $action/reactivate."
+            ),
+        )
+
+    if resource.edm_type_name == "ACP.TenantMembership":
+        abort(
+            400,
+            (
+                "Status is action-managed for TenantMembership. Use "
+                "$action/suspend, $action/unsuspend, or $action/remove."
+            ),
+        )
+
+
 @api.get("core/acp/v1/<entity_set>/<entity_id>")
 @api.get("core/acp/v1/<entity_set>", defaults={"entity_id": None})
 @permission_required(permission_type=":read")
@@ -300,6 +362,8 @@ async def create_entity_tenant(
     )
 
     create_data["tenant_id"] = tenant_uuid
+    if resource.edm_type_name == "ACP.TenantInvitation" and actor_id is not None:
+        create_data["invited_by_user_id"] = actor_id
 
     svc: ICrudService = registry.get_edm_service(resource.service_key)
     try:
@@ -372,14 +436,13 @@ async def update_entity(
     registry: IAdminRegistry = registry_provider()
     resource = registry.get_resource(entity_set)
     entity = _entity_name(resource.edm_type_name)
+    _reject_action_only_status_patch(resource=resource, data=data)
 
-    update_data: dict[str, Any] = {}
-    if resource.crud.update_schema is not None:
-        for item in resource.crud.update_schema:
-            content = data.get(item)
-            if content is None:
-                continue
-            update_data[title_to_snake(item)] = content
+    update_data = _build_update_data(
+        data,
+        resource.crud.update_schema,
+        tenant_scoped=False,
+    )
 
     if not update_data:
         return "", 204
@@ -502,6 +565,7 @@ async def update_entity_tenant(
     if not isinstance(data, dict):
         logger.debug("`data` is not a dict.")
         abort(400)
+    _reject_action_only_status_patch(resource=resource, data=data)
 
     if "TenantId" in data or "tenant_id" in data:
         abort(400, "TenantId is not mutable via this endpoint.")
@@ -515,16 +579,11 @@ async def update_entity_tenant(
     except (TypeError, ValueError):
         abort(400, f"RowVersion must be a valid integer. {row_version} given.")
 
-    update_data: dict[str, Any] = {}
-    if resource.crud.update_schema is not None:
-        for item in resource.crud.update_schema:
-            if item == "TenantId":
-                continue
-
-            content = data.get(item)
-            if content is None:
-                continue
-            update_data[title_to_snake(item)] = content
+    update_data = _build_update_data(
+        data,
+        resource.crud.update_schema,
+        tenant_scoped=True,
+    )
 
     if not update_data:
         return "", 204
