@@ -158,6 +158,33 @@ def _reject_action_only_status_patch(
             ),
         )
 
+    if resource.edm_type_name == "ACP.Role":
+        abort(
+            400,
+            (
+                "Status is action-managed for Role. Use "
+                "$action/deprecate or $action/reactivate."
+            ),
+        )
+
+    if resource.edm_type_name == "ACP.PermissionObject":
+        abort(
+            400,
+            (
+                "Status is action-managed for PermissionObject. Use "
+                "$action/deprecate or $action/reactivate."
+            ),
+        )
+
+    if resource.edm_type_name == "ACP.PermissionType":
+        abort(
+            400,
+            (
+                "Status is action-managed for PermissionType. Use "
+                "$action/deprecate or $action/reactivate."
+            ),
+        )
+
 
 @api.get("core/acp/v1/<entity_set>/<entity_id>")
 @api.get("core/acp/v1/<entity_set>", defaults={"entity_id": None})

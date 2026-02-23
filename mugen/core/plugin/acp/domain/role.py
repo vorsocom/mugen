@@ -20,6 +20,8 @@ class RoleDE(BaseDE, TenantScopedDEMixin):
 
     display_name: str | None = None
 
+    status: str | None = None
+
     permission_entries: Sequence["PermissionEntryDE"] | None = None  # type: ignore
 
     role_memberships: Sequence["RoleMembershipDE"] | None = None  # type: ignore

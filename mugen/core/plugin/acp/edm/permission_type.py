@@ -37,6 +37,10 @@ permission_type_type = EdmType(
             "Name",
             TypeRef("Edm.String"),
         ),
+        "Status": EdmProperty(
+            "Status",
+            TypeRef("Edm.String"),
+        ),
     },
     nav_properties={
         "PermissionEntries": EdmNavigationProperty(

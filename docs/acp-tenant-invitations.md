@@ -7,6 +7,8 @@ Last Updated: 2026-02-22
 
 This document defines ACP tenant invitation delivery and redeem behavior.
 Public unauthenticated signup/redeem is out of scope for this phase.
+Tenant role-template provisioning remains downstream-owned and is not handled
+by ACP core invitation APIs.
 
 ## Configuration
 

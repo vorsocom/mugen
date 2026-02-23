@@ -16,4 +16,6 @@ class PermissionObjectDE(BaseDE):
 
     name: str | None = None
 
+    status: str | None = None
+
     permission_entries: Sequence["PermissionEntryDE"] | None = None  # type: ignore

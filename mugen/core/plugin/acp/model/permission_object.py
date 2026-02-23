@@ -2,13 +2,24 @@
 
 __all__ = ["PermissionObject"]
 
+import enum
 from typing import List
 
 from sqlalchemy import CheckConstraint, UniqueConstraint
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import CITEXT
+from sqlalchemy.dialects.postgresql import ENUM as PGENUM
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+
+
+class PermissionObjectStatus(str, enum.Enum):
+    """Permission object status enum values."""
+
+    ACTIVE = "active"
+
+    DEPRECATED = "deprecated"
 
 
 # pylint: disable=too-few-public-methods
@@ -26,6 +37,18 @@ class PermissionObject(ModelBase):
         CITEXT(128),
         nullable=False,
         index=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        PGENUM(
+            PermissionObjectStatus,
+            name="admin_permission_object_status",
+            values_callable=lambda items: [item.value for item in items],
+            create_type=True,
+        ),
+        nullable=False,
+        index=True,
+        server_default=sa_text("'active'"),
     )
 
     global_permission_entries: Mapped[List["GlobalPermissionEntry"]] = (
