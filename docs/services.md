@@ -22,6 +22,9 @@ shared service control plane for downstream orchestration.
 For tenant invitation lifecycle and authenticated redeem contracts, see
 `docs/acp-tenant-invitations.md`.
 
+For ACP RBAC policy semantics (deny-by-default, precedence, bootstrap grants),
+see `docs/acp-rbac-policy.md`.
+
 Downstream plugins should compose business orchestration on top of ACP-exposed
 resources/actions rather than bypassing them with direct table writes.
 
