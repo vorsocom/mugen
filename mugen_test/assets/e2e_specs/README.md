@@ -52,10 +52,18 @@ To run the whole template suite with automatic unique placeholder injection:
   - `__SNAP_NOTE__`
   - `__WEB_CONVERSATION_ID__`
   - `__WEB_TEXT__`
+  - `__ACP_USERNAME__`
+  - `__ACP_PASSWORD__`
+  - `__INVITEE_EMAIL__`
 - ACP invitation-redeem template notes:
-  - `redeem_scenarios` captures authenticated redeem checks (success/replay/expired/email-mismatch).
-  - those custom steps are for focused ACP redeem validation workflows and are not auto-run by
-    `run_all_e2e_templates.sh`.
+  - `redeem_scenarios` captures authenticated redeem checks
+    (success/replay/expired/email-mismatch).
+  - these scenarios are auto-run by
+    `mugen_test/assets/e2e_specs/acp/run_acp_invitation_redeem_e2e.sh` when
+    orchestrated from `run_all_e2e_templates.sh`.
+  - the ACP invitation runner starts a local SMTP sink to capture outbound
+    invite emails and extracts the redeem token from `InviteUrl` in the
+    message body.
 
 ## Web E2E Behavior
 

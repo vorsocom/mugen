@@ -557,12 +557,23 @@ def _load_config(config_file: str) -> dict:
         sys.exit(1)
 
 
+def _resolve_config_file() -> str:
+    """Resolve config file path from environment with sane defaults."""
+    config_file = os.getenv("MUGEN_CONFIG_FILE", "mugen.toml")
+    if not isinstance(config_file, str):
+        return "mugen.toml"
+    config_file = config_file.strip()
+    if config_file == "":
+        return "mugen.toml"
+    return config_file
+
+
 def _build_container() -> DependencyInjector:
     """Build providers.
 
     Order is important.
     """
-    config = _load_config("mugen.toml")
+    config = _load_config(_resolve_config_file())
     injector = DependencyInjector()
 
     _build_config_provider(config, injector)

@@ -63,6 +63,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ACP_RUNNER="$REPO_ROOT/.codex/skills/acp-http-e2e-tester/scripts/run_acp_http_e2e.sh"
 WEB_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/web/run_web_http_e2e.sh"
+ACP_INVITE_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/acp/run_acp_invitation_redeem_e2e.sh"
 
 PRINT_CONFIG=0
 ONLY_FILTER=""
@@ -108,6 +109,11 @@ if [[ ! -x "$WEB_RUNNER" ]]; then
   exit 1
 fi
 
+if [[ ! -x "$ACP_INVITE_RUNNER" ]]; then
+  echo "ERROR: runner not found or not executable: $ACP_INVITE_RUNNER" >&2
+  exit 1
+fi
+
 E2E_PYTHON_BIN="$(resolve_python_bin)"
 E2E_PYTHONPATH="$REPO_ROOT"
 if [[ -n "${PYTHONPATH:-}" ]]; then
@@ -117,6 +123,7 @@ HYPERCORN_CMD="$(shell_join_quoted env "PYTHONPATH=$E2E_PYTHONPATH" "$E2E_PYTHON
 HYPERCORN_CMD_ESCAPED="$(escape_sed_replacement "$HYPERCORN_CMD")"
 
 declare -a SPECS=(
+  "mugen_test/assets/e2e_specs/acp/acp-tenant-invitation-redeem.template.json"
   "mugen_test/assets/e2e_specs/ops_case/ops-case-e2e-lifecycle.template.json"
   "mugen_test/assets/e2e_specs/ops_sla/ops-sla-e2e-clock-lifecycle.template.json"
   "mugen_test/assets/e2e_specs/ops_workflow/ops-workflow-e2e-definition-smoke.template.json"
@@ -144,6 +151,8 @@ render_spec() {
   local case_title tracked_ref wf_key meter_code vendor_code
   local pack_key policy_code sender_key block_sender_key reporting_code snap_note
   local billing_account_code billing_product_code web_conversation_id web_text
+  local acp_username acp_password invitee_email
+  local acp_username_escaped acp_password_escaped invitee_email_escaped
 
   case_title="E2E OpsCase ${run_id}"
   tracked_ref="OPS-SLA-${run_id}"
@@ -160,6 +169,12 @@ render_spec() {
   snap_note="Ops reporting snapshot lifecycle e2e ${run_id}"
   web_conversation_id="web_conv_${run_id_flat}"
   web_text="Web e2e message ${run_id}"
+  acp_username="${ACP_E2E_USERNAME:-admin}"
+  acp_password="${ACP_E2E_PASSWORD:-aDmin,123}"
+  invitee_email="invitee.${run_id_flat}@example.com"
+  acp_username_escaped="$(escape_sed_replacement "$acp_username")"
+  acp_password_escaped="$(escape_sed_replacement "$acp_password")"
+  invitee_email_escaped="$(escape_sed_replacement "$invitee_email")"
 
   sed \
     -e "s|__HYPERCORN_CMD__|${hypercorn_cmd_escaped}|g" \
@@ -178,6 +193,9 @@ render_spec() {
     -e "s|__SNAP_NOTE__|${snap_note}|g" \
     -e "s|__WEB_CONVERSATION_ID__|${web_conversation_id}|g" \
     -e "s|__WEB_TEXT__|${web_text}|g" \
+    -e "s|__ACP_USERNAME__|${acp_username_escaped}|g" \
+    -e "s|__ACP_PASSWORD__|${acp_password_escaped}|g" \
+    -e "s|__INVITEE_EMAIL__|${invitee_email_escaped}|g" \
     "$template" > "$output"
 }
 
@@ -217,6 +235,8 @@ for spec_rel in "${SPECS[@]}"; do
   runner="$ACP_RUNNER"
   if [[ "$spec_rel" == *"/web/"* ]]; then
     runner="$WEB_RUNNER"
+  elif [[ "$spec_rel" == *"/acp/acp-tenant-invitation-redeem.template.json" ]]; then
+    runner="$ACP_INVITE_RUNNER"
   fi
 
   if bash "$runner" --spec "$rendered_spec" "${RUNNER_ARGS[@]}"; then
