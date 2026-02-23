@@ -205,6 +205,7 @@ plugin_name = "com.vorsocomputing.mugen.acp"
 namespace = "com.vorsocomputing.mugen.acp"
 
 admin_login_email = "admin@example.com"
+test_email_recipient = "<set-test-email-recipient>"
 admin_password = "<set-admin-password>"
 admin_password_hash = ""
 admin_username = "admin"
