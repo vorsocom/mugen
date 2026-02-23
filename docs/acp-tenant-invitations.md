@@ -6,6 +6,7 @@ Last Updated: 2026-02-22
 ## Scope
 
 This document defines ACP tenant invitation delivery and redeem behavior.
+Public unauthenticated signup/redeem is out of scope for this phase.
 
 ## Configuration
 
@@ -69,6 +70,22 @@ All require:
 ```
 
 - Success response: `204`
+
+## Invitee Onboarding UX (Login-First)
+
+Invite redeem is login-first and authenticated-only.
+The client flow is:
+
+1. User opens invite link containing `tenant_id`, `invitation_id`, and `token`.
+2. If the user is unauthenticated, route to login.
+3. After login, call:
+   `POST /core/acp/v1/auth/tenants/{tenant_id}/invitations/{invitation_id}/redeem`
+   with body `{ "Token": "<token-from-link>" }`.
+4. Map response codes to UX outcomes:
+   - `204`: redeem succeeded, continue to tenant experience.
+   - `403`: token invalid or login email does not match invitation email.
+   - `404`: invitation not found for tenant/id.
+   - `409`: invitation replayed, expired, or otherwise no longer redeemable.
 
 ## Error Semantics
 
