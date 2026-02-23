@@ -12,6 +12,9 @@ This document defines lifecycle behavior for:
   - permission objects (`ACP.PermissionObject`)
   - permission types (`ACP.PermissionType`)
 
+For RBAC authorization policy semantics (including deny-by-default), see
+`docs/acp-rbac-policy.md`.
+
 ## Lifecycle Endpoints
 
 All lifecycle actions require:
