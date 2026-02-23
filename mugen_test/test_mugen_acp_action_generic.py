@@ -76,11 +76,23 @@ class _FakeService:
         self.calls.append(("entity_action_deactivate", kwargs))
         return {"status": "tenant-deactivated"}
 
+    async def entity_action_deprecate(self, **kwargs):
+        if self.raise_db_error:
+            raise SQLAlchemyError("db")
+        self.calls.append(("entity_action_deprecate", kwargs))
+        return {"status": "permission-object-deprecated"}
+
     async def action_suspend(self, **kwargs):
         if self.raise_db_error:
             raise SQLAlchemyError("db")
         self.calls.append(("action_suspend", kwargs))
         return {"status": "membership-suspended"}
+
+    async def action_deprecate(self, **kwargs):
+        if self.raise_db_error:
+            raise SQLAlchemyError("db")
+        self.calls.append(("action_deprecate", kwargs))
+        return {"status": "role-deprecated"}
 
 
 class _FakeRegistry:
@@ -114,8 +126,9 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
     """Covers helper functions and generic action endpoint dispatch branches."""
 
     async def test_helpers_and_provider_functions(self) -> None:
-        self.assertEqual(action_api._entity_name("ACP.User"), "User")  # pylint: disable=protected-access
-        self.assertEqual(action_api._entity_name("User"), "User")  # pylint: disable=protected-access
+        # pylint: disable=protected-access
+        self.assertEqual(action_api._entity_name("ACP.User"), "User")
+        self.assertEqual(action_api._entity_name("User"), "User")
 
         app = Quart("action_helpers_test")
         async with app.test_request_context(
@@ -123,21 +136,21 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
             method="POST",
             headers={"X-Request-Id": "req-1", "X-Correlation-Id": "corr-1"},
         ):
-            self.assertEqual(action_api._request_ids(), ("req-1", "corr-1"))  # pylint: disable=protected-access
+            self.assertEqual(action_api._request_ids(), ("req-1", "corr-1"))
 
         async with app.test_request_context(
             "/api/core/acp/v1/Things/$action/do",
             method="POST",
             headers={"X-Request-Id": "req-2", "X-Trace-Id": "trace-2"},
         ):
-            self.assertEqual(action_api._request_ids(), ("req-2", "trace-2"))  # pylint: disable=protected-access
+            self.assertEqual(action_api._request_ids(), ("req-2", "trace-2"))
 
         async with app.test_request_context(
             "/api/core/acp/v1/Things/$action/do",
             method="POST",
             headers={"X-Request-Id": "req-3"},
         ):
-            self.assertEqual(action_api._request_ids(), ("req-3", "req-3"))  # pylint: disable=protected-access
+            self.assertEqual(action_api._request_ids(), ("req-3", "req-3"))
 
         with patch.object(
             action_api.di,
@@ -147,8 +160,8 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
                 get_required_ext_service=lambda _key: "registry",
             ),
         ):
-            self.assertEqual(action_api._logger_provider(), "logger")  # pylint: disable=protected-access
-            self.assertEqual(action_api._registry_provider(), "registry")  # pylint: disable=protected-access
+            self.assertEqual(action_api._logger_provider(), "logger")
+            self.assertEqual(action_api._registry_provider(), "registry")
 
     async def test_dispatch_entity_set_action_paths(self) -> None:
         app = Quart("action_set_dispatch_test")
@@ -320,14 +333,16 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
             json={"row_version": 5},
         ):
             with patch.object(action_api, "emit_audit_event", new=AsyncMock()):
-                tenant_result = await action_api.dispatch_entity_action_tenant.__wrapped__(
-                    tenant_id=str(tenant_id),
-                    entity_set="Things",
-                    entity_id=str(entity_id),
-                    action="do",
-                    auth_user=str(auth_user),
-                    logger_provider=lambda: logger,
-                    registry_provider=lambda: tenant_registry,
+                tenant_result = (
+                    await action_api.dispatch_entity_action_tenant.__wrapped__(
+                        tenant_id=str(tenant_id),
+                        entity_set="Things",
+                        entity_id=str(entity_id),
+                        action="do",
+                        auth_user=str(auth_user),
+                        logger_provider=lambda: logger,
+                        registry_provider=lambda: tenant_registry,
+                    )
                 )
         self.assertEqual(tenant_result, {"status": "ok-tenant"})
 
@@ -378,6 +393,51 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(result, {"status": "tenant-deactivated"})
         self.assertEqual(service.calls[-1][0], "entity_action_deactivate")
+
+        permission_object_registry = _FakeRegistry(
+            has_tenant=False,
+            service=service,
+            actions={"deprecate": {"schema": _ActionPayload}},
+        )
+        async with app.test_request_context(
+            f"/api/core/acp/v1/PermissionObjects/{entity_id}/$action/deprecate",
+            method="POST",
+            json={"row_version": 1},
+        ):
+            with patch.object(action_api, "emit_audit_event", new=AsyncMock()):
+                result = await action_api.dispatch_entity_action.__wrapped__(
+                    entity_set="PermissionObjects",
+                    entity_id=str(entity_id),
+                    action="deprecate",
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: permission_object_registry,
+                )
+        self.assertEqual(result, {"status": "permission-object-deprecated"})
+        self.assertEqual(service.calls[-1][0], "entity_action_deprecate")
+
+        role_registry = _FakeRegistry(
+            has_tenant=True,
+            service=service,
+            actions={"deprecate": {"schema": _ActionPayload}},
+        )
+        async with app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Roles/{entity_id}/$action/deprecate",
+            method="POST",
+            json={"row_version": 2},
+        ):
+            with patch.object(action_api, "emit_audit_event", new=AsyncMock()):
+                result = await action_api.dispatch_entity_action_tenant.__wrapped__(
+                    tenant_id=str(tenant_id),
+                    entity_set="Roles",
+                    entity_id=str(entity_id),
+                    action="deprecate",
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: role_registry,
+                )
+        self.assertEqual(result, {"status": "role-deprecated"})
+        self.assertEqual(service.calls[-1][0], "action_deprecate")
 
         membership_registry = _FakeRegistry(
             has_tenant=True,

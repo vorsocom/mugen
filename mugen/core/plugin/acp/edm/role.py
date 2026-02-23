@@ -46,6 +46,10 @@ role_type = EdmType(
             "DisplayName",
             TypeRef("Edm.String"),
         ),
+        "Status": EdmProperty(
+            "Status",
+            TypeRef("Edm.String"),
+        ),
     },
     nav_properties={
         "Tenant": EdmNavigationProperty(

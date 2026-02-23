@@ -2,14 +2,25 @@
 
 __all__ = ["Role"]
 
+import enum
 from typing import List
 
 from sqlalchemy import CheckConstraint, UniqueConstraint
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import CITEXT
+from sqlalchemy.dialects.postgresql import ENUM as PGENUM
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+
+
+class RoleStatus(str, enum.Enum):
+    """Role status enum values."""
+
+    ACTIVE = "active"
+
+    DEPRECATED = "deprecated"
 
 
 # pylint: disable=too-few-public-methods
@@ -33,6 +44,18 @@ class Role(ModelBase, TenantScopedMixin):
         CITEXT(128),
         nullable=False,
         index=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        PGENUM(
+            RoleStatus,
+            name="admin_role_status",
+            values_callable=lambda items: [item.value for item in items],
+            create_type=True,
+        ),
+        nullable=False,
+        index=True,
+        server_default=sa_text("'active'"),
     )
 
     tenant: Mapped["Tenant"] = relationship(  # type: ignore

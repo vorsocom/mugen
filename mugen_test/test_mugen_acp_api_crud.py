@@ -260,6 +260,27 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertEqual(ex.exception.code, 400)
 
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._reject_action_only_status_patch(
+                    resource=_resource(edm_type_name="ACP.Role"),
+                    data={"Status": "deprecated"},
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._reject_action_only_status_patch(
+                    resource=_resource(edm_type_name="ACP.PermissionObject"),
+                    data={"Status": "deprecated"},
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._reject_action_only_status_patch(
+                    resource=_resource(edm_type_name="ACP.PermissionType"),
+                    data={"status": "deprecated"},
+                )
+            self.assertEqual(ex.exception.code, 400)
+
             crud_mod._reject_action_only_status_patch(
                 resource=_resource(edm_type_name="ACP.User"),
                 data={"Status": "active"},
@@ -714,6 +735,54 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(ex.exception.code, 400)
 
+        permission_object_resource_registry = _FakeRegistry(
+            resource=_resource(
+                update_schema=("Name", "Status"),
+                edm_type_name="ACP.PermissionObject",
+            ),
+            service=svc,
+            tenant_scoped=False,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/PermissionObjects/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 9, "Status": "deprecated"},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="PermissionObjects",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: permission_object_resource_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        permission_type_resource_registry = _FakeRegistry(
+            resource=_resource(
+                update_schema=("Name", "Status"),
+                edm_type_name="ACP.PermissionType",
+            ),
+            service=svc,
+            tenant_scoped=False,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/PermissionTypes/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 9, "Status": "deprecated"},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="PermissionTypes",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: permission_type_resource_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
         membership_resource_registry = _FakeRegistry(
             resource=_resource(
                 update_schema=("RoleInTenant", "Status"),
@@ -736,6 +805,31 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                         auth_user=str(actor_id),
                         logger_provider=_logger,
                         registry_provider=lambda: membership_resource_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        role_resource_registry = _FakeRegistry(
+            resource=_resource(
+                update_schema=("DisplayName", "Status"),
+                edm_type_name="ACP.Role",
+            ),
+            service=svc,
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Roles/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 8, "Status": "deprecated"},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Roles",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: role_resource_registry,
                     )
                 self.assertEqual(ex.exception.code, 400)
 

@@ -260,6 +260,16 @@ def contribute(
             "allow_delete": False,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "actions": {
+                "deprecate": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                },
+                "reactivate": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                },
+            },
         },
         {
             "set": "PermissionTypes",
@@ -270,6 +280,16 @@ def contribute(
             "allow_delete": False,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "actions": {
+                "deprecate": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                },
+                "reactivate": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                },
+            },
         },
         {
             "set": "Persons",
@@ -309,6 +329,16 @@ def contribute(
             "allow_delete": False,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "actions": {
+                "deprecate": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                },
+                "reactivate": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                },
+            },
         },
         {
             "set": "RoleMemberships",
