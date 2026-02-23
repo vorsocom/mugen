@@ -504,6 +504,25 @@ if [[ -z "$tenant_id" ]]; then
 fi
 
 if [[ -z "$tenant_id" ]]; then
+  resolve_tenant_id_by_slug() {
+    local slug="$1"
+    local tenant_result
+    local resolved_tenant_id=""
+
+    for _ in $(seq 1 20); do
+      tenant_result="$(curl -sk -H "$admin_auth_header" "$base_url/Tenants")"
+      resolved_tenant_id="$(echo "$tenant_result" | jq -r --arg slug "$slug" \
+        '.value[] | select(.Slug == $slug) | .Id' | tail -n 1)"
+      if [[ -n "$resolved_tenant_id" ]]; then
+        echo "$resolved_tenant_id"
+        return 0
+      fi
+      sleep 0.5
+    done
+
+    return 1
+  }
+
   tenant_suffix="$(date +%Y%m%d%H%M%S)"
   tenant_slug="e2e-invite-${tenant_suffix}"
   tenant_payload="$(jq -cn \
@@ -523,6 +542,13 @@ if [[ -z "$tenant_id" ]]; then
     exit 1
   fi
   tenant_id="$(jq -r '.Id // empty' "$tmp_dir/create_tenant.out")"
+  if [[ -z "$tenant_id" ]]; then
+    if ! tenant_id="$(resolve_tenant_id_by_slug "$tenant_slug")"; then
+      echo "ERROR: tenant bootstrap returned 201 but tenant lookup by slug failed." >&2
+      cat "$tmp_dir/create_tenant.out" >&2 || true
+      exit 1
+    fi
+  fi
 fi
 
 if [[ -z "$tenant_id" ]]; then
