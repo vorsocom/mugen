@@ -4,15 +4,18 @@ __all__ = ["RefreshTokenService"]
 
 import uuid
 from types import SimpleNamespace
+from typing import Any
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
+from quart import abort
 from sqlalchemy.exc import SQLAlchemyError
 
 from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
+from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.contract.service import IRefreshTokenService
 from mugen.core.plugin.acp.domain import RefreshTokenDE
 
@@ -82,3 +85,20 @@ class RefreshTokenService(
         except VerificationError:
             self._logger.error("Token hash verification error.")
             return False
+
+    async def entity_action_revoke(
+        self,
+        entity_id: uuid.UUID,
+        auth_user_id: uuid.UUID,  # noqa: ARG002
+        data: IValidationBase,  # noqa: ARG002
+    ) -> tuple[dict[str, Any], int]:
+        """Revoke a refresh token."""
+        try:
+            deleted = await self.delete({"id": entity_id})
+        except SQLAlchemyError:
+            abort(500)
+
+        if deleted is None:
+            abort(404, "Refresh token not found.")
+
+        return "", 204

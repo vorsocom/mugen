@@ -94,6 +94,12 @@ class _FakeService:
         self.calls.append(("action_deprecate", kwargs))
         return {"status": "role-deprecated"}
 
+    async def entity_action_revoke(self, **kwargs):
+        if self.raise_db_error:
+            raise SQLAlchemyError("db")
+        self.calls.append(("entity_action_revoke", kwargs))
+        return {"status": "refresh-token-revoked"}
+
 
 class _FakeRegistry:
     def __init__(
@@ -415,6 +421,28 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(result, {"status": "permission-object-deprecated"})
         self.assertEqual(service.calls[-1][0], "entity_action_deprecate")
+
+        refresh_token_registry = _FakeRegistry(
+            has_tenant=False,
+            service=service,
+            actions={"revoke": {"schema": _ActionPayload}},
+        )
+        async with app.test_request_context(
+            f"/api/core/acp/v1/RefreshTokens/{entity_id}/$action/revoke",
+            method="POST",
+            json={"row_version": 1},
+        ):
+            with patch.object(action_api, "emit_audit_event", new=AsyncMock()):
+                result = await action_api.dispatch_entity_action.__wrapped__(
+                    entity_set="RefreshTokens",
+                    entity_id=str(entity_id),
+                    action="revoke",
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: refresh_token_registry,
+                )
+        self.assertEqual(result, {"status": "refresh-token-revoked"})
+        self.assertEqual(service.calls[-1][0], "entity_action_revoke")
 
         role_registry = _FakeRegistry(
             has_tenant=True,
