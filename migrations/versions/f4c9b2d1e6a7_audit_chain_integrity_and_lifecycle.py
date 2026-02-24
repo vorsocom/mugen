@@ -1,7 +1,7 @@
 """audit chain integrity and lifecycle controls
 
 Revision ID: f4c9b2d1e6a7
-Revises: 8f0c1d2e3a4b
+Revises: df918b0b6284
 Create Date: 2026-02-24 15:20:00.000000
 
 """
@@ -16,7 +16,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "f4c9b2d1e6a7"
-down_revision: Union[str, None] = "8f0c1d2e3a4b"
+down_revision: Union[str, None] = "df918b0b6284"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
