@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 from quart import abort, request
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from mugen.core import di
 from mugen.core.api import api
@@ -186,6 +186,129 @@ def _reject_action_only_status_patch(
         )
 
 
+def _reject_rbac_immutable_patch_fields(
+    *,
+    resource: Any,
+    data: dict[str, Any],
+) -> None:
+    """Block PATCH updates to immutable RBAC identity or binding fields."""
+    if resource.edm_type_name in {"ACP.Role", "ACP.GlobalRole"}:
+        if any(key in data for key in ("Namespace", "namespace", "Name", "name")):
+            abort(
+                400,
+                (
+                    "Namespace and Name are immutable for role resources. "
+                    "Create a new role when changing role keys."
+                ),
+            )
+        return
+
+    if resource.edm_type_name == "ACP.PermissionEntry":
+        if any(
+            key in data
+            for key in (
+                "RoleId",
+                "role_id",
+                "PermissionObjectId",
+                "permission_object_id",
+                "PermissionTypeId",
+                "permission_type_id",
+            )
+        ):
+            abort(
+                400,
+                (
+                    "Permission entry role/object/type bindings are immutable. "
+                    "Delete and recreate the entry to rebind."
+                ),
+            )
+        return
+
+    if resource.edm_type_name == "ACP.GlobalPermissionEntry":
+        if any(
+            key in data
+            for key in (
+                "GlobalRoleId",
+                "global_role_id",
+                "PermissionObjectId",
+                "permission_object_id",
+                "PermissionTypeId",
+                "permission_type_id",
+            )
+        ):
+            abort(
+                400,
+                (
+                    "Global permission entry role/object/type bindings are immutable. "
+                    "Delete and recreate the entry to rebind."
+                ),
+            )
+
+
+def _integrity_sql_state(error: IntegrityError) -> str | None:
+    """Extract SQLSTATE code from SQLAlchemy IntegrityError if available."""
+    orig = getattr(error, "orig", None)
+    if orig is None:
+        return None
+
+    pgcode = getattr(orig, "pgcode", None)
+    if isinstance(pgcode, str):
+        return pgcode
+
+    sqlstate = getattr(orig, "sqlstate", None)
+    if isinstance(sqlstate, str):
+        return sqlstate
+
+    diag = getattr(orig, "diag", None)
+    if diag is None:
+        return None
+
+    diag_state = getattr(diag, "sqlstate", None)
+    if isinstance(diag_state, str):
+        return diag_state
+
+    return None
+
+
+def _classify_integrity_error(error: IntegrityError) -> tuple[int, str]:
+    """Map DB integrity errors to API status codes."""
+    sql_state = _integrity_sql_state(error)
+    if sql_state == "23505":
+        return 409, "Conflict with an existing resource."
+
+    if sql_state in {"23502", "23503", "23514", "22P02"}:
+        return 400, "Payload violates relational constraints."
+
+    error_text = f"{error}".lower()
+    if "duplicate key value" in error_text or "unique constraint" in error_text:
+        return 409, "Conflict with an existing resource."
+
+    if (
+        "foreign key constraint" in error_text
+        or "null value in column" in error_text
+        or "not-null constraint" in error_text
+        or "violates check constraint" in error_text
+        or "invalid input syntax" in error_text
+    ):
+        return 400, "Payload violates relational constraints."
+
+    return 500, "Unexpected database integrity error."
+
+
+def _classify_create_update_error(
+    error: SQLAlchemyError,
+) -> tuple[str, int, str | None]:
+    """Classify SQLAlchemy create/update errors into audit outcome + HTTP status."""
+    if isinstance(error, IntegrityError):
+        status, message = _classify_integrity_error(error)
+        if status == 409:
+            return "conflict", status, message
+        if status == 400:
+            return "invalid", status, message
+
+    return "error", 500, None
+
+
 @api.get("core/acp/v1/<entity_set>/<entity_id>")
 @api.get("core/acp/v1/<entity_set>", defaults={"entity_id": None})
 @permission_required(permission_type=":read")
@@ -302,19 +425,22 @@ async def create_entity(
         created = await svc.create(create_data)
     except SQLAlchemyError as e:
         logger.error(e)
+        outcome, status_code, message = _classify_create_update_error(e)
         await emit_audit_event(
             registry=registry,
             entity_set=entity_set,
             entity=entity,
             operation="create",
-            outcome="error",
+            outcome=outcome,
             source_plugin=resource.namespace,
             actor_id=actor_id,
             changed_fields=list(create_data.keys()),
             request_id=request_id,
             correlation_id=correlation_id,
         )
-        abort(500)
+        if message is None:
+            abort(status_code)
+        abort(status_code, message)
 
     await emit_audit_event(
         registry=registry,
@@ -397,12 +523,13 @@ async def create_entity_tenant(
         created = await svc.create(create_data)
     except SQLAlchemyError as e:
         logger.error(e)
+        outcome, status_code, message = _classify_create_update_error(e)
         await emit_audit_event(
             registry=registry,
             entity_set=entity_set,
             entity=entity,
             operation="create",
-            outcome="error",
+            outcome=outcome,
             source_plugin=resource.namespace,
             actor_id=actor_id,
             tenant_id=tenant_uuid,
@@ -410,7 +537,9 @@ async def create_entity_tenant(
             request_id=request_id,
             correlation_id=correlation_id,
         )
-        abort(500)
+        if message is None:
+            abort(status_code)
+        abort(status_code, message)
 
     await emit_audit_event(
         registry=registry,
@@ -464,6 +593,7 @@ async def update_entity(
     resource = registry.get_resource(entity_set)
     entity = _entity_name(resource.edm_type_name)
     _reject_action_only_status_patch(resource=resource, data=data)
+    _reject_rbac_immutable_patch_fields(resource=resource, data=data)
 
     update_data = _build_update_data(
         data,
@@ -506,20 +636,23 @@ async def update_entity(
         abort(409, "RowVersion conflict. Refresh and retry.")
     except SQLAlchemyError as e:
         logger.error(e)
+        outcome, status_code, message = _classify_create_update_error(e)
         await emit_audit_event(
             registry=registry,
             entity_set=entity_set,
             entity=entity,
             entity_id=entity_uuid,
             operation="update",
-            outcome="error",
+            outcome=outcome,
             source_plugin=resource.namespace,
             actor_id=actor_id,
             changed_fields=list(update_data.keys()),
             request_id=request_id,
             correlation_id=correlation_id,
         )
-        abort(500)
+        if message is None:
+            abort(status_code)
+        abort(status_code, message)
 
     if updated is None:
         await emit_audit_event(
@@ -593,6 +726,7 @@ async def update_entity_tenant(
         logger.debug("`data` is not a dict.")
         abort(400)
     _reject_action_only_status_patch(resource=resource, data=data)
+    _reject_rbac_immutable_patch_fields(resource=resource, data=data)
 
     if "TenantId" in data or "tenant_id" in data:
         abort(400, "TenantId is not mutable via this endpoint.")
@@ -651,13 +785,14 @@ async def update_entity_tenant(
         abort(409, "RowVersion conflict. Refresh and retry.")
     except SQLAlchemyError as e:
         logger.error(e)
+        outcome, status_code, message = _classify_create_update_error(e)
         await emit_audit_event(
             registry=registry,
             entity_set=entity_set,
             entity=entity,
             entity_id=entity_uuid,
             operation="update",
-            outcome="error",
+            outcome=outcome,
             source_plugin=resource.namespace,
             actor_id=actor_id,
             tenant_id=tenant_uuid,
@@ -665,7 +800,9 @@ async def update_entity_tenant(
             request_id=request_id,
             correlation_id=correlation_id,
         )
-        abort(500)
+        if message is None:
+            abort(status_code)
+        abort(status_code, message)
 
     if updated is None:
         await emit_audit_event(

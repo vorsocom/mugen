@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from pydantic import BaseModel
 from quart import Quart
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 
 def _bootstrap_namespace_packages() -> None:
@@ -164,6 +164,128 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(crud_mod._entity_name("ACP.User"), "User")
         self.assertEqual(crud_mod._entity_name("User"), "User")
 
+        duplicate_error = IntegrityError(
+            "insert into t values (?)",
+            {"id": 1},
+            Exception("duplicate key value violates unique constraint"),
+            None,
+        )
+        status_code, _ = crud_mod._classify_integrity_error(duplicate_error)
+        self.assertEqual(status_code, 409)
+
+        foreign_key_error = IntegrityError(
+            "insert into t values (?)",
+            {"id": 1},
+            Exception("insert violates foreign key constraint"),
+            None,
+        )
+        status_code, _ = crud_mod._classify_integrity_error(foreign_key_error)
+        self.assertEqual(status_code, 400)
+
+        pgcode_error = IntegrityError(
+            "insert into t values (?)",
+            {"id": 1},
+            Exception("unexpected"),
+            None,
+        )
+        pgcode_error.orig = SimpleNamespace(pgcode="23505")
+        self.assertEqual(crud_mod._integrity_sql_state(pgcode_error), "23505")
+        status_code, _ = crud_mod._classify_integrity_error(pgcode_error)
+        self.assertEqual(status_code, 409)
+
+        sqlstate_error = IntegrityError(
+            "insert into t values (?)",
+            {"id": 1},
+            Exception("unexpected"),
+            None,
+        )
+        sqlstate_error.orig = SimpleNamespace(sqlstate="23503")
+        self.assertEqual(crud_mod._integrity_sql_state(sqlstate_error), "23503")
+        status_code, _ = crud_mod._classify_integrity_error(sqlstate_error)
+        self.assertEqual(status_code, 400)
+
+        diag_sqlstate_error = IntegrityError(
+            "insert into t values (?)",
+            {"id": 1},
+            Exception("unexpected"),
+            None,
+        )
+        diag_sqlstate_error.orig = SimpleNamespace(
+            pgcode=None,
+            sqlstate=None,
+            diag=SimpleNamespace(sqlstate="23514"),
+        )
+        self.assertEqual(crud_mod._integrity_sql_state(diag_sqlstate_error), "23514")
+
+        diag_missing_error = IntegrityError(
+            "insert into t values (?)",
+            {"id": 1},
+            Exception("unexpected"),
+            None,
+        )
+        diag_missing_error.orig = SimpleNamespace(pgcode=None, sqlstate=None, diag=None)
+        self.assertIsNone(crud_mod._integrity_sql_state(diag_missing_error))
+
+        diag_non_str_error = IntegrityError(
+            "insert into t values (?)",
+            {"id": 1},
+            Exception("unexpected"),
+            None,
+        )
+        diag_non_str_error.orig = SimpleNamespace(
+            pgcode=None,
+            sqlstate=None,
+            diag=SimpleNamespace(sqlstate=12345),
+        )
+        self.assertIsNone(crud_mod._integrity_sql_state(diag_non_str_error))
+
+        no_orig_error = IntegrityError(
+            "insert into t values (?)",
+            {"id": 1},
+            Exception("unexpected"),
+            None,
+        )
+        no_orig_error.orig = None
+        self.assertIsNone(crud_mod._integrity_sql_state(no_orig_error))
+
+        unknown_integrity_error = IntegrityError(
+            "insert into t values (?)",
+            {"id": 1},
+            Exception("unexpected integrity failure"),
+            None,
+        )
+        unknown_integrity_error.orig = SimpleNamespace(
+            pgcode=None,
+            sqlstate=None,
+            diag=SimpleNamespace(sqlstate=None),
+        )
+        status_code, _ = crud_mod._classify_integrity_error(unknown_integrity_error)
+        self.assertEqual(status_code, 500)
+
+        outcome, status_code, _ = crud_mod._classify_create_update_error(
+            duplicate_error
+        )
+        self.assertEqual(outcome, "conflict")
+        self.assertEqual(status_code, 409)
+
+        outcome, status_code, _ = crud_mod._classify_create_update_error(
+            foreign_key_error
+        )
+        self.assertEqual(outcome, "invalid")
+        self.assertEqual(status_code, 400)
+
+        outcome, status_code, _ = crud_mod._classify_create_update_error(
+            unknown_integrity_error
+        )
+        self.assertEqual(outcome, "error")
+        self.assertEqual(status_code, 500)
+
+        outcome, status_code, _ = crud_mod._classify_create_update_error(
+            SQLAlchemyError("boom")
+        )
+        self.assertEqual(outcome, "error")
+        self.assertEqual(status_code, 500)
+
     async def test_request_ids_and_build_create_data_paths(self) -> None:
         async with self.app.test_request_context(
             "/api/core/acp/v1/Users",
@@ -281,9 +403,57 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertEqual(ex.exception.code, 400)
 
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._reject_rbac_immutable_patch_fields(
+                    resource=_resource(edm_type_name="ACP.GlobalRole"),
+                    data={"Name": "new-name"},
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._reject_rbac_immutable_patch_fields(
+                    resource=_resource(edm_type_name="ACP.Role"),
+                    data={"namespace": "new-namespace"},
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._reject_rbac_immutable_patch_fields(
+                    resource=_resource(edm_type_name="ACP.GlobalPermissionEntry"),
+                    data={"PermissionObjectId": str(uuid.uuid4())},
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._reject_rbac_immutable_patch_fields(
+                    resource=_resource(edm_type_name="ACP.PermissionEntry"),
+                    data={"role_id": str(uuid.uuid4())},
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            crud_mod._reject_rbac_immutable_patch_fields(
+                resource=_resource(edm_type_name="ACP.Role"),
+                data={"DisplayName": "Allowed"},
+            )
+
+            crud_mod._reject_rbac_immutable_patch_fields(
+                resource=_resource(edm_type_name="ACP.PermissionEntry"),
+                data={"Permitted": True},
+            )
+
+            crud_mod._reject_rbac_immutable_patch_fields(
+                resource=_resource(edm_type_name="ACP.GlobalPermissionEntry"),
+                data={"Permitted": False},
+            )
+
             crud_mod._reject_action_only_status_patch(
                 resource=_resource(edm_type_name="ACP.User"),
                 data={"Status": "active"},
+            )
+
+            crud_mod._reject_rbac_immutable_patch_fields(
+                resource=_resource(edm_type_name="ACP.User"),
+                data={"Name": "Allowed"},
             )
 
     async def test_get_entities_and_get_entities_tenant_paths(self) -> None:
@@ -471,6 +641,72 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ex.exception.code, 500)
         self.assertEqual(emit.await_args.kwargs["outcome"], "error")
 
+        unique_registry = _FakeRegistry(
+            resource=_resource(create_schema=("Name",)),
+            service=SimpleNamespace(
+                create=AsyncMock(
+                    side_effect=IntegrityError(
+                        "insert",
+                        {"name": "Alice"},
+                        Exception("duplicate key value violates unique constraint"),
+                        None,
+                    )
+                )
+            ),
+        )
+        emit = AsyncMock(return_value=None)
+        async with self.app.test_request_context(
+            "/api/core/acp/v1/Users",
+            method="POST",
+            json={"Name": "Alice"},
+        ):
+            with (
+                patch.object(crud_mod, "emit_audit_event", new=emit),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_fn(
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: unique_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+        self.assertEqual(emit.await_args.kwargs["outcome"], "conflict")
+
+        invalid_registry = _FakeRegistry(
+            resource=_resource(create_schema=("Name",)),
+            service=SimpleNamespace(
+                create=AsyncMock(
+                    side_effect=IntegrityError(
+                        "insert",
+                        {"name": "Alice"},
+                        Exception("insert violates foreign key constraint"),
+                        None,
+                    )
+                )
+            ),
+        )
+        emit = AsyncMock(return_value=None)
+        async with self.app.test_request_context(
+            "/api/core/acp/v1/Users",
+            method="POST",
+            json={"Name": "Alice"},
+        ):
+            with (
+                patch.object(crud_mod, "emit_audit_event", new=emit),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_fn(
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: invalid_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+        self.assertEqual(emit.await_args.kwargs["outcome"], "invalid")
+
     async def test_create_entity_tenant_paths(self) -> None:
         tenant_id = uuid.uuid4()
         actor_id = uuid.uuid4()
@@ -592,6 +828,43 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(ex.exception.code, 400)
 
+        integrity_registry = _FakeRegistry(
+            resource=_resource(create_schema=("TenantId", "Name")),
+            service=SimpleNamespace(
+                create=AsyncMock(
+                    side_effect=IntegrityError(
+                        "insert",
+                        {"name": "Alice"},
+                        Exception("duplicate key value violates unique constraint"),
+                        None,
+                    )
+                )
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+            method="POST",
+            json={"Name": "Alice"},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await create_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: integrity_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+
     async def test_update_entity_and_update_entity_tenant_paths(self) -> None:
         entity_id = uuid.uuid4()
         tenant_id = uuid.uuid4()
@@ -674,6 +947,78 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                         registry_provider=lambda: conflict_registry,
                     )
                 self.assertEqual(ex.exception.code, 409)
+
+        integrity_conflict_registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=before),
+                update_with_row_version=AsyncMock(
+                    side_effect=IntegrityError(
+                        "update",
+                        {"display_name": "new"},
+                        Exception("duplicate key value violates unique constraint"),
+                        None,
+                    )
+                ),
+            ),
+            tenant_scoped=True,
+        )
+        emit = AsyncMock(return_value=None)
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 7, "DisplayName": "new"},
+        ):
+            with (
+                patch.object(crud_mod, "emit_audit_event", new=emit),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: integrity_conflict_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
+        self.assertEqual(emit.await_args.kwargs["outcome"], "conflict")
+
+        integrity_invalid_registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=before),
+                update_with_row_version=AsyncMock(
+                    side_effect=IntegrityError(
+                        "update",
+                        {"display_name": "new"},
+                        Exception("update violates foreign key constraint"),
+                        None,
+                    )
+                ),
+            ),
+            tenant_scoped=True,
+        )
+        emit = AsyncMock(return_value=None)
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 7, "DisplayName": "new"},
+        ):
+            with (
+                patch.object(crud_mod, "emit_audit_event", new=emit),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: integrity_invalid_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+        self.assertEqual(emit.await_args.kwargs["outcome"], "invalid")
 
         update_tenant_fn = crud_mod.update_entity_tenant.__wrapped__
         async with self.app.test_request_context(
@@ -830,6 +1175,104 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                         auth_user=str(actor_id),
                         logger_provider=_logger,
                         registry_provider=lambda: role_resource_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        global_role_resource_registry = _FakeRegistry(
+            resource=_resource(
+                update_schema=("DisplayName",),
+                edm_type_name="ACP.GlobalRole",
+            ),
+            service=svc,
+            tenant_scoped=False,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/GlobalRoles/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 9, "Name": "renamed"},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="GlobalRoles",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: global_role_resource_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        role_key_resource_registry = _FakeRegistry(
+            resource=_resource(
+                update_schema=("DisplayName",),
+                edm_type_name="ACP.Role",
+            ),
+            service=svc,
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Roles/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 8, "Namespace": "changed"},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Roles",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: role_key_resource_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        permission_entry_resource_registry = _FakeRegistry(
+            resource=_resource(
+                update_schema=("Permitted",),
+                edm_type_name="ACP.PermissionEntry",
+            ),
+            service=svc,
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/PermissionEntries/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 8, "RoleId": str(uuid.uuid4())},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="PermissionEntries",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: permission_entry_resource_registry,
+                    )
+                self.assertEqual(ex.exception.code, 400)
+
+        global_permission_entry_resource_registry = _FakeRegistry(
+            resource=_resource(
+                update_schema=("Permitted",),
+                edm_type_name="ACP.GlobalPermissionEntry",
+            ),
+            service=svc,
+            tenant_scoped=False,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/GlobalPermissionEntries/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 8, "GlobalRoleId": str(uuid.uuid4())},
+        ):
+            with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_fn(
+                        entity_set="GlobalPermissionEntries",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: global_permission_entry_resource_registry,
                     )
                 self.assertEqual(ex.exception.code, 400)
 
@@ -1273,6 +1716,46 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                         registry_provider=lambda: sql_error_registry,
                     )
                 self.assertEqual(ex.exception.code, 500)
+
+        update_tenant_fn = crud_mod.update_entity_tenant.__wrapped__
+        integrity_error_registry = _FakeRegistry(
+            resource=_resource(update_schema=("DisplayName",)),
+            service=SimpleNamespace(
+                get=AsyncMock(return_value=SimpleNamespace(id=entity_id)),
+                update_with_row_version=AsyncMock(
+                    side_effect=IntegrityError(
+                        "update",
+                        {"display_name": "new"},
+                        Exception("duplicate key value violates unique constraint"),
+                        None,
+                    )
+                ),
+            ),
+            tenant_scoped=True,
+        )
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{entity_id}",
+            method="PATCH",
+            json={"RowVersion": 1, "DisplayName": "new"},
+        ):
+            with (
+                patch.object(
+                    crud_mod,
+                    "emit_audit_event",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(crud_mod, "abort", side_effect=_abort_raiser),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await update_tenant_fn(
+                        tenant_id=str(tenant_id),
+                        entity_set="Users",
+                        entity_id=str(entity_id),
+                        auth_user=str(actor_id),
+                        logger_provider=_logger,
+                        registry_provider=lambda: integrity_error_registry,
+                    )
+                self.assertEqual(ex.exception.code, 409)
 
         not_found_registry = _FakeRegistry(
             resource=_resource(update_schema=("DisplayName",)),

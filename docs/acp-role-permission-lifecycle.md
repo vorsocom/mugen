@@ -1,7 +1,7 @@
 # ACP Role and Permission Lifecycle
 
 Status: Draft  
-Last Updated: 2026-02-23
+Last Updated: 2026-02-24
 
 ## Scope
 
@@ -54,6 +54,42 @@ Direct PATCH writes to `Status` are rejected with `400` for:
 - `ACP.PermissionType`
 
 Use lifecycle actions instead.
+
+## RBAC CRUD Mutability Boundaries
+
+The RBAC CRUD surface is intentionally narrow to keep identity keys stable.
+
+- `GlobalRoles`
+  - create: `Namespace`, `Name`, `DisplayName`
+  - patch: `DisplayName` only (`RowVersion` required)
+  - `Namespace` / `Name` are immutable and PATCH attempts return `400`
+- `Roles` (tenant-scoped)
+  - create: `Namespace`, `Name`, `DisplayName` (`TenantId` is path-controlled)
+  - patch: `DisplayName` only (`RowVersion` required)
+  - `Namespace` / `Name` are immutable and PATCH attempts return `400`
+- `PermissionObjects`
+  - create: `Namespace`, `Name`
+  - patch: disabled (`405`) to keep taxonomy keys immutable
+- `PermissionTypes`
+  - create: `Namespace`, `Name`
+  - patch: disabled (`405`) to keep taxonomy keys immutable
+- `GlobalPermissionEntries`
+  - create: `GlobalRoleId`, `PermissionObjectId`, `PermissionTypeId`, `Permitted`
+  - patch: `Permitted` only (`RowVersion` required)
+  - role/object/type rebinding fields are immutable and PATCH attempts return `400`
+- `PermissionEntries` (tenant-scoped)
+  - create: `RoleId`, `PermissionObjectId`, `PermissionTypeId`, `Permitted`
+    (`TenantId` is path-controlled)
+  - patch: `Permitted` only (`RowVersion` required)
+  - role/object/type rebinding fields are immutable and PATCH attempts return `400`
+
+## Constraint Error Semantics
+
+For RBAC create/update operations:
+
+- malformed/invalid payload validation returns `400`
+- DB unique conflicts return `409`
+- DB FK/not-null/check/input-reference integrity violations return `400`
 
 ## Core Taxonomy Delete Policy
 
