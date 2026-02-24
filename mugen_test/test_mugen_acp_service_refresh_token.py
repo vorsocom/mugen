@@ -14,6 +14,17 @@ from mugen.core.plugin.acp.service import refresh_token as refresh_token_module
 from mugen.core.plugin.acp.service.refresh_token import RefreshTokenService
 
 
+class _AbortCalled(Exception):
+    def __init__(self, code: int, message: str | None = None):
+        super().__init__(code, message)
+        self.code = code
+        self.message = message
+
+
+def _abort_raiser(code: int, message: str | None = None):
+    raise _AbortCalled(code, message)
+
+
 def _config() -> SimpleNamespace:
     return SimpleNamespace(
         acp=SimpleNamespace(
@@ -39,8 +50,14 @@ class TestMugenAcpServiceRefreshToken(unittest.IsolatedAsyncioTestCase):
             "container",
             new=SimpleNamespace(config=fake_config, logging_gateway=fake_logger),
         ):
-            self.assertIs(refresh_token_module._config_provider(), fake_config)  # pylint: disable=protected-access
-            self.assertIs(refresh_token_module._logger_provider(), fake_logger)  # pylint: disable=protected-access
+            self.assertIs(  # pylint: disable=protected-access
+                refresh_token_module._config_provider(),
+                fake_config,
+            )
+            self.assertIs(  # pylint: disable=protected-access
+                refresh_token_module._logger_provider(),
+                fake_logger,
+            )
 
     def _new_service(self):
         svc = RefreshTokenService(
@@ -78,9 +95,15 @@ class TestMugenAcpServiceRefreshToken(unittest.IsolatedAsyncioTestCase):
             hash=Mock(return_value="rehash-2"),
         )
         svc.update = AsyncMock(side_effect=SQLAlchemyError("db-issue"))
-        ok_rehash_fail = await svc.verify_refresh_token_hash("hash", "token", uuid.uuid4())
+        ok_rehash_fail = await svc.verify_refresh_token_hash(
+            "hash",
+            "token",
+            uuid.uuid4(),
+        )
         self.assertTrue(ok_rehash_fail)
-        svc._logger.debug.assert_called_with("Could not rehash token")  # pylint: disable=protected-access
+        svc._logger.debug.assert_called_with(  # pylint: disable=protected-access
+            "Could not rehash token"
+        )
 
         svc._ph = SimpleNamespace(  # pylint: disable=protected-access
             verify=Mock(side_effect=VerificationError("bad")),
@@ -88,4 +111,40 @@ class TestMugenAcpServiceRefreshToken(unittest.IsolatedAsyncioTestCase):
         )
         failed = await svc.verify_refresh_token_hash("hash", "token", uuid.uuid4())
         self.assertFalse(failed)
-        svc._logger.error.assert_called_with("Token hash verification error.")  # pylint: disable=protected-access
+        svc._logger.error.assert_called_with(  # pylint: disable=protected-access
+            "Token hash verification error."
+        )
+
+    async def test_entity_action_revoke_paths(self) -> None:
+        svc = self._new_service()
+        entity_id = uuid.uuid4()
+        auth_user_id = uuid.uuid4()
+
+        svc.delete = AsyncMock(return_value=SimpleNamespace(id=entity_id))
+        payload, status = await svc.entity_action_revoke(
+            entity_id=entity_id,
+            auth_user_id=auth_user_id,
+            data=SimpleNamespace(),
+        )
+        self.assertEqual((payload, status), ("", 204))
+        svc.delete.assert_awaited_once_with({"id": entity_id})
+
+        with patch.object(refresh_token_module, "abort", side_effect=_abort_raiser):
+            svc.delete = AsyncMock(return_value=None)
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc.entity_action_revoke(
+                    entity_id=entity_id,
+                    auth_user_id=auth_user_id,
+                    data=SimpleNamespace(),
+                )
+            self.assertEqual(ex.exception.code, 404)
+            self.assertEqual(ex.exception.message, "Refresh token not found.")
+
+            svc.delete = AsyncMock(side_effect=SQLAlchemyError("db"))
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc.entity_action_revoke(
+                    entity_id=entity_id,
+                    auth_user_id=auth_user_id,
+                    data=SimpleNamespace(),
+                )
+            self.assertEqual(ex.exception.code, 500)
