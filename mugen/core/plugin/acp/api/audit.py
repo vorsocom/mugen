@@ -190,4 +190,7 @@ async def emit_audit_event(
     try:
         await audit_svc.create(record)
     except Exception as exc:  # pylint: disable=broad-except
+        emit_cfg = getattr(getattr(config, "audit", SimpleNamespace()), "emit", None)
+        if bool(getattr(emit_cfg, "fail_closed", False)):
+            raise
         logger.debug(f"Failed to emit audit event: {exc}")

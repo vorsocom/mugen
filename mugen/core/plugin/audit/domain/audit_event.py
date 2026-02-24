@@ -36,7 +36,28 @@ class AuditEventDE(BaseDE):
     after_snapshot: dict[str, Any] | None = None
     meta: dict[str, Any] | None = None
 
+    scope_key: str | None = None
+    scope_seq: int | None = None
+    prev_entry_hash: str | None = None
+    entry_hash: str | None = None
+    hash_alg: str | None = None
+    hash_key_id: str | None = None
+    before_snapshot_hash: str | None = None
+    after_snapshot_hash: str | None = None
+    sealed_at: datetime | None = None
+
     retention_until: datetime | None = None
     redaction_due_at: datetime | None = None
     redacted_at: datetime | None = None
     redaction_reason: str | None = None
+    legal_hold_at: datetime | None = None
+    legal_hold_until: datetime | None = None
+    legal_hold_by_user_id: uuid.UUID | None = None
+    legal_hold_reason: str | None = None
+    legal_hold_released_at: datetime | None = None
+    legal_hold_released_by_user_id: uuid.UUID | None = None
+    legal_hold_release_reason: str | None = None
+    tombstoned_at: datetime | None = None
+    tombstoned_by_user_id: uuid.UUID | None = None
+    tombstone_reason: str | None = None
+    purge_due_at: datetime | None = None

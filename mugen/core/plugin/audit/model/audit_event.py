@@ -5,7 +5,7 @@ __all__ = ["AuditEvent"]
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Uuid
+from sqlalchemy import BigInteger, DateTime, Index, Uuid
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -65,6 +65,32 @@ class AuditEvent(ModelBase):
     after_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    scope_key: Mapped[str] = mapped_column(CITEXT(256), nullable=False, index=True)
+    scope_seq: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        index=True,
+    )
+    prev_entry_hash: Mapped[str | None] = mapped_column(CITEXT(128), nullable=True)
+    entry_hash: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+    hash_alg: Mapped[str] = mapped_column(
+        CITEXT(64),
+        nullable=False,
+        server_default=sa_text("'hmac-sha256'"),
+    )
+    hash_key_id: Mapped[str | None] = mapped_column(CITEXT(128), nullable=True)
+    before_snapshot_hash: Mapped[str | None] = mapped_column(CITEXT(128), nullable=True)
+    after_snapshot_hash: Mapped[str | None] = mapped_column(CITEXT(128), nullable=True)
+    sealed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+
     retention_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
@@ -81,6 +107,48 @@ class AuditEvent(ModelBase):
         index=True,
     )
     redaction_reason: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True)
+    legal_hold_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    legal_hold_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    legal_hold_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+    )
+    legal_hold_reason: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True)
+    legal_hold_released_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    legal_hold_released_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+    )
+    legal_hold_release_reason: Mapped[str | None] = mapped_column(
+        CITEXT(255),
+        nullable=True,
+    )
+    tombstoned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    tombstoned_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+    )
+    tombstone_reason: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True)
+    purge_due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
 
     __table_args__ = (
         Index(
@@ -88,6 +156,12 @@ class AuditEvent(ModelBase):
             "entity_set",
             "entity_id",
             "occurred_at",
+        ),
+        Index(
+            "ux_audit_event__scope_seq",
+            "scope_key",
+            "scope_seq",
+            unique=True,
         ),
         {"schema": "mugen"},
     )

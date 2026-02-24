@@ -30,18 +30,49 @@ class _ActionPayload(BaseModel):
 
 
 class _FakeEdmType:
-    def __init__(self, has_tenant: bool):
-        self._has_tenant = has_tenant
+    def __init__(self, tenant_scope: str):
+        self._tenant_scope = tenant_scope
 
     def find_property(self, name: str):
-        if name == "TenantId" and self._has_tenant:
-            return object()
-        return None
+        if name != "TenantId":
+            return None
+
+        if self._tenant_scope == "none":
+            return None
+
+        if self._tenant_scope == "optional":
+            return SimpleNamespace(nullable=True)
+
+        return SimpleNamespace(nullable=False)
+
+
+def _resolve_scope(
+    *,
+    has_tenant: bool | None = None,
+    tenant_scope: str | None = None,
+) -> str:
+    if tenant_scope is not None:
+        return tenant_scope
+
+    if has_tenant is None:
+        return "none"
+
+    return "required" if has_tenant else "none"
 
 
 class _FakeSchema:
-    def __init__(self, has_tenant: bool):
-        self._type = _FakeEdmType(has_tenant=has_tenant)
+    def __init__(
+        self,
+        *,
+        has_tenant: bool | None = None,
+        tenant_scope: str | None = None,
+    ):
+        self._type = _FakeEdmType(
+            tenant_scope=_resolve_scope(
+                has_tenant=has_tenant,
+                tenant_scope=tenant_scope,
+            )
+        )
 
     def get_type(self, _edm_name: str):
         return self._type
@@ -105,12 +136,16 @@ class _FakeRegistry:
     def __init__(
         self,
         *,
-        has_tenant: bool,
         service: _FakeService,
         schema=_ActionPayload,
         actions=None,
+        has_tenant: bool | None = None,
+        tenant_scope: str | None = None,
     ):
-        self.schema = _FakeSchema(has_tenant=has_tenant)
+        self.schema = _FakeSchema(
+            has_tenant=has_tenant,
+            tenant_scope=tenant_scope,
+        )
         self._service = service
         self._resource = SimpleNamespace(
             edm_type_name="ACP.Thing",
@@ -135,6 +170,27 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
         # pylint: disable=protected-access
         self.assertEqual(action_api._entity_name("ACP.User"), "User")
         self.assertEqual(action_api._entity_name("User"), "User")
+        self.assertEqual(
+            action_api._tenant_scope_mode(
+                registry=_FakeRegistry(service=_FakeService(), tenant_scope="none"),
+                edm_type_name="ACP.Thing",
+            ),
+            "none",
+        )
+        self.assertEqual(
+            action_api._tenant_scope_mode(
+                registry=_FakeRegistry(service=_FakeService(), tenant_scope="required"),
+                edm_type_name="ACP.Thing",
+            ),
+            "required",
+        )
+        self.assertEqual(
+            action_api._tenant_scope_mode(
+                registry=_FakeRegistry(service=_FakeService(), tenant_scope="optional"),
+                edm_type_name="ACP.Thing",
+            ),
+            "optional",
+        )
 
         app = Quart("action_helpers_test")
         async with app.test_request_context(
@@ -229,6 +285,25 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(ex.exception.code, 400)
 
+        optional_registry = _FakeRegistry(
+            tenant_scope="optional",
+            service=_FakeService(),
+        )
+        async with app.test_request_context(
+            "/api/core/acp/v1/Things/$action/do",
+            method="POST",
+            json={"row_version": 3},
+        ):
+            with patch.object(action_api, "emit_audit_event", new=AsyncMock()):
+                result = await action_api.dispatch_entity_set_action.__wrapped__(
+                    entity_set="Things",
+                    action="do",
+                    auth_user=str(uuid.uuid4()),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: optional_registry,
+                )
+        self.assertEqual(result, {"status": "ok-set"})
+
     async def test_dispatch_entity_set_action_tenant_paths(self) -> None:
         app = Quart("action_set_tenant_dispatch_test")
         service = _FakeService()
@@ -254,6 +329,28 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"status": "ok-tenant"})
         self.assertEqual(service.calls[-1][1]["where"], {"tenant_id": tenant_id})
         emit.assert_awaited_once()
+
+        optional_registry = _FakeRegistry(
+            tenant_scope="optional",
+            service=service,
+        )
+        async with app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Things/$action/do",
+            method="POST",
+            json={"row_version": 4},
+        ):
+            with patch.object(action_api, "emit_audit_event", new=AsyncMock()):
+                optional_result = (
+                    await action_api.dispatch_entity_set_action_tenant.__wrapped__(
+                        tenant_id=str(tenant_id),
+                        entity_set="Things",
+                        action="do",
+                        auth_user=str(auth_user),
+                        logger_provider=lambda: logger,
+                        registry_provider=lambda: optional_registry,
+                    )
+                )
+        self.assertEqual(optional_result, {"status": "ok-tenant"})
 
         non_tenant_registry = _FakeRegistry(has_tenant=False, service=service)
         async with app.test_request_context(
@@ -315,6 +412,26 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
                     registry_provider=lambda: non_tenant_registry,
                 )
         self.assertEqual(result, {"status": "ok-entity"})
+
+        optional_registry = _FakeRegistry(
+            tenant_scope="optional",
+            service=service,
+        )
+        async with app.test_request_context(
+            f"/api/core/acp/v1/Things/{entity_id}/$action/do",
+            method="POST",
+            json={"row_version": 5},
+        ):
+            with patch.object(action_api, "emit_audit_event", new=AsyncMock()):
+                optional_result = await action_api.dispatch_entity_action.__wrapped__(
+                    entity_set="Things",
+                    entity_id=str(entity_id),
+                    action="do",
+                    auth_user=str(auth_user),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: optional_registry,
+                )
+        self.assertEqual(optional_result, {"status": "ok-entity"})
 
         async with app.test_request_context(
             f"/api/core/acp/v1/Things/{entity_id}/$action/do",
