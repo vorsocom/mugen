@@ -71,6 +71,18 @@ from mugen.core.plugin.acp.api.validation.generic import (
     NoValidationSchema,
     RowVersionValidation,
 )
+from mugen.core.plugin.acp.api.validation.rbac import (
+    GlobalPermissionEntryCreateValidation,
+    GlobalPermissionEntryUpdateValidation,
+    GlobalRoleCreateValidation,
+    GlobalRoleUpdateValidation,
+    PermissionEntryCreateValidation,
+    PermissionEntryUpdateValidation,
+    PermissionObjectCreateValidation,
+    PermissionTypeCreateValidation,
+    RoleCreateValidation,
+    RoleUpdateValidation,
+)
 from mugen.core.plugin.acp.api.validation.tenant import (
     TenantDomainCreateValidation,
     TenantDomainUpdateValidation,
@@ -217,6 +229,10 @@ def contribute(
             "allow_delete": True,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "crud": CrudPolicy(
+                create_schema=GlobalPermissionEntryCreateValidation,
+                update_schema=GlobalPermissionEntryUpdateValidation,
+            ),
         },
         {
             "set": "GlobalRoles",
@@ -227,6 +243,10 @@ def contribute(
             "allow_delete": False,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "crud": CrudPolicy(
+                create_schema=GlobalRoleCreateValidation,
+                update_schema=GlobalRoleUpdateValidation,
+            ),
         },
         {
             "set": "GlobalRoleMemberships",
@@ -250,13 +270,17 @@ def contribute(
             "allow_delete": True,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "crud": CrudPolicy(
+                create_schema=PermissionEntryCreateValidation,
+                update_schema=PermissionEntryUpdateValidation,
+            ),
         },
         {
             "set": "PermissionObjects",
             "entity": "PermissionObject",
             "description": "Permission objects (nouns) identified by namespace:name",
             "allow_create": True,
-            "allow_update": True,
+            "allow_update": False,
             "allow_delete": False,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
@@ -270,13 +294,16 @@ def contribute(
                     "schema": RowVersionValidation,
                 },
             },
+            "crud": CrudPolicy(
+                create_schema=PermissionObjectCreateValidation,
+            ),
         },
         {
             "set": "PermissionTypes",
             "entity": "PermissionType",
             "description": "Permission types (verbs) identified by namespace:name",
             "allow_create": True,
-            "allow_update": True,
+            "allow_update": False,
             "allow_delete": False,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
@@ -290,6 +317,9 @@ def contribute(
                     "schema": RowVersionValidation,
                 },
             },
+            "crud": CrudPolicy(
+                create_schema=PermissionTypeCreateValidation,
+            ),
         },
         {
             "set": "Persons",
@@ -339,6 +369,10 @@ def contribute(
                     "schema": RowVersionValidation,
                 },
             },
+            "crud": CrudPolicy(
+                create_schema=RoleCreateValidation,
+                update_schema=RoleUpdateValidation,
+            ),
         },
         {
             "set": "RoleMemberships",
