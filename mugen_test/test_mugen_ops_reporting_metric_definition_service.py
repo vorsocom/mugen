@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
 import uuid
@@ -330,7 +330,7 @@ class TestMugenOpsReportingMetricDefinitionService(unittest.IsolatedAsyncioTestC
             tenant_id=tenant_id,
             metric_definition_id=metric_id,
             bucket_start=now,
-            bucket_end=now.replace(hour=now.hour + 1),
+            bucket_end=now + timedelta(hours=1),
             scope_key="__all__",
             value_numeric=3,
             source_count=2,
@@ -346,7 +346,7 @@ class TestMugenOpsReportingMetricDefinitionService(unittest.IsolatedAsyncioTestC
             tenant_id=tenant_id,
             metric_definition_id=metric_id,
             bucket_start=now,
-            bucket_end=now.replace(hour=now.hour + 1),
+            bucket_end=now + timedelta(hours=1),
             scope_key="team",
             value_numeric=3,
             source_count=2,
