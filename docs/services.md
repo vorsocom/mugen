@@ -33,7 +33,8 @@ resources/actions rather than bypassing them with direct table writes.
 The following core plugins are built to register their entities/actions into ACP
 and provide reusable platform primitives:
 
-- `audit`: append-only audit records for ACP write/action surfaces.
+- `audit`: tamper-evident audit records with hash-chain verification and
+  lifecycle controls (legal hold, redact, tombstone, purge).
 - `billing`: account/product/price/subscription/usage/invoice/payment primitives.
 - `channel_orchestration`: intake, routing, throttle, blocklist, and fallback.
 - `knowledge_pack`: versioned knowledge content lifecycle and retrieval metadata.

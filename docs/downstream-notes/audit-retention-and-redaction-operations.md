@@ -7,14 +7,15 @@
 ## Context
 
 Core stores retention and redaction policy fields on audit records
-(`retention_until`, `redaction_due_at`, `redacted_at`, `redaction_reason`) but
-intentionally does not run lifecycle jobs. Downstream operations must enforce
-retention/redaction behavior to satisfy compliance and storage constraints.
+(`retention_until`, `redaction_due_at`, `redacted_at`, `redaction_reason`) and
+now includes first-class lifecycle execution (`run_lifecycle`, `seal_backlog`)
+plus a worker script path.
 
 ## Decision
 
-- Implement retention and redaction as downstream operational jobs.
-- Redact snapshots first, then delete expired rows per policy.
+- Use core lifecycle phases (`redact_due`, `tombstone_expired`, `purge_due`)
+  for retention/redaction operations.
+- Redact snapshots first, then tombstone and purge expired rows per policy.
 - Keep immutable audit semantics: lifecycle jobs may redact or delete rows based
   on policy windows, but should not rewrite historical business facts.
 - Record lifecycle actions with explicit reason codes.
@@ -23,8 +24,10 @@ retention/redaction behavior to satisfy compliance and storage constraints.
 
 - Core responsibilities:
   - Persist policy timing fields and redaction markers on audit rows.
+  - Enforce DB immutability/delete guardrails.
+  - Provide lifecycle actions and worker-compatible execution path.
 - Downstream responsibilities:
-  - Schedule and execute lifecycle jobs.
+  - Schedule lifecycle execution by environment policy.
   - Define legal/compliance policy windows by environment/tenant.
   - Produce operational telemetry and alerting for job failures.
 - Why this boundary:
@@ -42,9 +45,11 @@ retention/redaction behavior to satisfy compliance and storage constraints.
 
 ### Services / APIs
 
-- Add a downstream maintenance worker (cron/scheduler) with two phases:
-  1. `redact_due_events`
-  2. `purge_expired_events`
+- Use core maintenance phases:
+  1. `seal_backlog`
+  2. `redact_due`
+  3. `tombstone_expired`
+  4. `purge_due`
 - Make each phase idempotent and bounded by batch size.
 - Publish metrics (rows scanned/redacted/deleted, lag, failures).
 

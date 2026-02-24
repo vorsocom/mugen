@@ -279,3 +279,26 @@ class TestACPAuditEmission(unittest.IsolatedAsyncioTestCase):
         )
 
         logger.debug.assert_called_once()
+
+    async def test_emit_fail_closed_raises_on_write_error(self):
+        registry = _FakeRegistry(_FailingAuditService())
+
+        with self.assertRaises(RuntimeError):
+            await emit_audit_event(
+                registry=registry,
+                entity_set="Users",
+                entity="User",
+                operation="create",
+                outcome="error",
+                source_plugin="com.vorsocomputing.mugen.acp",
+                request_id="req-1",
+                correlation_id="corr-1",
+                logger_provider=lambda: SimpleNamespace(debug=lambda *_: None),
+                config_provider=lambda: SimpleNamespace(
+                    audit=SimpleNamespace(
+                        emit=SimpleNamespace(
+                            fail_closed=True,
+                        )
+                    )
+                ),
+            )

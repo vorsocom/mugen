@@ -27,6 +27,10 @@ from mugen.core.utility.string.case_conversion_helper import title_to_snake
 # ylint: disable=too-many-positional-arguments
 # pylint: disable=too-many-locals
 
+_SCOPE_NONE = "none"
+_SCOPE_REQUIRED = "required"
+_SCOPE_OPTIONAL = "optional"
+
 
 def _logger_provider():
     return di.container.logging_gateway
@@ -60,6 +64,21 @@ def _request_ids() -> tuple[str | None, str | None]:
         or request_id
     )
     return request_id, correlation_id
+
+
+def _tenant_scope_mode(
+    *,
+    registry: IAdminRegistry,
+    edm_type_name: str,
+) -> str:
+    tenant_property = registry.schema.get_type(edm_type_name).find_property("TenantId")
+    if tenant_property is None:
+        return _SCOPE_NONE
+
+    if bool(getattr(tenant_property, "nullable", False)):
+        return _SCOPE_OPTIONAL
+
+    return _SCOPE_REQUIRED
 
 
 def _build_create_data(
@@ -363,7 +382,11 @@ async def get_entities_tenant(
     logger: ILoggingGateway = logger_provider()
     registry: IAdminRegistry = registry_provider()
 
-    if registry.schema.get_type(edm_type_name).find_property("TenantId") is None:
+    scope_mode = _tenant_scope_mode(
+        registry=registry,
+        edm_type_name=edm_type_name,
+    )
+    if scope_mode == _SCOPE_NONE:
         logger.debug(
             f"Tenant route used for non-tenant-scoped entity_set: {entity_set}"
         )
@@ -480,7 +503,11 @@ async def create_entity_tenant(
     entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
-    if registry.schema.get_type(edm_type_name).find_property("TenantId") is None:
+    scope_mode = _tenant_scope_mode(
+        registry=registry,
+        edm_type_name=edm_type_name,
+    )
+    if scope_mode == _SCOPE_NONE:
         logger.debug(
             f"Tenant route used for non-tenant-scoped entity_set: {entity_set}"
         )
@@ -710,7 +737,11 @@ async def update_entity_tenant(
     entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
-    if registry.schema.get_type(edm_type_name).find_property("TenantId") is None:
+    scope_mode = _tenant_scope_mode(
+        registry=registry,
+        edm_type_name=edm_type_name,
+    )
+    if scope_mode == _SCOPE_NONE:
         logger.debug(
             f"Tenant route used for non-tenant-scoped entity_set: {entity_set}"
         )
@@ -968,7 +999,11 @@ async def delete_entity_tenant(
     entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
-    if registry.schema.get_type(edm_type_name).find_property("TenantId") is None:
+    scope_mode = _tenant_scope_mode(
+        registry=registry,
+        edm_type_name=edm_type_name,
+    )
+    if scope_mode == _SCOPE_NONE:
         logger.debug(
             f"Tenant route used for non-tenant-scoped entity_set: {entity_set}"
         )
@@ -1324,7 +1359,11 @@ async def restore_entity_tenant(
     entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
-    if registry.schema.get_type(edm_type_name).find_property("TenantId") is None:
+    scope_mode = _tenant_scope_mode(
+        registry=registry,
+        edm_type_name=edm_type_name,
+    )
+    if scope_mode == _SCOPE_NONE:
         logger.debug(
             f"Tenant route used for non-tenant-scoped entity_set: {entity_set}"
         )

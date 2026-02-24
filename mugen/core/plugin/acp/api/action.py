@@ -19,6 +19,10 @@ from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 # ylint: disable=too-many-positional-arguments
 # pylint: disable=too-many-locals
 
+_SCOPE_NONE = "none"
+_SCOPE_REQUIRED = "required"
+_SCOPE_OPTIONAL = "optional"
+
 
 def _logger_provider():
     return di.container.logging_gateway
@@ -42,6 +46,21 @@ def _request_ids() -> tuple[str | None, str | None]:
         or request_id
     )
     return request_id, correlation_id
+
+
+def _tenant_scope_mode(
+    *,
+    registry: IAdminRegistry,
+    edm_type_name: str,
+) -> str:
+    tenant_property = registry.schema.get_type(edm_type_name).find_property("TenantId")
+    if tenant_property is None:
+        return _SCOPE_NONE
+
+    if bool(getattr(tenant_property, "nullable", False)):
+        return _SCOPE_OPTIONAL
+
+    return _SCOPE_REQUIRED
 
 
 @api.post("core/acp/v1/<entity_set>/$action/<action>")
@@ -68,7 +87,8 @@ async def dispatch_entity_set_action(
     entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
-    if registry.schema.get_type(edm_type_name).find_property("TenantId") is not None:
+    scope_mode = _tenant_scope_mode(registry=registry, edm_type_name=edm_type_name)
+    if scope_mode == _SCOPE_REQUIRED:
         abort(400, "Entity set is tenant-scoped; use the tenant action endpoint.")
 
     svc = registry.get_edm_service(resource.service_key)
@@ -163,7 +183,8 @@ async def dispatch_entity_set_action_tenant(
     entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
-    if registry.schema.get_type(edm_type_name).find_property("TenantId") is None:
+    scope_mode = _tenant_scope_mode(registry=registry, edm_type_name=edm_type_name)
+    if scope_mode == _SCOPE_NONE:
         abort(400, "Entity set is not tenant-scoped.")
 
     try:
@@ -271,7 +292,8 @@ async def dispatch_entity_action(
     entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
-    if registry.schema.get_type(edm_type_name).find_property("TenantId") is not None:
+    scope_mode = _tenant_scope_mode(registry=registry, edm_type_name=edm_type_name)
+    if scope_mode == _SCOPE_REQUIRED:
         abort(400, "Entity set is tenant-scoped; use the tenant action endpoint.")
 
     svc = registry.get_edm_service(resource.service_key)
@@ -376,7 +398,8 @@ async def dispatch_entity_action_tenant(
     entity = _entity_name(resource.edm_type_name)
 
     edm_type_name = resource.edm_type_name
-    if registry.schema.get_type(edm_type_name).find_property("TenantId") is None:
+    scope_mode = _tenant_scope_mode(registry=registry, edm_type_name=edm_type_name)
+    if scope_mode == _SCOPE_NONE:
         abort(400, "Entity set is not tenant-scoped.")
 
     try:

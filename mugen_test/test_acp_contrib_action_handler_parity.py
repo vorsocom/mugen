@@ -54,16 +54,25 @@ class TestAcpContribActionHandlerParity(unittest.TestCase):
                 continue
 
             service_cls = _load_provider_attr(service_spec.service_cls)
-            tenant_scoped = (
-                registry.schema.get_type(resource.edm_type_name).find_property(
-                    "TenantId"
-                )
-                is not None
-            )
+            tenant_property = registry.schema.get_type(
+                resource.edm_type_name
+            ).find_property("TenantId")
+            if tenant_property is None:
+                scope_mode = "none"
+            elif bool(getattr(tenant_property, "nullable", False)):
+                scope_mode = "optional"
+            else:
+                scope_mode = "required"
 
             for action in actions:
-                if tenant_scoped:
+                if scope_mode == "required":
                     expected_handlers = (f"action_{action}",)
+                elif scope_mode == "optional":
+                    expected_handlers = (
+                        f"action_{action}",
+                        f"entity_action_{action}",
+                        f"entity_set_action_{action}",
+                    )
                 else:
                     expected_handlers = (
                         f"entity_action_{action}",

@@ -76,21 +76,50 @@ class _UpdateSchema(BaseModel):
 
 
 class _FakeEdmType:
-    def __init__(self, *, tenant_scoped: bool):
-        self._tenant_scoped = tenant_scoped
+    def __init__(self, *, tenant_scope: str):
+        self._tenant_scope = tenant_scope
 
     def find_property(self, name: str):
-        if name == "TenantId" and self._tenant_scoped:
-            return object()
-        return None
+        if name != "TenantId":
+            return None
+
+        if self._tenant_scope == "none":
+            return None
+
+        if self._tenant_scope == "optional":
+            return SimpleNamespace(nullable=True)
+
+        return SimpleNamespace(nullable=False)
+
+
+def _resolve_scope(
+    *,
+    tenant_scoped: bool | None = None,
+    tenant_scope: str | None = None,
+) -> str:
+    if tenant_scope is not None:
+        return tenant_scope
+
+    if tenant_scoped is None:
+        return "none"
+
+    return "required" if tenant_scoped else "none"
 
 
 class _FakeSchema:
-    def __init__(self, *, tenant_scoped: bool):
-        self._tenant_scoped = tenant_scoped
+    def __init__(
+        self,
+        *,
+        tenant_scoped: bool | None = None,
+        tenant_scope: str | None = None,
+    ):
+        self._tenant_scope = _resolve_scope(
+            tenant_scoped=tenant_scoped,
+            tenant_scope=tenant_scope,
+        )
 
     def get_type(self, _edm_type_name: str):
-        return _FakeEdmType(tenant_scoped=self._tenant_scoped)
+        return _FakeEdmType(tenant_scope=self._tenant_scope)
 
 
 def _resource(
@@ -121,10 +150,20 @@ def _resource(
 
 
 class _FakeRegistry:
-    def __init__(self, *, resource, service, tenant_scoped: bool = True):
+    def __init__(
+        self,
+        *,
+        resource,
+        service,
+        tenant_scoped: bool | None = True,
+        tenant_scope: str | None = None,
+    ):
         self._resource = resource
         self._service = service
-        self.schema = _FakeSchema(tenant_scoped=tenant_scoped)
+        self.schema = _FakeSchema(
+            tenant_scoped=tenant_scoped,
+            tenant_scope=tenant_scope,
+        )
 
     def get_resource(self, _entity_set: str):
         return self._resource
@@ -163,6 +202,39 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(crud_mod._entity_name("ACP.User"), "User")
         self.assertEqual(crud_mod._entity_name("User"), "User")
+        self.assertEqual(
+            crud_mod._tenant_scope_mode(
+                registry=_FakeRegistry(
+                    resource=_resource(),
+                    service=SimpleNamespace(),
+                    tenant_scope="none",
+                ),
+                edm_type_name="ACP.User",
+            ),
+            "none",
+        )
+        self.assertEqual(
+            crud_mod._tenant_scope_mode(
+                registry=_FakeRegistry(
+                    resource=_resource(),
+                    service=SimpleNamespace(),
+                    tenant_scope="required",
+                ),
+                edm_type_name="ACP.User",
+            ),
+            "required",
+        )
+        self.assertEqual(
+            crud_mod._tenant_scope_mode(
+                registry=_FakeRegistry(
+                    resource=_resource(),
+                    service=SimpleNamespace(),
+                    tenant_scope="optional",
+                ),
+                edm_type_name="ACP.User",
+            ),
+            "optional",
+        )
 
         duplicate_error = IntegrityError(
             "insert into t values (?)",
@@ -518,6 +590,21 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             registry_provider=lambda: registry,
         )
         self.assertEqual(tenant_payload["@context"], "_#Users")
+
+        optional_registry = _FakeRegistry(
+            resource=_resource(),
+            service=SimpleNamespace(),
+            tenant_scope="optional",
+        )
+        optional_payload = await get_entities_tenant_fn(
+            entity_set="Users",
+            entity_id=None,
+            edm_type_name="ACP.User",
+            rgql=SimpleNamespace(count=0, values=[]),
+            logger_provider=lambda: logger,
+            registry_provider=lambda: optional_registry,
+        )
+        self.assertEqual(optional_payload["@context"], "_#Users")
 
         tenant_payload = await get_entities_tenant_fn(
             entity_set="Users",
@@ -1272,7 +1359,9 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                         entity_id=str(entity_id),
                         auth_user=str(actor_id),
                         logger_provider=_logger,
-                        registry_provider=lambda: global_permission_entry_resource_registry,
+                        registry_provider=(
+                            lambda: global_permission_entry_resource_registry
+                        ),
                     )
                 self.assertEqual(ex.exception.code, 400)
 

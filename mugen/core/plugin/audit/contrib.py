@@ -21,6 +21,15 @@ from mugen.core.plugin.acp.contract.sdk.resource import (
 )
 from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
+from mugen.core.plugin.audit.api.validation import (
+    AuditEventPlaceLegalHoldValidation,
+    AuditEventRedactValidation,
+    AuditEventReleaseLegalHoldValidation,
+    AuditEventRunLifecycleValidation,
+    AuditEventSealBacklogValidation,
+    AuditEventTombstoneValidation,
+    AuditEventVerifyChainValidation,
+)
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
 _WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+|\d+")
@@ -92,7 +101,44 @@ def contribute(
                 allow_create=False,
                 allow_update=False,
                 allow_delete=False,
-                allow_manage=False,
+                allow_manage=True,
+                actions={
+                    "place_legal_hold": {
+                        "perm": admin_ns.verb("manage"),
+                        "schema": AuditEventPlaceLegalHoldValidation,
+                        "confirm": "Place legal hold on this audit event?",
+                    },
+                    "release_legal_hold": {
+                        "perm": admin_ns.verb("manage"),
+                        "schema": AuditEventReleaseLegalHoldValidation,
+                        "confirm": "Release legal hold on this audit event?",
+                    },
+                    "redact": {
+                        "perm": admin_ns.verb("manage"),
+                        "schema": AuditEventRedactValidation,
+                        "confirm": "Redact this audit event snapshot data?",
+                    },
+                    "tombstone": {
+                        "perm": admin_ns.verb("manage"),
+                        "schema": AuditEventTombstoneValidation,
+                        "confirm": "Tombstone this audit event for purge scheduling?",
+                    },
+                    "run_lifecycle": {
+                        "perm": admin_ns.verb("manage"),
+                        "schema": AuditEventRunLifecycleValidation,
+                        "confirm": "Run audit lifecycle phases now?",
+                    },
+                    "verify_chain": {
+                        "perm": admin_ns.verb("manage"),
+                        "schema": AuditEventVerifyChainValidation,
+                        "confirm": "Verify audit hash chain integrity?",
+                    },
+                    "seal_backlog": {
+                        "perm": admin_ns.verb("manage"),
+                        "schema": AuditEventSealBacklogValidation,
+                        "confirm": "Seal unchained audit backlog rows now?",
+                    },
+                },
             ),
             behavior=AdminBehavior(rgql_enabled=True),
             crud=CrudPolicy(),
@@ -107,6 +153,14 @@ def contribute(
         TableSpec(
             table_name="audit_event",
             table_provider="mugen.core.plugin.audit.model.audit_event:AuditEvent",
+        )
+    )
+    registry.register_table_spec(
+        TableSpec(
+            table_name="audit_chain_head",
+            table_provider=(
+                "mugen.core.plugin.audit.model.audit_chain_head:AuditChainHead"
+            ),
         )
     )
 
