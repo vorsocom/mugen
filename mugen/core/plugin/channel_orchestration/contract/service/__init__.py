@@ -9,6 +9,7 @@ __all__ = [
     "IThrottleRuleService",
     "IBlocklistEntryService",
     "IOrchestrationEventService",
+    "IWorkItemService",
 ]
 
 from .blocklist_entry import IBlocklistEntryService
@@ -19,3 +20,4 @@ from .orchestration_event import IOrchestrationEventService
 from .orchestration_policy import IOrchestrationPolicyService
 from .routing_rule import IRoutingRuleService
 from .throttle_rule import IThrottleRuleService
+from .work_item import IWorkItemService

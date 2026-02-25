@@ -8,6 +8,7 @@ __all__ = [
     "WorkflowInstanceDE",
     "WorkflowTaskDE",
     "WorkflowEventDE",
+    "WorkflowActionDedupDE",
 ]
 
 from mugen.core.plugin.ops_workflow.domain.workflow_definition import (
@@ -15,6 +16,9 @@ from mugen.core.plugin.ops_workflow.domain.workflow_definition import (
 )
 from mugen.core.plugin.ops_workflow.domain.workflow_event import WorkflowEventDE
 from mugen.core.plugin.ops_workflow.domain.workflow_instance import WorkflowInstanceDE
+from mugen.core.plugin.ops_workflow.domain.workflow_action_dedup import (
+    WorkflowActionDedupDE,
+)
 from mugen.core.plugin.ops_workflow.domain.workflow_state import WorkflowStateDE
 from mugen.core.plugin.ops_workflow.domain.workflow_task import WorkflowTaskDE
 from mugen.core.plugin.ops_workflow.domain.workflow_transition import (

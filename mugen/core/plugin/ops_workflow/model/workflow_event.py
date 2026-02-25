@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -43,6 +44,10 @@ class WorkflowEventType(str, enum.Enum):
     TASK_ASSIGNED = "task_assigned"
     TASK_COMPLETED = "task_completed"
     CANCELLED = "cancelled"
+    REPLAYED = "replayed"
+    COMPENSATION_REQUESTED = "compensation_requested"
+    COMPENSATION_PLANNED = "compensation_planned"
+    COMPENSATION_FAILED = "compensation_failed"
 
 
 class WorkflowEvent(ModelBase, TenantScopedMixin):
@@ -58,6 +63,12 @@ class WorkflowEvent(ModelBase, TenantScopedMixin):
 
     workflow_task_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
+        nullable=True,
+        index=True,
+    )
+
+    event_seq: Mapped[int | None] = mapped_column(
+        BigInteger,
         nullable=True,
         index=True,
     )
@@ -138,10 +149,20 @@ class WorkflowEvent(ModelBase, TenantScopedMixin):
             "note IS NULL OR length(btrim(note)) > 0",
             name="ck_ops_wf_event_note_nonempty",
         ),
+        CheckConstraint(
+            "event_seq IS NULL OR event_seq > 0",
+            name="ck_ops_wf_event_event_seq_positive_if_set",
+        ),
         UniqueConstraint(
             "tenant_id",
             "id",
             name="ux_ops_wf_event_tenant_id_id",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "workflow_instance_id",
+            "event_seq",
+            name="ux_ops_wf_event_tenant_instance_event_seq",
         ),
         Index(
             "ix_ops_wf_event_tenant_instance_occ",

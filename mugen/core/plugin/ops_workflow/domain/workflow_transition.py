@@ -26,6 +26,7 @@ class WorkflowTransitionDE(BaseDE, TenantScopedDEMixin):
     requires_approval: bool | None = None
     auto_assign_user_id: uuid.UUID | None = None
     auto_assign_queue: str | None = None
+    compensation_json: dict[str, Any] | list[Any] | None = None
 
     is_active: bool | None = None
     attributes: dict[str, Any] | None = None

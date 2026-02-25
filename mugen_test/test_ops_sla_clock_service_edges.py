@@ -10,13 +10,16 @@ from werkzeug.exceptions import HTTPException
 
 from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
 from mugen.core.plugin.ops_sla.api.validation import (
+    SlaClockMarkBreachedValidation,
     SlaClockResumeValidation,
     SlaClockStartValidation,
     SlaClockStopValidation,
+    SlaClockTickValidation,
 )
 from mugen.core.plugin.ops_sla.domain import (
     SlaCalendarDE,
     SlaClockDE,
+    SlaClockDefinitionDE,
     SlaPolicyDE,
     SlaTargetDE,
 )
@@ -394,3 +397,313 @@ class TestSlaClockServiceEdges(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(ctx.exception.code, 409)
+
+    async def test_warn_offsets_and_best_effort_update_clock_branches(self) -> None:
+        svc = self._svc()
+        tenant_id = uuid.uuid4()
+        clock_id = uuid.uuid4()
+
+        self.assertEqual(
+            SlaClockService._warn_offsets([60, "120", 0, -1, "bad"]), {60, 120}
+        )
+
+        expected = SlaClockDE(id=clock_id, tenant_id=tenant_id, status="running")
+        svc.update_with_row_version = AsyncMock(return_value=expected)
+        updated = await svc._best_effort_update_clock(
+            where={"tenant_id": tenant_id, "id": clock_id},
+            expected_row_version=2,
+            changes={"status": "running"},
+        )
+        self.assertEqual(updated.id, clock_id)
+
+        svc.update_with_row_version = AsyncMock(
+            side_effect=RowVersionConflict("ops_sla_clock")
+        )
+        self.assertIsNone(
+            await svc._best_effort_update_clock(
+                where={"tenant_id": tenant_id, "id": clock_id},
+                expected_row_version=2,
+                changes={"status": "running"},
+            )
+        )
+
+        svc.update_with_row_version = AsyncMock(side_effect=SQLAlchemyError("boom"))
+        with self.assertRaises(HTTPException) as ctx:
+            await svc._best_effort_update_clock(
+                where={"tenant_id": tenant_id, "id": clock_id},
+                expected_row_version=2,
+                changes={"status": "running"},
+            )
+        self.assertEqual(ctx.exception.code, 500)
+
+    async def test_resolve_clock_definition_and_target_context_branches(self) -> None:
+        svc = self._svc()
+        tenant_id = uuid.uuid4()
+        definition_id = uuid.uuid4()
+
+        definition = SlaClockDefinitionDE(
+            id=definition_id,
+            tenant_id=tenant_id,
+            target_minutes=10,
+            warn_offsets_json=[300, "60"],
+        )
+        svc._clock_definition_service.get = AsyncMock(return_value=definition)
+        resolved = await svc._resolve_clock_definition(
+            tenant_id=tenant_id,
+            clock_definition_id=definition_id,
+        )
+        self.assertEqual(resolved.id, definition_id)
+
+        svc._resolve_clock_definition = AsyncMock(return_value=definition)
+        svc._resolve_target = AsyncMock(return_value=None)
+        clock = SlaClockDE(clock_definition_id=definition_id)
+        target_minutes, warn_offsets, returned_definition = (
+            await svc._resolve_target_context(
+                tenant_id=tenant_id,
+                clock=clock,
+            )
+        )
+        self.assertEqual(target_minutes, 10)
+        self.assertEqual(warn_offsets, {60, 300})
+        self.assertEqual(returned_definition.id, definition_id)
+
+        zero_definition = SlaClockDefinitionDE(
+            id=definition_id,
+            tenant_id=tenant_id,
+            target_minutes=0,
+        )
+        svc._resolve_clock_definition = AsyncMock(return_value=zero_definition)
+        svc._resolve_target = AsyncMock(
+            return_value=SlaTargetDE(target_minutes=20, warn_before_minutes=3)
+        )
+        target_minutes, warn_offsets, returned_definition = (
+            await svc._resolve_target_context(
+                tenant_id=tenant_id,
+                clock=SlaClockDE(policy_id=uuid.uuid4(), metric="response"),
+            )
+        )
+        self.assertEqual(target_minutes, 20)
+        self.assertEqual(warn_offsets, {180})
+        self.assertEqual(returned_definition.id, definition_id)
+
+        svc._resolve_target = AsyncMock(return_value=None)
+        target_minutes, warn_offsets, _ = await svc._resolve_target_context(
+            tenant_id=tenant_id,
+            clock=SlaClockDE(policy_id=uuid.uuid4(), metric="response"),
+        )
+        self.assertEqual((target_minutes, warn_offsets), (0, set()))
+
+    async def test_action_mark_breached_skips_clock_event_when_id_missing(self) -> None:
+        svc = self._svc()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        now = datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc)
+        svc._now_utc = lambda: now
+
+        current = SlaClockDE(
+            id=None,
+            tenant_id=tenant_id,
+            status="paused",
+            row_version=2,
+            elapsed_seconds=15,
+            metric="response",
+        )
+
+        svc.get = AsyncMock(return_value=current)
+        svc.update_with_row_version = AsyncMock(return_value=current)
+        svc._append_breach_event = AsyncMock(return_value=Mock())
+        svc._resolve_clock_definition = AsyncMock(return_value=None)
+        svc._append_clock_event = AsyncMock()
+
+        result = await svc.action_mark_breached(
+            tenant_id=tenant_id,
+            entity_id=uuid.uuid4(),
+            where={"tenant_id": tenant_id, "id": uuid.uuid4()},
+            auth_user_id=actor_id,
+            data=SlaClockMarkBreachedValidation(row_version=2, event_type="breached"),
+        )
+        self.assertEqual(result, ("", 204))
+        svc._append_clock_event.assert_not_awaited()
+
+    async def test_action_tick_dry_run_warn_and_breach_rows(self) -> None:
+        svc = self._svc()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        now = datetime(2026, 2, 16, 12, 30, tzinfo=timezone.utc)
+
+        idless_clock = SlaClockDE(
+            id=None,
+            tenant_id=tenant_id,
+            status="running",
+            row_version=1,
+            elapsed_seconds=0,
+        )
+        warn_clock = SlaClockDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            status="running",
+            row_version=2,
+            elapsed_seconds=10,
+            trace_id="trace-warn",
+            warned_offsets_json=[],
+            is_breached=False,
+        )
+        breach_clock = SlaClockDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            status="running",
+            row_version=3,
+            elapsed_seconds=10,
+            trace_id="trace-breach",
+            warned_offsets_json=[],
+            is_breached=False,
+        )
+
+        svc.list = AsyncMock(return_value=[idless_clock, warn_clock, breach_clock])
+        svc._compute_deadline = AsyncMock(
+            side_effect=[now + timedelta(seconds=30), now - timedelta(seconds=1)]
+        )
+        svc._resolve_target_context = AsyncMock(
+            side_effect=[(5, {60}, None), (5, set(), None)]
+        )
+
+        payload, status = await svc.action_tick(
+            tenant_id=tenant_id,
+            where={},
+            auth_user_id=actor_id,
+            data=SlaClockTickValidation(now_utc=now, dry_run=True),
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["DryRun"])
+        self.assertEqual(payload["Counters"]["Scanned"], 3)
+        self.assertEqual(payload["Counters"]["WarnedCount"], 1)
+        self.assertEqual(payload["Counters"]["BreachedCount"], 1)
+        self.assertEqual(payload["Counters"]["ConflictCount"], 0)
+        self.assertEqual(payload["Warned"][0]["ClockEventId"], None)
+        self.assertEqual(payload["Breached"][0]["ClockEventId"], None)
+
+    async def test_action_tick_persist_paths_with_conflict_warn_and_breach(
+        self,
+    ) -> None:
+        svc = self._svc()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        now = datetime(2026, 2, 16, 12, 45, tzinfo=timezone.utc)
+
+        warn_id = uuid.uuid4()
+        breach_id = uuid.uuid4()
+        conflict_id = uuid.uuid4()
+        warn_clock = SlaClockDE(
+            id=warn_id,
+            tenant_id=tenant_id,
+            status="running",
+            row_version=2,
+            elapsed_seconds=10,
+            trace_id="trace-warn",
+            warned_offsets_json=[],
+            is_breached=False,
+        )
+        breach_clock = SlaClockDE(
+            id=breach_id,
+            tenant_id=tenant_id,
+            status="running",
+            row_version=3,
+            elapsed_seconds=10,
+            trace_id="trace-breach",
+            warned_offsets_json=[],
+            is_breached=False,
+        )
+        conflict_clock = SlaClockDE(
+            id=conflict_id,
+            tenant_id=tenant_id,
+            status="running",
+            row_version=4,
+            elapsed_seconds=10,
+            trace_id="trace-conflict",
+            warned_offsets_json=[],
+            is_breached=False,
+        )
+
+        svc.list = AsyncMock(return_value=[warn_clock, breach_clock, conflict_clock])
+        svc._compute_deadline = AsyncMock(
+            side_effect=[
+                now + timedelta(seconds=30),
+                now - timedelta(seconds=1),
+                now + timedelta(seconds=10),
+            ]
+        )
+        svc._resolve_target_context = AsyncMock(
+            side_effect=[(5, {60}, None), (5, set(), None), (5, {20}, None)]
+        )
+        updated_warn = SlaClockDE(
+            id=warn_id,
+            tenant_id=tenant_id,
+            status="running",
+            row_version=3,
+            trace_id="trace-warn",
+            warned_offsets_json=[60],
+            is_breached=False,
+        )
+        updated_breach = SlaClockDE(
+            id=breach_id,
+            tenant_id=tenant_id,
+            status="breached",
+            row_version=4,
+            trace_id="trace-breach",
+            warned_offsets_json=[],
+            is_breached=True,
+        )
+        svc._best_effort_update_clock = AsyncMock(
+            side_effect=[updated_warn, updated_breach, None]
+        )
+        warn_event_id = uuid.uuid4()
+        breach_event_id = uuid.uuid4()
+        svc._append_clock_event = AsyncMock(
+            side_effect=[Mock(id=warn_event_id), Mock(id=breach_event_id)]
+        )
+
+        payload, status = await svc.action_tick(
+            tenant_id=tenant_id,
+            where={},
+            auth_user_id=actor_id,
+            data=SlaClockTickValidation(now_utc=now, dry_run=False),
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["DryRun"])
+        self.assertEqual(payload["Counters"]["Scanned"], 3)
+        self.assertEqual(payload["Counters"]["WarnedCount"], 1)
+        self.assertEqual(payload["Counters"]["BreachedCount"], 1)
+        self.assertEqual(payload["Counters"]["ConflictCount"], 1)
+        self.assertEqual(payload["Warned"][0]["ClockEventId"], str(warn_event_id))
+        self.assertEqual(payload["Breached"][0]["ClockEventId"], str(breach_event_id))
+
+    async def test_action_tick_skips_rows_when_deadline_unavailable(self) -> None:
+        svc = self._svc()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        now = datetime(2026, 2, 16, 12, 50, tzinfo=timezone.utc)
+
+        clock = SlaClockDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            status="running",
+            row_version=2,
+            elapsed_seconds=10,
+            warned_offsets_json=[],
+            is_breached=False,
+        )
+
+        svc.list = AsyncMock(return_value=[clock])
+        svc._compute_deadline = AsyncMock(return_value=None)
+        svc._resolve_target_context = AsyncMock(return_value=(5, {60}, None))
+
+        payload, status = await svc.action_tick(
+            tenant_id=tenant_id,
+            where={},
+            auth_user_id=actor_id,
+            data=SlaClockTickValidation(now_utc=now, dry_run=True),
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["Counters"]["Scanned"], 1)
+        self.assertEqual(payload["Counters"]["WarnedCount"], 0)
+        self.assertEqual(payload["Counters"]["BreachedCount"], 0)

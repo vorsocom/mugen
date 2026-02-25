@@ -1,5 +1,6 @@
 """Unit tests for ops_workflow WorkflowTaskService edge branches."""
 
+from datetime import datetime, timezone
 import unittest
 from unittest.mock import AsyncMock, Mock
 import uuid
@@ -251,3 +252,89 @@ class TestWorkflowTaskServiceEdges(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, ("", 204))
         svc._event_service.create.assert_not_called()
+
+    async def test_append_event_uses_cached_event_seq(self) -> None:
+        svc = self._svc()
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        now = datetime(2026, 2, 16, 14, 0, tzinfo=timezone.utc)
+
+        svc._event_seq_cache[(tenant_id, instance_id)] = 9
+        svc._now_utc = lambda: now
+        svc._event_service.create = AsyncMock(return_value=Mock())
+        svc._event_service.list = AsyncMock(return_value=[])
+        svc._event_service.count = AsyncMock(return_value=0)
+
+        await svc._append_event(
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+            event_type="task_assigned",
+            actor_user_id=actor_id,
+            note=" assigned ",
+            payload={"x": 1},
+        )
+
+        payload = svc._event_service.create.await_args.args[0]
+        self.assertEqual(payload["event_seq"], 10)
+        self.assertEqual(payload["note"], "assigned")
+        self.assertEqual(payload["occurred_at"], now)
+        svc._event_service.list.assert_not_awaited()
+        svc._event_service.count.assert_not_awaited()
+
+    async def test_append_event_uses_count_fallback_when_latest_missing(self) -> None:
+        svc = self._svc()
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+
+        svc._event_service.list = AsyncMock(return_value=[])
+        svc._event_service.count = AsyncMock(return_value=4)
+        svc._event_service.create = AsyncMock(return_value=Mock())
+
+        await svc._append_event(
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+            event_type="task_completed",
+            actor_user_id=actor_id,
+            note=None,
+            payload=None,
+        )
+
+        payload = svc._event_service.create.await_args.args[0]
+        self.assertEqual(payload["event_seq"], 5)
+        self.assertIsNone(payload["payload"])
+
+    async def test_append_event_uses_latest_event_seq_when_available(self) -> None:
+        svc = self._svc()
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+
+        svc._event_service.list = AsyncMock(
+            return_value=[WorkflowTaskDE(row_version=1)]
+        )
+        svc._event_service.list.return_value[0].event_seq = (
+            11  # type: ignore[attr-defined]
+        )
+        svc._event_service.count = AsyncMock(return_value=0)
+        svc._event_service.create = AsyncMock(return_value=Mock())
+
+        await svc._append_event(
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+            event_type="task_completed",
+            actor_user_id=actor_id,
+            note="done",
+            payload={"ok": True},
+        )
+
+        payload = svc._event_service.create.await_args.args[0]
+        self.assertEqual(payload["event_seq"], 12)
+        svc._event_service.count.assert_not_awaited()

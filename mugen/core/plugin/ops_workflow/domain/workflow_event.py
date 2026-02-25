@@ -19,6 +19,7 @@ class WorkflowEventDE(BaseDE, TenantScopedDEMixin):
 
     workflow_instance_id: uuid.UUID | None = None
     workflow_task_id: uuid.UUID | None = None
+    event_seq: int | None = None
 
     event_type: str | None = None
 

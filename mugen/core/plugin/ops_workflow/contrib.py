@@ -33,7 +33,9 @@ from mugen.core.plugin.ops_workflow.api.validation import (
     WorkflowAssignTaskValidation,
     WorkflowCancelInstanceValidation,
     WorkflowCompleteTaskValidation,
+    WorkflowCompensateValidation,
     WorkflowRejectValidation,
+    WorkflowReplayValidation,
     WorkflowStartInstanceValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
@@ -158,6 +160,7 @@ def contribute(
                     "RequiresApproval",
                     "AutoAssignUserId",
                     "AutoAssignQueue",
+                    "CompensationJson",
                     "IsActive",
                     "Attributes",
                 ),
@@ -215,6 +218,16 @@ def contribute(
                     "perm": admin_ns.verb("manage"),
                     "schema": WorkflowCancelInstanceValidation,
                     "confirm": "Cancel this workflow instance?",
+                },
+                "replay": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": WorkflowReplayValidation,
+                    "confirm": "Replay events for this workflow instance?",
+                },
+                "compensate": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": WorkflowCompensateValidation,
+                    "confirm": "Plan compensation events for this workflow instance?",
                 },
             },
         },
@@ -348,3 +361,13 @@ def contribute(
                 init_kwargs={"table": table_name},
             )
         )
+
+    registry.register_table_spec(
+        TableSpec(
+            table_name="ops_workflow_action_dedup",
+            table_provider=(
+                "mugen.core.plugin.ops_workflow.model.workflow_action_dedup:"
+                "WorkflowActionDedup"
+            ),
+        )
+    )

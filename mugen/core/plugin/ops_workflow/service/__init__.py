@@ -8,12 +8,16 @@ __all__ = [
     "WorkflowInstanceService",
     "WorkflowTaskService",
     "WorkflowEventService",
+    "WorkflowActionDedupService",
 ]
 
 from mugen.core.plugin.ops_workflow.service.workflow_definition import (
     WorkflowDefinitionService,
 )
 from mugen.core.plugin.ops_workflow.service.workflow_event import WorkflowEventService
+from mugen.core.plugin.ops_workflow.service.workflow_action_dedup import (
+    WorkflowActionDedupService,
+)
 from mugen.core.plugin.ops_workflow.service.workflow_instance import (
     WorkflowInstanceService,
 )

@@ -45,6 +45,8 @@ _bootstrap_namespace_packages()
 from mugen.core.plugin.acp.api.action import dispatch_entity_action_tenant  # noqa: E402
 from mugen.core.plugin.ops_workflow.api.validation import (  # noqa: E402
     WorkflowAdvanceValidation,
+    WorkflowCompensateValidation,
+    WorkflowReplayValidation,
 )
 
 
@@ -68,6 +70,14 @@ class _FakeWorkflowInstanceService:
         self.calls.append(kwargs)
         return {"status": "ok"}
 
+    async def action_replay(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"status": "replayed"}
+
+    async def action_compensate(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"status": "compensated"}
+
 
 class _FakeRegistry:
     def __init__(self, svc: _FakeWorkflowInstanceService) -> None:
@@ -81,7 +91,13 @@ class _FakeRegistry:
                 actions={
                     "advance": {
                         "schema": WorkflowAdvanceValidation,
-                    }
+                    },
+                    "replay": {
+                        "schema": WorkflowReplayValidation,
+                    },
+                    "compensate": {
+                        "schema": WorkflowCompensateValidation,
+                    },
                 }
             ),
         )
@@ -147,3 +163,76 @@ class TestOpsWorkflowAcpActionDispatch(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(call["data"], WorkflowAdvanceValidation)
         self.assertEqual(call["data"].row_version, 7)
         self.assertEqual(call["data"].transition_key, "manager_approval")
+
+    async def test_dispatch_replay_action_validates_payload(self) -> None:
+        app = Quart("ops_workflow_replay_action_dispatch_test")
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        auth_user = uuid.uuid4()
+
+        fake_service = _FakeWorkflowInstanceService()
+        registry = _FakeRegistry(fake_service)
+
+        request_path = (
+            f"/api/core/acp/v1/tenants/{tenant_id}/OpsWorkflowInstances/{instance_id}"
+            "/$action/replay"
+        )
+        async with app.test_request_context(
+            request_path,
+            method="POST",
+            json={"Repair": True},
+        ):
+            result = await dispatch_entity_action_tenant.__wrapped__(
+                tenant_id=str(tenant_id),
+                entity_set="OpsWorkflowInstances",
+                entity_id=str(instance_id),
+                action="replay",
+                auth_user=str(auth_user),
+                logger_provider=lambda: SimpleNamespace(
+                    debug=lambda *_: None,
+                    error=lambda *_: None,
+                ),
+                registry_provider=lambda: registry,
+            )
+
+        self.assertEqual(result, {"status": "replayed"})
+        call = fake_service.calls[0]
+        self.assertIsInstance(call["data"], WorkflowReplayValidation)
+        self.assertTrue(call["data"].repair)
+
+    async def test_dispatch_compensate_action_validates_payload(self) -> None:
+        app = Quart("ops_workflow_compensate_action_dispatch_test")
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        auth_user = uuid.uuid4()
+
+        fake_service = _FakeWorkflowInstanceService()
+        registry = _FakeRegistry(fake_service)
+
+        request_path = (
+            f"/api/core/acp/v1/tenants/{tenant_id}/OpsWorkflowInstances/{instance_id}"
+            "/$action/compensate"
+        )
+        async with app.test_request_context(
+            request_path,
+            method="POST",
+            json={"RowVersion": 3, "TransitionKey": "rollback"},
+        ):
+            result = await dispatch_entity_action_tenant.__wrapped__(
+                tenant_id=str(tenant_id),
+                entity_set="OpsWorkflowInstances",
+                entity_id=str(instance_id),
+                action="compensate",
+                auth_user=str(auth_user),
+                logger_provider=lambda: SimpleNamespace(
+                    debug=lambda *_: None,
+                    error=lambda *_: None,
+                ),
+                registry_provider=lambda: registry,
+            )
+
+        self.assertEqual(result, {"status": "compensated"})
+        call = fake_service.calls[0]
+        self.assertIsInstance(call["data"], WorkflowCompensateValidation)
+        self.assertEqual(call["data"].row_version, 3)
+        self.assertEqual(call["data"].transition_key, "rollback")

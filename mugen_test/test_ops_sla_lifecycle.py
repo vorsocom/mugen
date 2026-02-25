@@ -170,6 +170,7 @@ class TestOpsSlaLifecycle(unittest.IsolatedAsyncioTestCase):
         svc.get = AsyncMock(return_value=current)
         svc.update_with_row_version = AsyncMock(return_value=current)
         svc._breach_event_service.create = AsyncMock(return_value=Mock())
+        svc._clock_event_service.create = AsyncMock(return_value=Mock())
 
         result = await svc.action_mark_breached(
             tenant_id=tenant_id,

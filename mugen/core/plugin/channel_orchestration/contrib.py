@@ -30,6 +30,9 @@ from mugen.core.plugin.channel_orchestration.api.validation import (
     RouteConversationValidation,
     SetFallbackValidation,
     UnblockSenderActionValidation,
+    WorkItemCreateFromChannelValidation,
+    WorkItemLinkToCaseValidation,
+    WorkItemReplayValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -314,6 +317,53 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(),
         },
+        {
+            "set": "WorkItems",
+            "entity": "WorkItem",
+            "description": (
+                "Canonical intake envelopes used to replay channel payloads into"
+                " workflow and SLA execution paths."
+            ),
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "crud": CrudPolicy(
+                create_schema=(
+                    "TenantId",
+                    "TraceId",
+                    "Source",
+                ),
+                update_schema=(
+                    "Source",
+                    "Participants",
+                    "Content",
+                    "Attachments",
+                    "Signals",
+                    "Extractions",
+                    "LinkedCaseId",
+                    "LinkedWorkflowInstanceId",
+                    "Attributes",
+                ),
+            ),
+            "actions": {
+                "create_from_channel": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": WorkItemCreateFromChannelValidation,
+                    "confirm": "Create a canonical work item from channel payload?",
+                },
+                "link_to_case": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": WorkItemLinkToCaseValidation,
+                    "confirm": "Link this work item to case/workflow records?",
+                },
+                "replay": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": WorkItemReplayValidation,
+                    "confirm": "Replay the canonical work item envelope?",
+                },
+            },
+        },
     )
 
     objects: list[PermissionObjectDef] = []
@@ -391,8 +441,7 @@ def contribute(
             EdmTypeSpec(
                 edm_type_name=edm_type_name,
                 edm_provider=(
-                    "mugen.core.plugin.channel_orchestration.edm:"
-                    f"{obj_name}_type"
+                    "mugen.core.plugin.channel_orchestration.edm:" f"{obj_name}_type"
                 ),
             )
         )

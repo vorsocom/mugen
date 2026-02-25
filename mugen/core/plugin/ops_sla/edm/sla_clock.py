@@ -24,6 +24,8 @@ sla_clock_type = EdmType(
         "PolicyId": EdmProperty("PolicyId", TypeRef("Edm.Guid")),
         "CalendarId": EdmProperty("CalendarId", TypeRef("Edm.Guid")),
         "TargetId": EdmProperty("TargetId", TypeRef("Edm.Guid")),
+        "ClockDefinitionId": EdmProperty("ClockDefinitionId", TypeRef("Edm.Guid")),
+        "TraceId": EdmProperty("TraceId", TypeRef("Edm.String")),
         "TrackedNamespace": EdmProperty(
             "TrackedNamespace", TypeRef("Edm.String"), nullable=False
         ),
@@ -44,6 +46,12 @@ sla_clock_type = EdmType(
         "DeadlineAt": EdmProperty("DeadlineAt", TypeRef("Edm.DateTimeOffset")),
         "IsBreached": EdmProperty("IsBreached", TypeRef("Edm.Boolean"), nullable=False),
         "BreachCount": EdmProperty("BreachCount", TypeRef("Edm.Int64"), nullable=False),
+        "WarnedOffsetsJson": EdmProperty(
+            "WarnedOffsetsJson",
+            TypeRef("Edm.String"),
+            filterable=False,
+            sortable=False,
+        ),
         "LastActorUserId": EdmProperty("LastActorUserId", TypeRef("Edm.Guid")),
         "Attributes": EdmProperty(
             "Attributes",

@@ -36,6 +36,12 @@ workflow_transition_type = EdmType(
         ),
         "AutoAssignUserId": EdmProperty("AutoAssignUserId", TypeRef("Edm.Guid")),
         "AutoAssignQueue": EdmProperty("AutoAssignQueue", TypeRef("Edm.String")),
+        "CompensationJson": EdmProperty(
+            "CompensationJson",
+            TypeRef("Edm.String"),
+            filterable=False,
+            sortable=False,
+        ),
         "IsActive": EdmProperty("IsActive", TypeRef("Edm.Boolean"), nullable=False),
         "Attributes": EdmProperty(
             "Attributes",

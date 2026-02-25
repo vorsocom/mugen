@@ -12,6 +12,8 @@ from mugen.core.plugin.channel_orchestration.api.validation import (
     BlockSenderActionValidation,
     EvaluateIntakeValidation,
     SetFallbackValidation,
+    WorkItemCreateFromChannelValidation,
+    WorkItemLinkToCaseValidation,
     UnblockSenderActionValidation,
 )
 from mugen.core.plugin.knowledge_pack.api.validation import (
@@ -61,6 +63,8 @@ from mugen.core.plugin.ops_reporting.api.validation import (
 )
 from mugen.core.plugin.ops_sla.api.validation import (
     SlaClockCreateValidation,
+    SlaEscalationEvaluateValidation,
+    SlaEscalationTestValidation,
     SlaTargetCreateValidation,
 )
 from mugen.core.plugin.ops_vpn.api.validation import (
@@ -69,7 +73,12 @@ from mugen.core.plugin.ops_vpn.api.validation import (
 )
 from mugen.core.plugin.ops_workflow.api.validation import (
     WorkflowAdvanceValidation,
+    WorkflowApproveValidation,
     WorkflowAssignTaskValidation,
+    WorkflowCancelInstanceValidation,
+    WorkflowCompensateValidation,
+    WorkflowRejectValidation,
+    WorkflowStartInstanceValidation,
 )
 
 
@@ -158,6 +167,15 @@ class TestMugenApiValidationBranches(unittest.TestCase):
                 tenant_id=tenant_id,
                 tracked_namespace="ops",
                 metric="m",
+                tracked_ref="abc",
+                trace_id=" ",
+            )
+        with self.assertRaises(ValidationError):
+            SlaClockCreateValidation(
+                row_version=1,
+                tenant_id=tenant_id,
+                tracked_namespace="ops",
+                metric="m",
             )
 
         with self.assertRaises(ValidationError):
@@ -207,6 +225,25 @@ class TestMugenApiValidationBranches(unittest.TestCase):
         )
         self.assertIsNotNone(valid_target)
 
+        with self.assertRaises(ValidationError):
+            SlaEscalationEvaluateValidation(
+                policy_key=" ",
+                trigger_event_json={"EventType": "warned"},
+            )
+        with self.assertRaises(ValueError):
+            SlaEscalationEvaluateValidation.model_construct(
+                policy_key="p1",
+                trigger_event_json="bad",
+            )._validate_payload()
+
+        with self.assertRaises(ValidationError):
+            SlaEscalationTestValidation(policy_key=" ", sample_event_json={})
+        with self.assertRaises(ValueError):
+            SlaEscalationTestValidation.model_construct(
+                policy_key="policy-a",
+                sample_event_json="bad",
+            )._validate_payload()
+
     def test_channel_orchestration_validators(self) -> None:
         with self.assertRaises(ValidationError):
             EvaluateIntakeValidation(row_version=1)
@@ -230,6 +267,24 @@ class TestMugenApiValidationBranches(unittest.TestCase):
         self.assertIsNotNone(valid_block)
         valid_unblock = UnblockSenderActionValidation(sender_key="sender-1")
         self.assertIsNotNone(valid_unblock)
+
+        with self.assertRaises(ValidationError):
+            WorkItemCreateFromChannelValidation(source=" ", trace_id="trace-1")
+        with self.assertRaises(ValidationError):
+            WorkItemCreateFromChannelValidation(source="chat", trace_id=" ")
+        with self.assertRaises(ValidationError):
+            WorkItemLinkToCaseValidation(row_version=1)
+
+        valid_work_item_create = WorkItemCreateFromChannelValidation(
+            source="chat",
+            trace_id="trace-1",
+        )
+        self.assertIsNotNone(valid_work_item_create)
+        valid_work_item_link = WorkItemLinkToCaseValidation(
+            row_version=1,
+            linked_case_id=uuid.uuid4(),
+        )
+        self.assertIsNotNone(valid_work_item_link)
 
     def test_ops_case_validators(self) -> None:
         with self.assertRaises(ValidationError):
@@ -263,6 +318,22 @@ class TestMugenApiValidationBranches(unittest.TestCase):
             WorkflowAdvanceValidation(row_version=1)
         with self.assertRaises(ValidationError):
             WorkflowAssignTaskValidation(row_version=1)
+        with self.assertRaises(ValidationError):
+            WorkflowStartInstanceValidation(row_version=1, client_action_key=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowAdvanceValidation(
+                row_version=1,
+                transition_key="next",
+                client_action_key=" ",
+            )
+        with self.assertRaises(ValidationError):
+            WorkflowApproveValidation(row_version=1, client_action_key=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowRejectValidation(row_version=1, client_action_key=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowCancelInstanceValidation(row_version=1, client_action_key=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowCompensateValidation(row_version=1, transition_key=" ")
 
         valid_advance = WorkflowAdvanceValidation(row_version=1, transition_key="next")
         self.assertIsNotNone(valid_advance)

@@ -14,7 +14,14 @@ class WorkflowStartInstanceValidation(IValidationBase):
     row_version: NonNegativeInt
 
     start_state_id: uuid.UUID | None = None
+    client_action_key: str | None = None
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_client_action_key(self) -> "WorkflowStartInstanceValidation":
+        if self.client_action_key is not None and not self.client_action_key.strip():
+            raise ValueError("ClientActionKey cannot be empty if provided.")
+        return self
 
 
 class WorkflowAdvanceValidation(IValidationBase):
@@ -31,6 +38,7 @@ class WorkflowAdvanceValidation(IValidationBase):
     task_title: str | None = None
     task_description: str | None = None
 
+    client_action_key: str | None = None
     note: str | None = None
     payload: dict[str, Any] | None = None
 
@@ -40,6 +48,8 @@ class WorkflowAdvanceValidation(IValidationBase):
         has_state = self.to_state_id is not None
         if not has_key and not has_state:
             raise ValueError("Provide TransitionKey or ToStateId.")
+        if self.client_action_key is not None and not self.client_action_key.strip():
+            raise ValueError("ClientActionKey cannot be empty if provided.")
         return self
 
 
@@ -48,7 +58,14 @@ class WorkflowApproveValidation(IValidationBase):
 
     row_version: NonNegativeInt
 
+    client_action_key: str | None = None
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_client_action_key(self) -> "WorkflowApproveValidation":
+        if self.client_action_key is not None and not self.client_action_key.strip():
+            raise ValueError("ClientActionKey cannot be empty if provided.")
+        return self
 
 
 class WorkflowRejectValidation(IValidationBase):
@@ -56,8 +73,15 @@ class WorkflowRejectValidation(IValidationBase):
 
     row_version: NonNegativeInt
 
+    client_action_key: str | None = None
     reason: str | None = None
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_client_action_key(self) -> "WorkflowRejectValidation":
+        if self.client_action_key is not None and not self.client_action_key.strip():
+            raise ValueError("ClientActionKey cannot be empty if provided.")
+        return self
 
 
 class WorkflowCancelInstanceValidation(IValidationBase):
@@ -65,8 +89,35 @@ class WorkflowCancelInstanceValidation(IValidationBase):
 
     row_version: NonNegativeInt
 
+    client_action_key: str | None = None
     reason: str | None = None
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_client_action_key(self) -> "WorkflowCancelInstanceValidation":
+        if self.client_action_key is not None and not self.client_action_key.strip():
+            raise ValueError("ClientActionKey cannot be empty if provided.")
+        return self
+
+
+class WorkflowReplayValidation(IValidationBase):
+    """Validate payload for replay actions."""
+
+    repair: bool = False
+
+
+class WorkflowCompensateValidation(IValidationBase):
+    """Validate payload for compensate actions."""
+
+    row_version: NonNegativeInt
+    transition_key: str | None = None
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_transition_key(self) -> "WorkflowCompensateValidation":
+        if self.transition_key is not None and not self.transition_key.strip():
+            raise ValueError("TransitionKey cannot be empty if provided.")
+        return self
 
 
 class WorkflowAssignTaskValidation(IValidationBase):
