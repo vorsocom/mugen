@@ -187,14 +187,18 @@ class TestOpsWorkflowLifecycle(unittest.IsolatedAsyncioTestCase):
                 row_version=5,
             )
         )
-        svc._require_open_decision_request = AsyncMock(
-            return_value=WorkflowDecisionRequestDE(
-                id=uuid.uuid4(),
-                tenant_id=tenant_id,
-                workflow_instance_id=instance_id,
-                workflow_task_id=task_id,
-                status="open",
-                row_version=6,
+        decision_request_id = uuid.uuid4()
+        svc._get_or_create_legacy_decision_request = AsyncMock(
+            return_value=(
+                WorkflowDecisionRequestDE(
+                    id=decision_request_id,
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task_id=task_id,
+                    status="open",
+                    row_version=6,
+                ),
+                True,
             )
         )
         svc._decision_request_service.action_resolve = AsyncMock(
@@ -245,8 +249,15 @@ class TestOpsWorkflowLifecycle(unittest.IsolatedAsyncioTestCase):
             call.args[0]["event_type"]
             for call in svc._event_service.create.await_args_list
         ]
-        self.assertIn("task_completed", event_types)
-        self.assertIn("approved", event_types)
+        self.assertEqual(event_types, ["task_completed", "approved"])
+        approved_payload = svc._event_service.create.await_args_list[-1].args[0][
+            "payload"
+        ]
+        self.assertEqual(
+            approved_payload["decision_request_id"],
+            str(decision_request_id),
+        )
+        self.assertTrue(approved_payload["legacy_bridge_created"])
 
     async def test_reject_clears_pending_transition(self) -> None:
         """Reject should keep current state and clear pending transition/task ids."""
@@ -291,14 +302,18 @@ class TestOpsWorkflowLifecycle(unittest.IsolatedAsyncioTestCase):
                 row_version=3,
             )
         )
-        svc._require_open_decision_request = AsyncMock(
-            return_value=WorkflowDecisionRequestDE(
-                id=uuid.uuid4(),
-                tenant_id=tenant_id,
-                workflow_instance_id=instance_id,
-                workflow_task_id=task_id,
-                status="open",
-                row_version=4,
+        decision_request_id = uuid.uuid4()
+        svc._get_or_create_legacy_decision_request = AsyncMock(
+            return_value=(
+                WorkflowDecisionRequestDE(
+                    id=decision_request_id,
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task_id=task_id,
+                    status="open",
+                    row_version=4,
+                ),
+                True,
             )
         )
         svc._decision_request_service.action_cancel = AsyncMock(
@@ -325,5 +340,12 @@ class TestOpsWorkflowLifecycle(unittest.IsolatedAsyncioTestCase):
             call.args[0]["event_type"]
             for call in svc._event_service.create.await_args_list
         ]
-        self.assertIn("task_completed", event_types)
-        self.assertIn("rejected", event_types)
+        self.assertEqual(event_types, ["task_completed", "rejected"])
+        rejected_payload = svc._event_service.create.await_args_list[-1].args[0][
+            "payload"
+        ]
+        self.assertEqual(
+            rejected_payload["decision_request_id"],
+            str(decision_request_id),
+        )
+        self.assertTrue(rejected_payload["legacy_bridge_created"])

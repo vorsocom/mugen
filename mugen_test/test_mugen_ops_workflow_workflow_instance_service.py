@@ -193,7 +193,9 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
             table="ops_workflow_workflow_instance", rsg=Mock()
         )
         svc._event_seq_cache[(tenant_id, instance_id)] = 9
-        svc._event_service.list = AsyncMock(return_value=[WorkflowEventDE(event_seq=10)])
+        svc._event_service.list = AsyncMock(
+            return_value=[WorkflowEventDE(event_seq=10)]
+        )
         svc._event_service.count = AsyncMock(return_value=0)
         svc._event_service.create = AsyncMock(
             side_effect=[
@@ -221,7 +223,9 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
         )
 
         self.assertEqual(svc._event_service.create.await_count, 2)
-        first_event_seq = svc._event_service.create.await_args_list[0].args[0]["event_seq"]
+        first_event_seq = svc._event_service.create.await_args_list[0].args[0][
+            "event_seq"
+        ]
         second_event_seq = svc._event_service.create.await_args_list[1].args[0][
             "event_seq"
         ]
@@ -288,7 +292,10 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 "insert",
                 {"event_seq": 2},
                 Exception(
-                    'duplicate key value violates unique constraint "ux_other_constraint"'
+                    (
+                        'duplicate key value violates unique constraint '
+                        '"ux_other_constraint"'
+                    )
                 ),
             )
         )
@@ -946,6 +953,7 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 transition_key="manager_approval",
                 task_title="  ",
                 task_description="   ",
+                note="   ",
             ),
         )
         self.assertEqual(result, ("", 204))
@@ -953,6 +961,11 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
             call.kwargs["event_type"] for call in svc._append_event.await_args_list
         ]
         self.assertEqual(event_types, ["approval_requested", "task_assigned"])
+        self.assertIsNone(
+            svc._decision_request_service.action_open.await_args.kwargs["data"].note
+        )
+        approval_event = svc._append_event.await_args_list[0].kwargs
+        self.assertIsNone(approval_event["note"])
 
         non_approval_transition = _transition(
             tenant_id=tenant_id,
@@ -1212,15 +1225,16 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 row_version=3,
             )
         )
-        svc._require_open_decision_request = AsyncMock(
-            return_value=WorkflowDecisionRequestDE(
-                id=uuid.uuid4(),
-                tenant_id=tenant_id,
-                workflow_instance_id=instance_id,
-                workflow_task_id=task_id,
-                status="open",
-                row_version=6,
-            )
+        approve_decision_request = WorkflowDecisionRequestDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+            status="open",
+            row_version=6,
+        )
+        svc._get_or_create_legacy_decision_request = AsyncMock(
+            return_value=(approve_decision_request, False)
         )
         svc._decision_request_service.action_resolve = AsyncMock(
             return_value=({"DecisionRequestId": str(uuid.uuid4())}, 200)
@@ -1265,15 +1279,16 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 row_version=3,
             )
         )
-        svc._require_open_decision_request = AsyncMock(
-            return_value=WorkflowDecisionRequestDE(
-                id=uuid.uuid4(),
-                tenant_id=tenant_id,
-                workflow_instance_id=instance_id,
-                workflow_task_id=task_id,
-                status="open",
-                row_version=4,
-            )
+        reject_decision_request = WorkflowDecisionRequestDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+            status="open",
+            row_version=4,
+        )
+        svc._get_or_create_legacy_decision_request = AsyncMock(
+            return_value=(reject_decision_request, False)
         )
         svc._decision_request_service.action_cancel = AsyncMock(
             return_value=({"DecisionRequestId": str(uuid.uuid4())}, 200)
@@ -1449,7 +1464,9 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
             )
         )
         cancel_without_pending._task_service.get = AsyncMock()
-        cancel_without_pending._find_open_decision_request = AsyncMock(return_value=None)
+        cancel_without_pending._find_open_decision_request = AsyncMock(
+            return_value=None
+        )
         cancel_without_pending._update_instance_with_row_version = AsyncMock()
         cancel_without_pending._append_event = AsyncMock()
         cancel_result = await cancel_without_pending.action_cancel_instance(
@@ -1556,6 +1573,296 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
             cancel_with_idless_update._append_event.await_args.kwargs["event_type"],
             "cancelled",
         )
+
+    async def test_advance_decision_open_failure_compensates_state(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        version_id = uuid.uuid4()
+        state_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+        where = {"tenant_id": tenant_id, "id": instance_id}
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        active = _instance(
+            instance_id=instance_id,
+            tenant_id=tenant_id,
+            workflow_version_id=version_id,
+            current_state_id=state_id,
+            status="active",
+            row_version=12,
+        )
+        approval_transition = _transition(
+            transition_id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            workflow_version_id=version_id,
+            from_state_id=state_id,
+            to_state_id=uuid.uuid4(),
+            key="needs_review",
+            requires_approval=True,
+        )
+        svc._get_for_action = AsyncMock(return_value=active)
+        svc._resolve_transition = AsyncMock(return_value=approval_transition)
+        svc._task_service.create = AsyncMock(
+            return_value=_task(
+                task_id=task_id,
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                status="open",
+                row_version=1,
+            )
+        )
+        svc._update_instance_with_row_version = AsyncMock()
+        svc._decision_request_service.action_open = AsyncMock(
+            side_effect=RuntimeError("decision open failed")
+        )
+        svc.update = AsyncMock(
+            return_value=_instance(
+                instance_id=instance_id,
+                tenant_id=tenant_id,
+                workflow_version_id=version_id,
+                current_state_id=state_id,
+                status="active",
+                row_version=13,
+            )
+        )
+        svc._task_service.update = AsyncMock(
+            return_value=_task(
+                task_id=task_id,
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                status="cancelled",
+                row_version=2,
+            )
+        )
+        svc._append_event = AsyncMock()
+
+        with self.assertRaises(RuntimeError):
+            await svc.action_advance(
+                tenant_id=tenant_id,
+                entity_id=instance_id,
+                where=where,
+                auth_user_id=actor_id,
+                data=WorkflowAdvanceValidation(
+                    row_version=12,
+                    transition_key="needs_review",
+                    note="   ",
+                ),
+            )
+
+        pending_changes = svc._update_instance_with_row_version.await_args.kwargs[
+            "changes"
+        ]
+        self.assertEqual(pending_changes["status"], "awaiting_approval")
+        self.assertEqual(
+            pending_changes["pending_transition_id"],
+            approval_transition.id,
+        )
+        self.assertEqual(pending_changes["pending_task_id"], task_id)
+
+        open_data = svc._decision_request_service.action_open.await_args.kwargs["data"]
+        self.assertIsNone(open_data.note)
+
+        compensated_changes = svc.update.await_args.kwargs["changes"]
+        self.assertEqual(compensated_changes["status"], "active")
+        self.assertIsNone(compensated_changes["pending_transition_id"])
+        self.assertIsNone(compensated_changes["pending_task_id"])
+
+        cancelled_changes = svc._task_service.update.await_args.kwargs["changes"]
+        self.assertEqual(cancelled_changes["status"], "cancelled")
+        self.assertEqual(cancelled_changes["outcome"], "decision_open_failed")
+
+        compensation_event = svc._append_event.await_args.kwargs
+        self.assertEqual(compensation_event["event_type"], "task_completed")
+        self.assertEqual(
+            compensation_event["payload"]["reason"],
+            "decision_open_failed",
+        )
+
+    async def test_action_approve_legacy_bridge_with_whitespace_note(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        transition_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+        state_id = uuid.uuid4()
+        bridge_id = uuid.uuid4()
+        where = {"tenant_id": tenant_id, "id": instance_id}
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        awaiting = _instance(
+            instance_id=instance_id,
+            tenant_id=tenant_id,
+            workflow_version_id=uuid.uuid4(),
+            current_state_id=state_id,
+            status="awaiting_approval",
+            row_version=8,
+            pending_transition_id=transition_id,
+            pending_task_id=task_id,
+        )
+        pending_task = _task(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            status="open",
+            row_version=4,
+        )
+        bridge_request = WorkflowDecisionRequestDE(
+            id=bridge_id,
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+            status="open",
+            row_version=6,
+        )
+
+        svc._get_for_action = AsyncMock(return_value=awaiting)
+        svc._transition_service.get = AsyncMock(
+            return_value=_transition(
+                transition_id=transition_id,
+                tenant_id=tenant_id,
+                workflow_version_id=awaiting.workflow_version_id,
+                from_state_id=state_id,
+                to_state_id=uuid.uuid4(),
+                key="approval",
+                requires_approval=True,
+            )
+        )
+        svc._task_service.get = AsyncMock(return_value=pending_task)
+        svc._find_open_decision_request = AsyncMock(
+            side_effect=[None, bridge_request]
+        )
+        svc._decision_request_service.action_open = AsyncMock(
+            return_value=({"DecisionRequestId": str(bridge_id)}, 201)
+        )
+        svc._decision_request_service.action_resolve = AsyncMock(
+            return_value=({"DecisionRequestId": str(bridge_id)}, 200)
+        )
+        svc._update_pending_task = AsyncMock(
+            return_value=_task(
+                task_id=task_id,
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                status="completed",
+                row_version=5,
+            )
+        )
+        svc._append_event = AsyncMock()
+        svc._apply_transition = AsyncMock(return_value=("", 204))
+
+        result = await svc.action_approve(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where=where,
+            auth_user_id=actor_id,
+            data=WorkflowApproveValidation(row_version=8, note="   "),
+        )
+        self.assertEqual(result, ("", 204))
+        self.assertEqual(svc._find_open_decision_request.await_count, 2)
+        open_data = svc._decision_request_service.action_open.await_args.kwargs["data"]
+        self.assertEqual(open_data.template_key, "workflow.approval.legacy_bridge")
+        resolve_data = (
+            svc._decision_request_service.action_resolve.await_args.kwargs["data"]
+        )
+        self.assertIsNone(resolve_data.note)
+        apply_payload = svc._apply_transition.await_args.kwargs["payload"]
+        self.assertEqual(apply_payload["decision_request_id"], str(bridge_id))
+        self.assertTrue(apply_payload["legacy_bridge_created"])
+
+    async def test_action_reject_legacy_bridge_with_whitespace_note(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+        state_id = uuid.uuid4()
+        bridge_id = uuid.uuid4()
+        where = {"tenant_id": tenant_id, "id": instance_id}
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        rejecting = _instance(
+            instance_id=instance_id,
+            tenant_id=tenant_id,
+            workflow_version_id=uuid.uuid4(),
+            current_state_id=state_id,
+            status="awaiting_approval",
+            row_version=6,
+            pending_task_id=task_id,
+        )
+        pending_task = _task(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            status="open",
+            row_version=3,
+        )
+        bridge_request = WorkflowDecisionRequestDE(
+            id=bridge_id,
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+            status="open",
+            row_version=5,
+        )
+
+        svc._get_for_action = AsyncMock(return_value=rejecting)
+        svc._task_service.get = AsyncMock(return_value=pending_task)
+        svc._find_open_decision_request = AsyncMock(
+            side_effect=[None, bridge_request]
+        )
+        svc._decision_request_service.action_open = AsyncMock(
+            return_value=({"DecisionRequestId": str(bridge_id)}, 201)
+        )
+        svc._decision_request_service.action_cancel = AsyncMock(
+            return_value=({"DecisionRequestId": str(bridge_id)}, 200)
+        )
+        svc._update_pending_task = AsyncMock(
+            return_value=_task(
+                task_id=task_id,
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                status="rejected",
+                row_version=4,
+            )
+        )
+        svc._update_instance_with_row_version = AsyncMock()
+        svc._append_event = AsyncMock()
+
+        result = await svc.action_reject(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where=where,
+            auth_user_id=actor_id,
+            data=WorkflowRejectValidation(
+                row_version=6,
+                reason="  policy ",
+                note="   ",
+            ),
+        )
+        self.assertEqual(result, ("", 204))
+        self.assertEqual(svc._find_open_decision_request.await_count, 2)
+        open_data = svc._decision_request_service.action_open.await_args.kwargs["data"]
+        self.assertEqual(open_data.template_key, "workflow.approval.legacy_bridge")
+        cancel_data = svc._decision_request_service.action_cancel.await_args.kwargs[
+            "data"
+        ]
+        self.assertEqual(cancel_data.reason, "policy")
+        self.assertIsNone(cancel_data.note)
+        rejected_event = svc._append_event.await_args_list[-1].kwargs
+        self.assertEqual(rejected_event["event_type"], "rejected")
+        self.assertEqual(
+            rejected_event["payload"]["decision_request_id"],
+            str(bridge_id),
+        )
+        self.assertTrue(rejected_event["payload"]["legacy_bridge_created"])
 
     async def test_new_helper_methods_for_json_payload_hash_and_uuid(self) -> None:
         aware = datetime(2026, 2, 16, 15, 0, tzinfo=timezone.utc)
@@ -1737,6 +2044,281 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
         )
         self.assertEqual(derived_without_created_status["status"], "draft")
 
+    async def test_safe_decision_validation_helpers_abort_400(self) -> None:
+        with patch.object(workflow_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                WorkflowInstanceService._safe_decision_open_validation(
+                    template_key="workflow.approval",
+                    note="   ",
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                WorkflowInstanceService._safe_decision_resolve_validation(
+                    row_version=1,
+                    outcome="approved",
+                    note="   ",
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                WorkflowInstanceService._safe_decision_cancel_validation(
+                    row_version=1,
+                    reason="   ",
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+    async def test_legacy_bridge_and_compensation_guard_branches(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        pending_task = _task(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            status="open",
+            row_version=2,
+        )
+
+        with patch.object(workflow_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._get_or_create_legacy_decision_request(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task=_task(task_id=None),
+                    auth_user_id=actor_id,
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            svc._find_open_decision_request = AsyncMock(
+                return_value=WorkflowDecisionRequestDE(
+                    id=None,
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task_id=task_id,
+                    status="open",
+                    row_version=2,
+                )
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._get_or_create_legacy_decision_request(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task=pending_task,
+                    auth_user_id=actor_id,
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            svc._find_open_decision_request = AsyncMock(
+                return_value=WorkflowDecisionRequestDE(
+                    id=uuid.uuid4(),
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task_id=task_id,
+                    status="open",
+                    row_version=0,
+                )
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._get_or_create_legacy_decision_request(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task=pending_task,
+                    auth_user_id=actor_id,
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            svc._find_open_decision_request = AsyncMock(
+                side_effect=[
+                    None,
+                    None,
+                ]
+            )
+            svc._decision_request_service.action_open = AsyncMock(
+                return_value=({"DecisionRequestId": str(uuid.uuid4())}, 201)
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._get_or_create_legacy_decision_request(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task=pending_task,
+                    auth_user_id=actor_id,
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            svc._find_open_decision_request = AsyncMock(
+                side_effect=[
+                    None,
+                    WorkflowDecisionRequestDE(
+                        id=None,
+                        tenant_id=tenant_id,
+                        workflow_instance_id=instance_id,
+                        workflow_task_id=task_id,
+                        status="open",
+                        row_version=3,
+                    ),
+                ]
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._get_or_create_legacy_decision_request(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task=pending_task,
+                    auth_user_id=actor_id,
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            svc._find_open_decision_request = AsyncMock(
+                side_effect=[
+                    None,
+                    WorkflowDecisionRequestDE(
+                        id=uuid.uuid4(),
+                        tenant_id=tenant_id,
+                        workflow_instance_id=instance_id,
+                        workflow_task_id=task_id,
+                        status="open",
+                        row_version=0,
+                    ),
+                ]
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._get_or_create_legacy_decision_request(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task=pending_task,
+                    auth_user_id=actor_id,
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            current = _instance(
+                instance_id=instance_id,
+                tenant_id=tenant_id,
+                status="active",
+                row_version=4,
+            )
+            where = {"tenant_id": tenant_id, "id": instance_id}
+            svc.update = AsyncMock(side_effect=SQLAlchemyError("boom"))
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._compensate_advance_decision_open_failure(
+                    tenant_id=tenant_id,
+                    entity_id=instance_id,
+                    where=where,
+                    current=current,
+                    task=pending_task,
+                    auth_user_id=actor_id,
+                )
+            self.assertEqual(ex.exception.code, 500)
+
+            svc.update = AsyncMock(return_value=None)
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._compensate_advance_decision_open_failure(
+                    tenant_id=tenant_id,
+                    entity_id=instance_id,
+                    where=where,
+                    current=current,
+                    task=pending_task,
+                    auth_user_id=actor_id,
+                )
+            self.assertEqual(ex.exception.code, 500)
+
+            svc.update = AsyncMock(
+                return_value=_instance(
+                    instance_id=instance_id,
+                    tenant_id=tenant_id,
+                    status="active",
+                    row_version=5,
+                )
+            )
+            svc._task_service.update = AsyncMock(side_effect=SQLAlchemyError("boom"))
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._compensate_advance_decision_open_failure(
+                    tenant_id=tenant_id,
+                    entity_id=instance_id,
+                    where=where,
+                    current=current,
+                    task=pending_task,
+                    auth_user_id=actor_id,
+                )
+            self.assertEqual(ex.exception.code, 500)
+
+            svc._task_service.update = AsyncMock(return_value=None)
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._compensate_advance_decision_open_failure(
+                    tenant_id=tenant_id,
+                    entity_id=instance_id,
+                    where=where,
+                    current=current,
+                    task=pending_task,
+                    auth_user_id=actor_id,
+                )
+            self.assertEqual(ex.exception.code, 500)
+
+        existing = WorkflowDecisionRequestDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+            status="open",
+            row_version=7,
+        )
+        svc._find_open_decision_request = AsyncMock(return_value=existing)
+        resolved, bridge_created = await svc._get_or_create_legacy_decision_request(
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task=pending_task,
+            auth_user_id=actor_id,
+        )
+        self.assertFalse(bridge_created)
+        self.assertEqual(resolved.id, existing.id)
+
+        current = _instance(
+            instance_id=instance_id,
+            tenant_id=tenant_id,
+            status="active",
+            row_version=6,
+        )
+        where = {"tenant_id": tenant_id, "id": instance_id}
+        svc.update = AsyncMock(return_value=current)
+        svc._task_service.update = AsyncMock()
+        svc._append_event = AsyncMock()
+        await svc._compensate_advance_decision_open_failure(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where=where,
+            current=current,
+            task=_task(task_id=None),
+            auth_user_id=actor_id,
+        )
+        svc._task_service.update.assert_not_awaited()
+        svc._append_event.assert_not_awaited()
+
+        svc.update = AsyncMock(return_value=current)
+        svc._task_service.update = AsyncMock(
+            return_value=_task(
+                task_id=None,
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                status="cancelled",
+                row_version=3,
+            )
+        )
+        svc._append_event = AsyncMock()
+        await svc._compensate_advance_decision_open_failure(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where=where,
+            current=current,
+            task=pending_task,
+            auth_user_id=actor_id,
+        )
+        svc._append_event.assert_not_awaited()
+
     async def test_policy_binding_and_decision_lookup_helpers(self) -> None:
         svc = WorkflowInstanceService(
             table="ops_workflow_workflow_instance",
@@ -1776,14 +2358,16 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
             "require_approval",
         )
         self.assertIsNone(WorkflowInstanceService._obligation_name({"x": 1}))
-        require_approval, require_reason_note = WorkflowInstanceService._obligation_flags(
-            [
-                "skip-non-mapping",
-                {"Type": "require_approval"},
-                {"Name": "log_reason", "Required": False},
-                {"Name": "log_reason", "Required": True},
-                {"Name": "ignored"},
-            ]
+        require_approval, require_reason_note = (
+            WorkflowInstanceService._obligation_flags(
+                [
+                    "skip-non-mapping",
+                    {"Type": "require_approval"},
+                    {"Name": "log_reason", "Required": False},
+                    {"Name": "log_reason", "Required": True},
+                    {"Name": "ignored"},
+                ]
+            )
         )
         self.assertTrue(require_approval)
         self.assertTrue(require_reason_note)
@@ -1903,12 +2487,17 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 to_state_id=uuid.uuid4(),
                 key="invalid",
             )
-            invalid_binding_transition.attributes = {"PolicyDefinitionId": "not-a-uuid"}
+            invalid_binding_transition.attributes = {
+                "PolicyDefinitionId": "not-a-uuid"
+            }
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._resolve_transition_policy_binding(
                     tenant_id=tenant_id,
                     transition=invalid_binding_transition,
-                    data=WorkflowAdvanceValidation(row_version=1, transition_key="invalid"),
+                    data=WorkflowAdvanceValidation(
+                        row_version=1,
+                        transition_key="invalid",
+                    ),
                 )
             self.assertEqual(ex.exception.code, 400)
 
@@ -1960,7 +2549,10 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 await svc._resolve_transition_policy_binding(
                     tenant_id=tenant_id,
                     transition=transition_with_code,
-                    data=WorkflowAdvanceValidation(row_version=1, transition_key="coded"),
+                    data=WorkflowAdvanceValidation(
+                        row_version=1,
+                        transition_key="coded",
+                    ),
                 )
             self.assertEqual(ex.exception.code, 409)
 
@@ -1977,7 +2569,10 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
             selected = await svc._resolve_transition_policy_binding(
                 tenant_id=tenant_id,
                 transition=transition_with_code,
-                data=WorkflowAdvanceValidation(row_version=1, transition_key="coded"),
+                data=WorkflowAdvanceValidation(
+                    row_version=1,
+                    transition_key="coded",
+                ),
             )
             self.assertEqual(selected.id, single_candidate.id)
 
@@ -2003,7 +2598,10 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 await svc._resolve_transition_policy_binding(
                     tenant_id=tenant_id,
                     transition=transition_with_code,
-                    data=WorkflowAdvanceValidation(row_version=1, transition_key="coded"),
+                    data=WorkflowAdvanceValidation(
+                        row_version=1,
+                        transition_key="coded",
+                    ),
                 )
             self.assertEqual(ex.exception.code, 409)
 
@@ -2026,7 +2624,10 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
         resolved_policy = await svc._resolve_transition_policy_binding(
             tenant_id=tenant_id,
             transition=transition_with_uuid_binding,
-            data=WorkflowAdvanceValidation(row_version=1, transition_key="uuid-bound"),
+            data=WorkflowAdvanceValidation(
+                row_version=1,
+                transition_key="uuid-bound",
+            ),
         )
         self.assertEqual(resolved_policy.id, policy_id)
 
@@ -2054,7 +2655,10 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                     auth_user_id=actor_id,
                     current=current,
                     transition=transition,
-                    data=WorkflowAdvanceValidation(row_version=5, transition_key="next"),
+                    data=WorkflowAdvanceValidation(
+                        row_version=5,
+                        transition_key="next",
+                    ),
                 )
             self.assertEqual(ex.exception.code, 409)
 
@@ -2073,11 +2677,16 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                     auth_user_id=actor_id,
                     current=current,
                     transition=transition,
-                    data=WorkflowAdvanceValidation(row_version=5, transition_key="next"),
+                    data=WorkflowAdvanceValidation(
+                        row_version=5,
+                        transition_key="next",
+                    ),
                 )
             self.assertEqual(ex.exception.code, 409)
 
-            svc._resolve_transition_policy_binding = AsyncMock(return_value=active_policy)
+            svc._resolve_transition_policy_binding = AsyncMock(
+                return_value=active_policy
+            )
             svc._policy_definition_service.action_evaluate_policy = AsyncMock(
                 return_value=({"Decision": "deny", "Obligations": []}, 200)
             )
@@ -2090,7 +2699,10 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                     entity_id=instance_id,
                     where={"tenant_id": tenant_id, "id": instance_id},
                     auth_user_id=actor_id,
-                    data=WorkflowAdvanceValidation(row_version=5, transition_key="next"),
+                    data=WorkflowAdvanceValidation(
+                        row_version=5,
+                        transition_key="next",
+                    ),
                 )
             self.assertEqual(ex.exception.code, 403)
 
@@ -2109,7 +2721,10 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                     entity_id=instance_id,
                     where={"tenant_id": tenant_id, "id": instance_id},
                     auth_user_id=actor_id,
-                    data=WorkflowAdvanceValidation(row_version=5, transition_key="next"),
+                    data=WorkflowAdvanceValidation(
+                        row_version=5,
+                        transition_key="next",
+                    ),
                 )
             self.assertEqual(ex.exception.code, 400)
 
@@ -2140,7 +2755,10 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                     entity_id=instance_id,
                     where={"tenant_id": tenant_id, "id": instance_id},
                     auth_user_id=actor_id,
-                    data=WorkflowAdvanceValidation(row_version=5, transition_key="approval"),
+                    data=WorkflowAdvanceValidation(
+                        row_version=5,
+                        transition_key="approval",
+                    ),
                 )
             self.assertEqual(ex.exception.code, 409)
 
@@ -2164,7 +2782,7 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
             )
         )
 
-    async def test_cancel_instance_fallback_cancels_linked_decision_request(self) -> None:
+    async def test_cancel_instance_fallback_cancels_linked_decision(self) -> None:
         tenant_id = uuid.uuid4()
         instance_id = uuid.uuid4()
         version_id = uuid.uuid4()
@@ -2227,7 +2845,7 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
         self.assertEqual(cancel_call["data"].reason, "cancelled by operator")
         self.assertEqual(cancel_call["data"].note, "cleanup")
 
-    async def test_cancel_instance_uses_first_decision_lookup_when_present(self) -> None:
+    async def test_cancel_instance_uses_first_decision_lookup(self) -> None:
         tenant_id = uuid.uuid4()
         instance_id = uuid.uuid4()
         version_id = uuid.uuid4()
