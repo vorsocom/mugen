@@ -31,6 +31,7 @@ _bootstrap_namespace_packages()
 # noqa: E402
 # pylint: disable=wrong-import-position
 from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
+from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 from mugen.core.plugin.acp.service import dedup_record as dedup_mod
 from mugen.core.plugin.acp.service.dedup_record import DedupRecordService
 
@@ -251,6 +252,12 @@ class TestMugenAcpServiceDedupRecord(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 svc._normalize_text("   ", field="Scope")
             self.assertEqual(ex.exception.code, 400)
+
+    def test_normalize_tenant_id_defaults_to_global_tenant(self) -> None:
+        self.assertEqual(
+            DedupRecordService._normalize_tenant_id(None),
+            GLOBAL_TENANT_ID,
+        )
 
     async def test_acquire_create_error_paths(self) -> None:
         service = _build_service()

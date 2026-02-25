@@ -31,6 +31,7 @@ _bootstrap_namespace_packages()
 # noqa: E402
 # pylint: disable=wrong-import-position
 from mugen.core.plugin.acp.service import schema_definition as schema_definition_mod
+from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 from mugen.core.plugin.acp.service.schema_binding import SchemaBindingService
 from mugen.core.plugin.acp.service.schema_definition import SchemaDefinitionService
 
@@ -114,6 +115,29 @@ class TestMugenAcpServiceSchemaRegistry(unittest.IsolatedAsyncioTestCase):
         self.assertIn("checksum_sha256", payload)
         self.assertIn("schema_json", payload)
         self.assertNotIn("schema_payload", payload)
+
+    async def test_schema_definition_create_defaults_missing_tenant_id_to_global(
+        self,
+    ) -> None:
+        service = _build_schema_definition_service()
+        super_create = AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+
+        with patch.object(
+            schema_definition_mod.IRelationalService,
+            "create",
+            new=super_create,
+        ):
+            await SchemaDefinitionService.create(
+                service,
+                {
+                    "key": "sample",
+                    "version": 1,
+                    "schema_payload": {"type": "object"},
+                },
+            )
+
+        payload = super_create.await_args.args[0]
+        self.assertEqual(payload["tenant_id"], GLOBAL_TENANT_ID)
 
     async def test_schema_definition_create_enforces_size_and_checksum(self) -> None:
         service = _build_schema_definition_service(max_schema_bytes=8)

@@ -36,6 +36,7 @@ from mugen.core.plugin.acp.api.foundation import (
     commit_idempotency_success,
     enforce_schema_bindings,
 )
+from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 
 
 class _FakeRegistry:
@@ -139,6 +140,10 @@ class TestMugenAcpApiFoundation(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(state["enabled"], True)
         self.assertEqual(state["record_id"], record_id)
+        self.assertEqual(
+            dedup_svc.acquire.await_args.kwargs["tenant_id"],
+            GLOBAL_TENANT_ID,
+        )
         self.assertEqual(
             dedup_svc.acquire.await_args.kwargs["scope"],
             "acp:action:Users:provision",

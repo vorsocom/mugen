@@ -14,6 +14,7 @@ from mugen.core import di
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
 from mugen.core.contract.gateway.storage.rdbms.types import FilterGroup
+from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.contract.service.schema_definition import (
     ISchemaDefinitionService,
@@ -27,7 +28,6 @@ from mugen.core.plugin.acp.utility.schema_json import (
 )
 
 _DEFAULT_MAX_SCHEMA_BYTES = 256 * 1024
-_GLOBAL_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 
 def _config_provider():
@@ -61,7 +61,7 @@ class SchemaDefinitionService(
 
     @staticmethod
     def _normalize_tenant_id(tenant_id: uuid.UUID | None) -> uuid.UUID:
-        return tenant_id if tenant_id is not None else _GLOBAL_TENANT_ID
+        return tenant_id if tenant_id is not None else GLOBAL_TENANT_ID
 
     @staticmethod
     def _normalize_key(key: str | None) -> str:
