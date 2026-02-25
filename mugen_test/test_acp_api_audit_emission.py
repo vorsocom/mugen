@@ -39,8 +39,16 @@ def _bootstrap_namespace_packages() -> None:
 
 _bootstrap_namespace_packages()
 
-from mugen.core.plugin.acp.api import audit as audit_mod  # noqa: E402  pylint: disable=wrong-import-position
-from mugen.core.plugin.acp.api.audit import emit_audit_event  # noqa: E402  pylint: disable=wrong-import-position
+from mugen.core.plugin.acp.api import (
+    audit as audit_mod,
+)  # noqa: E402  pylint: disable=wrong-import-position
+
+# noqa: E402
+# pylint: disable=wrong-import-position
+from mugen.core.plugin.acp.api.audit import (
+    emit_audit_event,
+    emit_biz_trace_event,
+)
 
 
 @dataclass
@@ -64,6 +72,15 @@ class _FailingAuditService:
         raise RuntimeError("write failed")
 
 
+class _GenericCaptureService:
+    def __init__(self) -> None:
+        self.records: list[dict] = []
+
+    async def create(self, values: dict):
+        self.records.append(values)
+        return values
+
+
 class _FakeRegistry:
     def __init__(self, svc: _FakeAuditService) -> None:
         self._svc = svc
@@ -84,6 +101,19 @@ class _MissingAuditRegistry:
         raise KeyError(entity_set)
 
 
+class _MultiRegistry:
+    def __init__(self, services: dict[str, object]) -> None:
+        self._services = services
+
+    def get_resource(self, entity_set: str):
+        if entity_set not in self._services:
+            raise KeyError(entity_set)
+        return SimpleNamespace(service_key=entity_set)
+
+    def get_edm_service(self, key: str):
+        return self._services[key]
+
+
 class TestACPAuditEmission(unittest.IsolatedAsyncioTestCase):
     """Tests for audit event payload generation."""
 
@@ -95,8 +125,12 @@ class TestACPAuditEmission(unittest.IsolatedAsyncioTestCase):
             "container",
             new=SimpleNamespace(config=fake_config, logging_gateway=fake_logger),
         ):
-            self.assertIs(audit_mod._config_provider(), fake_config)  # pylint: disable=protected-access
-            self.assertIs(audit_mod._logger_provider(), fake_logger)  # pylint: disable=protected-access
+            self.assertIs(
+                audit_mod._config_provider(), fake_config
+            )  # pylint: disable=protected-access
+            self.assertIs(
+                audit_mod._logger_provider(), fake_logger
+            )  # pylint: disable=protected-access
 
         class _Mode(Enum):
             READY = "ready"
@@ -114,7 +148,9 @@ class TestACPAuditEmission(unittest.IsolatedAsyncioTestCase):
             "set_items": {"x", "y"},
             "obj": object(),
         }
-        json_safe_payload = audit_mod._json_safe(payload)  # pylint: disable=protected-access
+        json_safe_payload = audit_mod._json_safe(
+            payload
+        )  # pylint: disable=protected-access
         self.assertIsInstance(json_safe_payload["uuid"], str)
         self.assertTrue(json_safe_payload["naive_dt"].endswith("+00:00"))
         self.assertEqual(json_safe_payload["enum"], "ready")
@@ -123,56 +159,84 @@ class TestACPAuditEmission(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted(json_safe_payload["set_items"]), ["x", "y"])
         self.assertIsInstance(json_safe_payload["obj"], str)
 
-        self.assertIsNone(audit_mod._json_safe(None))  # pylint: disable=protected-access
+        self.assertIsNone(
+            audit_mod._json_safe(None)
+        )  # pylint: disable=protected-access
         self.assertEqual(audit_mod._json_safe(3), 3)  # pylint: disable=protected-access
-        self.assertEqual(audit_mod._json_safe(True), True)  # pylint: disable=protected-access
+        self.assertEqual(
+            audit_mod._json_safe(True), True
+        )  # pylint: disable=protected-access
 
-        self.assertIsNone(audit_mod._parse_positive_int(None))  # pylint: disable=protected-access
-        self.assertIsNone(audit_mod._parse_positive_int("bad"))  # pylint: disable=protected-access
-        self.assertIsNone(audit_mod._parse_positive_int(0))  # pylint: disable=protected-access
-        self.assertIsNone(audit_mod._parse_positive_int(-5))  # pylint: disable=protected-access
-        self.assertEqual(audit_mod._parse_positive_int("9"), 9)  # pylint: disable=protected-access
+        self.assertIsNone(
+            audit_mod._parse_positive_int(None)
+        )  # pylint: disable=protected-access
+        self.assertIsNone(
+            audit_mod._parse_positive_int("bad")
+        )  # pylint: disable=protected-access
+        self.assertIsNone(
+            audit_mod._parse_positive_int(0)
+        )  # pylint: disable=protected-access
+        self.assertIsNone(
+            audit_mod._parse_positive_int(-5)
+        )  # pylint: disable=protected-access
+        self.assertEqual(
+            audit_mod._parse_positive_int("9"), 9
+        )  # pylint: disable=protected-access
 
-        defaults = audit_mod._resolve_snapshot_policy(SimpleNamespace())  # pylint: disable=protected-access
+        defaults = audit_mod._resolve_snapshot_policy(
+            SimpleNamespace()
+        )  # pylint: disable=protected-access
         self.assertEqual(defaults, (False, False, None, None))
 
     async def test_request_id_resolution_paths(self) -> None:
         app = Quart("audit-request-id-paths")
 
-        req, corr = audit_mod._resolve_request_ids("r1", "c1")  # pylint: disable=protected-access
+        req, corr = audit_mod._resolve_request_ids(
+            "r1", "c1"
+        )  # pylint: disable=protected-access
         self.assertEqual((req, corr), ("r1", "c1"))
 
-        req_no_ctx, corr_no_ctx = audit_mod._resolve_request_ids(None, None)  # pylint: disable=protected-access
+        req_no_ctx, corr_no_ctx = audit_mod._resolve_request_ids(
+            None, None
+        )  # pylint: disable=protected-access
         self.assertEqual((req_no_ctx, corr_no_ctx), (None, None))
 
         async with app.test_request_context(
             "/api/core/acp/v1/Users",
             headers={"X-Request-Id": "req-1", "X-Correlation-Id": "corr-1"},
         ):
-            req_hdr, corr_hdr = audit_mod._resolve_request_ids(None, None)  # pylint: disable=protected-access
+            req_hdr, corr_hdr = audit_mod._resolve_request_ids(
+                None, None
+            )  # pylint: disable=protected-access
             self.assertEqual((req_hdr, corr_hdr), ("req-1", "corr-1"))
 
         async with app.test_request_context(
             "/api/core/acp/v1/Users",
             headers={"X-Request-Id": "req-2", "X-Trace-Id": "trace-2"},
         ):
-            req_hdr, corr_hdr = audit_mod._resolve_request_ids(None, None)  # pylint: disable=protected-access
+            req_hdr, corr_hdr = audit_mod._resolve_request_ids(
+                None, None
+            )  # pylint: disable=protected-access
             self.assertEqual((req_hdr, corr_hdr), ("req-2", "trace-2"))
 
         async with app.test_request_context(
             "/api/core/acp/v1/Users",
             headers={"X-Request-Id": "req-3"},
         ):
-            req_hdr, corr_hdr = audit_mod._resolve_request_ids(None, None)  # pylint: disable=protected-access
+            req_hdr, corr_hdr = audit_mod._resolve_request_ids(
+                None, None
+            )  # pylint: disable=protected-access
             self.assertEqual((req_hdr, corr_hdr), ("req-3", "req-3"))
 
         async with app.test_request_context(
             "/api/core/acp/v1/Users",
             headers={"X-Correlation-Id": "corr-4"},
         ):
-            req_hdr, corr_hdr = audit_mod._resolve_request_ids(  # pylint: disable=protected-access
-                "req-4",
-                None,
+            req_hdr, corr_hdr = (
+                audit_mod._resolve_request_ids(  # pylint: disable=protected-access
+                    "req-4",
+                    None,
+                )
             )
             self.assertEqual((req_hdr, corr_hdr), ("req-4", "corr-4"))
 
@@ -180,9 +244,11 @@ class TestACPAuditEmission(unittest.IsolatedAsyncioTestCase):
             "/api/core/acp/v1/Users",
             headers={"X-Request-Id": "req-5"},
         ):
-            req_hdr, corr_hdr = audit_mod._resolve_request_ids(  # pylint: disable=protected-access
-                None,
-                "corr-5",
+            req_hdr, corr_hdr = (
+                audit_mod._resolve_request_ids(  # pylint: disable=protected-access
+                    None,
+                    "corr-5",
+                )
             )
             self.assertEqual((req_hdr, corr_hdr), ("req-5", "corr-5"))
 
@@ -301,4 +367,327 @@ class TestACPAuditEmission(unittest.IsolatedAsyncioTestCase):
                         )
                     )
                 ),
+            )
+
+    async def test_traceparent_parsing_and_correlation_link_emission(self):
+        audit_svc = _GenericCaptureService()
+        corr_svc = _GenericCaptureService()
+        registry = _MultiRegistry(
+            services={
+                "AuditEvents": audit_svc,
+                "AuditCorrelationLinks": corr_svc,
+            }
+        )
+        app = Quart("audit-traceparent")
+        traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+        async with app.test_request_context(
+            "/api/core/acp/v1/Users",
+            headers={
+                "traceparent": traceparent,
+                "X-Request-Id": "req-1",
+            },
+        ):
+            await emit_audit_event(
+                registry=registry,
+                entity_set="Users",
+                entity="User",
+                entity_id=uuid.uuid4(),
+                operation="create",
+                outcome="success",
+                source_plugin="com.vorsocomputing.mugen.acp",
+                request_id=None,
+                correlation_id=None,
+                logger_provider=lambda: SimpleNamespace(debug=lambda *_: None),
+                config_provider=lambda: SimpleNamespace(),
+            )
+
+        self.assertEqual(len(audit_svc.records), 1)
+        self.assertEqual(len(corr_svc.records), 1)
+        self.assertEqual(
+            corr_svc.records[0]["trace_id"],
+            "4bf92f3577b34da6a3ce929d0e0e4736",
+        )
+
+        parsed = audit_mod._parse_traceparent(
+            traceparent
+        )  # pylint: disable=protected-access
+        self.assertEqual(
+            parsed,
+            ("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"),
+        )
+        self.assertEqual(
+            audit_mod._parse_traceparent("bad"),  # pylint: disable=protected-access
+            (None, None),
+        )
+
+    async def test_emit_biz_trace_event_respects_redaction_and_truncation(self):
+        biz_svc = _GenericCaptureService()
+        registry = _MultiRegistry(
+            services={
+                "AuditBizTraceEvents": biz_svc,
+            }
+        )
+        redaction_config = SimpleNamespace(
+            audit=SimpleNamespace(
+                biz_trace=SimpleNamespace(
+                    enabled=True,
+                    max_detail_bytes=1024,
+                    redacted_keys=["password"],
+                )
+            )
+        )
+        truncation_config = SimpleNamespace(
+            audit=SimpleNamespace(
+                biz_trace=SimpleNamespace(
+                    enabled=True,
+                    max_detail_bytes=40,
+                    redacted_keys=["password"],
+                )
+            )
+        )
+        app = Quart("audit-biz-trace")
+
+        async with app.test_request_context(
+            "/api/core/acp/v1/Users",
+            headers={"X-Request-Id": "req-1"},
+        ):
+            await emit_biz_trace_event(
+                registry=registry,
+                stage="finish",
+                source_plugin="com.vorsocomputing.mugen.acp",
+                entity_set="Users",
+                action_name="provision",
+                details={
+                    "password": "secret",
+                    "nested": {"password": "secret-2"},
+                },
+                config_provider=lambda: redaction_config,
+                logger_provider=lambda: SimpleNamespace(debug=lambda *_: None),
+            )
+            await emit_biz_trace_event(
+                registry=registry,
+                stage="finish",
+                source_plugin="com.vorsocomputing.mugen.acp",
+                entity_set="Users",
+                action_name="provision",
+                details={
+                    "text": "x" * 200,
+                },
+                config_provider=lambda: truncation_config,
+                logger_provider=lambda: SimpleNamespace(debug=lambda *_: None),
+            )
+
+        self.assertEqual(len(biz_svc.records), 2)
+
+        redacted_record = biz_svc.records[0]
+        self.assertEqual(redacted_record["stage"], "finish")
+        self.assertEqual(redacted_record["details_json"]["password"], "***REDACTED***")
+        self.assertEqual(
+            redacted_record["details_json"]["nested"]["password"],
+            "***REDACTED***",
+        )
+
+        truncated_record = biz_svc.records[1]
+        self.assertTrue(truncated_record["trace_id"])
+        self.assertTrue(truncated_record["details_json"]["truncated"])
+
+    async def test_trace_and_policy_helper_edge_paths(self) -> None:
+        app = Quart("audit-helper-edges")
+        self.assertEqual(
+            audit_mod._parse_traceparent(  # pylint: disable=protected-access
+                "00-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-00f067aa0ba902b7-01"
+            ),
+            (None, None),
+        )
+        self.assertEqual(
+            audit_mod._parse_traceparent(  # pylint: disable=protected-access
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-abc-01"
+            ),
+            (None, None),
+        )
+
+        trace_id, span_id, parent_span_id = (
+            audit_mod._resolve_trace_context(  # pylint: disable=protected-access
+                request_id="req-1",
+                correlation_id="corr-1",
+                trace_id=None,
+            )
+        )
+        self.assertEqual(trace_id, "corr-1")
+        self.assertIsNone(span_id)
+        self.assertIsNone(parent_span_id)
+
+        trace_id, _, _ = (
+            audit_mod._resolve_trace_context(  # pylint: disable=protected-access
+                request_id="req-1",
+                correlation_id="corr-1",
+                trace_id="explicit",
+            )
+        )
+        self.assertEqual(trace_id, "explicit")
+
+        async with app.test_request_context(
+            "/api/core/acp/v1/Users",
+            headers={
+                "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+            },
+        ):
+            trace_id, span_id, _ = (
+                audit_mod._resolve_trace_context(  # pylint: disable=protected-access
+                    request_id="req-1",
+                    correlation_id="corr-1",
+                    trace_id="explicit-trace",
+                )
+            )
+        self.assertEqual(trace_id, "explicit-trace")
+        self.assertEqual(span_id, "00f067aa0ba902b7")
+
+        enabled, max_detail_bytes, redacted_keys = (
+            audit_mod._resolve_biz_trace_policy(  # pylint: disable=protected-access
+                SimpleNamespace(
+                    audit=SimpleNamespace(
+                        biz_trace=SimpleNamespace(
+                            enabled=True,
+                            max_detail_bytes=None,
+                            redacted_keys=["", "password"],
+                        )
+                    )
+                )
+            )
+        )
+        self.assertEqual(enabled, True)
+        self.assertGreater(max_detail_bytes, 0)
+        self.assertEqual(redacted_keys, {"password"})
+
+        _, _, redacted_keys = (
+            audit_mod._resolve_biz_trace_policy(  # pylint: disable=protected-access
+                SimpleNamespace(
+                    audit=SimpleNamespace(
+                        biz_trace=SimpleNamespace(
+                            enabled=True,
+                            max_detail_bytes=32,
+                            redacted_keys="not-a-list",
+                        )
+                    )
+                )
+            )
+        )
+        self.assertEqual(redacted_keys, set())
+
+        redacted = audit_mod._redact_detail_keys(  # pylint: disable=protected-access
+            {
+                "list": [{"password": "s"}],
+                "tuple": ({"password": "s2"},),
+                "set": {"a"},
+            },
+            {"password"},
+        )
+        self.assertEqual(redacted["list"][0]["password"], "***REDACTED***")
+        self.assertEqual(redacted["tuple"][0]["password"], "***REDACTED***")
+        self.assertEqual(redacted["set"], {"a"})
+
+        raw_uuid = uuid.uuid4()
+        self.assertEqual(
+            audit_mod._coerce_optional_uuid(
+                raw_uuid
+            ),  # pylint: disable=protected-access
+            raw_uuid,
+        )
+        self.assertIsNone(
+            audit_mod._coerce_optional_uuid(
+                "bad-uuid"
+            )  # pylint: disable=protected-access
+        )
+
+    async def test_emit_correlation_and_biz_trace_error_paths(self) -> None:
+        logger = Mock()
+        failing_corr_service = _FailingAuditService()
+        registry = _MultiRegistry(
+            services={
+                "AuditEvents": _GenericCaptureService(),
+                "AuditCorrelationLinks": failing_corr_service,
+            }
+        )
+
+        await emit_audit_event(
+            registry=registry,
+            entity_set="Users",
+            entity="User",
+            operation="create",
+            outcome="success",
+            source_plugin="com.vorsocomputing.mugen.acp",
+            meta={},
+            request_id="",
+            correlation_id="",
+            trace_id="",
+            logger_provider=lambda: logger,
+            config_provider=lambda: SimpleNamespace(),
+        )
+        logger.debug.assert_called()
+
+        missing_registry = _MultiRegistry(services={})
+        await emit_biz_trace_event(
+            registry=missing_registry,
+            stage="start",
+            source_plugin="com.vorsocomputing.mugen.acp",
+            entity_set="Users",
+            action_name="provision",
+            config_provider=lambda: SimpleNamespace(
+                audit=SimpleNamespace(
+                    biz_trace=SimpleNamespace(
+                        enabled=True,
+                        max_detail_bytes=64,
+                        redacted_keys=[],
+                    )
+                )
+            ),
+            logger_provider=lambda: SimpleNamespace(debug=lambda *_: None),
+        )
+
+        biz_logger = Mock()
+        await emit_biz_trace_event(
+            registry=_MultiRegistry(
+                services={"AuditBizTraceEvents": _FailingAuditService()}
+            ),
+            stage="finish",
+            source_plugin="com.vorsocomputing.mugen.acp",
+            entity_set="Users",
+            action_name="provision",
+            span_id="span-1",
+            parent_span_id="parent-1",
+            config_provider=lambda: SimpleNamespace(
+                audit=SimpleNamespace(
+                    biz_trace=SimpleNamespace(
+                        enabled=True,
+                        max_detail_bytes=128,
+                        redacted_keys=[],
+                    ),
+                    emit=SimpleNamespace(fail_closed=False),
+                )
+            ),
+            logger_provider=lambda: biz_logger,
+        )
+        biz_logger.debug.assert_called()
+
+        with self.assertRaises(RuntimeError):
+            await emit_biz_trace_event(
+                registry=_MultiRegistry(
+                    services={"AuditBizTraceEvents": _FailingAuditService()}
+                ),
+                stage="finish",
+                source_plugin="com.vorsocomputing.mugen.acp",
+                entity_set="Users",
+                action_name="provision",
+                config_provider=lambda: SimpleNamespace(
+                    audit=SimpleNamespace(
+                        biz_trace=SimpleNamespace(
+                            enabled=True,
+                            max_detail_bytes=128,
+                            redacted_keys=[],
+                        ),
+                        emit=SimpleNamespace(fail_closed=True),
+                    )
+                ),
+                logger_provider=lambda: SimpleNamespace(debug=lambda *_: None),
             )

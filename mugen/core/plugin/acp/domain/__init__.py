@@ -1,6 +1,7 @@
 """Public API for the admin.domain package."""
 
 __all__ = [
+    "DedupRecordDE",
     "GlobalPermissionEntryDE",
     "GlobalRoleMembershipDE",
     "GlobalRoleDE",
@@ -11,6 +12,8 @@ __all__ = [
     "RefreshTokenDE",
     "RoleDE",
     "RoleMembershipDE",
+    "SchemaBindingDE",
+    "SchemaDefinitionDE",
     "SystemFlagDE",
     "TenantDE",
     "TenantDomainDE",
@@ -19,6 +22,7 @@ __all__ = [
     "UserDE",
 ]
 
+from mugen.core.plugin.acp.domain.dedup_record import DedupRecordDE
 from mugen.core.plugin.acp.domain.global_permission_entry import (
     GlobalPermissionEntryDE,
 )
@@ -31,6 +35,8 @@ from mugen.core.plugin.acp.domain.person import PersonDE
 from mugen.core.plugin.acp.domain.refresh_token import RefreshTokenDE
 from mugen.core.plugin.acp.domain.role import RoleDE
 from mugen.core.plugin.acp.domain.role_membership import RoleMembershipDE
+from mugen.core.plugin.acp.domain.schema_binding import SchemaBindingDE
+from mugen.core.plugin.acp.domain.schema_definition import SchemaDefinitionDE
 from mugen.core.plugin.acp.domain.system_flag import SystemFlagDE
 from mugen.core.plugin.acp.domain.tenant import TenantDE
 from mugen.core.plugin.acp.domain.tenant_domain import TenantDomainDE

@@ -1,5 +1,15 @@
 """Public API for audit.contract.service."""
 
-__all__ = ["IAuditEventService"]
+__all__ = [
+    "IAuditBizTraceEventService",
+    "IAuditCorrelationLinkService",
+    "IAuditEventService",
+]
 
+from mugen.core.plugin.audit.contract.service.audit_biz_trace_event import (
+    IAuditBizTraceEventService,
+)
+from mugen.core.plugin.audit.contract.service.audit_correlation_link import (
+    IAuditCorrelationLinkService,
+)
 from mugen.core.plugin.audit.contract.service.audit_event import IAuditEventService

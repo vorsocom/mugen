@@ -16,6 +16,8 @@ shared service control plane for downstream orchestration.
 - tenant-scoped CRUD and action routing;
 - permission object/action registration and enforcement;
 - shared row-version concurrency behavior;
+- opt-in request idempotency via `X-Idempotency-Key` with ACP dedup ledger replay;
+- generic schema registry and optional payload-binding enforcement gates;
 - contributor-based runtime binding for plugin resources;
 - reusable admin HTTP/API surface used by core plugins.
 
@@ -37,7 +39,8 @@ The following core plugins are built to register their entities/actions into ACP
 and provide reusable platform primitives:
 
 - `audit`: tamper-evident audit records with hash-chain verification and
-  lifecycle controls (legal hold, redact, tombstone, purge).
+  lifecycle controls (legal hold, redact, tombstone, purge), plus correlation
+  graph links and business-trace observability timeline events.
 - `billing`: account/product/price/subscription/usage/invoice/payment primitives.
 - `channel_orchestration`: intake, routing, throttle, blocklist, and fallback.
 - `knowledge_pack`: versioned knowledge content lifecycle and retrieval metadata.
@@ -63,3 +66,19 @@ For downstream business-case planning:
    - ACP style checker
    - Alembic migration checker (per track)
    - ACP HTTP E2E template suite
+
+## Phase 1 Foundations
+
+Phase 1 introduces four core-only control-plane primitives:
+
+- ACP `DedupRecords`: shared idempotency ledger with acquire/commit/sweep
+  actions and replay envelopes.
+- ACP `Schemas` and `SchemaBindings`: generic schema registry with validate,
+  coerce (defaults only), and activate-version actions.
+- Audit `AuditCorrelationLinks`: trace/correlation/entity graph edges for
+  resolve-trace projections.
+- Audit `AuditBizTraceEvents`: request-lifecycle timeline events for
+  inspect-trace diagnostics.
+
+Downstream rollout guidance is documented in:
+`docs/downstream-notes/phase1-foundations-adoption.md`.

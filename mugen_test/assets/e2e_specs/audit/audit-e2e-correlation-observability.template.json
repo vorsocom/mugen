@@ -1,0 +1,34 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "__ACP_USERNAME__",
+    "password": "__ACP_PASSWORD__"
+  },
+  "tenant_id": null,
+  "entity_set": "TenantDomains",
+  "create_payload": {
+    "Domain": "audit-correlation-__CODE__.example.com"
+  },
+  "lookup": {
+    "field": "Domain",
+    "value": "audit-correlation-__CODE__.example.com"
+  },
+  "status_field": "Domain",
+  "actions": [],
+  "assertions": {
+    "event_entity_set": "AuditCorrelationLinks",
+    "event_entity_id_field": "EntityId",
+    "event_type_field": "Operation",
+    "expected_event_sequence": [
+      "create"
+    ]
+  },
+  "negative_creates": [],
+  "positive_creates": []
+}

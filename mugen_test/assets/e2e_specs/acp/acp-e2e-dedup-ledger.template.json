@@ -1,0 +1,68 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "__ACP_USERNAME__",
+    "password": "__ACP_PASSWORD__"
+  },
+  "tenant_id": null,
+  "entity_set": "DedupRecords",
+  "create_payload": {
+    "Scope": "acp:e2e:dedup",
+    "IdempotencyKey": "__TRACKED_REF__",
+    "RequestHash": "e2e-request-hash",
+    "ExpiresAt": "2099-12-31T00:00:00Z"
+  },
+  "lookup": {
+    "field": "IdempotencyKey",
+    "value": "__TRACKED_REF__"
+  },
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "commit_success",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "ResponseCode": 201,
+        "ResponsePayload": {
+          "Replay": true
+        },
+        "ResultRef": "acp-e2e-dedup-result"
+      }
+    },
+    {
+      "name": "acquire",
+      "target": "entity_set",
+      "expect_code": 200,
+      "payload": {
+        "Scope": "acp:e2e:dedup",
+        "IdempotencyKey": "__TRACKED_REF__",
+        "RequestHash": "e2e-request-hash"
+      }
+    },
+    {
+      "name": "sweep_expired",
+      "target": "entity_set",
+      "expect_code": 200,
+      "payload": {
+        "BatchSize": 50
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": "succeeded",
+    "event_entity_set": "AuditEvents",
+    "event_entity_id_field": "EntityId",
+    "event_type_field": "Operation",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [],
+  "positive_creates": []
+}

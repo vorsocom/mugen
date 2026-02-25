@@ -28,6 +28,8 @@ _bootstrap_namespace_packages()
 # noqa: E402
 # pylint: disable=wrong-import-position
 from mugen.core.plugin.audit.api.validation import (
+    AuditBizTraceInspectTraceValidation,
+    AuditCorrelationResolveTraceValidation,
     AuditEventRedactValidation,
 )
 
@@ -47,3 +49,21 @@ class TestAuditValidation(unittest.TestCase):
             reason="policy",
         )
         self.assertEqual(payload.reason, "policy")
+
+    def test_correlation_trace_requires_reference(self) -> None:
+        with self.assertRaises(ValidationError):
+            AuditCorrelationResolveTraceValidation()
+
+        payload = AuditCorrelationResolveTraceValidation(trace_id="  abc123  ")
+        self.assertEqual(payload.trace_id, "abc123")
+
+    def test_biz_trace_inspect_requires_reference(self) -> None:
+        with self.assertRaises(ValidationError):
+            AuditBizTraceInspectTraceValidation(stage="finish")
+
+        payload = AuditBizTraceInspectTraceValidation(
+            correlation_id=" corr-1 ",
+            stage=" finish ",
+        )
+        self.assertEqual(payload.correlation_id, "corr-1")
+        self.assertEqual(payload.stage, "finish")

@@ -1,6 +1,7 @@
 """Public API for the admin.model package."""
 
 __all__ = [
+    "DedupRecord",
     "GlobalPermissionEntry",
     "GlobalRole",
     "GlobalRoleMembership",
@@ -11,6 +12,8 @@ __all__ = [
     "RefreshToken",
     "Role",
     "RoleMembership",
+    "SchemaBinding",
+    "SchemaDefinition",
     "SystemFlag",
     "Tenant",
     "TenantDomain",
@@ -19,6 +22,7 @@ __all__ = [
     "User",
 ]
 
+from mugen.core.plugin.acp.model.dedup_record import DedupRecord
 from mugen.core.plugin.acp.model.global_permission_entry import GlobalPermissionEntry
 from mugen.core.plugin.acp.model.global_role import GlobalRole
 from mugen.core.plugin.acp.model.global_role_membership import GlobalRoleMembership
@@ -29,6 +33,8 @@ from mugen.core.plugin.acp.model.person import Person
 from mugen.core.plugin.acp.model.refresh_token import RefreshToken
 from mugen.core.plugin.acp.model.role import Role
 from mugen.core.plugin.acp.model.role_membership import RoleMembership
+from mugen.core.plugin.acp.model.schema_binding import SchemaBinding
+from mugen.core.plugin.acp.model.schema_definition import SchemaDefinition
 from mugen.core.plugin.acp.model.system_flag import SystemFlag
 from mugen.core.plugin.acp.model.tenant import Tenant
 from mugen.core.plugin.acp.model.tenant_domain import TenantDomain

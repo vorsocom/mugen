@@ -27,6 +27,8 @@ _bootstrap_namespace_packages()
 # noqa: E402
 # pylint: disable=wrong-import-position
 from mugen.core.plugin.audit.api.validation import (
+    AuditBizTraceInspectTraceValidation,
+    AuditCorrelationResolveTraceValidation,
     AuditEventPlaceLegalHoldValidation,
     AuditEventRunLifecycleValidation,
     AuditEventSealBacklogValidation,
@@ -47,32 +49,54 @@ class TestAuditContrib(unittest.TestCase):
             plugin_namespace="com.vorsocomputing.mugen.audit",
         )
 
-        resource = registry.register_resource.call_args.args[0]
+        resources = [call.args[0] for call in registry.register_resource.call_args_list]
+        resources_by_set = {resource.entity_set: resource for resource in resources}
 
-        self.assertTrue(resource.capabilities.allow_read)
-        self.assertFalse(resource.capabilities.allow_create)
-        self.assertFalse(resource.capabilities.allow_update)
-        self.assertFalse(resource.capabilities.allow_delete)
-        self.assertTrue(resource.capabilities.allow_manage)
-        self.assertEqual(resource.entity_set, "AuditEvents")
-        self.assertEqual(resource.edm_type_name, "AUDIT.AuditEvent")
-        self.assertIn("place_legal_hold", resource.capabilities.actions)
-        self.assertIn("run_lifecycle", resource.capabilities.actions)
-        self.assertIn("verify_chain", resource.capabilities.actions)
-        self.assertIn("seal_backlog", resource.capabilities.actions)
+        self.assertEqual(
+            set(resources_by_set.keys()),
+            {
+                "AuditEvents",
+                "AuditCorrelationLinks",
+                "AuditBizTraceEvents",
+            },
+        )
+
+        events_resource = resources_by_set["AuditEvents"]
+        self.assertTrue(events_resource.capabilities.allow_read)
+        self.assertFalse(events_resource.capabilities.allow_create)
+        self.assertFalse(events_resource.capabilities.allow_update)
+        self.assertFalse(events_resource.capabilities.allow_delete)
+        self.assertTrue(events_resource.capabilities.allow_manage)
+        self.assertEqual(events_resource.edm_type_name, "AUDIT.AuditEvent")
+        self.assertIn("place_legal_hold", events_resource.capabilities.actions)
+        self.assertIn("run_lifecycle", events_resource.capabilities.actions)
+        self.assertIn("verify_chain", events_resource.capabilities.actions)
+        self.assertIn("seal_backlog", events_resource.capabilities.actions)
         self.assertIs(
-            resource.capabilities.actions["place_legal_hold"]["schema"],
+            events_resource.capabilities.actions["place_legal_hold"]["schema"],
             AuditEventPlaceLegalHoldValidation,
         )
         self.assertIs(
-            resource.capabilities.actions["run_lifecycle"]["schema"],
+            events_resource.capabilities.actions["run_lifecycle"]["schema"],
             AuditEventRunLifecycleValidation,
         )
         self.assertIs(
-            resource.capabilities.actions["verify_chain"]["schema"],
+            events_resource.capabilities.actions["verify_chain"]["schema"],
             AuditEventVerifyChainValidation,
         )
         self.assertIs(
-            resource.capabilities.actions["seal_backlog"]["schema"],
+            events_resource.capabilities.actions["seal_backlog"]["schema"],
             AuditEventSealBacklogValidation,
+        )
+
+        correlation_resource = resources_by_set["AuditCorrelationLinks"]
+        self.assertEqual(
+            correlation_resource.capabilities.actions["resolve_trace"]["schema"],
+            AuditCorrelationResolveTraceValidation,
+        )
+
+        biz_trace_resource = resources_by_set["AuditBizTraceEvents"]
+        self.assertEqual(
+            biz_trace_resource.capabilities.actions["inspect_trace"]["schema"],
+            AuditBizTraceInspectTraceValidation,
         )

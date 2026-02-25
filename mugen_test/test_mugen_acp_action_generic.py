@@ -151,9 +151,7 @@ class _FakeRegistry:
             edm_type_name="ACP.Thing",
             service_key="thing_svc",
             namespace="com.test.plugin",
-            capabilities=SimpleNamespace(
-                actions=actions or {"do": {"schema": schema}}
-            ),
+            capabilities=SimpleNamespace(actions=actions or {"do": {"schema": schema}}),
         )
 
     def get_resource(self, _entity_set: str):
@@ -224,6 +222,105 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(action_api._logger_provider(), "logger")
             self.assertEqual(action_api._registry_provider(), "registry")
+        self.assertEqual(
+            action_api._action_response_parts(({"ok": True}, 201)), (201, {"ok": True})
+        )
+        self.assertEqual(
+            action_api._action_response_parts({"ok": True}), (200, {"ok": True})
+        )
+
+    async def test_dispatch_replay_short_circuit_paths(self) -> None:
+        app = Quart("action_replay_dispatch_test")
+        replay_response = SimpleNamespace(tag="replay")
+        logger = Mock()
+
+        with (
+            patch.object(
+                action_api,
+                "acquire_idempotency",
+                new=AsyncMock(
+                    return_value={"enabled": True, "replay_response": replay_response}
+                ),
+            ),
+            patch.object(action_api, "enforce_schema_bindings", new=AsyncMock()),
+            patch.object(action_api, "emit_audit_event", new=AsyncMock()),
+            patch.object(action_api, "emit_biz_trace_event", new=AsyncMock()),
+            patch.object(action_api, "commit_idempotency_success", new=AsyncMock()),
+            patch.object(action_api, "commit_idempotency_failure", new=AsyncMock()),
+        ):
+            async with app.test_request_context(
+                "/api/core/acp/v1/Things/$action/do",
+                method="POST",
+                json={"row_version": 1},
+            ):
+                result = await action_api.dispatch_entity_set_action.__wrapped__(
+                    entity_set="Things",
+                    action="do",
+                    auth_user=str(uuid.uuid4()),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: _FakeRegistry(
+                        has_tenant=False,
+                        service=_FakeService(),
+                    ),
+                )
+            self.assertIs(result, replay_response)
+
+            tenant_id = uuid.uuid4()
+            async with app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Things/$action/do",
+                method="POST",
+                json={"row_version": 1},
+            ):
+                result = await action_api.dispatch_entity_set_action_tenant.__wrapped__(
+                    tenant_id=str(tenant_id),
+                    entity_set="Things",
+                    action="do",
+                    auth_user=str(uuid.uuid4()),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: _FakeRegistry(
+                        has_tenant=True,
+                        service=_FakeService(),
+                    ),
+                )
+            self.assertIs(result, replay_response)
+
+            entity_id = uuid.uuid4()
+            async with app.test_request_context(
+                f"/api/core/acp/v1/Things/{entity_id}/$action/do",
+                method="POST",
+                json={"row_version": 1},
+            ):
+                result = await action_api.dispatch_entity_action.__wrapped__(
+                    entity_set="Things",
+                    entity_id=str(entity_id),
+                    action="do",
+                    auth_user=str(uuid.uuid4()),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: _FakeRegistry(
+                        has_tenant=False,
+                        service=_FakeService(),
+                    ),
+                )
+            self.assertIs(result, replay_response)
+
+            async with app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Things/{entity_id}/$action/do",
+                method="POST",
+                json={"row_version": 1},
+            ):
+                result = await action_api.dispatch_entity_action_tenant.__wrapped__(
+                    tenant_id=str(tenant_id),
+                    entity_set="Things",
+                    entity_id=str(entity_id),
+                    action="do",
+                    auth_user=str(uuid.uuid4()),
+                    logger_provider=lambda: logger,
+                    registry_provider=lambda: _FakeRegistry(
+                        has_tenant=True,
+                        service=_FakeService(),
+                    ),
+                )
+            self.assertIs(result, replay_response)
 
     async def test_dispatch_entity_set_action_paths(self) -> None:
         app = Quart("action_set_dispatch_test")
