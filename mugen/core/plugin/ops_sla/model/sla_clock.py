@@ -63,6 +63,19 @@ class SlaClock(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    clock_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("mugen.ops_sla_clock_definition.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    trace_id: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+
     tracked_namespace: Mapped[str] = mapped_column(
         CITEXT(128),
         nullable=False,
@@ -165,6 +178,11 @@ class SlaClock(ModelBase, TenantScopedMixin):
         server_default=sa_text("0"),
     )
 
+    warned_offsets_json: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
     last_actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
@@ -201,6 +219,10 @@ class SlaClock(ModelBase, TenantScopedMixin):
         CheckConstraint(
             "severity IS NULL OR length(btrim(severity)) > 0",
             name="ck_ops_sla_clock__severity_nonempty_if_set",
+        ),
+        CheckConstraint(
+            "trace_id IS NULL OR length(btrim(trace_id)) > 0",
+            name="ck_ops_sla_clock__trace_id_nonempty_if_set",
         ),
         CheckConstraint(
             "elapsed_seconds >= 0",

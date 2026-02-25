@@ -104,3 +104,51 @@ class UnblockSenderActionValidation(IValidationBase):
         if not (self.sender_key or "").strip():
             raise ValueError("SenderKey must be non-empty.")
         return self
+
+
+class WorkItemCreateFromChannelValidation(IValidationBase):
+    """Validate payload for create_from_channel actions."""
+
+    trace_id: str | None = None
+    source: str
+
+    participants: dict[str, Any] | list[Any] | None = None
+    content: dict[str, Any] | list[Any] | None = None
+    attachments: dict[str, Any] | list[Any] | None = None
+    signals: dict[str, Any] | list[Any] | None = None
+    extractions: dict[str, Any] | list[Any] | None = None
+
+    linked_case_id: uuid.UUID | None = None
+    linked_workflow_instance_id: uuid.UUID | None = None
+
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_strings(self) -> "WorkItemCreateFromChannelValidation":
+        if self.trace_id is not None and not self.trace_id.strip():
+            raise ValueError("TraceId cannot be empty if provided.")
+        if not (self.source or "").strip():
+            raise ValueError("Source must be non-empty.")
+        return self
+
+
+class WorkItemLinkToCaseValidation(IValidationBase):
+    """Validate payload for link_to_case actions."""
+
+    row_version: NonNegativeInt
+
+    linked_case_id: uuid.UUID | None = None
+    linked_workflow_instance_id: uuid.UUID | None = None
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_link_target(self) -> "WorkItemLinkToCaseValidation":
+        if self.linked_case_id is None and self.linked_workflow_instance_id is None:
+            raise ValueError("Provide LinkedCaseId or LinkedWorkflowInstanceId.")
+        return self
+
+
+class WorkItemReplayValidation(IValidationBase):
+    """Validate payload for replay actions."""
+
+    include_metadata: bool = False

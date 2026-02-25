@@ -9,6 +9,7 @@ __all__ = [
     "ThrottleRuleDE",
     "BlocklistEntryDE",
     "OrchestrationEventDE",
+    "WorkItemDE",
 ]
 
 from mugen.core.plugin.channel_orchestration.domain.channel_profile import (
@@ -29,3 +30,4 @@ from mugen.core.plugin.channel_orchestration.domain.blocklist_entry import (
 from mugen.core.plugin.channel_orchestration.domain.orchestration_event import (
     OrchestrationEventDE,
 )
+from mugen.core.plugin.channel_orchestration.domain.work_item import WorkItemDE

@@ -76,3 +76,27 @@ class IWorkflowInstanceService(
         data: IValidationBase,
     ) -> tuple[dict[str, Any], int]:
         """Cancel an in-flight workflow instance."""
+
+    @abstractmethod
+    async def action_replay(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        where: Mapping[str, Any],
+        auth_user_id: uuid.UUID,
+        data: IValidationBase,
+    ) -> tuple[dict[str, Any], int]:
+        """Replay workflow events deterministically and report divergence."""
+
+    @abstractmethod
+    async def action_compensate(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        where: Mapping[str, Any],
+        auth_user_id: uuid.UUID,
+        data: IValidationBase,
+    ) -> tuple[dict[str, Any], int]:
+        """Plan compensation events from transition compensation specs."""

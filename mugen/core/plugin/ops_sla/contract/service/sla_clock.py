@@ -76,3 +76,15 @@ class ISlaClockService(
         data: IValidationBase,
     ) -> tuple[dict[str, Any], int]:
         """Mark the tracked clock as breached and append an event."""
+
+    @abstractmethod
+    async def action_tick(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        where: Mapping[str, Any],
+        auth_user_id: uuid.UUID,
+        data: IValidationBase,
+        entity_id: uuid.UUID | None = None,
+    ) -> tuple[dict[str, Any], int]:
+        """Evaluate running clocks and emit warning/breach events once per rule."""

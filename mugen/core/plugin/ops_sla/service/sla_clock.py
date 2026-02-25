@@ -14,24 +14,35 @@ from mugen.core.contract.gateway.storage.rdbms.crud_base import (
 )
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
-from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
+from mugen.core.contract.gateway.storage.rdbms.types import (
+    FilterGroup,
+    OrderBy,
+    RowVersionConflict,
+)
 from mugen.core.plugin.ops_sla.api.validation import (
     SlaClockMarkBreachedValidation,
     SlaClockPauseValidation,
     SlaClockResumeValidation,
     SlaClockStartValidation,
     SlaClockStopValidation,
+    SlaClockTickValidation,
 )
 from mugen.core.plugin.ops_sla.contract.service.sla_clock import ISlaClockService
 from mugen.core.plugin.ops_sla.domain import (
     SlaBreachEventDE,
     SlaCalendarDE,
     SlaClockDE,
+    SlaClockDefinitionDE,
+    SlaClockEventDE,
     SlaPolicyDE,
     SlaTargetDE,
 )
 from mugen.core.plugin.ops_sla.service.sla_breach_event import SlaBreachEventService
 from mugen.core.plugin.ops_sla.service.sla_calendar import SlaCalendarService
+from mugen.core.plugin.ops_sla.service.sla_clock_definition import (
+    SlaClockDefinitionService,
+)
+from mugen.core.plugin.ops_sla.service.sla_clock_event import SlaClockEventService
 from mugen.core.plugin.ops_sla.service.sla_policy import SlaPolicyService
 from mugen.core.plugin.ops_sla.service.sla_target import SlaTargetService
 
@@ -46,6 +57,8 @@ class SlaClockService(
     _CALENDAR_TABLE = "ops_sla_calendar"
     _TARGET_TABLE = "ops_sla_target"
     _BREACH_EVENT_TABLE = "ops_sla_breach_event"
+    _CLOCK_DEFINITION_TABLE = "ops_sla_clock_definition"
+    _CLOCK_EVENT_TABLE = "ops_sla_clock_event"
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
         super().__init__(
@@ -59,6 +72,14 @@ class SlaClockService(
         self._target_service = SlaTargetService(table=self._TARGET_TABLE, rsg=rsg)
         self._breach_event_service = SlaBreachEventService(
             table=self._BREACH_EVENT_TABLE,
+            rsg=rsg,
+        )
+        self._clock_definition_service = SlaClockDefinitionService(
+            table=self._CLOCK_DEFINITION_TABLE,
+            rsg=rsg,
+        )
+        self._clock_event_service = SlaClockEventService(
+            table=self._CLOCK_EVENT_TABLE,
             rsg=rsg,
         )
 
@@ -131,6 +152,24 @@ class SlaClockService(
 
         return updated
 
+    async def _best_effort_update_clock(
+        self,
+        *,
+        where: dict,
+        expected_row_version: int,
+        changes: dict,
+    ) -> SlaClockDE | None:
+        try:
+            return await self.update_with_row_version(
+                where=where,
+                expected_row_version=expected_row_version,
+                changes=changes,
+            )
+        except RowVersionConflict:
+            return None
+        except SQLAlchemyError:
+            abort(500)
+
     @staticmethod
     def _business_days(value: list[int] | None) -> set[int]:
         out = {
@@ -150,6 +189,19 @@ class SlaClockService(
                 out.add(date.fromisoformat(raw))
             except ValueError:
                 continue
+        return out
+
+    @staticmethod
+    def _warn_offsets(value: list | None) -> set[int]:
+        out: set[int] = set()
+        for raw in value or []:
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if parsed <= 0:
+                continue
+            out.add(parsed)
         return out
 
     def _add_business_seconds(
@@ -231,6 +283,22 @@ class SlaClockService(
             }
         )
 
+    async def _resolve_clock_definition(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        clock_definition_id: uuid.UUID | None,
+    ) -> SlaClockDefinitionDE | None:
+        if clock_definition_id is None:
+            return None
+
+        return await self._clock_definition_service.get(
+            {
+                "tenant_id": tenant_id,
+                "id": clock_definition_id,
+            }
+        )
+
     async def _resolve_calendar(
         self,
         *,
@@ -290,6 +358,35 @@ class SlaClockService(
             }
         )
 
+    async def _resolve_target_context(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        clock: SlaClockDE,
+    ) -> tuple[int, set[int], SlaClockDefinitionDE | None]:
+        definition = await self._resolve_clock_definition(
+            tenant_id=tenant_id,
+            clock_definition_id=clock.clock_definition_id,
+        )
+        if definition is not None and int(definition.target_minutes or 0) > 0:
+            return (
+                int(definition.target_minutes),
+                self._warn_offsets(definition.warn_offsets_json),
+                definition,
+            )
+
+        target = await self._resolve_target(tenant_id=tenant_id, clock=clock)
+        if target is None:
+            return 0, set(), definition
+
+        target_minutes = int(target.target_minutes or 0)
+        warn_offsets = set()
+        warn_before_minutes = int(target.warn_before_minutes or 0)
+        if warn_before_minutes > 0:
+            warn_offsets.add(warn_before_minutes * 60)
+
+        return target_minutes, warn_offsets, definition
+
     @staticmethod
     def _elapsed_with_open_segment(clock: SlaClockDE, now: datetime) -> int:
         elapsed = int(clock.elapsed_seconds or 0)
@@ -315,8 +412,10 @@ class SlaClockService(
         at_time: datetime,
         elapsed_seconds: int,
     ) -> datetime | None:
-        target = await self._resolve_target(tenant_id=tenant_id, clock=clock)
-        target_minutes = int(target.target_minutes or 0) if target is not None else 0
+        target_minutes, _warn_offsets, _definition = await self._resolve_target_context(
+            tenant_id=tenant_id,
+            clock=clock,
+        )
         if target_minutes <= 0:
             return None
 
@@ -354,6 +453,36 @@ class SlaClockService(
                 "reason": self._normalize_optional_text(data.reason),
                 "note": self._normalize_optional_text(data.note),
                 "payload": dict(data.payload) if data.payload else None,
+            }
+        )
+
+    async def _append_clock_event(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        clock: SlaClockDE,
+        clock_definition: SlaClockDefinitionDE | None,
+        event_type: str,
+        actor_user_id: uuid.UUID,
+        warned_offset_seconds: int | None,
+        payload_json: dict | None,
+        occurred_at: datetime,
+    ) -> SlaClockEventDE:
+        return await self._clock_event_service.create(
+            {
+                "tenant_id": tenant_id,
+                "clock_id": clock.id,
+                "clock_definition_id": (
+                    clock_definition.id
+                    if clock_definition is not None
+                    else clock.clock_definition_id
+                ),
+                "event_type": event_type,
+                "warned_offset_seconds": warned_offset_seconds,
+                "trace_id": self._normalize_optional_text(clock.trace_id),
+                "occurred_at": occurred_at,
+                "actor_user_id": actor_user_id,
+                "payload_json": payload_json,
             }
         )
 
@@ -395,6 +524,7 @@ class SlaClockService(
                 "paused_at": None,
                 "stopped_at": None,
                 "deadline_at": deadline_at,
+                "warned_offsets_json": [],
                 "last_actor_user_id": auth_user_id,
             },
         )
@@ -538,7 +668,7 @@ class SlaClockService(
         auth_user_id: uuid.UUID,
         data: SlaClockMarkBreachedValidation,
     ) -> tuple[dict, int]:
-        """Mark a clock as breached and append an immutable breach event."""
+        """Mark a clock as breached and append immutable breach+clock events."""
         expected_row_version = int(data.row_version)
         current = await self._get_for_action(
             where=where,
@@ -573,4 +703,213 @@ class SlaClockService(
             occurred_at=now,
         )
 
+        definition = await self._resolve_clock_definition(
+            tenant_id=tenant_id,
+            clock_definition_id=current.clock_definition_id,
+        )
+        if current.id is not None:
+            await self._append_clock_event(
+                tenant_id=tenant_id,
+                clock=current,
+                clock_definition=definition,
+                event_type="breached",
+                actor_user_id=auth_user_id,
+                warned_offset_seconds=None,
+                payload_json={
+                    "event_type": data.event_type,
+                    "reason": self._normalize_optional_text(data.reason),
+                },
+                occurred_at=now,
+            )
+
         return "", 204
+
+    async def action_tick(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        where: dict,
+        auth_user_id: uuid.UUID,
+        data: SlaClockTickValidation,
+        entity_id: uuid.UUID | None = None,
+    ) -> tuple[dict, int]:
+        """Evaluate running clocks and emit warning/breach events exactly once."""
+        _ = entity_id
+
+        now = data.now_utc or self._now_utc()
+        now = self._to_aware_utc(now)
+        batch_size = int(data.batch_size or 200)
+
+        tick_where = dict(where)
+        tick_where["tenant_id"] = tenant_id
+        tick_where["status"] = "running"
+
+        clocks = list(
+            await self.list(
+                filter_groups=[FilterGroup(where=tick_where)],
+                order_by=[
+                    OrderBy(field="deadline_at", descending=False),
+                    OrderBy(field="created_at", descending=False),
+                ],
+                limit=batch_size,
+            )
+        )
+
+        warned_rows: list[dict] = []
+        breached_rows: list[dict] = []
+        counters = {
+            "Scanned": len(clocks),
+            "WarnedCount": 0,
+            "BreachedCount": 0,
+            "ConflictCount": 0,
+        }
+
+        for clock in clocks:
+            if clock.id is None:
+                continue
+
+            elapsed = self._elapsed_with_open_segment(clock, now)
+            deadline_at = await self._compute_deadline(
+                tenant_id=tenant_id,
+                clock=clock,
+                at_time=now,
+                elapsed_seconds=elapsed,
+            )
+            target_minutes, warn_offsets, definition = (
+                await self._resolve_target_context(
+                    tenant_id=tenant_id,
+                    clock=clock,
+                )
+            )
+
+            if target_minutes <= 0 or deadline_at is None:
+                continue
+
+            remaining_seconds = int((deadline_at - now).total_seconds())
+            existing_warned = self._warn_offsets(clock.warned_offsets_json)
+            new_warned = sorted(
+                offset
+                for offset in warn_offsets
+                if offset not in existing_warned
+                and remaining_seconds <= offset
+                and remaining_seconds > 0
+            )
+
+            next_warned = sorted(existing_warned.union(new_warned))
+            is_new_breach = remaining_seconds <= 0 and not bool(clock.is_breached)
+
+            if not bool(data.dry_run):
+                updated = await self._best_effort_update_clock(
+                    where={"tenant_id": tenant_id, "id": clock.id},
+                    expected_row_version=int(clock.row_version or 1),
+                    changes={
+                        "elapsed_seconds": elapsed,
+                        "deadline_at": deadline_at,
+                        "warned_offsets_json": next_warned,
+                        "status": "breached" if is_new_breach else clock.status,
+                        "is_breached": bool(clock.is_breached) or is_new_breach,
+                        "breached_at": (
+                            (clock.breached_at or now)
+                            if is_new_breach
+                            else clock.breached_at
+                        ),
+                        "breach_count": int(clock.breach_count or 0)
+                        + (1 if is_new_breach else 0),
+                        "last_started_at": (
+                            None if is_new_breach else clock.last_started_at
+                        ),
+                        "paused_at": None if is_new_breach else clock.paused_at,
+                        "stopped_at": (
+                            (clock.stopped_at or now)
+                            if is_new_breach
+                            else clock.stopped_at
+                        ),
+                        "last_actor_user_id": auth_user_id,
+                    },
+                )
+                if updated is None:
+                    counters["ConflictCount"] += 1
+                    continue
+
+                clock = updated
+
+                for offset in new_warned:
+                    event = await self._append_clock_event(
+                        tenant_id=tenant_id,
+                        clock=clock,
+                        clock_definition=definition,
+                        event_type="warned",
+                        actor_user_id=auth_user_id,
+                        warned_offset_seconds=offset,
+                        payload_json={
+                            "remaining_seconds": remaining_seconds,
+                            "target_minutes": target_minutes,
+                            "deadline_at": deadline_at.isoformat(),
+                        },
+                        occurred_at=now,
+                    )
+                    warned_rows.append(
+                        {
+                            "ClockId": str(clock.id),
+                            "ClockEventId": str(event.id),
+                            "WarnedOffsetSeconds": offset,
+                            "TraceId": clock.trace_id,
+                        }
+                    )
+                    counters["WarnedCount"] += 1
+
+                if is_new_breach:
+                    event = await self._append_clock_event(
+                        tenant_id=tenant_id,
+                        clock=clock,
+                        clock_definition=definition,
+                        event_type="breached",
+                        actor_user_id=auth_user_id,
+                        warned_offset_seconds=None,
+                        payload_json={
+                            "remaining_seconds": remaining_seconds,
+                            "target_minutes": target_minutes,
+                            "deadline_at": deadline_at.isoformat(),
+                        },
+                        occurred_at=now,
+                    )
+                    breached_rows.append(
+                        {
+                            "ClockId": str(clock.id),
+                            "ClockEventId": str(event.id),
+                            "TraceId": clock.trace_id,
+                        }
+                    )
+                    counters["BreachedCount"] += 1
+            else:
+                for offset in new_warned:
+                    warned_rows.append(
+                        {
+                            "ClockId": str(clock.id),
+                            "ClockEventId": None,
+                            "WarnedOffsetSeconds": offset,
+                            "TraceId": clock.trace_id,
+                        }
+                    )
+                    counters["WarnedCount"] += 1
+
+                if is_new_breach:
+                    breached_rows.append(
+                        {
+                            "ClockId": str(clock.id),
+                            "ClockEventId": None,
+                            "TraceId": clock.trace_id,
+                        }
+                    )
+                    counters["BreachedCount"] += 1
+
+        return (
+            {
+                "Warned": warned_rows,
+                "Breached": breached_rows,
+                "Counters": counters,
+                "DryRun": bool(data.dry_run),
+                "NowUtc": now.isoformat(),
+            },
+            200,
+        )

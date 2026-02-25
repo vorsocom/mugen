@@ -27,6 +27,7 @@ workflow_event_type = EdmType(
             nullable=False,
         ),
         "WorkflowTaskId": EdmProperty("WorkflowTaskId", TypeRef("Edm.Guid")),
+        "EventSeq": EdmProperty("EventSeq", TypeRef("Edm.Int64")),
         "EventType": EdmProperty("EventType", TypeRef("Edm.String"), nullable=False),
         "FromStateId": EdmProperty("FromStateId", TypeRef("Edm.Guid")),
         "ToStateId": EdmProperty("ToStateId", TypeRef("Edm.Guid")),

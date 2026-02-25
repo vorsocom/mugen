@@ -14,7 +14,13 @@ from mugen.core.contract.gateway.storage.rdbms.crud_base import (
 )
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
-from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
+from mugen.core.contract.gateway.storage.rdbms.types import (
+    FilterGroup,
+    OrderBy,
+    RowVersionConflict,
+    ScalarFilter,
+    ScalarFilterOp,
+)
 from mugen.core.plugin.ops_workflow.api.validation import (
     WorkflowAssignTaskValidation,
     WorkflowCompleteTaskValidation,
@@ -43,6 +49,7 @@ class WorkflowTaskService(
             **kwargs,
         )
         self._event_service = WorkflowEventService(table=self._EVENT_TABLE, rsg=rsg)
+        self._event_seq_cache: dict[tuple[uuid.UUID, uuid.UUID], int] = {}
 
     @staticmethod
     def _now_utc() -> datetime:
@@ -118,11 +125,56 @@ class WorkflowTaskService(
         note: str | None,
         payload: Mapping[str, Any] | None = None,
     ) -> None:
+        cache_key = (tenant_id, workflow_instance_id)
+        cached = self._event_seq_cache.get(cache_key)
+        if cached is not None:
+            next_seq = int(cached) + 1
+        else:
+            try:
+                latest = await self._event_service.list(
+                    filter_groups=[
+                        FilterGroup(
+                            where={
+                                "tenant_id": tenant_id,
+                                "workflow_instance_id": workflow_instance_id,
+                            },
+                            scalar_filters=[
+                                ScalarFilter(
+                                    field="event_seq",
+                                    op=ScalarFilterOp.GT,
+                                    value=0,
+                                )
+                            ],
+                        )
+                    ],
+                    order_by=[OrderBy(field="event_seq", descending=True)],
+                    limit=1,
+                )
+                if latest:
+                    next_seq = int(latest[0].event_seq or 0) + 1
+                else:
+                    count = await self._event_service.count(
+                        filter_groups=[
+                            FilterGroup(
+                                where={
+                                    "tenant_id": tenant_id,
+                                    "workflow_instance_id": workflow_instance_id,
+                                }
+                            )
+                        ]
+                    )
+                    next_seq = int(count) + 1
+            except Exception:  # noqa: BLE001
+                next_seq = 1
+
+        self._event_seq_cache[cache_key] = next_seq
+
         await self._event_service.create(
             {
                 "tenant_id": tenant_id,
                 "workflow_instance_id": workflow_instance_id,
                 "workflow_task_id": workflow_task_id,
+                "event_seq": next_seq,
                 "event_type": event_type,
                 "actor_user_id": actor_user_id,
                 "note": self._normalize_optional_text(note),

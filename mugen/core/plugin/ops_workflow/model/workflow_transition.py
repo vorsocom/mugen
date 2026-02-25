@@ -79,6 +79,11 @@ class WorkflowTransition(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    compensation_json: Mapped[dict | list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

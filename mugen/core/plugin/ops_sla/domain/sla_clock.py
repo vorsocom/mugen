@@ -19,6 +19,8 @@ class SlaClockDE(BaseDE, TenantScopedDEMixin):
     policy_id: uuid.UUID | None = None
     calendar_id: uuid.UUID | None = None
     target_id: uuid.UUID | None = None
+    clock_definition_id: uuid.UUID | None = None
+    trace_id: str | None = None
 
     tracked_namespace: str | None = None
     tracked_id: uuid.UUID | None = None
@@ -41,6 +43,7 @@ class SlaClockDE(BaseDE, TenantScopedDEMixin):
 
     is_breached: bool | None = None
     breach_count: int | None = None
+    warned_offsets_json: list[int] | None = None
 
     last_actor_user_id: uuid.UUID | None = None
 

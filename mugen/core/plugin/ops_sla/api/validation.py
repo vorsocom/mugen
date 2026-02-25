@@ -1,5 +1,6 @@
 """Validation schemas used by ops_sla ACP actions and create payloads."""
 
+from datetime import datetime
 from typing import Any, Literal
 import uuid
 
@@ -22,6 +23,8 @@ class SlaClockCreateValidation(IValidationBase):
     policy_id: uuid.UUID | None = None
     calendar_id: uuid.UUID | None = None
     target_id: uuid.UUID | None = None
+    clock_definition_id: uuid.UUID | None = None
+    trace_id: str | None = None
 
     priority: str | None = None
     severity: str | None = None
@@ -41,6 +44,9 @@ class SlaClockCreateValidation(IValidationBase):
 
         if self.tracked_id is None and not tracked_ref:
             raise ValueError("Provide TrackedId or TrackedRef.")
+
+        if self.trace_id is not None and not self.trace_id.strip():
+            raise ValueError("TraceId cannot be empty if provided.")
 
         return self
 
@@ -76,6 +82,50 @@ class SlaClockMarkBreachedValidation(SlaClockActionValidation):
     escalation_level: NonNegativeInt | None = None
     reason: str | None = None
     payload: dict[str, Any] | None = None
+
+
+class SlaClockTickValidation(IValidationBase):
+    """Validate payload for tick actions."""
+
+    batch_size: PositiveInt | None = None
+    now_utc: datetime | None = None
+    dry_run: bool = False
+
+
+class SlaEscalationEvaluateValidation(IValidationBase):
+    """Validate payload for escalation evaluate actions."""
+
+    policy_key: str | None = None
+    trigger_event_json: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "SlaEscalationEvaluateValidation":
+        if self.policy_key is not None and not self.policy_key.strip():
+            raise ValueError("PolicyKey cannot be empty if provided.")
+        if not isinstance(self.trigger_event_json, dict):
+            raise ValueError("TriggerEventJson must be an object.")
+        return self
+
+
+class SlaEscalationExecuteValidation(SlaEscalationEvaluateValidation):
+    """Validate payload for escalation execute actions."""
+
+    dry_run: bool = False
+
+
+class SlaEscalationTestValidation(IValidationBase):
+    """Validate payload for escalation test actions."""
+
+    policy_key: str
+    sample_event_json: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "SlaEscalationTestValidation":
+        if not (self.policy_key or "").strip():
+            raise ValueError("PolicyKey must be non-empty.")
+        if not isinstance(self.sample_event_json, dict):
+            raise ValueError("SampleEventJson must be an object.")
+        return self
 
 
 class SlaTargetCreateValidation(IValidationBase):

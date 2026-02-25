@@ -9,6 +9,7 @@ __all__ = [
     "throttle_rule_type",
     "blocklist_entry_type",
     "orchestration_event_type",
+    "work_item_type",
 ]
 
 from mugen.core.plugin.channel_orchestration.edm.channel_profile import (
@@ -29,3 +30,4 @@ from mugen.core.plugin.channel_orchestration.edm.blocklist_entry import (
 from mugen.core.plugin.channel_orchestration.edm.orchestration_event import (
     orchestration_event_type,
 )
+from mugen.core.plugin.channel_orchestration.edm.work_item import work_item_type

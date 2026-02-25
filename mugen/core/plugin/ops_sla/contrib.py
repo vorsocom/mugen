@@ -33,6 +33,10 @@ from mugen.core.plugin.ops_sla.api.validation import (
     SlaClockResumeValidation,
     SlaClockStartValidation,
     SlaClockStopValidation,
+    SlaClockTickValidation,
+    SlaEscalationEvaluateValidation,
+    SlaEscalationExecuteValidation,
+    SlaEscalationTestValidation,
     SlaTargetCreateValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
@@ -157,12 +161,15 @@ def contribute(
                     "PolicyId",
                     "CalendarId",
                     "TargetId",
+                    "ClockDefinitionId",
+                    "TraceId",
                     "TrackedNamespace",
                     "TrackedId",
                     "TrackedRef",
                     "Metric",
                     "Priority",
                     "Severity",
+                    "WarnedOffsetsJson",
                     "Attributes",
                 ),
             ),
@@ -192,7 +199,115 @@ def contribute(
                     "schema": SlaClockMarkBreachedValidation,
                     "confirm": "Mark this SLA clock as breached?",
                 },
+                "tick": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": SlaClockTickValidation,
+                    "confirm": "Evaluate running clocks and emit SLA events?",
+                },
             },
+        },
+        {
+            "set": "OpsSlaClockDefinitions",
+            "entity": "SlaClockDefinition",
+            "table_name": "ops_sla_clock_definition",
+            "description": (
+                "Unified SLA clock-definition templates that specify target"
+                " deadline minutes and warning offsets."
+            ),
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "crud": CrudPolicy(
+                create_schema=(
+                    "TenantId",
+                    "Code",
+                    "Name",
+                    "Metric",
+                    "TargetMinutes",
+                ),
+                update_schema=(
+                    "Code",
+                    "Name",
+                    "Description",
+                    "Metric",
+                    "TargetMinutes",
+                    "WarnOffsetsJson",
+                    "IsActive",
+                    "Attributes",
+                ),
+            ),
+        },
+        {
+            "set": "OpsSlaClockEvents",
+            "entity": "SlaClockEvent",
+            "table_name": "ops_sla_clock_event",
+            "description": (
+                "Append-only warning and breach events emitted from SLA tick runs."
+            ),
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "crud": CrudPolicy(),
+        },
+        {
+            "set": "OpsSlaEscalationPolicies",
+            "entity": "SlaEscalationPolicy",
+            "table_name": "ops_sla_escalation_policy",
+            "description": (
+                "Deterministic escalation rules that match trigger payloads and"
+                " produce adapter-driven action plans."
+            ),
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "crud": CrudPolicy(
+                create_schema=(
+                    "TenantId",
+                    "PolicyKey",
+                    "Name",
+                ),
+                update_schema=(
+                    "PolicyKey",
+                    "Name",
+                    "Description",
+                    "Priority",
+                    "TriggersJson",
+                    "ActionsJson",
+                    "IsActive",
+                    "Attributes",
+                ),
+            ),
+            "actions": {
+                "evaluate": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": SlaEscalationEvaluateValidation,
+                    "confirm": "Evaluate escalation policy matches?",
+                },
+                "execute": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": SlaEscalationExecuteValidation,
+                    "confirm": "Execute escalation planning and persist run logs?",
+                },
+                "test": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": SlaEscalationTestValidation,
+                    "confirm": "Test escalation policy behavior with sample payload?",
+                },
+            },
+        },
+        {
+            "set": "OpsSlaEscalationRuns",
+            "entity": "SlaEscalationRun",
+            "table_name": "ops_sla_escalation_run",
+            "description": (
+                "Append-only escalation run records with per-action result"
+                " diagnostics and aggregate status."
+            ),
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "crud": CrudPolicy(),
         },
         {
             "set": "OpsSlaBreachEvents",
