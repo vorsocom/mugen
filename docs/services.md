@@ -1,7 +1,7 @@
 # Working with muGen Services
 
 Status: Draft
-Last Updated: 2026-02-14
+Last Updated: 2026-02-24
 Audience: Core and downstream plugin teams
 
 ## Purpose
@@ -27,6 +27,9 @@ see `docs/acp-rbac-policy.md`.
 
 Downstream plugins should compose business orchestration on top of ACP-exposed
 resources/actions rather than bypassing them with direct table writes.
+
+For schema ownership and migration isolation between core and downstream
+plugins, see `docs/migration-track-separation.md`.
 
 ## ACP-Derived Core Plugins
 
@@ -58,5 +61,5 @@ For downstream business-case planning:
    contracts.
 4. Validate with standard checks:
    - ACP style checker
-   - Alembic migration checker
+   - Alembic migration checker (per track)
    - ACP HTTP E2E template suite

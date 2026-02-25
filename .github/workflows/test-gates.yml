@@ -48,7 +48,7 @@ jobs:
             --rdbms-url postgresql+psycopg://mugen:mugen@127.0.0.1:5432/mugen \
             --aws-region us-east-1 \
             --enable-web-platform
-          poetry run python -m alembic upgrade head
+          poetry run python scripts/run_migration_tracks.py upgrade head
 
       - name: Run Pre-Push Quality Gates
         env:
