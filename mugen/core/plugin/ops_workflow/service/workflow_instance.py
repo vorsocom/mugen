@@ -69,6 +69,8 @@ class WorkflowInstanceService(
     _ALLOWED_ADVANCE_STATUS = {"active"}
     _TERMINAL_INSTANCE_STATUS = {"completed", "cancelled"}
     _ACTIVE_TASK_STATUS = {"open", "in_progress"}
+    _EVENT_SEQ_UNIQUE_CONSTRAINT = "ux_ops_wf_event_tenant_instance_event_seq"
+    _EVENT_APPEND_MAX_ATTEMPTS = 5
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
         super().__init__(
@@ -100,6 +102,24 @@ class WorkflowInstanceService(
             return None
         clean = str(value).strip()
         return clean or None
+
+    @classmethod
+    def _integrity_constraint_name(cls, error: IntegrityError) -> str | None:
+        orig = getattr(error, "orig", None)
+        diag = getattr(orig, "diag", None)
+        constraint_name = getattr(diag, "constraint_name", None)
+        if isinstance(constraint_name, str) and constraint_name.strip():
+            return constraint_name.strip()
+
+        message = str(error)
+        if cls._EVENT_SEQ_UNIQUE_CONSTRAINT in message:
+            return cls._EVENT_SEQ_UNIQUE_CONSTRAINT
+
+        return None
+
+    @classmethod
+    def _is_event_seq_conflict(cls, error: IntegrityError) -> bool:
+        return cls._integrity_constraint_name(error) == cls._EVENT_SEQ_UNIQUE_CONSTRAINT
 
     @staticmethod
     def _to_aware_utc(value: datetime | None) -> datetime | None:
@@ -274,26 +294,43 @@ class WorkflowInstanceService(
         note: str | None = None,
         payload: Mapping[str, Any] | None = None,
     ) -> None:
-        event_seq = await self._next_event_seq(
-            tenant_id=tenant_id,
-            workflow_instance_id=workflow_instance_id,
-        )
+        cache_key = (tenant_id, workflow_instance_id)
 
-        await self._event_service.create(
-            {
-                "tenant_id": tenant_id,
-                "workflow_instance_id": workflow_instance_id,
-                "workflow_task_id": workflow_task_id,
-                "event_seq": event_seq,
-                "event_type": event_type,
-                "from_state_id": from_state_id,
-                "to_state_id": to_state_id,
-                "actor_user_id": actor_user_id,
-                "note": self._normalize_optional_text(note),
-                "payload": dict(payload) if payload else None,
-                "occurred_at": self._now_utc(),
-            }
-        )
+        for attempt in range(1, self._EVENT_APPEND_MAX_ATTEMPTS + 1):
+            event_seq = await self._next_event_seq(
+                tenant_id=tenant_id,
+                workflow_instance_id=workflow_instance_id,
+            )
+
+            try:
+                await self._event_service.create(
+                    {
+                        "tenant_id": tenant_id,
+                        "workflow_instance_id": workflow_instance_id,
+                        "workflow_task_id": workflow_task_id,
+                        "event_seq": event_seq,
+                        "event_type": event_type,
+                        "from_state_id": from_state_id,
+                        "to_state_id": to_state_id,
+                        "actor_user_id": actor_user_id,
+                        "note": self._normalize_optional_text(note),
+                        "payload": dict(payload) if payload else None,
+                        "occurred_at": self._now_utc(),
+                    }
+                )
+                return
+            except IntegrityError as error:
+                if not self._is_event_seq_conflict(error):
+                    abort(500)
+
+                self._event_seq_cache.pop(cache_key, None)
+                if attempt >= self._EVENT_APPEND_MAX_ATTEMPTS:
+                    abort(
+                        409,
+                        "Workflow event sequence conflict. Retry the action.",
+                    )
+            except SQLAlchemyError:
+                abort(500)
 
     async def _maybe_replay_action_result(
         self,

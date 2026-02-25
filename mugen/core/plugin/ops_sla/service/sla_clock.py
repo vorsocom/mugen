@@ -267,6 +267,56 @@ class SlaClockService(
 
         return cursor.astimezone(timezone.utc)
 
+    @classmethod
+    def _business_elapsed_seconds(
+        cls,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+        calendar: SlaCalendarDE,
+    ) -> int:
+        start_utc = cls._to_aware_utc(start_at)
+        end_utc = cls._to_aware_utc(end_at)
+        wall_clock_delta = int((end_utc - start_utc).total_seconds())
+        if wall_clock_delta <= 0:
+            return 0
+
+        timezone_name = (calendar.timezone or "UTC").strip() or "UTC"
+        try:
+            tz = ZoneInfo(timezone_name)
+        except Exception:
+            return wall_clock_delta
+
+        business_start = calendar.business_start_time or time(hour=9)
+        business_end = calendar.business_end_time or time(hour=17)
+        if business_end <= business_start:
+            return wall_clock_delta
+
+        business_days = cls._business_days(calendar.business_days)
+        holidays = cls._holiday_dates(calendar.holiday_refs)
+
+        local_start = start_utc.astimezone(tz)
+        local_end = end_utc.astimezone(tz)
+        cursor_date = local_start.date()
+        end_date = local_end.date()
+        elapsed = 0
+
+        while cursor_date <= end_date:
+            if cursor_date in holidays or cursor_date.isoweekday() not in business_days:
+                cursor_date += timedelta(days=1)
+                continue
+
+            day_start = datetime.combine(cursor_date, business_start, tzinfo=tz)
+            day_end = datetime.combine(cursor_date, business_end, tzinfo=tz)
+            segment_start = max(day_start, local_start)
+            segment_end = min(day_end, local_end)
+            if segment_end > segment_start:
+                elapsed += int((segment_end - segment_start).total_seconds())
+
+            cursor_date += timedelta(days=1)
+
+        return max(0, elapsed)
+
     async def _resolve_policy(
         self,
         *,
@@ -387,18 +437,30 @@ class SlaClockService(
 
         return target_minutes, warn_offsets, definition
 
-    @staticmethod
-    def _elapsed_with_open_segment(clock: SlaClockDE, now: datetime) -> int:
+    @classmethod
+    def _elapsed_with_open_segment(
+        cls,
+        clock: SlaClockDE,
+        now: datetime,
+        *,
+        calendar: SlaCalendarDE | None = None,
+    ) -> int:
         elapsed = int(clock.elapsed_seconds or 0)
 
         if clock.status != "running" or clock.last_started_at is None:
             return elapsed
 
-        started_at = clock.last_started_at
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=timezone.utc)
+        started_at = cls._to_aware_utc(clock.last_started_at)
+        now_utc = cls._to_aware_utc(now)
+        if calendar is None:
+            delta = int((now_utc - started_at).total_seconds())
+        else:
+            delta = cls._business_elapsed_seconds(
+                start_at=started_at,
+                end_at=now_utc,
+                calendar=calendar,
+            )
 
-        delta = int((now - started_at).total_seconds())
         if delta > 0:
             elapsed += delta
 
@@ -411,6 +473,7 @@ class SlaClockService(
         clock: SlaClockDE,
         at_time: datetime,
         elapsed_seconds: int,
+        calendar: SlaCalendarDE | None = None,
     ) -> datetime | None:
         target_minutes, _warn_offsets, _definition = await self._resolve_target_context(
             tenant_id=tenant_id,
@@ -423,7 +486,8 @@ class SlaClockService(
         if remaining_seconds <= 0:
             return at_time
 
-        calendar = await self._resolve_calendar(tenant_id=tenant_id, clock=clock)
+        if calendar is None:
+            calendar = await self._resolve_calendar(tenant_id=tenant_id, clock=clock)
         if calendar is None:
             return at_time + timedelta(seconds=remaining_seconds)
 
@@ -551,12 +615,14 @@ class SlaClockService(
             abort(409, "Only running clocks can be paused.")
 
         now = self._now_utc()
-        elapsed = self._elapsed_with_open_segment(current, now)
+        calendar = await self._resolve_calendar(tenant_id=tenant_id, clock=current)
+        elapsed = self._elapsed_with_open_segment(current, now, calendar=calendar)
         deadline_at = await self._compute_deadline(
             tenant_id=tenant_id,
             clock=current,
             at_time=now,
             elapsed_seconds=elapsed,
+            calendar=calendar,
         )
 
         await self._update_clock_with_row_version(
@@ -638,11 +704,10 @@ class SlaClockService(
             abort(409, "Only running or paused clocks can be stopped.")
 
         now = self._now_utc()
-        elapsed = (
-            self._elapsed_with_open_segment(current, now)
-            if current.status == "running"
-            else int(current.elapsed_seconds or 0)
-        )
+        calendar = None
+        if current.status == "running":
+            calendar = await self._resolve_calendar(tenant_id=tenant_id, clock=current)
+        elapsed = self._elapsed_with_open_segment(current, now, calendar=calendar)
 
         await self._update_clock_with_row_version(
             where=where,
@@ -676,7 +741,12 @@ class SlaClockService(
         )
 
         now = self._now_utc()
-        elapsed = self._elapsed_with_open_segment(current, now)
+        calendar = (
+            await self._resolve_calendar(tenant_id=tenant_id, clock=current)
+            if current.status == "running"
+            else None
+        )
+        elapsed = self._elapsed_with_open_segment(current, now, calendar=calendar)
 
         await self._update_clock_with_row_version(
             where=where,
@@ -768,12 +838,14 @@ class SlaClockService(
             if clock.id is None:
                 continue
 
-            elapsed = self._elapsed_with_open_segment(clock, now)
+            calendar = await self._resolve_calendar(tenant_id=tenant_id, clock=clock)
+            elapsed = self._elapsed_with_open_segment(clock, now, calendar=calendar)
             deadline_at = await self._compute_deadline(
                 tenant_id=tenant_id,
                 clock=clock,
                 at_time=now,
                 elapsed_seconds=elapsed,
+                calendar=calendar,
             )
             target_minutes, warn_offsets, definition = (
                 await self._resolve_target_context(

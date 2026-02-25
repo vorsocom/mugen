@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from quart import abort
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from mugen.core.contract.gateway.storage.rdbms.crud_base import (
     ICrudServiceWithRowVersion,
@@ -40,6 +40,8 @@ class WorkflowTaskService(
 
     _EVENT_TABLE = "ops_workflow_workflow_event"
     _TERMINAL_STATUSES = {"completed", "rejected", "cancelled"}
+    _EVENT_SEQ_UNIQUE_CONSTRAINT = "ux_ops_wf_event_tenant_instance_event_seq"
+    _EVENT_APPEND_MAX_ATTEMPTS = 5
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
         super().__init__(
@@ -61,6 +63,24 @@ class WorkflowTaskService(
             return None
         clean = str(value).strip()
         return clean or None
+
+    @classmethod
+    def _integrity_constraint_name(cls, error: IntegrityError) -> str | None:
+        orig = getattr(error, "orig", None)
+        diag = getattr(orig, "diag", None)
+        constraint_name = getattr(diag, "constraint_name", None)
+        if isinstance(constraint_name, str) and constraint_name.strip():
+            return constraint_name.strip()
+
+        message = str(error)
+        if cls._EVENT_SEQ_UNIQUE_CONSTRAINT in message:
+            return cls._EVENT_SEQ_UNIQUE_CONSTRAINT
+
+        return None
+
+    @classmethod
+    def _is_event_seq_conflict(cls, error: IntegrityError) -> bool:
+        return cls._integrity_constraint_name(error) == cls._EVENT_SEQ_UNIQUE_CONSTRAINT
 
     async def _get_for_action(
         self,
@@ -126,62 +146,77 @@ class WorkflowTaskService(
         payload: Mapping[str, Any] | None = None,
     ) -> None:
         cache_key = (tenant_id, workflow_instance_id)
-        cached = self._event_seq_cache.get(cache_key)
-        if cached is not None:
-            next_seq = int(cached) + 1
-        else:
-            try:
-                latest = await self._event_service.list(
-                    filter_groups=[
-                        FilterGroup(
-                            where={
-                                "tenant_id": tenant_id,
-                                "workflow_instance_id": workflow_instance_id,
-                            },
-                            scalar_filters=[
-                                ScalarFilter(
-                                    field="event_seq",
-                                    op=ScalarFilterOp.GT,
-                                    value=0,
-                                )
-                            ],
-                        )
-                    ],
-                    order_by=[OrderBy(field="event_seq", descending=True)],
-                    limit=1,
-                )
-                if latest:
-                    next_seq = int(latest[0].event_seq or 0) + 1
-                else:
-                    count = await self._event_service.count(
+        for attempt in range(1, self._EVENT_APPEND_MAX_ATTEMPTS + 1):
+            cached = self._event_seq_cache.get(cache_key)
+            if cached is not None:
+                next_seq = int(cached) + 1
+            else:
+                try:
+                    latest = await self._event_service.list(
                         filter_groups=[
                             FilterGroup(
                                 where={
                                     "tenant_id": tenant_id,
                                     "workflow_instance_id": workflow_instance_id,
-                                }
+                                },
+                                scalar_filters=[
+                                    ScalarFilter(
+                                        field="event_seq",
+                                        op=ScalarFilterOp.GT,
+                                        value=0,
+                                    )
+                                ],
                             )
-                        ]
+                        ],
+                        order_by=[OrderBy(field="event_seq", descending=True)],
+                        limit=1,
                     )
-                    next_seq = int(count) + 1
-            except Exception:  # noqa: BLE001
-                next_seq = 1
+                    if latest:
+                        next_seq = int(latest[0].event_seq or 0) + 1
+                    else:
+                        count = await self._event_service.count(
+                            filter_groups=[
+                                FilterGroup(
+                                    where={
+                                        "tenant_id": tenant_id,
+                                        "workflow_instance_id": workflow_instance_id,
+                                    }
+                                )
+                            ]
+                        )
+                        next_seq = int(count) + 1
+                except Exception:  # noqa: BLE001
+                    next_seq = 1
 
-        self._event_seq_cache[cache_key] = next_seq
+            self._event_seq_cache[cache_key] = next_seq
 
-        await self._event_service.create(
-            {
-                "tenant_id": tenant_id,
-                "workflow_instance_id": workflow_instance_id,
-                "workflow_task_id": workflow_task_id,
-                "event_seq": next_seq,
-                "event_type": event_type,
-                "actor_user_id": actor_user_id,
-                "note": self._normalize_optional_text(note),
-                "payload": dict(payload) if payload else None,
-                "occurred_at": self._now_utc(),
-            }
-        )
+            try:
+                await self._event_service.create(
+                    {
+                        "tenant_id": tenant_id,
+                        "workflow_instance_id": workflow_instance_id,
+                        "workflow_task_id": workflow_task_id,
+                        "event_seq": next_seq,
+                        "event_type": event_type,
+                        "actor_user_id": actor_user_id,
+                        "note": self._normalize_optional_text(note),
+                        "payload": dict(payload) if payload else None,
+                        "occurred_at": self._now_utc(),
+                    }
+                )
+                return
+            except IntegrityError as error:
+                if not self._is_event_seq_conflict(error):
+                    abort(500)
+
+                self._event_seq_cache.pop(cache_key, None)
+                if attempt >= self._EVENT_APPEND_MAX_ATTEMPTS:
+                    abort(
+                        409,
+                        "Workflow event sequence conflict. Retry the action.",
+                    )
+            except SQLAlchemyError:
+                abort(500)
 
     async def action_assign_task(
         self,

@@ -111,6 +111,101 @@ class TestSlaClockServiceEdges(unittest.IsolatedAsyncioTestCase):
             datetime(2026, 2, 17, 9, 0, 1, tzinfo=timezone.utc),
         )
 
+    def test_business_elapsed_seconds_excludes_after_hours_and_weekend(self) -> None:
+        svc = self._svc()
+        calendar = SlaCalendarDE(
+            timezone="UTC",
+            business_start_time=time(9, 0),
+            business_end_time=time(17, 0),
+            business_days=[1, 2, 3, 4, 5],
+            holiday_refs=[],
+        )
+
+        start = datetime(2026, 2, 13, 16, 0, tzinfo=timezone.utc)  # Friday
+        after_hours = datetime(2026, 2, 13, 18, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            svc._business_elapsed_seconds(
+                start_at=start,
+                end_at=after_hours,
+                calendar=calendar,
+            ),
+            3600,
+        )
+
+        next_business_day = datetime(2026, 2, 16, 10, 0, tzinfo=timezone.utc)  # Monday
+        self.assertEqual(
+            svc._business_elapsed_seconds(
+                start_at=start,
+                end_at=next_business_day,
+                calendar=calendar,
+            ),
+            7200,
+        )
+
+    def test_business_elapsed_seconds_invalid_timezone_falls_back_to_wall_clock(
+        self,
+    ) -> None:
+        svc = self._svc()
+        calendar = SlaCalendarDE(timezone="bad/timezone")
+        start = datetime(2026, 2, 13, 16, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 2, 13, 18, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            svc._business_elapsed_seconds(
+                start_at=start,
+                end_at=end,
+                calendar=calendar,
+            ),
+            7200,
+        )
+
+    def test_business_elapsed_seconds_handles_zero_and_invalid_business_window(
+        self,
+    ) -> None:
+        svc = self._svc()
+        calendar = SlaCalendarDE(
+            timezone="UTC",
+            business_start_time=time(9, 0),
+            business_end_time=time(17, 0),
+            business_days=[1, 2, 3, 4, 5],
+            holiday_refs=[],
+        )
+        start = datetime(2026, 2, 13, 10, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            svc._business_elapsed_seconds(
+                start_at=start,
+                end_at=start,
+                calendar=calendar,
+            ),
+            0,
+        )
+
+        after_hours_start = datetime(2026, 2, 13, 18, 0, tzinfo=timezone.utc)
+        after_hours_end = datetime(2026, 2, 13, 19, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            svc._business_elapsed_seconds(
+                start_at=after_hours_start,
+                end_at=after_hours_end,
+                calendar=calendar,
+            ),
+            0,
+        )
+
+        inverted_window = SlaCalendarDE(
+            timezone="UTC",
+            business_start_time=time(17, 0),
+            business_end_time=time(9, 0),
+        )
+        self.assertEqual(
+            svc._business_elapsed_seconds(
+                start_at=start,
+                end_at=start + timedelta(hours=2),
+                calendar=inverted_window,
+            ),
+            7200,
+        )
+
     async def test_get_for_action_raises_500_on_sql_error(self) -> None:
         svc = self._svc()
         svc.get = AsyncMock(side_effect=SQLAlchemyError("boom"))

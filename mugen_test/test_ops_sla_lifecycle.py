@@ -1,6 +1,6 @@
 """Unit tests for ops_sla clock lifecycle and breach behavior."""
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 import unittest
 from unittest.mock import AsyncMock, Mock
 import uuid
@@ -13,8 +13,9 @@ from mugen.core.plugin.ops_sla.api.validation import (
     SlaClockResumeValidation,
     SlaClockStartValidation,
     SlaClockStopValidation,
+    SlaClockTickValidation,
 )
-from mugen.core.plugin.ops_sla.domain import SlaClockDE
+from mugen.core.plugin.ops_sla.domain import SlaCalendarDE, SlaClockDE
 from mugen.core.plugin.ops_sla.service.sla_clock import SlaClockService
 
 
@@ -148,6 +149,39 @@ class TestOpsSlaLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stop_changes["status"], "stopped")
         self.assertEqual(stop_changes["elapsed_seconds"], 450)
 
+    async def test_stop_from_paused_keeps_elapsed_without_calendar_lookup(self) -> None:
+        tenant_id = uuid.uuid4()
+        clock_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        stop_now = datetime(2026, 2, 13, 16, 30, tzinfo=timezone.utc)
+
+        svc = SlaClockService(table="ops_sla_clock", rsg=Mock())
+        svc._now_utc = lambda: stop_now
+        svc._resolve_calendar = AsyncMock()
+        paused = SlaClockDE(
+            id=clock_id,
+            tenant_id=tenant_id,
+            status="paused",
+            row_version=8,
+            elapsed_seconds=321,
+            metric="response",
+        )
+        svc.get = AsyncMock(return_value=paused)
+        svc.update_with_row_version = AsyncMock(return_value=paused)
+
+        stop_result = await svc.action_stop_clock(
+            tenant_id=tenant_id,
+            entity_id=clock_id,
+            where={"tenant_id": tenant_id, "id": clock_id},
+            auth_user_id=actor_id,
+            data=SlaClockStopValidation(row_version=8),
+        )
+
+        self.assertEqual(stop_result, ("", 204))
+        stop_changes = svc.update_with_row_version.await_args.kwargs["changes"]
+        self.assertEqual(stop_changes["elapsed_seconds"], 321)
+        svc._resolve_calendar.assert_not_awaited()
+
     async def test_mark_breached_appends_event(self) -> None:
         tenant_id = uuid.uuid4()
         clock_id = uuid.uuid4()
@@ -218,3 +252,59 @@ class TestOpsSlaLifecycle(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(ctx.exception.code, 409)
+
+    async def test_tick_business_hours_elapsed_breach_rolls_to_next_business_day(
+        self,
+    ) -> None:
+        tenant_id = uuid.uuid4()
+        clock_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+
+        svc = SlaClockService(table="ops_sla_clock", rsg=Mock())
+        calendar = SlaCalendarDE(
+            timezone="UTC",
+            business_start_time=time(9, 0),
+            business_end_time=time(17, 0),
+            business_days=[1, 2, 3, 4, 5],
+            holiday_refs=[],
+        )
+        clock = SlaClockDE(
+            id=clock_id,
+            tenant_id=tenant_id,
+            status="running",
+            row_version=1,
+            elapsed_seconds=0,
+            last_started_at=datetime(2026, 2, 13, 16, 0, tzinfo=timezone.utc),  # Friday
+            warned_offsets_json=[],
+            is_breached=False,
+            metric="response",
+            trace_id="trace-business-window",
+        )
+
+        svc.list = AsyncMock(return_value=[clock])
+        svc._resolve_calendar = AsyncMock(return_value=calendar)
+        svc._resolve_target_context = AsyncMock(return_value=(120, set(), None))
+
+        evening_payload, evening_status = await svc.action_tick(
+            tenant_id=tenant_id,
+            where={},
+            auth_user_id=actor_id,
+            data=SlaClockTickValidation(
+                now_utc=datetime(2026, 2, 13, 18, 0, tzinfo=timezone.utc),
+                dry_run=True,
+            ),
+        )
+        self.assertEqual(evening_status, 200)
+        self.assertEqual(evening_payload["Counters"]["BreachedCount"], 0)
+
+        next_day_payload, next_day_status = await svc.action_tick(
+            tenant_id=tenant_id,
+            where={},
+            auth_user_id=actor_id,
+            data=SlaClockTickValidation(
+                now_utc=datetime(2026, 2, 16, 10, 0, tzinfo=timezone.utc),
+                dry_run=True,
+            ),
+        )
+        self.assertEqual(next_day_status, 200)
+        self.assertEqual(next_day_payload["Counters"]["BreachedCount"], 1)
