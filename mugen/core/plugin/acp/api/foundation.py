@@ -10,9 +10,8 @@ from typing import Any
 from quart import abort, make_response, request
 
 from mugen.core import di
+from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
-
-_GLOBAL_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 
 def _config_provider():
@@ -20,7 +19,7 @@ def _config_provider():
 
 
 def _normalize_tenant_id(tenant_id: uuid.UUID | None) -> uuid.UUID:
-    return tenant_id if tenant_id is not None else _GLOBAL_TENANT_ID
+    return tenant_id if tenant_id is not None else GLOBAL_TENANT_ID
 
 
 def _canonical_json_hash(value: Any) -> str:

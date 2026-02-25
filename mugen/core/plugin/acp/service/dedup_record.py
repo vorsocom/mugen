@@ -20,6 +20,7 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
     ScalarFilter,
     ScalarFilterOp,
 )
+from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.contract.service.dedup_record import IDedupRecordService
 from mugen.core.plugin.acp.domain import DedupRecordDE
@@ -27,7 +28,6 @@ from mugen.core.plugin.acp.domain import DedupRecordDE
 _DEFAULT_TTL_SECONDS = 60 * 60
 _DEFAULT_LEASE_SECONDS = 30
 _DEFAULT_SWEEP_BATCH_SIZE = 500
-_GLOBAL_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 
 def _config_provider():
@@ -61,7 +61,7 @@ class DedupRecordService(
 
     @staticmethod
     def _normalize_tenant_id(tenant_id: uuid.UUID | None) -> uuid.UUID:
-        return tenant_id if tenant_id is not None else _GLOBAL_TENANT_ID
+        return tenant_id if tenant_id is not None else GLOBAL_TENANT_ID
 
     @staticmethod
     def _normalize_text(value: str | None, *, field: str) -> str:

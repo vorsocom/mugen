@@ -15,6 +15,8 @@ guessing header conventions, metadata shape, or rollout sequencing.
 
 - Downstream producers adopt ACP idempotency using `X-Idempotency-Key` first,
   with optional `X-Idempotency-Scope` and `X-Idempotency-Request-Hash`.
+- Non-tenant idempotency and schema-definition/binding operations persist under
+  reserved global tenant ID `00000000-0000-0000-0000-000000000000`.
 - Parent linkage for correlation graphing uses audit `meta.ParentEntitySet` and
   `meta.ParentEntityId` when parent-child operations are known.
 - Schema registry rollout starts in audit-only mode (`enforce_bindings=false`),
@@ -65,6 +67,10 @@ guessing header conventions, metadata shape, or rollout sequencing.
 
 ### Operational Notes
 
+- Migration prerequisite:
+  - apply remediation migration
+    `e7a1c2d3f4b5_phase1_global_tenant_and_schema_binding_uniqueness.py`
+    before enabling idempotency headers on non-tenant routes.
 - Rollout order:
   1. apply migrations;
   2. deploy code with `enforce_bindings=false` and `audit.biz_trace.enabled=false`;
