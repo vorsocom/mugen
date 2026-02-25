@@ -26,8 +26,11 @@ Downstream services must adopt these primitives without breaking existing
   no linked open decision request.
 - Treat non-approval obligations as downstream responsibilities.
 - Standardize on policy trace propagation using `TraceId` where available.
-- Guarantee approval-request failures are compensated so instance state is not
-  persisted as `awaiting_approval` without a linked open decision request.
+- Reconcile approval-request open failures first; when linked/progressed state
+  is already safe, `advance` returns `204` and records that success for replay.
+- Apply guarded optimistic-lock compensation only when the instance is still in
+  the original pending snapshot; unresolved compensation failures still surface
+  as action errors.
 
 ## Core vs Downstream Boundary
 

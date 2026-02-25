@@ -6,7 +6,7 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from pydantic import ValidationError
 from quart import abort
@@ -445,7 +445,21 @@ class WorkflowInstanceService(
             abort(409, "Decision request RowVersion is invalid.")
         return bridged, True
 
-    async def _compensate_advance_decision_open_failure(
+    @classmethod
+    def _matches_advance_pending_snapshot(
+        cls,
+        *,
+        instance: WorkflowInstanceDE,
+        pending_transition_id: uuid.UUID | None,
+        pending_task_id: uuid.UUID | None,
+    ) -> bool:
+        return (
+            instance.status == "awaiting_approval"
+            and cls._uuid_equal(instance.pending_transition_id, pending_transition_id)
+            and cls._uuid_equal(instance.pending_task_id, pending_task_id)
+        )
+
+    async def _reconcile_advance_open_failure(
         self,
         *,
         tenant_id: uuid.UUID,
@@ -454,65 +468,174 @@ class WorkflowInstanceService(
         current: WorkflowInstanceDE,
         task: WorkflowTaskDE,
         auth_user_id: uuid.UUID,
-    ) -> None:
-        now = self._now_utc()
+        pending_instance_row_version: int,
+        pending_transition_id: uuid.UUID | None,
+        pending_task_id: uuid.UUID | None,
+        task_row_version: int,
+    ) -> Literal["compensated", "reconciled"]:
+        if task.id is not None:
+            linked_request = await self._find_open_decision_request(
+                tenant_id=tenant_id,
+                workflow_instance_id=entity_id,
+                workflow_task_id=task.id,
+            )
+            if linked_request is not None:
+                return "reconciled"
+
+        latest_where = dict(where)
+        latest_where["tenant_id"] = tenant_id
+        latest_where["id"] = entity_id
+        latest_where.pop("row_version", None)
 
         try:
-            compensated_instance = await self.update(
-                where=where,
-                changes={
-                    "status": "active",
-                    "pending_transition_id": None,
-                    "pending_task_id": None,
-                    "last_actor_user_id": auth_user_id,
-                },
-            )
+            latest_instance = await self.get(latest_where)
         except SQLAlchemyError:
             abort(500)
+        if latest_instance is None:
+            abort(500, "Workflow instance compensation failed after decision open.")
+
+        if not self._matches_advance_pending_snapshot(
+            instance=latest_instance,
+            pending_transition_id=pending_transition_id,
+            pending_task_id=pending_task_id,
+        ):
+            return "reconciled"
+
+        rollback_where = {
+            "tenant_id": tenant_id,
+            "id": entity_id,
+            "status": "awaiting_approval",
+            "pending_transition_id": pending_transition_id,
+            "pending_task_id": pending_task_id,
+        }
+        expected_instance_row_version = int(pending_instance_row_version or 0)
+        if expected_instance_row_version <= 0:
+            expected_instance_row_version = int(latest_instance.row_version or 0)
+        if expected_instance_row_version <= 0:
+            abort(500, "Workflow instance compensation failed after decision open.")
+
+        instance_svc: ICrudServiceWithRowVersion[WorkflowInstanceDE] = self
+        compensated_instance: WorkflowInstanceDE | None = None
+        for attempt in range(2):
+            try:
+                compensated_instance = await instance_svc.update_with_row_version(
+                    where=rollback_where,
+                    expected_row_version=expected_instance_row_version,
+                    changes={
+                        "status": "active",
+                        "pending_transition_id": None,
+                        "pending_task_id": None,
+                        "last_actor_user_id": auth_user_id,
+                    },
+                )
+            except RowVersionConflict:
+                compensated_instance = None
+            except SQLAlchemyError:
+                abort(500)
+
+            if compensated_instance is not None:
+                break
+
+            try:
+                latest_instance = await self.get(latest_where)
+            except SQLAlchemyError:
+                abort(500)
+
+            if latest_instance is not None and not self._matches_advance_pending_snapshot(
+                instance=latest_instance,
+                pending_transition_id=pending_transition_id,
+                pending_task_id=pending_task_id,
+            ):
+                return "reconciled"
+
+            if attempt == 0:
+                expected_instance_row_version = (
+                    int(latest_instance.row_version or 0)
+                    if latest_instance is not None
+                    else 0
+                )
+                if expected_instance_row_version <= 0:
+                    abort(500, "Workflow instance compensation failed after decision open.")
 
         if compensated_instance is None:
             abort(500, "Workflow instance compensation failed after decision open.")
 
         if task.id is None:
-            return
+            return "compensated"
 
+        task_where = {
+            "tenant_id": tenant_id,
+            "id": task.id,
+            "workflow_instance_id": entity_id,
+        }
         try:
-            cancelled_task = await self._task_service.update(
-                where={
-                    "tenant_id": tenant_id,
-                    "id": task.id,
-                    "workflow_instance_id": entity_id,
-                },
-                changes={
-                    "status": "cancelled",
-                    "completed_at": now,
-                    "cancelled_at": now,
-                    "completed_by_user_id": auth_user_id,
-                    "outcome": "decision_open_failed",
-                },
-            )
+            latest_task = await self._task_service.get(task_where)
         except SQLAlchemyError:
             abort(500)
+        if latest_task is None or latest_task.status not in self._ACTIVE_TASK_STATUS:
+            return "compensated"
+
+        now = self._now_utc()
+        expected_task_row_version = int(task_row_version or 0)
+        if expected_task_row_version <= 0:
+            expected_task_row_version = int(latest_task.row_version or 0)
+        if expected_task_row_version <= 0:
+            abort(500, "Approval task compensation failed after decision open.")
+
+        cancelled_task: WorkflowTaskDE | None = None
+        for attempt in range(2):
+            try:
+                cancelled_task = await self._task_service.update_with_row_version(
+                    where=task_where,
+                    expected_row_version=expected_task_row_version,
+                    changes={
+                        "status": "cancelled",
+                        "completed_at": now,
+                        "cancelled_at": now,
+                        "completed_by_user_id": auth_user_id,
+                        "outcome": "decision_open_failed",
+                    },
+                )
+            except RowVersionConflict:
+                cancelled_task = None
+            except SQLAlchemyError:
+                abort(500)
+
+            if cancelled_task is not None:
+                break
+
+            try:
+                latest_task = await self._task_service.get(task_where)
+            except SQLAlchemyError:
+                abort(500)
+
+            if latest_task is None or latest_task.status not in self._ACTIVE_TASK_STATUS:
+                return "compensated"
+
+            if attempt == 0:
+                expected_task_row_version = int(latest_task.row_version or 0)
+                if expected_task_row_version <= 0:
+                    abort(500, "Approval task compensation failed after decision open.")
 
         if cancelled_task is None:
             abort(500, "Approval task compensation failed after decision open.")
 
-        if cancelled_task.id is None:
-            return
+        if cancelled_task.id is not None:
+            await self._append_event(
+                tenant_id=tenant_id,
+                workflow_instance_id=entity_id,
+                workflow_task_id=cancelled_task.id,
+                event_type="task_completed",
+                actor_user_id=auth_user_id,
+                from_state_id=current.current_state_id,
+                to_state_id=current.current_state_id,
+                payload={
+                    "outcome": "decision_open_failed",
+                    "reason": "decision_open_failed",
+                },
+            )
 
-        await self._append_event(
-            tenant_id=tenant_id,
-            workflow_instance_id=entity_id,
-            workflow_task_id=cancelled_task.id,
-            event_type="task_completed",
-            actor_user_id=auth_user_id,
-            from_state_id=current.current_state_id,
-            to_state_id=current.current_state_id,
-            payload={
-                "outcome": "decision_open_failed",
-                "reason": "decision_open_failed",
-            },
-        )
+        return "compensated"
 
     async def _resolve_transition_policy_binding(
         self,
@@ -1456,7 +1579,7 @@ class WorkflowInstanceService(
                 note=normalized_note,
             )
 
-            await self._update_instance_with_row_version(
+            pending_instance = await self._update_instance_with_row_version(
                 where=where,
                 expected_row_version=expected_row_version,
                 changes={
@@ -1477,61 +1600,68 @@ class WorkflowInstanceService(
                     )
                 )
             except Exception:
-                await self._compensate_advance_decision_open_failure(
+                reconcile_result = await self._reconcile_advance_open_failure(
                     tenant_id=tenant_id,
                     entity_id=entity_id,
                     where=where,
                     current=current,
                     task=task,
                     auth_user_id=auth_user_id,
+                    pending_instance_row_version=int(pending_instance.row_version or 0),
+                    pending_transition_id=pending_instance.pending_transition_id,
+                    pending_task_id=pending_instance.pending_task_id,
+                    task_row_version=int(task.row_version or 0),
                 )
-                raise
+                if reconcile_result == "reconciled":
+                    result = ("", 204)
+                else:
+                    raise
+            else:
+                decision_request_id = (
+                    str(open_result.get("DecisionRequestId"))
+                    if isinstance(open_result, Mapping)
+                    and open_result.get("DecisionRequestId") is not None
+                    else None
+                )
 
-            decision_request_id = (
-                str(open_result.get("DecisionRequestId"))
-                if isinstance(open_result, Mapping)
-                and open_result.get("DecisionRequestId") is not None
-                else None
-            )
-
-            await self._append_event(
-                tenant_id=tenant_id,
-                workflow_instance_id=entity_id,
-                workflow_task_id=task.id,
-                event_type="approval_requested",
-                actor_user_id=auth_user_id,
-                from_state_id=current.current_state_id,
-                to_state_id=transition.to_state_id,
-                note=normalized_note,
-                payload={
-                    "transition_key": transition.key,
-                    "requires_approval": True,
-                    "decision_request_id": decision_request_id,
-                    "policy_summary": policy_summary,
-                    "obligations": obligations,
-                    "status": "awaiting_approval",
-                },
-            )
-
-            if task.id is not None and is_assigned:
                 await self._append_event(
                     tenant_id=tenant_id,
                     workflow_instance_id=entity_id,
                     workflow_task_id=task.id,
-                    event_type="task_assigned",
+                    event_type="approval_requested",
                     actor_user_id=auth_user_id,
                     from_state_id=current.current_state_id,
-                    to_state_id=current.current_state_id,
+                    to_state_id=transition.to_state_id,
+                    note=normalized_note,
                     payload={
-                        "assignee_user_id": (
-                            str(assignee_user_id) if assignee_user_id else None
-                        ),
-                        "queue_name": queue_name,
-                        "handoff_count": 0,
+                        "transition_key": transition.key,
+                        "requires_approval": True,
+                        "decision_request_id": decision_request_id,
+                        "policy_summary": policy_summary,
+                        "obligations": obligations,
+                        "status": "awaiting_approval",
                     },
                 )
 
-            result = ("", 204)
+                if task.id is not None and is_assigned:
+                    await self._append_event(
+                        tenant_id=tenant_id,
+                        workflow_instance_id=entity_id,
+                        workflow_task_id=task.id,
+                        event_type="task_assigned",
+                        actor_user_id=auth_user_id,
+                        from_state_id=current.current_state_id,
+                        to_state_id=current.current_state_id,
+                        payload={
+                            "assignee_user_id": (
+                                str(assignee_user_id) if assignee_user_id else None
+                            ),
+                            "queue_name": queue_name,
+                            "handoff_count": 0,
+                        },
+                    )
+
+                result = ("", 204)
         else:
             result = await self._apply_transition(
                 tenant_id=tenant_id,
