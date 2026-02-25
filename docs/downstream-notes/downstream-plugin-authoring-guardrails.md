@@ -32,6 +32,8 @@ downstream plugins, but should not be pushed into ACP core abstractions.
 - Keep partial index definitions in Alembic migrations as the source of truth.
   Do not rely on ORM-only `postgresql_where` metadata as the authoritative
   contract for downstream uniqueness semantics.
+- Keep downstream plugin migrations in plugin-owned migration tracks (separate
+  schema + version table), not in core `migrations/versions`.
 - Run style and targeted static-analysis checks before merge.
 
 ## Core vs Downstream Boundary
@@ -58,6 +60,8 @@ downstream plugins, but should not be pushed into ACP core abstractions.
   `if TYPE_CHECKING:`.
 - For partial indexes, define and evolve predicates in migration revisions and
   treat migration SQL as canonical for production behavior.
+- Use plugin track runners for migration execution (`scripts/run_migration_tracks.py`)
+  and keep core track history independent.
 
 ### Services / APIs
 

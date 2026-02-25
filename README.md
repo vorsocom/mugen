@@ -111,6 +111,9 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 # Activate the Python environment.
 ~$ poetry shell
 
+# Apply migrations for all enabled tracks (core + configured plugins).
+~$ python scripts/run_migration_tracks.py upgrade head
+
 # Run the application.
 ~$ hypercorn -c hypercorn.toml quartman
 ```

@@ -369,6 +369,25 @@ url = "postgresql+psycopg://user:password@server/database"
 # SQLAlchemy requires an asynchronous driver.
 url = "postgresql+psycopg://user:password@server/database"
 
+[rdbms.migration_tracks.core]
+# Core track remains the default migration lineage.
+enabled = true
+alembic_config = "alembic.ini"
+schema = "mugen"
+version_table = "alembic_version"
+version_table_schema = "mugen"
+
+# Downstream plugin tracks run independently from core.
+# Each track gets its own schema + version table contract.
+# [[rdbms.migration_tracks.plugins]]
+# name = "acme_extension"
+# enabled = true
+# alembic_config = "plugins/acme_extension/alembic.ini"
+# schema = "acme_extension"
+# version_table = "alembic_version"
+# version_table_schema = "acme_extension"
+# model_modules = ["acme_extension.model.base"]
+
 # === SambaNova ===
 [sambanova]
 # Operation defaults for SambaNova chat completions.
