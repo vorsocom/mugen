@@ -9,10 +9,12 @@ from werkzeug.exceptions import HTTPException
 from mugen.core.plugin.ops_workflow.api.validation import (
     WorkflowAdvanceValidation,
     WorkflowApproveValidation,
+    WorkflowReplayValidation,
     WorkflowRejectValidation,
 )
 from mugen.core.plugin.ops_workflow.domain import (
     WorkflowDecisionRequestDE,
+    WorkflowEventDE,
     WorkflowInstanceDE,
     WorkflowStateDE,
     WorkflowTaskDE,
@@ -219,6 +221,130 @@ class TestOpsWorkflowLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp, ("", 204))
         svc.update_with_row_version.assert_not_awaited()
         svc._task_service.update_with_row_version.assert_not_awaited()
+
+    async def test_advance_open_failure_reconciled_pending_replay_has_no_divergence(
+        self,
+    ) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        transition_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        state_id = uuid.uuid4()
+        to_state_id = uuid.uuid4()
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        current = WorkflowInstanceDE(
+            id=instance_id,
+            tenant_id=tenant_id,
+            workflow_version_id=uuid.uuid4(),
+            current_state_id=state_id,
+            status="active",
+            row_version=7,
+        )
+        transition = WorkflowTransitionDE(
+            id=transition_id,
+            tenant_id=tenant_id,
+            workflow_version_id=current.workflow_version_id,
+            key="manager_approval",
+            from_state_id=current.current_state_id,
+            to_state_id=to_state_id,
+            requires_approval=True,
+        )
+        pending_instance = WorkflowInstanceDE(
+            id=instance_id,
+            tenant_id=tenant_id,
+            workflow_version_id=current.workflow_version_id,
+            current_state_id=state_id,
+            pending_transition_id=transition_id,
+            pending_task_id=task_id,
+            status="awaiting_approval",
+            row_version=8,
+        )
+        linked_request = WorkflowDecisionRequestDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+            template_key="workflow.approval",
+            status="open",
+            row_version=1,
+        )
+
+        recorded_events: list[WorkflowEventDE] = []
+
+        async def append_event_side_effect(**kwargs):
+            recorded_events.append(
+                WorkflowEventDE(
+                    event_type=kwargs.get("event_type"),
+                    workflow_task_id=kwargs.get("workflow_task_id"),
+                    to_state_id=kwargs.get("to_state_id"),
+                    payload=kwargs.get("payload"),
+                )
+            )
+            return Mock()
+
+        svc._get_for_action = AsyncMock(return_value=current)
+        svc._resolve_transition = AsyncMock(return_value=transition)
+        svc._task_service.create = AsyncMock(
+            return_value=WorkflowTaskDE(
+                id=task_id,
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                status="open",
+                row_version=1,
+            )
+        )
+        svc._update_instance_with_row_version = AsyncMock(return_value=pending_instance)
+        svc._decision_request_service.action_open = AsyncMock(
+            side_effect=RuntimeError("decision open failed")
+        )
+        svc._find_open_decision_request = AsyncMock(return_value=linked_request)
+        svc.get = AsyncMock(return_value=pending_instance)
+        svc.update_with_row_version = AsyncMock()
+        svc._task_service.update_with_row_version = AsyncMock()
+        svc._append_event = AsyncMock(side_effect=append_event_side_effect)
+
+        advance_resp = await svc.action_advance(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where={"tenant_id": tenant_id, "id": instance_id},
+            auth_user_id=actor_id,
+            data=WorkflowAdvanceValidation(
+                row_version=7,
+                transition_key="manager_approval",
+            ),
+        )
+
+        self.assertEqual(advance_resp, ("", 204))
+        self.assertEqual([e.event_type for e in recorded_events], ["approval_requested"])
+
+        replay_events = [
+            WorkflowEventDE(
+                event_type="started",
+                to_state_id=state_id,
+                payload={"status": "active"},
+            ),
+            *recorded_events,
+        ]
+        svc.get = AsyncMock(return_value=pending_instance)
+        svc._ordered_events = AsyncMock(return_value=replay_events)
+
+        replay_resp, replay_status = await svc.action_replay(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where={"tenant_id": tenant_id, "id": instance_id},
+            auth_user_id=actor_id,
+            data=WorkflowReplayValidation(repair=False),
+        )
+
+        self.assertEqual(replay_status, 200)
+        self.assertEqual(replay_resp["Divergence"], {})
+        self.assertEqual(replay_resp["DerivedState"]["Status"], "awaiting_approval")
+        self.assertEqual(replay_resp["DerivedState"]["PendingTaskId"], str(task_id))
 
     async def test_approve_applies_transition_and_completes_task(self) -> None:
         """Approve should complete pending task and advance to target state."""

@@ -6,7 +6,7 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, TypedDict
 
 from pydantic import ValidationError
 from quart import abort
@@ -69,6 +69,11 @@ from mugen.core.plugin.ops_workflow.service.workflow_transition import (
 )
 
 
+class _AdvanceOpenFailureReconcileResult(TypedDict):
+    outcome: Literal["compensated", "reconciled_pending", "reconciled_progressed"]
+    decision_request_id: uuid.UUID | None
+
+
 class WorkflowInstanceService(
     IRelationalService[WorkflowInstanceDE],
     IWorkflowInstanceService,
@@ -86,6 +91,10 @@ class WorkflowInstanceService(
     _ALLOWED_ADVANCE_STATUS = {"active"}
     _TERMINAL_INSTANCE_STATUS = {"completed", "cancelled"}
     _ACTIVE_TASK_STATUS = {"open", "in_progress"}
+    _APPROVAL_DECISION_TEMPLATE_KEYS = {
+        "workflow.approval",
+        "workflow.approval.legacy_bridge",
+    }
     _EVENT_SEQ_UNIQUE_CONSTRAINT = "ux_ops_wf_event_tenant_instance_event_seq"
     _EVENT_APPEND_MAX_ATTEMPTS = 5
 
@@ -459,6 +468,21 @@ class WorkflowInstanceService(
             and cls._uuid_equal(instance.pending_task_id, pending_task_id)
         )
 
+    @staticmethod
+    def _advance_open_failure_result(
+        *,
+        outcome: Literal[
+            "compensated",
+            "reconciled_pending",
+            "reconciled_progressed",
+        ],
+        decision_request_id: uuid.UUID | None = None,
+    ) -> _AdvanceOpenFailureReconcileResult:
+        return {
+            "outcome": outcome,
+            "decision_request_id": decision_request_id,
+        }
+
     async def _reconcile_advance_open_failure(
         self,
         *,
@@ -472,7 +496,12 @@ class WorkflowInstanceService(
         pending_transition_id: uuid.UUID | None,
         pending_task_id: uuid.UUID | None,
         task_row_version: int,
-    ) -> Literal["compensated", "reconciled"]:
+    ) -> _AdvanceOpenFailureReconcileResult:
+        latest_where = dict(where)
+        latest_where["tenant_id"] = tenant_id
+        latest_where["id"] = entity_id
+        latest_where.pop("row_version", None)
+
         if task.id is not None:
             linked_request = await self._find_open_decision_request(
                 tenant_id=tenant_id,
@@ -480,12 +509,25 @@ class WorkflowInstanceService(
                 workflow_task_id=task.id,
             )
             if linked_request is not None:
-                return "reconciled"
-
-        latest_where = dict(where)
-        latest_where["tenant_id"] = tenant_id
-        latest_where["id"] = entity_id
-        latest_where.pop("row_version", None)
+                try:
+                    latest_instance = await self.get(latest_where)
+                except SQLAlchemyError:
+                    abort(500)
+                if latest_instance is None:
+                    abort(500, "Workflow instance compensation failed after decision open.")
+                if self._matches_advance_pending_snapshot(
+                    instance=latest_instance,
+                    pending_transition_id=pending_transition_id,
+                    pending_task_id=pending_task_id,
+                ):
+                    return self._advance_open_failure_result(
+                        outcome="reconciled_pending",
+                        decision_request_id=linked_request.id,
+                    )
+                return self._advance_open_failure_result(
+                    outcome="reconciled_progressed",
+                    decision_request_id=linked_request.id,
+                )
 
         try:
             latest_instance = await self.get(latest_where)
@@ -499,7 +541,7 @@ class WorkflowInstanceService(
             pending_transition_id=pending_transition_id,
             pending_task_id=pending_task_id,
         ):
-            return "reconciled"
+            return self._advance_open_failure_result(outcome="reconciled_progressed")
 
         rollback_where = {
             "tenant_id": tenant_id,
@@ -546,7 +588,7 @@ class WorkflowInstanceService(
                 pending_transition_id=pending_transition_id,
                 pending_task_id=pending_task_id,
             ):
-                return "reconciled"
+                return self._advance_open_failure_result(outcome="reconciled_progressed")
 
             if attempt == 0:
                 expected_instance_row_version = (
@@ -561,7 +603,7 @@ class WorkflowInstanceService(
             abort(500, "Workflow instance compensation failed after decision open.")
 
         if task.id is None:
-            return "compensated"
+            return self._advance_open_failure_result(outcome="compensated")
 
         task_where = {
             "tenant_id": tenant_id,
@@ -573,7 +615,7 @@ class WorkflowInstanceService(
         except SQLAlchemyError:
             abort(500)
         if latest_task is None or latest_task.status not in self._ACTIVE_TASK_STATUS:
-            return "compensated"
+            return self._advance_open_failure_result(outcome="compensated")
 
         now = self._now_utc()
         expected_task_row_version = int(task_row_version or 0)
@@ -610,7 +652,7 @@ class WorkflowInstanceService(
                 abort(500)
 
             if latest_task is None or latest_task.status not in self._ACTIVE_TASK_STATUS:
-                return "compensated"
+                return self._advance_open_failure_result(outcome="compensated")
 
             if attempt == 0:
                 expected_task_row_version = int(latest_task.row_version or 0)
@@ -635,7 +677,7 @@ class WorkflowInstanceService(
                 },
             )
 
-        return "compensated"
+        return self._advance_open_failure_result(outcome="compensated")
 
     async def _resolve_transition_policy_binding(
         self,
@@ -1096,8 +1138,22 @@ class WorkflowInstanceService(
                 pending_task_id = event.workflow_task_id
                 continue
 
+            if event_type == "decision_opened":
+                template_key = (
+                    cls._normalize_optional_text(str(payload.get("template_key")))
+                    if isinstance(payload, Mapping)
+                    and payload.get("template_key") is not None
+                    else None
+                )
+                if (
+                    event.workflow_task_id is not None
+                    and template_key in cls._APPROVAL_DECISION_TEMPLATE_KEYS
+                ):
+                    status = "awaiting_approval"
+                    pending_task_id = event.workflow_task_id
+                continue
+
             if event_type in {
-                "decision_opened",
                 "decision_resolved",
                 "decision_expired",
                 "decision_cancelled",
@@ -1612,7 +1668,50 @@ class WorkflowInstanceService(
                     pending_task_id=pending_instance.pending_task_id,
                     task_row_version=int(task.row_version or 0),
                 )
-                if reconcile_result == "reconciled":
+                if reconcile_result["outcome"] == "reconciled_pending":
+                    await self._append_event(
+                        tenant_id=tenant_id,
+                        workflow_instance_id=entity_id,
+                        workflow_task_id=task.id,
+                        event_type="approval_requested",
+                        actor_user_id=auth_user_id,
+                        from_state_id=current.current_state_id,
+                        to_state_id=transition.to_state_id,
+                        note=normalized_note,
+                        payload={
+                            "transition_key": transition.key,
+                            "requires_approval": True,
+                            "decision_request_id": self._uuid_text(
+                                reconcile_result["decision_request_id"]
+                            ),
+                            "policy_summary": policy_summary,
+                            "obligations": obligations,
+                            "status": "awaiting_approval",
+                        },
+                    )
+
+                    if task.id is not None and is_assigned:
+                        await self._append_event(
+                            tenant_id=tenant_id,
+                            workflow_instance_id=entity_id,
+                            workflow_task_id=task.id,
+                            event_type="task_assigned",
+                            actor_user_id=auth_user_id,
+                            from_state_id=current.current_state_id,
+                            to_state_id=current.current_state_id,
+                            payload={
+                                "assignee_user_id": (
+                                    str(assignee_user_id)
+                                    if assignee_user_id
+                                    else None
+                                ),
+                                "queue_name": queue_name,
+                                "handoff_count": 0,
+                            },
+                        )
+
+                    result = ("", 204)
+                elif reconcile_result["outcome"] == "reconciled_progressed":
                     result = ("", 204)
                 else:
                     raise

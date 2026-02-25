@@ -26,11 +26,20 @@ Downstream services must adopt these primitives without breaking existing
   no linked open decision request.
 - Treat non-approval obligations as downstream responsibilities.
 - Standardize on policy trace propagation using `TraceId` where available.
-- Reconcile approval-request open failures first; when linked/progressed state
-  is already safe, `advance` returns `204` and records that success for replay.
+- Reconcile approval-request open failures first; when a linked open decision
+  request exists and the instance is still in the pending snapshot, `advance`
+  synthesizes `approval_requested` (and `task_assigned` when applicable) before
+  returning `204`, preserving event-ledger consistency.
+- When reconcile confirms the instance has already progressed, `advance`
+  returns `204` without synthetic pending events.
 - Apply guarded optimistic-lock compensation only when the instance is still in
   the original pending snapshot; unresolved compensation failures still surface
   as action errors.
+- Replay/state derivation tolerates missing `approval_requested` by guarded
+  `decision_opened` inference only when `workflow_task_id` is present and
+  `template_key` is `workflow.approval` or
+  `workflow.approval.legacy_bridge`.
+- External `action_advance` request/response shape is unchanged.
 
 ## Core vs Downstream Boundary
 
