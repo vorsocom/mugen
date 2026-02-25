@@ -1,0 +1,71 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsWorkflowDecisionRequests",
+  "skip_create": true,
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "open",
+      "target": "entity_set",
+      "expect_code": 201,
+      "capture_entity_id_field": "DecisionRequestId",
+      "refresh_entity_after_action": true,
+      "payload": {
+        "TraceId": "wf-decision-__WF_KEY__",
+        "TemplateKey": "workflow.approval",
+        "RequesterActorJson": {
+          "Type": "user",
+          "Id": "__USER_ID__"
+        },
+        "OptionsJson": {
+          "Outcomes": [
+            "approved",
+            "rejected"
+          ]
+        },
+        "ContextJson": {
+          "Source": "e2e",
+          "WorkflowKey": "__WF_KEY__"
+        },
+        "Attributes": {
+          "Scenario": "decision-request-e2e"
+        },
+        "Note": "open decision request e2e"
+      }
+    },
+    {
+      "name": "resolve",
+      "target": "entity",
+      "expect_code": 200,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Outcome": "approved",
+        "Reason": "approved by e2e",
+        "OutcomeJson": {
+          "Decision": "approved"
+        },
+        "Note": "resolve decision request e2e"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": "resolved",
+    "event_entity_set": "OpsWorkflowEvents",
+    "event_entity_id_field": "WorkflowInstanceId",
+    "event_type_field": "EventType",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [],
+  "positive_creates": []
+}

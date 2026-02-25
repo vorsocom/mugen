@@ -12,6 +12,7 @@ from mugen.core.plugin.ops_workflow.api.validation import (
     WorkflowRejectValidation,
 )
 from mugen.core.plugin.ops_workflow.domain import (
+    WorkflowDecisionRequestDE,
     WorkflowInstanceDE,
     WorkflowStateDE,
     WorkflowTaskDE,
@@ -102,6 +103,9 @@ class TestOpsWorkflowLifecycle(unittest.IsolatedAsyncioTestCase):
                 workflow_instance_id=instance_id,
             )
         )
+        svc._decision_request_service.action_open = AsyncMock(
+            return_value=({"DecisionRequestId": str(uuid.uuid4())}, 201)
+        )
         svc.update_with_row_version = AsyncMock(return_value=current)
         svc._event_service.create = AsyncMock(return_value=Mock())
 
@@ -123,6 +127,7 @@ class TestOpsWorkflowLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(changes["status"], "awaiting_approval")
         self.assertEqual(changes["pending_transition_id"], transition_id)
         self.assertEqual(changes["pending_task_id"], task_id)
+        svc._decision_request_service.action_open.assert_awaited_once()
 
         event_payload = svc._event_service.create.await_args.args[0]
         self.assertEqual(event_payload["event_type"], "approval_requested")
@@ -181,6 +186,19 @@ class TestOpsWorkflowLifecycle(unittest.IsolatedAsyncioTestCase):
                 status="completed",
                 row_version=5,
             )
+        )
+        svc._require_open_decision_request = AsyncMock(
+            return_value=WorkflowDecisionRequestDE(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                workflow_task_id=task_id,
+                status="open",
+                row_version=6,
+            )
+        )
+        svc._decision_request_service.action_resolve = AsyncMock(
+            return_value=({"DecisionRequestId": str(uuid.uuid4())}, 200)
         )
         svc._state_service.get = AsyncMock(
             return_value=WorkflowStateDE(
@@ -272,6 +290,19 @@ class TestOpsWorkflowLifecycle(unittest.IsolatedAsyncioTestCase):
                 status="rejected",
                 row_version=3,
             )
+        )
+        svc._require_open_decision_request = AsyncMock(
+            return_value=WorkflowDecisionRequestDE(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                workflow_task_id=task_id,
+                status="open",
+                row_version=4,
+            )
+        )
+        svc._decision_request_service.action_cancel = AsyncMock(
+            return_value=({"DecisionRequestId": str(uuid.uuid4())}, 200)
         )
         svc.update_with_row_version = AsyncMock(return_value=current)
         svc._event_service.create = AsyncMock(return_value=Mock())

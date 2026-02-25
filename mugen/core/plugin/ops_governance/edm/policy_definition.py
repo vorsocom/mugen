@@ -31,6 +31,7 @@ policy_definition_type = EdmType(
             TypeRef("Edm.String"),
             nullable=False,
         ),
+        "Engine": EdmProperty("Engine", TypeRef("Edm.String"), nullable=False),
         "Version": EdmProperty("Version", TypeRef("Edm.Int64"), nullable=False),
         "IsActive": EdmProperty("IsActive", TypeRef("Edm.Boolean"), nullable=False),
         "LastEvaluatedAt": EdmProperty(
@@ -42,6 +43,12 @@ policy_definition_type = EdmType(
             TypeRef("Edm.Guid"),
         ),
         "LastDecisionLogId": EdmProperty("LastDecisionLogId", TypeRef("Edm.Guid")),
+        "DocumentJson": EdmProperty(
+            "DocumentJson",
+            TypeRef("Edm.String"),
+            filterable=False,
+            sortable=False,
+        ),
         "Attributes": EdmProperty(
             "Attributes",
             TypeRef("Edm.String"),

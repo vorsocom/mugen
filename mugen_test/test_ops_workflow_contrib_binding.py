@@ -13,6 +13,12 @@ from mugen.core.plugin.ops_workflow.contrib import contribute
 from mugen.core.plugin.ops_workflow.service.workflow_definition import (
     WorkflowDefinitionService,
 )
+from mugen.core.plugin.ops_workflow.service.workflow_decision_outcome import (
+    WorkflowDecisionOutcomeService,
+)
+from mugen.core.plugin.ops_workflow.service.workflow_decision_request import (
+    WorkflowDecisionRequestService,
+)
 from mugen.core.plugin.ops_workflow.service.workflow_event import WorkflowEventService
 from mugen.core.plugin.ops_workflow.service.workflow_instance import (
     WorkflowInstanceService,
@@ -69,6 +75,8 @@ class TestOpsWorkflowContribBinding(unittest.TestCase):
         transitions = registry.get_resource("OpsWorkflowTransitions")
         instances = registry.get_resource("OpsWorkflowInstances")
         tasks = registry.get_resource("OpsWorkflowTasks")
+        decision_requests = registry.get_resource("OpsWorkflowDecisionRequests")
+        decision_outcomes = registry.get_resource("OpsWorkflowDecisionOutcomes")
         events = registry.get_resource("OpsWorkflowEvents")
 
         self.assertIn("ops_workflow_workflow_definition", fake_rsg.tables)
@@ -77,6 +85,8 @@ class TestOpsWorkflowContribBinding(unittest.TestCase):
         self.assertIn("ops_workflow_workflow_transition", fake_rsg.tables)
         self.assertIn("ops_workflow_workflow_instance", fake_rsg.tables)
         self.assertIn("ops_workflow_workflow_task", fake_rsg.tables)
+        self.assertIn("ops_workflow_decision_request", fake_rsg.tables)
+        self.assertIn("ops_workflow_decision_outcome", fake_rsg.tables)
         self.assertIn("ops_workflow_workflow_event", fake_rsg.tables)
 
         self.assertIsInstance(
@@ -104,6 +114,14 @@ class TestOpsWorkflowContribBinding(unittest.TestCase):
             WorkflowTaskService,
         )
         self.assertIsInstance(
+            registry.get_edm_service(decision_requests.service_key),
+            WorkflowDecisionRequestService,
+        )
+        self.assertIsInstance(
+            registry.get_edm_service(decision_outcomes.service_key),
+            WorkflowDecisionOutcomeService,
+        )
+        self.assertIsInstance(
             registry.get_edm_service(events.service_key),
             WorkflowEventService,
         )
@@ -115,9 +133,24 @@ class TestOpsWorkflowContribBinding(unittest.TestCase):
         self.assertIn("cancel_instance", instances.capabilities.actions)
         self.assertIn("assign_task", tasks.capabilities.actions)
         self.assertIn("complete_task", tasks.capabilities.actions)
+        self.assertIn("open", decision_requests.capabilities.actions)
+        self.assertIn("resolve", decision_requests.capabilities.actions)
+        self.assertIn("cancel", decision_requests.capabilities.actions)
+        self.assertIn("expire_overdue", decision_requests.capabilities.actions)
+        self.assertFalse(decision_outcomes.capabilities.allow_create)
+        self.assertFalse(decision_outcomes.capabilities.allow_update)
+        self.assertFalse(decision_outcomes.capabilities.allow_delete)
 
         instance_type = registry.schema.get_type("OPSWORKFLOW.WorkflowInstance")
         self.assertEqual(instance_type.entity_set_name, "OpsWorkflowInstances")
+
+        decision_request_type = registry.schema.get_type(
+            "OPSWORKFLOW.WorkflowDecisionRequest"
+        )
+        self.assertEqual(
+            decision_request_type.entity_set_name,
+            "OpsWorkflowDecisionRequests",
+        )
 
         event_type = registry.schema.get_type("OPSWORKFLOW.WorkflowEvent")
         self.assertEqual(event_type.entity_set_name, "OpsWorkflowEvents")

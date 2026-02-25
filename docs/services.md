@@ -1,7 +1,7 @@
 # Working with muGen Services
 
 Status: Draft
-Last Updated: 2026-02-24
+Last Updated: 2026-02-25
 Audience: Core and downstream plugin teams
 
 ## Purpose
@@ -82,3 +82,23 @@ Phase 1 introduces four core-only control-plane primitives:
 
 Downstream rollout guidance is documented in:
 `docs/downstream-notes/phase1-foundations-adoption.md`.
+
+## Phase 3 Decisioning Layer
+
+Phase 3 adds decisioning primitives in existing core plugins:
+
+- `ops_governance`:
+  - PDP-based `evaluate_policy` with policy document DSL evaluation,
+    obligations, and enriched decision logs.
+  - `activate_version` action for single-active policy version control.
+- `ops_workflow`:
+  - new `OpsWorkflowDecisionRequests` and `OpsWorkflowDecisionOutcomes`
+    resources.
+  - approval paths in `advance`/`approve`/`reject` now integrate with linked
+    decision requests while preserving backward compatibility.
+- `ops_sla`:
+  - escalation `open_decision` is executable in core (dry-run `planned`,
+    execute `opened`).
+
+Downstream rollout guidance is documented in:
+`docs/downstream-notes/phase3-decisioning-layer-adoption.md`.

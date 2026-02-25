@@ -27,6 +27,7 @@ from mugen.core.plugin.acp.contract.sdk.resource import (
 from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.ops_governance.api.validation import (
+    ActivatePolicyVersionActionValidation,
     ApplyRetentionActionValidation,
     ConsentRecordCreateValidation,
     DataHandlingRecordCreateValidation,
@@ -140,6 +141,8 @@ def contribute(
                     "PolicyType",
                     "RuleRef",
                     "EvaluationMode",
+                    "Engine",
+                    "DocumentJson",
                     "Version",
                     "IsActive",
                     "Attributes",
@@ -150,6 +153,11 @@ def contribute(
                     "perm": admin_ns.verb("manage"),
                     "schema": EvaluatePolicyActionValidation,
                     "confirm": "Evaluate this policy definition?",
+                },
+                "activate_version": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": ActivatePolicyVersionActionValidation,
+                    "confirm": "Activate this policy definition version?",
                 },
             },
         },

@@ -8,10 +8,18 @@ __all__ = [
     "IWorkflowInstanceService",
     "IWorkflowTaskService",
     "IWorkflowEventService",
+    "IWorkflowDecisionRequestService",
+    "IWorkflowDecisionOutcomeService",
 ]
 
 from mugen.core.plugin.ops_workflow.contract.service.workflow_definition import (
     IWorkflowDefinitionService,
+)
+from mugen.core.plugin.ops_workflow.contract.service.workflow_decision_outcome import (
+    IWorkflowDecisionOutcomeService,
+)
+from mugen.core.plugin.ops_workflow.contract.service.workflow_decision_request import (
+    IWorkflowDecisionRequestService,
 )
 from mugen.core.plugin.ops_workflow.contract.service.workflow_event import (
     IWorkflowEventService,

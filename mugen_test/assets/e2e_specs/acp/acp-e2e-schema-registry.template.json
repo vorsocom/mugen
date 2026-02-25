@@ -91,7 +91,7 @@
       "payload": {
         "SchemaDefinitionId": "__ENTITY_ID__",
         "TargetNamespace": "com.vorsocomputing.mugen.acp",
-        "TargetEntitySet": "TenantDomains",
+        "TargetEntitySet": "TenantDomains__CODE__",
         "IsRequired": true
       }
     }
@@ -104,7 +104,7 @@
       "payload": {
         "SchemaDefinitionId": "__ENTITY_ID__",
         "TargetNamespace": "com.vorsocomputing.mugen.acp",
-        "TargetEntitySet": "TenantDomains",
+        "TargetEntitySet": "TenantDomains__CODE__",
         "TargetAction": null,
         "BindingKind": "create",
         "IsRequired": true,

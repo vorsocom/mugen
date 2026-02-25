@@ -9,10 +9,18 @@ __all__ = [
     "WorkflowTaskDE",
     "WorkflowEventDE",
     "WorkflowActionDedupDE",
+    "WorkflowDecisionRequestDE",
+    "WorkflowDecisionOutcomeDE",
 ]
 
 from mugen.core.plugin.ops_workflow.domain.workflow_definition import (
     WorkflowDefinitionDE,
+)
+from mugen.core.plugin.ops_workflow.domain.workflow_decision_outcome import (
+    WorkflowDecisionOutcomeDE,
+)
+from mugen.core.plugin.ops_workflow.domain.workflow_decision_request import (
+    WorkflowDecisionRequestDE,
 )
 from mugen.core.plugin.ops_workflow.domain.workflow_event import WorkflowEventDE
 from mugen.core.plugin.ops_workflow.domain.workflow_instance import WorkflowInstanceDE

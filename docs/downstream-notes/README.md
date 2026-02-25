@@ -61,6 +61,9 @@ Every downstream note should include:
 - `phase1-foundations-adoption.md` - Downstream rollout and usage guidance for
   Phase 1 core foundations (dedup, schema registry, correlation links, and
   business trace events).
+- `phase3-decisioning-layer-adoption.md` - Downstream rollout guidance for
+  Phase 3 decisioning primitives (PDP, decision requests/outcomes, and SLA
+  escalation decision opening).
 
 ## Template
 

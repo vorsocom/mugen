@@ -8,8 +8,10 @@ import uuid
 from unittest.mock import AsyncMock, Mock, patch
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from werkzeug.exceptions import HTTPException
 
 from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
+from mugen.core.plugin.ops_governance.domain import PolicyDefinitionDE
 from mugen.core.plugin.ops_workflow.api.validation import (
     WorkflowAdvanceValidation,
     WorkflowApproveValidation,
@@ -21,6 +23,7 @@ from mugen.core.plugin.ops_workflow.api.validation import (
 )
 from mugen.core.plugin.ops_workflow.domain import (
     WorkflowActionDedupDE,
+    WorkflowDecisionRequestDE,
     WorkflowEventDE,
     WorkflowInstanceDE,
     WorkflowStateDE,
@@ -927,6 +930,9 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 row_version=1,
             )
         )
+        svc._decision_request_service.action_open = AsyncMock(
+            return_value=({"DecisionRequestId": str(uuid.uuid4())}, 201)
+        )
         svc._update_instance_with_row_version = AsyncMock()
         svc._append_event = AsyncMock()
 
@@ -1206,6 +1212,19 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 row_version=3,
             )
         )
+        svc._require_open_decision_request = AsyncMock(
+            return_value=WorkflowDecisionRequestDE(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                workflow_task_id=task_id,
+                status="open",
+                row_version=6,
+            )
+        )
+        svc._decision_request_service.action_resolve = AsyncMock(
+            return_value=({"DecisionRequestId": str(uuid.uuid4())}, 200)
+        )
         svc._append_event = AsyncMock()
         svc._apply_transition = AsyncMock(return_value=("", 204))
         approve_result = await svc.action_approve(
@@ -1245,6 +1264,19 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 status="rejected",
                 row_version=3,
             )
+        )
+        svc._require_open_decision_request = AsyncMock(
+            return_value=WorkflowDecisionRequestDE(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                workflow_task_id=task_id,
+                status="open",
+                row_version=4,
+            )
+        )
+        svc._decision_request_service.action_cancel = AsyncMock(
+            return_value=({"DecisionRequestId": str(uuid.uuid4())}, 200)
         )
         svc._update_instance_with_row_version = AsyncMock()
         svc._append_event = AsyncMock()
@@ -1289,6 +1321,7 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 row_version=4,
             )
         )
+        svc._find_open_decision_request = AsyncMock(return_value=None)
         svc._update_instance_with_row_version = AsyncMock()
         svc._append_event = AsyncMock()
         cancel_result = await svc.action_cancel_instance(
@@ -1378,6 +1411,9 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 row_version=1,
             )
         )
+        advance_svc._decision_request_service.action_open = AsyncMock(
+            return_value=({"DecisionRequestId": str(uuid.uuid4())}, 201)
+        )
         advance_svc._update_instance_with_row_version = AsyncMock()
         advance_svc._append_event = AsyncMock()
         result = await advance_svc.action_advance(
@@ -1413,6 +1449,7 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
             )
         )
         cancel_without_pending._task_service.get = AsyncMock()
+        cancel_without_pending._find_open_decision_request = AsyncMock(return_value=None)
         cancel_without_pending._update_instance_with_row_version = AsyncMock()
         cancel_without_pending._append_event = AsyncMock()
         cancel_result = await cancel_without_pending.action_cancel_instance(
@@ -1450,6 +1487,9 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 status="completed",
                 row_version=1,
             )
+        )
+        cancel_with_completed_task._find_open_decision_request = AsyncMock(
+            return_value=None
         )
         cancel_with_completed_task._update_pending_task = AsyncMock()
         cancel_with_completed_task._update_instance_with_row_version = AsyncMock()
@@ -1497,6 +1537,9 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 status="cancelled",
                 row_version=3,
             )
+        )
+        cancel_with_idless_update._find_open_decision_request = AsyncMock(
+            return_value=None
         )
         cancel_with_idless_update._update_instance_with_row_version = AsyncMock()
         cancel_with_idless_update._append_event = AsyncMock()
@@ -1673,6 +1716,7 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
                 WorkflowEventDE(
                     event_type="approval_requested", workflow_task_id=task_1
                 ),
+                WorkflowEventDE(event_type="decision_opened"),
                 WorkflowEventDE(
                     event_type="advanced",
                     to_state_id=state_2,
@@ -1692,6 +1736,547 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
             )
         )
         self.assertEqual(derived_without_created_status["status"], "draft")
+
+    async def test_policy_binding_and_decision_lookup_helpers(self) -> None:
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+
+        self.assertTrue(WorkflowInstanceService._boolish(True))
+        self.assertFalse(WorkflowInstanceService._boolish(False))
+        self.assertTrue(WorkflowInstanceService._boolish(" yes "))
+        self.assertFalse(WorkflowInstanceService._boolish(" no "))
+        self.assertFalse(WorkflowInstanceService._boolish("maybe"))
+        self.assertTrue(WorkflowInstanceService._boolish(1))
+        self.assertFalse(WorkflowInstanceService._boolish(0))
+        self.assertTrue(WorkflowInstanceService._boolish(None, default=True))
+        self.assertFalse(WorkflowInstanceService._boolish(object()))
+
+        self.assertEqual(
+            WorkflowInstanceService._binding_value({"PolicyCode": "A"}, "PolicyCode"),
+            "A",
+        )
+        self.assertEqual(
+            WorkflowInstanceService._binding_value(
+                {"policycode": "B"},
+                "PolicyCode",
+            ),
+            "B",
+        )
+        self.assertIsNone(
+            WorkflowInstanceService._binding_value({"x": 1}, "PolicyCode")
+        )
+
+        self.assertEqual(
+            WorkflowInstanceService._obligation_name({"Type": "Require_Approval"}),
+            "require_approval",
+        )
+        self.assertIsNone(WorkflowInstanceService._obligation_name({"x": 1}))
+        require_approval, require_reason_note = WorkflowInstanceService._obligation_flags(
+            [
+                "skip-non-mapping",
+                {"Type": "require_approval"},
+                {"Name": "log_reason", "Required": False},
+                {"Name": "log_reason", "Required": True},
+                {"Name": "ignored"},
+            ]
+        )
+        self.assertTrue(require_approval)
+        self.assertTrue(require_reason_note)
+
+        decision_request = WorkflowDecisionRequestDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+            status="open",
+            row_version=2,
+        )
+        svc._decision_request_service.list = AsyncMock(return_value=[decision_request])
+        found = await svc._find_open_decision_request(
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+        )
+        self.assertEqual(found.id, decision_request.id)
+
+        svc._decision_request_service.list = AsyncMock(return_value=[])
+        self.assertIsNone(
+            await svc._find_open_decision_request(
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+            )
+        )
+
+        with patch.object(workflow_mod, "abort", side_effect=_abort_raiser):
+            svc._decision_request_service.list = AsyncMock(
+                side_effect=SQLAlchemyError("lookup failed")
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._find_open_decision_request(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                )
+            self.assertEqual(ex.exception.code, 500)
+
+            svc._find_open_decision_request = AsyncMock(return_value=None)
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._require_open_decision_request(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task_id=task_id,
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+        svc._find_open_decision_request = AsyncMock(return_value=decision_request)
+        required = await svc._require_open_decision_request(
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            workflow_task_id=task_id,
+        )
+        self.assertEqual(required.id, decision_request.id)
+
+        svc._find_open_decision_request = AsyncMock(
+            return_value=WorkflowDecisionRequestDE(
+                id=None,
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                workflow_task_id=task_id,
+                status="open",
+                row_version=2,
+            )
+        )
+        with self.assertRaises(HTTPException) as ex:
+            await svc._require_open_decision_request(
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                workflow_task_id=task_id,
+            )
+        self.assertEqual(ex.exception.code, 409)
+
+        svc._find_open_decision_request = AsyncMock(
+            return_value=WorkflowDecisionRequestDE(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                workflow_task_id=task_id,
+                status="open",
+                row_version=0,
+            )
+        )
+        with self.assertRaises(HTTPException) as ex:
+            await svc._require_open_decision_request(
+                tenant_id=tenant_id,
+                workflow_instance_id=instance_id,
+                workflow_task_id=task_id,
+            )
+        self.assertEqual(ex.exception.code, 409)
+
+    async def test_policy_binding_resolution_and_policy_guard_branches(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        version_id = uuid.uuid4()
+        state_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        policy_id = uuid.uuid4()
+        transition = _transition(
+            tenant_id=tenant_id,
+            workflow_version_id=version_id,
+            from_state_id=state_id,
+            to_state_id=uuid.uuid4(),
+            key="next",
+        )
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+
+        with patch.object(workflow_mod, "abort", side_effect=_abort_raiser):
+            invalid_binding_transition = _transition(
+                tenant_id=tenant_id,
+                workflow_version_id=version_id,
+                from_state_id=state_id,
+                to_state_id=uuid.uuid4(),
+                key="invalid",
+            )
+            invalid_binding_transition.attributes = {"PolicyDefinitionId": "not-a-uuid"}
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._resolve_transition_policy_binding(
+                    tenant_id=tenant_id,
+                    transition=invalid_binding_transition,
+                    data=WorkflowAdvanceValidation(row_version=1, transition_key="invalid"),
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            svc._policy_definition_service.get = AsyncMock(return_value=None)
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._resolve_transition_policy_binding(
+                    tenant_id=tenant_id,
+                    transition=transition,
+                    data=WorkflowAdvanceValidation(
+                        row_version=1,
+                        transition_key="next",
+                        policy_definition_id=policy_id,
+                    ),
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            svc._policy_definition_service.get = AsyncMock(
+                return_value=PolicyDefinitionDE(
+                    id=policy_id,
+                    tenant_id=tenant_id,
+                    code="bound",
+                    is_active=False,
+                    row_version=1,
+                )
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._resolve_transition_policy_binding(
+                    tenant_id=tenant_id,
+                    transition=transition,
+                    data=WorkflowAdvanceValidation(
+                        row_version=1,
+                        transition_key="next",
+                        policy_definition_id=policy_id,
+                    ),
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            transition_with_code = _transition(
+                tenant_id=tenant_id,
+                workflow_version_id=version_id,
+                from_state_id=state_id,
+                to_state_id=uuid.uuid4(),
+                key="coded",
+            )
+            transition_with_code.attributes = {"PolicyCode": "code-a"}
+
+            svc._policy_definition_service.list = AsyncMock(return_value=[])
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._resolve_transition_policy_binding(
+                    tenant_id=tenant_id,
+                    transition=transition_with_code,
+                    data=WorkflowAdvanceValidation(row_version=1, transition_key="coded"),
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            single_candidate = PolicyDefinitionDE(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                code="code-a",
+                is_active=True,
+                row_version=1,
+            )
+            svc._policy_definition_service.list = AsyncMock(
+                return_value=[single_candidate]
+            )
+            selected = await svc._resolve_transition_policy_binding(
+                tenant_id=tenant_id,
+                transition=transition_with_code,
+                data=WorkflowAdvanceValidation(row_version=1, transition_key="coded"),
+            )
+            self.assertEqual(selected.id, single_candidate.id)
+
+            svc._policy_definition_service.list = AsyncMock(
+                return_value=[
+                    PolicyDefinitionDE(
+                        id=uuid.uuid4(),
+                        tenant_id=tenant_id,
+                        code="code-a",
+                        is_active=True,
+                        row_version=1,
+                    ),
+                    PolicyDefinitionDE(
+                        id=uuid.uuid4(),
+                        tenant_id=tenant_id,
+                        code="code-a",
+                        is_active=True,
+                        row_version=2,
+                    ),
+                ]
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._resolve_transition_policy_binding(
+                    tenant_id=tenant_id,
+                    transition=transition_with_code,
+                    data=WorkflowAdvanceValidation(row_version=1, transition_key="coded"),
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+        active_policy = PolicyDefinitionDE(
+            id=policy_id,
+            tenant_id=tenant_id,
+            code="bound",
+            is_active=True,
+            row_version=3,
+        )
+        transition_with_uuid_binding = _transition(
+            tenant_id=tenant_id,
+            workflow_version_id=version_id,
+            from_state_id=state_id,
+            to_state_id=uuid.uuid4(),
+            key="uuid-bound",
+        )
+        transition_with_uuid_binding.attributes = {"PolicyDefinitionId": policy_id}
+        svc._policy_definition_service.get = AsyncMock(return_value=active_policy)
+        resolved_policy = await svc._resolve_transition_policy_binding(
+            tenant_id=tenant_id,
+            transition=transition_with_uuid_binding,
+            data=WorkflowAdvanceValidation(row_version=1, transition_key="uuid-bound"),
+        )
+        self.assertEqual(resolved_policy.id, policy_id)
+
+        current = _instance(
+            instance_id=instance_id,
+            tenant_id=tenant_id,
+            workflow_version_id=version_id,
+            current_state_id=state_id,
+            status="active",
+            row_version=5,
+        )
+        with patch.object(workflow_mod, "abort", side_effect=_abort_raiser):
+            svc._resolve_transition_policy_binding = AsyncMock(
+                return_value=PolicyDefinitionDE(
+                    id=None,
+                    tenant_id=tenant_id,
+                    is_active=True,
+                    row_version=1,
+                )
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._evaluate_transition_policy(
+                    tenant_id=tenant_id,
+                    entity_id=instance_id,
+                    auth_user_id=actor_id,
+                    current=current,
+                    transition=transition,
+                    data=WorkflowAdvanceValidation(row_version=5, transition_key="next"),
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            svc._resolve_transition_policy_binding = AsyncMock(
+                return_value=PolicyDefinitionDE(
+                    id=policy_id,
+                    tenant_id=tenant_id,
+                    is_active=True,
+                    row_version=0,
+                )
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._evaluate_transition_policy(
+                    tenant_id=tenant_id,
+                    entity_id=instance_id,
+                    auth_user_id=actor_id,
+                    current=current,
+                    transition=transition,
+                    data=WorkflowAdvanceValidation(row_version=5, transition_key="next"),
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+            svc._resolve_transition_policy_binding = AsyncMock(return_value=active_policy)
+            svc._policy_definition_service.action_evaluate_policy = AsyncMock(
+                return_value=({"Decision": "deny", "Obligations": []}, 200)
+            )
+            svc._maybe_replay_action_result = AsyncMock(return_value=None)
+            svc._get_for_action = AsyncMock(return_value=current)
+            svc._resolve_transition = AsyncMock(return_value=transition)
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc.action_advance(
+                    tenant_id=tenant_id,
+                    entity_id=instance_id,
+                    where={"tenant_id": tenant_id, "id": instance_id},
+                    auth_user_id=actor_id,
+                    data=WorkflowAdvanceValidation(row_version=5, transition_key="next"),
+                )
+            self.assertEqual(ex.exception.code, 403)
+
+            svc._policy_definition_service.action_evaluate_policy = AsyncMock(
+                return_value=(
+                    {
+                        "Decision": "allow",
+                        "Obligations": [{"Type": "log_reason", "Required": True}],
+                    },
+                    200,
+                )
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc.action_advance(
+                    tenant_id=tenant_id,
+                    entity_id=instance_id,
+                    where={"tenant_id": tenant_id, "id": instance_id},
+                    auth_user_id=actor_id,
+                    data=WorkflowAdvanceValidation(row_version=5, transition_key="next"),
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+            approval_transition = _transition(
+                tenant_id=tenant_id,
+                workflow_version_id=version_id,
+                from_state_id=state_id,
+                to_state_id=uuid.uuid4(),
+                key="approval",
+                requires_approval=True,
+            )
+            svc._resolve_transition = AsyncMock(return_value=approval_transition)
+            svc._policy_definition_service.action_evaluate_policy = AsyncMock(
+                return_value=({"Decision": "allow", "Obligations": []}, 200)
+            )
+            svc._task_service.create = AsyncMock(
+                return_value=_task(
+                    task_id=None,
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    status="open",
+                    row_version=1,
+                )
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc.action_advance(
+                    tenant_id=tenant_id,
+                    entity_id=instance_id,
+                    where={"tenant_id": tenant_id, "id": instance_id},
+                    auth_user_id=actor_id,
+                    data=WorkflowAdvanceValidation(row_version=5, transition_key="approval"),
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+        svc._resolve_transition_policy_binding = AsyncMock(return_value=active_policy)
+        svc._policy_definition_service.action_evaluate_policy = AsyncMock(
+            return_value=("not-a-mapping", 200)
+        )
+        self.assertIsNone(
+            await svc._evaluate_transition_policy(
+                tenant_id=tenant_id,
+                entity_id=instance_id,
+                auth_user_id=actor_id,
+                current=current,
+                transition=transition,
+                data=WorkflowAdvanceValidation(
+                    row_version=5,
+                    transition_key="next",
+                    payload={"x": 1},
+                    note="ok",
+                ),
+            )
+        )
+
+    async def test_cancel_instance_fallback_cancels_linked_decision_request(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        version_id = uuid.uuid4()
+        state_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        where = {"tenant_id": tenant_id, "id": instance_id}
+        now = datetime(2026, 2, 25, 12, 0, tzinfo=timezone.utc)
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        svc._now_utc = Mock(return_value=now)
+        svc._get_for_action = AsyncMock(
+            return_value=_instance(
+                instance_id=instance_id,
+                tenant_id=tenant_id,
+                workflow_version_id=version_id,
+                current_state_id=state_id,
+                status="active",
+                row_version=7,
+                pending_task_id=task_id,
+            )
+        )
+        svc._find_open_decision_request = AsyncMock(
+            side_effect=[
+                None,
+                WorkflowDecisionRequestDE(
+                    id=uuid.uuid4(),
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    workflow_task_id=task_id,
+                    status="open",
+                    row_version=3,
+                ),
+            ]
+        )
+        svc._decision_request_service.action_cancel = AsyncMock(
+            return_value=({"DecisionRequestId": str(uuid.uuid4())}, 200)
+        )
+        svc._task_service.get = AsyncMock(return_value=None)
+        svc._update_instance_with_row_version = AsyncMock()
+        svc._append_event = AsyncMock()
+
+        result = await svc.action_cancel_instance(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where=where,
+            auth_user_id=actor_id,
+            data=WorkflowCancelInstanceValidation(
+                row_version=7,
+                reason="  cancelled by operator ",
+                note="  cleanup ",
+            ),
+        )
+        self.assertEqual(result, ("", 204))
+        self.assertEqual(svc._find_open_decision_request.await_count, 2)
+        cancel_call = svc._decision_request_service.action_cancel.await_args.kwargs
+        self.assertEqual(cancel_call["data"].reason, "cancelled by operator")
+        self.assertEqual(cancel_call["data"].note, "cleanup")
+
+    async def test_cancel_instance_uses_first_decision_lookup_when_present(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        version_id = uuid.uuid4()
+        state_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        where = {"tenant_id": tenant_id, "id": instance_id}
+        now = datetime(2026, 2, 25, 13, 0, tzinfo=timezone.utc)
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance",
+            rsg=Mock(),
+        )
+        decision_request = WorkflowDecisionRequestDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            status="open",
+            row_version=2,
+        )
+        svc._now_utc = Mock(return_value=now)
+        svc._get_for_action = AsyncMock(
+            return_value=_instance(
+                instance_id=instance_id,
+                tenant_id=tenant_id,
+                workflow_version_id=version_id,
+                current_state_id=state_id,
+                status="active",
+                row_version=3,
+                pending_task_id=None,
+            )
+        )
+        svc._find_open_decision_request = AsyncMock(return_value=decision_request)
+        svc._decision_request_service.action_cancel = AsyncMock(
+            return_value=({"DecisionRequestId": str(decision_request.id)}, 200)
+        )
+        svc._task_service.get = AsyncMock()
+        svc._update_instance_with_row_version = AsyncMock()
+        svc._append_event = AsyncMock()
+
+        result = await svc.action_cancel_instance(
+            tenant_id=tenant_id,
+            entity_id=instance_id,
+            where=where,
+            auth_user_id=actor_id,
+            data=WorkflowCancelInstanceValidation(row_version=3, reason="cleanup"),
+        )
+        self.assertEqual(result, ("", 204))
+        self.assertEqual(svc._find_open_decision_request.await_count, 1)
+        svc._task_service.get.assert_not_awaited()
 
     async def test_maybe_replay_and_record_action_result_branches(self) -> None:
         tenant_id = uuid.uuid4()

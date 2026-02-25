@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import unittest
 from unittest.mock import AsyncMock, Mock
 import uuid
 
-from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import Forbidden, HTTPException
 
 from mugen.core.plugin.ops_sla.api.validation import (
     SlaEscalationEvaluateValidation,
@@ -162,26 +163,14 @@ class TestSlaEscalationPolicyService(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(actions, [{"ActionType": "notify"}])
 
+        self.assertIsNone(SlaEscalationPolicyService._action_type({}))
         self.assertEqual(
-            SlaEscalationPolicyService._action_result({}),
-            {
-                "ActionType": None,
-                "Status": "invalid_action_type",
-                "Code": "invalid_action_type",
-                "Message": "ActionType must be non-empty.",
-            },
+            SlaEscalationPolicyService._action_type({"ActionType": "open_decision"}),
+            "open_decision",
         )
         self.assertEqual(
-            SlaEscalationPolicyService._action_result({"ActionType": "open_decision"})[
-                "Status"
-            ],
-            "unsupported_action_type",
-        )
-        self.assertEqual(
-            SlaEscalationPolicyService._action_result({"ActionType": "notify"})[
-                "Status"
-            ],
-            "planned",
+            SlaEscalationPolicyService._action_type({"Type": "notify"}),
+            "notify",
         )
 
         self.assertEqual(SlaEscalationPolicyService._aggregate_run_status([]), "noop")
@@ -193,7 +182,16 @@ class TestSlaEscalationPolicyService(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             SlaEscalationPolicyService._aggregate_run_status(
-                [{"Status": "unsupported_action_type"}]
+                [{"Status": "failed", "Code": "failed_open_decision"}]
+            ),
+            "failed",
+        )
+        self.assertEqual(
+            SlaEscalationPolicyService._aggregate_run_status(
+                [
+                    {"Status": "failed", "Code": "failed_open_decision"},
+                    {"Status": "opened", "Code": "opened"},
+                ]
             ),
             "partial",
         )
@@ -201,6 +199,129 @@ class TestSlaEscalationPolicyService(unittest.IsolatedAsyncioTestCase):
             SlaEscalationPolicyService._aggregate_run_status([{"Status": "planned"}]),
             "ok",
         )
+
+    async def test_parse_helpers_and_action_result_error_branches(self) -> None:
+        svc = self._svc()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        policy = self._policy(tenant_id=tenant_id, policy_key="open-decision")
+
+        now = SlaEscalationPolicyService._now_utc()
+        self.assertEqual(now.tzinfo, timezone.utc)
+
+        direct_uuid = uuid.uuid4()
+        self.assertEqual(
+            SlaEscalationPolicyService._parse_optional_uuid(direct_uuid),
+            direct_uuid,
+        )
+        self.assertEqual(
+            SlaEscalationPolicyService._parse_optional_uuid(str(direct_uuid)),
+            direct_uuid,
+        )
+        self.assertIsNone(SlaEscalationPolicyService._parse_optional_uuid(" "))
+        self.assertIsNone(
+            SlaEscalationPolicyService._parse_optional_uuid("not-a-uuid")
+        )
+        self.assertIsNone(SlaEscalationPolicyService._parse_optional_uuid(123))
+
+        aware_dt = datetime(2026, 2, 25, 18, 0, tzinfo=timezone.utc)
+        naive_dt = datetime(2026, 2, 25, 18, 0)
+        parsed_aware = SlaEscalationPolicyService._parse_optional_datetime(aware_dt)
+        parsed_naive = SlaEscalationPolicyService._parse_optional_datetime(naive_dt)
+        parsed_str = SlaEscalationPolicyService._parse_optional_datetime(
+            "2026-02-25T18:00:00+00:00"
+        )
+        parsed_from_trigger = SlaEscalationPolicyService._parse_optional_datetime(
+            "2026-02-25T19:00:00"
+        )
+        self.assertEqual(parsed_aware, aware_dt)
+        self.assertEqual(
+            parsed_naive,
+            datetime(2026, 2, 25, 18, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(parsed_str, aware_dt)
+        self.assertEqual(
+            parsed_from_trigger,
+            datetime(2026, 2, 25, 19, 0, tzinfo=timezone.utc),
+        )
+        self.assertIsNone(SlaEscalationPolicyService._parse_optional_datetime(" "))
+        self.assertIsNone(
+            SlaEscalationPolicyService._parse_optional_datetime("bad-datetime")
+        )
+        self.assertIsNone(SlaEscalationPolicyService._parse_optional_datetime(42))
+
+        self.assertEqual(
+            SlaEscalationPolicyService._mapping_or_none({"a": 1}),
+            {"a": 1},
+        )
+        self.assertIsNone(SlaEscalationPolicyService._mapping_or_none(["a"]))
+
+        payload = SlaEscalationPolicyService._open_decision_payload(
+            trigger_event={
+                "TraceId": "trace-1",
+                "DueAt": "2026-02-25T19:00:00",
+            },
+            policy=policy,
+            action={},
+        )
+        self.assertEqual(payload["template_key"], "ops.sla.escalation.open_decision")
+        self.assertEqual(payload["trace_id"], "trace-1")
+        self.assertEqual(
+            payload["due_at"],
+            datetime(2026, 2, 25, 19, 0, tzinfo=timezone.utc),
+        )
+
+        payload_with_action_values = SlaEscalationPolicyService._open_decision_payload(
+            trigger_event={"TraceId": "trace-2"},
+            policy=policy,
+            action={
+                "TemplateKey": "custom.template",
+                "DueAt": "2026-02-25T20:30:00+00:00",
+            },
+        )
+        self.assertEqual(payload_with_action_values["template_key"], "custom.template")
+        self.assertEqual(
+            payload_with_action_values["due_at"],
+            datetime(2026, 2, 25, 20, 30, tzinfo=timezone.utc),
+        )
+
+        invalid_action_result = await svc._action_result(
+            action={},
+            dry_run=False,
+            tenant_id=tenant_id,
+            auth_user_id=actor_id,
+            trigger_event={"EventType": "warned"},
+            policy=policy,
+        )
+        self.assertEqual(invalid_action_result["Status"], "invalid_action_type")
+
+        svc._decision_request_service.action_open = AsyncMock(
+            side_effect=Forbidden("not allowed")
+        )
+        http_error_result = await svc._action_result(
+            action={"ActionType": "open_decision"},
+            dry_run=False,
+            tenant_id=tenant_id,
+            auth_user_id=actor_id,
+            trigger_event={"EventType": "warned"},
+            policy=policy,
+        )
+        self.assertEqual(http_error_result["Code"], "failed_open_decision")
+        self.assertEqual(http_error_result["Status"], "failed")
+
+        svc._decision_request_service.action_open = AsyncMock(
+            side_effect=RuntimeError("boom")
+        )
+        generic_error_result = await svc._action_result(
+            action={"ActionType": "open_decision"},
+            dry_run=False,
+            tenant_id=tenant_id,
+            auth_user_id=actor_id,
+            trigger_event={"EventType": "warned"},
+            policy=policy,
+        )
+        self.assertEqual(generic_error_result["Code"], "failed_open_decision")
+        self.assertEqual(generic_error_result["Status"], "failed")
 
     async def test_load_policy_candidates_and_evaluate_planning_paths(self) -> None:
         svc = self._svc()
@@ -347,6 +468,9 @@ class TestSlaEscalationPolicyService(unittest.IsolatedAsyncioTestCase):
         svc._run_service.create = AsyncMock(
             return_value=SlaEscalationRunDE(id=uuid.uuid4(), tenant_id=tenant_id)
         )
+        svc._decision_request_service.action_open = AsyncMock(
+            return_value=({"DecisionRequestId": str(uuid.uuid4())}, 201)
+        )
         dry_run_result = await svc.action_execute(
             tenant_id=tenant_id,
             where={},
@@ -362,13 +486,24 @@ class TestSlaEscalationPolicyService(unittest.IsolatedAsyncioTestCase):
                 dry_run=True,
             ),
         )
-        self.assertEqual(dry_run_result[0]["Status"], "partial")
+        self.assertEqual(dry_run_result[0]["Status"], "ok")
         self.assertEqual(dry_run_result[0]["Runs"][0]["RunId"], None)
+        dry_run_results = dry_run_result[0]["Runs"][0]["Results"]
+        open_result = next(
+            result
+            for result in dry_run_results
+            if result.get("ActionType") == "open_decision"
+        )
+        self.assertEqual(open_result["Status"], "planned")
         svc._run_service.create.assert_not_awaited()
+        svc._decision_request_service.action_open.assert_not_awaited()
 
         run_id = uuid.uuid4()
         svc._run_service.create = AsyncMock(
             return_value=SlaEscalationRunDE(id=run_id, tenant_id=tenant_id)
+        )
+        svc._decision_request_service.action_open = AsyncMock(
+            return_value=({"DecisionRequestId": str(uuid.uuid4())}, 201)
         )
         execute_result = await svc.action_execute(
             tenant_id=tenant_id,
@@ -386,11 +521,19 @@ class TestSlaEscalationPolicyService(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertEqual(execute_result[0]["RunId"], str(run_id))
-        self.assertEqual(execute_result[0]["Status"], "partial")
+        self.assertEqual(execute_result[0]["Status"], "ok")
         create_payload = svc._run_service.create.await_args.args[0]
-        self.assertEqual(create_payload["status"], "partial")
+        self.assertEqual(create_payload["status"], "ok")
         self.assertEqual(create_payload["executed_by_user_id"], actor_id)
         self.assertEqual(create_payload["trace_id"], "trace-y")
+        execute_results = execute_result[0]["Runs"][0]["Results"]
+        opened_result = next(
+            result
+            for result in execute_results
+            if result.get("ActionType") == "open_decision"
+        )
+        self.assertEqual(opened_result["Status"], "opened")
+        self.assertIsNotNone(opened_result["DecisionRequestId"])
 
         svc.get = AsyncMock(return_value=None)
         with self.assertRaises(HTTPException) as ctx:

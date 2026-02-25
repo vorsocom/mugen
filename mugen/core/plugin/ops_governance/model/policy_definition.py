@@ -56,6 +56,12 @@ class PolicyDefinition(ModelBase, TenantScopedMixin):
         server_default=sa_text("'advisory'"),
     )
 
+    engine: Mapped[str] = mapped_column(
+        CITEXT(32),
+        nullable=False,
+        server_default=sa_text("'dsl'"),
+    )
+
     version: Mapped[int] = mapped_column(
         BigInteger,
         nullable=False,
@@ -85,6 +91,12 @@ class PolicyDefinition(ModelBase, TenantScopedMixin):
         Uuid,
         nullable=True,
         index=True,
+    )
+
+    document_json: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=sa_text("'{}'::jsonb"),
     )
 
     attributes: Mapped[dict | None] = mapped_column(
@@ -118,6 +130,10 @@ class PolicyDefinition(ModelBase, TenantScopedMixin):
             name="ck_ops_gov_policy_definition__evaluation_mode_nonempty",
         ),
         CheckConstraint(
+            "length(btrim(engine)) > 0",
+            name="ck_ops_gov_policy_definition__engine_nonempty",
+        ),
+        CheckConstraint(
             "version > 0",
             name="ck_ops_gov_policy_definition__version_positive",
         ),
@@ -129,7 +145,15 @@ class PolicyDefinition(ModelBase, TenantScopedMixin):
         UniqueConstraint(
             "tenant_id",
             "code",
-            name="ux_ops_gov_policy_definition__tenant_code",
+            "version",
+            name="ux_ops_gov_policy_definition__tenant_code_version",
+        ),
+        Index(
+            "ux_ops_gov_policy_definition__tenant_code_active",
+            "tenant_id",
+            "code",
+            unique=True,
+            postgresql_where=sa_text("is_active = true"),
         ),
         Index(
             "ix_ops_gov_policy_definition__tenant_type_active",

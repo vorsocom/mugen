@@ -108,6 +108,7 @@ class TestOpsGovernanceContribBinding(unittest.TestCase):
         self.assertIn("grant_delegation", delegation.capabilities.actions)
         self.assertIn("revoke_delegation", delegation.capabilities.actions)
         self.assertIn("evaluate_policy", policies.capabilities.actions)
+        self.assertIn("activate_version", policies.capabilities.actions)
         self.assertIn("apply_retention_action", retentions.capabilities.actions)
 
         self.assertFalse(decision_logs.capabilities.allow_create)

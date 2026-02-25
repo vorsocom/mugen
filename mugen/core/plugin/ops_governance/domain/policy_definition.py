@@ -23,6 +23,7 @@ class PolicyDefinitionDE(BaseDE, TenantScopedDEMixin):
     rule_ref: str | None = None
 
     evaluation_mode: str | None = None
+    engine: str | None = None
     version: int | None = None
     is_active: bool | None = None
 
@@ -30,4 +31,5 @@ class PolicyDefinitionDE(BaseDE, TenantScopedDEMixin):
     last_evaluated_by_user_id: uuid.UUID | None = None
     last_decision_log_id: uuid.UUID | None = None
 
+    document_json: dict[str, Any] | None = None
     attributes: dict[str, Any] | None = None

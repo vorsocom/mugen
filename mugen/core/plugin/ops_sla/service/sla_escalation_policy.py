@@ -2,10 +2,12 @@
 
 __all__ = ["SlaEscalationPolicyService"]
 
+from datetime import datetime, timezone
 import uuid
 from typing import Any, Mapping
 
 from quart import abort
+from werkzeug.exceptions import HTTPException
 
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
@@ -14,6 +16,12 @@ from mugen.core.plugin.ops_sla.api.validation import (
     SlaEscalationEvaluateValidation,
     SlaEscalationExecuteValidation,
     SlaEscalationTestValidation,
+)
+from mugen.core.plugin.ops_workflow.api.validation import (
+    WorkflowDecisionRequestOpenValidation,
+)
+from mugen.core.plugin.ops_workflow.service.workflow_decision_request import (
+    WorkflowDecisionRequestService,
 )
 from mugen.core.plugin.ops_sla.contract.service.sla_escalation_policy import (
     ISlaEscalationPolicyService,
@@ -29,6 +37,7 @@ class SlaEscalationPolicyService(
     """A CRUD/action service for deterministic escalation planning and run logging."""
 
     _RUN_TABLE = "ops_sla_escalation_run"
+    _DECISION_REQUEST_TABLE = "ops_workflow_decision_request"
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
         super().__init__(
@@ -38,6 +47,10 @@ class SlaEscalationPolicyService(
             **kwargs,
         )
         self._run_service = SlaEscalationRunService(table=self._RUN_TABLE, rsg=rsg)
+        self._decision_request_service = WorkflowDecisionRequestService(
+            table=self._DECISION_REQUEST_TABLE,
+            rsg=rsg,
+        )
 
     @staticmethod
     def _normalize_optional_text(value: str | None) -> str | None:
@@ -45,6 +58,50 @@ class SlaEscalationPolicyService(
             return None
         clean = str(value).strip()
         return clean or None
+
+    @staticmethod
+    def _now_utc() -> datetime:
+        return datetime.now(timezone.utc)
+
+    @classmethod
+    def _parse_optional_uuid(cls, value: Any) -> uuid.UUID | None:
+        if isinstance(value, uuid.UUID):
+            return value
+        if isinstance(value, str):
+            clean = cls._normalize_optional_text(value)
+            if clean is None:
+                return None
+            try:
+                return uuid.UUID(clean)
+            except ValueError:
+                return None
+        return None
+
+    @classmethod
+    def _parse_optional_datetime(cls, value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            dt = value
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        if isinstance(value, str):
+            clean = cls._normalize_optional_text(value)
+            if clean is None:
+                return None
+            try:
+                parsed = datetime.fromisoformat(clean)
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        return None
+
+    @staticmethod
+    def _mapping_or_none(value: Any) -> dict[str, Any] | None:
+        if isinstance(value, Mapping):
+            return dict(value)
+        return None
 
     @classmethod
     def _event_get(cls, payload: Mapping[str, Any], key: str) -> Any:
@@ -223,10 +280,96 @@ class SlaEscalationPolicyService(
         return matched_policies, planned_actions
 
     @classmethod
-    def _action_result(cls, action: Mapping[str, Any]) -> dict[str, Any]:
-        action_type = cls._normalize_optional_text(
+    def _action_type(cls, action: Mapping[str, Any]) -> str | None:
+        return cls._normalize_optional_text(
             action.get("ActionType") or action.get("Type")
         )
+
+    @classmethod
+    def _open_decision_payload(
+        cls,
+        *,
+        trigger_event: Mapping[str, Any],
+        policy: SlaEscalationPolicyDE,
+        action: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        template_key = cls._normalize_optional_text(
+            action.get("TemplateKey") or action.get("template_key")
+        )
+        if template_key is None:
+            template_key = "ops.sla.escalation.open_decision"
+
+        trace_id = cls._normalize_optional_text(
+            action.get("TraceId")
+            or action.get("trace_id")
+            or trigger_event.get("TraceId")
+            or trigger_event.get("trace_id")
+        )
+
+        due_at = cls._parse_optional_datetime(
+            action.get("DueAt")
+            or action.get("due_at")
+            or action.get("DueAtUtc")
+            or action.get("due_at_utc")
+        )
+        if due_at is None:
+            due_at = cls._parse_optional_datetime(
+                trigger_event.get("DueAt") or trigger_event.get("due_at")
+            )
+
+        context = cls._mapping_or_none(
+            action.get("ContextJson") or action.get("context_json")
+        ) or {}
+        context.setdefault("TriggerEvent", dict(trigger_event))
+        context.setdefault(
+            "EscalationPolicy",
+            {
+                "PolicyId": str(policy.id),
+                "PolicyKey": policy.policy_key,
+                "Priority": int(policy.priority or 0),
+            },
+        )
+
+        return {
+            "trace_id": trace_id,
+            "template_key": template_key,
+            "requester_actor_json": (
+                cls._mapping_or_none(
+                    action.get("RequesterActorJson")
+                    or action.get("requester_actor_json")
+                )
+                or {"Source": "ops_sla_escalation"}
+            ),
+            "assigned_to_json": cls._mapping_or_none(
+                action.get("AssignedToJson") or action.get("assigned_to_json")
+            ),
+            "options_json": cls._mapping_or_none(
+                action.get("OptionsJson") or action.get("options_json")
+            ),
+            "context_json": context,
+            "workflow_instance_id": cls._parse_optional_uuid(
+                action.get("WorkflowInstanceId") or action.get("workflow_instance_id")
+            ),
+            "workflow_task_id": cls._parse_optional_uuid(
+                action.get("WorkflowTaskId") or action.get("workflow_task_id")
+            ),
+            "due_at": due_at,
+            "attributes": cls._mapping_or_none(
+                action.get("Attributes") or action.get("attributes")
+            ),
+        }
+
+    async def _action_result(
+        self,
+        *,
+        action: Mapping[str, Any],
+        dry_run: bool,
+        tenant_id: uuid.UUID,
+        auth_user_id: uuid.UUID,
+        trigger_event: Mapping[str, Any],
+        policy: SlaEscalationPolicyDE,
+    ) -> dict[str, Any]:
+        action_type = self._action_type(action)
         if action_type is None:
             return {
                 "ActionType": None,
@@ -235,29 +378,87 @@ class SlaEscalationPolicyService(
                 "Message": "ActionType must be non-empty.",
             }
 
-        if action_type == "open_decision":
+        if action_type != "open_decision":
             return {
                 "ActionType": action_type,
-                "Status": "unsupported_action_type",
-                "Code": "unsupported_action_type",
-                "Message": "open_decision is accepted but unsupported in phase2.",
+                "Status": "planned",
+                "Code": "planned_downstream_adapter",
+                "ExecutionMode": "plan_only",
+            }
+
+        open_payload = self._open_decision_payload(
+            trigger_event=trigger_event,
+            policy=policy,
+            action=action,
+        )
+        if bool(dry_run):
+            return {
+                "ActionType": action_type,
+                "Status": "planned",
+                "Code": "planned_open_decision",
+                "ExecutionMode": "plan_only",
+                "OpenDecisionPayload": open_payload,
+            }
+
+        try:
+            open_result, _status = await self._decision_request_service.action_open(
+                tenant_id=tenant_id,
+                where={"tenant_id": tenant_id},
+                auth_user_id=auth_user_id,
+                data=WorkflowDecisionRequestOpenValidation(**open_payload),
+            )
+        except HTTPException as error:
+            return {
+                "ActionType": action_type,
+                "Status": "failed",
+                "Code": "failed_open_decision",
+                "Message": str(error.description or "open_decision execution failed"),
+                "OpenDecisionPayload": open_payload,
+            }
+        except Exception as error:  # noqa: BLE001
+            return {
+                "ActionType": action_type,
+                "Status": "failed",
+                "Code": "failed_open_decision",
+                "Message": str(error),
+                "OpenDecisionPayload": open_payload,
             }
 
         return {
             "ActionType": action_type,
-            "Status": "planned",
-            "Code": "planned_downstream_adapter",
-            "ExecutionMode": "plan_only",
+            "Status": "opened",
+            "Code": "opened",
+            "DecisionRequestId": (
+                str(open_result.get("DecisionRequestId"))
+                if isinstance(open_result, Mapping)
+                and open_result.get("DecisionRequestId") is not None
+                else None
+            ),
+            "OpenDecisionPayload": open_payload,
         }
 
     @staticmethod
     def _aggregate_run_status(results: list[dict[str, Any]]) -> str:
         if not results:
             return "noop"
-        if any(result.get("Status") == "invalid_action_type" for result in results):
+
+        statuses = [str(result.get("Status") or "") for result in results]
+        if any(status == "invalid_action_type" for status in statuses):
             return "failed"
-        if any(result.get("Status") == "unsupported_action_type" for result in results):
+
+        has_failed_open_decision = any(
+            str(result.get("Code") or "") == "failed_open_decision"
+            for result in results
+        )
+        has_failed = has_failed_open_decision or any(
+            status == "failed" for status in statuses
+        )
+        has_success = any(status in {"planned", "opened"} for status in statuses)
+
+        if has_failed and has_success:
             return "partial"
+        if has_failed:
+            return "failed"
         return "ok"
 
     async def action_evaluate(
@@ -325,9 +526,18 @@ class SlaEscalationPolicyService(
 
         runs: list[dict[str, Any]] = []
         for policy in matched_policies:
-            action_results = [
-                self._action_result(action) for action in self._policy_actions(policy)
-            ]
+            action_results: list[dict[str, Any]] = []
+            for action in self._policy_actions(policy):
+                action_results.append(
+                    await self._action_result(
+                        action=action,
+                        dry_run=bool(data.dry_run),
+                        tenant_id=tenant_id,
+                        auth_user_id=auth_user_id,
+                        trigger_event=trigger_event,
+                        policy=policy,
+                    )
+                )
             status = self._aggregate_run_status(action_results)
 
             run_id: str | None = None
@@ -395,17 +605,22 @@ class SlaEscalationPolicyService(
 
         sample_event = dict(data.sample_event_json)
         matched = self._policy_matches_event(policy=policy, trigger_event=sample_event)
-        would_execute = (
-            [
-                {
-                    "Action": action,
-                    "Result": self._action_result(action),
-                }
-                for action in self._policy_actions(policy)
-            ]
-            if matched
-            else []
-        )
+        would_execute: list[dict[str, Any]] = []
+        if matched:
+            for action in self._policy_actions(policy):
+                would_execute.append(
+                    {
+                        "Action": action,
+                        "Result": await self._action_result(
+                            action=action,
+                            dry_run=True,
+                            tenant_id=tenant_id,
+                            auth_user_id=auth_user_id,
+                            trigger_event=sample_event,
+                            policy=policy,
+                        ),
+                    }
+                )
 
         return (
             {

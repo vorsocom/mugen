@@ -30,6 +30,10 @@ from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.ops_workflow.api.validation import (
     WorkflowAdvanceValidation,
     WorkflowApproveValidation,
+    WorkflowDecisionRequestCancelValidation,
+    WorkflowDecisionRequestExpireOverdueValidation,
+    WorkflowDecisionRequestOpenValidation,
+    WorkflowDecisionRequestResolveValidation,
     WorkflowAssignTaskValidation,
     WorkflowCancelInstanceValidation,
     WorkflowCompleteTaskValidation,
@@ -262,6 +266,55 @@ def contribute(
                     "confirm": "Complete this workflow task?",
                 },
             },
+        },
+        {
+            "set": "OpsWorkflowDecisionRequests",
+            "entity": "WorkflowDecisionRequest",
+            "table_name": "ops_workflow_decision_request",
+            "description": (
+                "First-class workflow decision requests for approval/review/exception"
+                " paths."
+            ),
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": True,
+            "crud": CrudPolicy(),
+            "actions": {
+                "open": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": WorkflowDecisionRequestOpenValidation,
+                    "confirm": "Open a workflow decision request?",
+                },
+                "resolve": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": WorkflowDecisionRequestResolveValidation,
+                    "confirm": "Resolve this workflow decision request?",
+                },
+                "cancel": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": WorkflowDecisionRequestCancelValidation,
+                    "confirm": "Cancel this workflow decision request?",
+                },
+                "expire_overdue": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": WorkflowDecisionRequestExpireOverdueValidation,
+                    "confirm": "Expire overdue workflow decision requests?",
+                },
+            },
+        },
+        {
+            "set": "OpsWorkflowDecisionOutcomes",
+            "entity": "WorkflowDecisionOutcome",
+            "table_name": "ops_workflow_decision_outcome",
+            "description": (
+                "Append-only decision resolution outcomes linked to decision requests."
+            ),
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": False,
+            "crud": CrudPolicy(),
         },
         {
             "set": "OpsWorkflowEvents",

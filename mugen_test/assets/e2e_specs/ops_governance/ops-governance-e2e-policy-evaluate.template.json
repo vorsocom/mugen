@@ -14,7 +14,49 @@
   "entity_set": "OpsPolicyDefinitions",
   "create_payload": {
     "Code": "__POLICY_CODE__",
-    "Name": "Governance Policy __POLICY_CODE__"
+    "Name": "Governance Policy __POLICY_CODE__",
+    "Engine": "dsl",
+    "DocumentJson": {
+      "Rules": [
+        {
+          "Name": "priority_review",
+          "Condition": {
+            "Path": "risk.priority",
+            "Op": "eq",
+            "Value": "high"
+          },
+          "Effect": "review",
+          "Reasons": [
+            "risk_priority_high"
+          ],
+          "Obligations": [
+            {
+              "Type": "require_approval",
+              "Required": true
+            }
+          ]
+        },
+        {
+          "Name": "default_allow",
+          "Effect": "allow",
+          "Reasons": [
+            "default_allow"
+          ],
+          "Obligations": [
+            {
+              "Type": "log_reason",
+              "Required": false
+            }
+          ]
+        }
+      ],
+      "Default": {
+        "Decision": "deny",
+        "Reasons": [
+          "default_deny"
+        ]
+      }
+    }
   },
   "lookup": {
     "field": "Code",
@@ -28,10 +70,21 @@
       "expect_code": 200,
       "payload": {
         "RowVersion": "__ROW_VERSION__",
+        "TraceId": "gov-e2e-__POLICY_CODE__",
         "SubjectNamespace": "ops_case",
         "SubjectRef": "CASE-E2E-001",
-        "Decision": "allow",
-        "Outcome": "applied"
+        "InputJson": {
+          "risk": {
+            "priority": "low"
+          },
+          "case": {
+            "type": "incident"
+          }
+        },
+        "ActorJson": {
+          "Type": "user",
+          "Id": "__USER_ID__"
+        }
       }
     }
   ],
