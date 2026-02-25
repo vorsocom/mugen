@@ -58,6 +58,9 @@ Every downstream note should include:
   notes.
 - `ops-workflow-notes.md` - Consolidated index for all
   `ops_workflow`-related downstream notes.
+- `phase1-foundations-adoption.md` - Downstream rollout and usage guidance for
+  Phase 1 core foundations (dedup, schema registry, correlation links, and
+  business trace events).
 
 ## Template
 

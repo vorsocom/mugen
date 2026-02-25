@@ -2,6 +2,7 @@
 
 __all__ = [
     "IAuthorizationService",
+    "IDedupRecordService",
     "IGlobalPermissionEntryService",
     "IGlobalRoleMembershipService",
     "IGlobalRoleService",
@@ -12,6 +13,8 @@ __all__ = [
     "IRefreshTokenService",
     "IRoleService",
     "IRoleMembershipService",
+    "ISchemaBindingService",
+    "ISchemaDefinitionService",
     "ISystemFlagService",
     "ITenantService",
     "ITenantDomainService",
@@ -21,6 +24,7 @@ __all__ = [
 ]
 
 from mugen.core.plugin.acp.contract.service.authorization import IAuthorizationService
+from mugen.core.plugin.acp.contract.service.dedup_record import IDedupRecordService
 from mugen.core.plugin.acp.contract.service.global_permission_entry import (
     IGlobalPermissionEntryService,
 )
@@ -42,6 +46,10 @@ from mugen.core.plugin.acp.contract.service.refresh_token import IRefreshTokenSe
 from mugen.core.plugin.acp.contract.service.role import IRoleService
 from mugen.core.plugin.acp.contract.service.role_membership import (
     IRoleMembershipService,
+)
+from mugen.core.plugin.acp.contract.service.schema_binding import ISchemaBindingService
+from mugen.core.plugin.acp.contract.service.schema_definition import (
+    ISchemaDefinitionService,
 )
 from mugen.core.plugin.acp.contract.service.system_flag import ISystemFlagService
 from mugen.core.plugin.acp.contract.service.tenant import ITenantService

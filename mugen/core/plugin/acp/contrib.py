@@ -71,6 +71,20 @@ from mugen.core.plugin.acp.api.validation.generic import (
     NoValidationSchema,
     RowVersionValidation,
 )
+from mugen.core.plugin.acp.api.validation.foundation import (
+    DedupAcquireValidation,
+    DedupRecordCreateValidation,
+    DedupCommitFailureValidation,
+    DedupCommitSuccessValidation,
+    DedupSweepExpiredValidation,
+    SchemaActivateVersionValidation,
+    SchemaBindingCreateValidation,
+    SchemaBindingUpdateValidation,
+    SchemaCoerceValidation,
+    SchemaDefinitionCreateValidation,
+    SchemaDefinitionUpdateValidation,
+    SchemaValidateValidation,
+)
 from mugen.core.plugin.acp.api.validation.rbac import (
     GlobalPermissionEntryCreateValidation,
     GlobalPermissionEntryUpdateValidation,
@@ -553,6 +567,83 @@ def contribute(
                 create_schema=NoValidationSchema,
                 update_schema=NoValidationSchema,
                 delete_schema=NoValidationSchema,
+            ),
+        },
+        {
+            "set": "DedupRecords",
+            "entity": "DedupRecord",
+            "description": (
+                "Shared idempotency/dedup ledger for ACP create/action requests"
+            ),
+            "allow_create": True,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": True,
+            "soft_delete": SoftDeletePolicy(),
+            "actions": {
+                "acquire": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": DedupAcquireValidation,
+                },
+                "commit_success": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": DedupCommitSuccessValidation,
+                },
+                "commit_failure": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": DedupCommitFailureValidation,
+                },
+                "sweep_expired": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": DedupSweepExpiredValidation,
+                },
+            },
+            "crud": CrudPolicy(
+                create_schema=DedupRecordCreateValidation,
+            ),
+        },
+        {
+            "set": "Schemas",
+            "entity": "SchemaDefinition",
+            "description": (
+                "Generic schema registry definitions for ACP payload contracts"
+            ),
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "soft_delete": SoftDeletePolicy(),
+            "actions": {
+                "validate": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": SchemaValidateValidation,
+                },
+                "coerce": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": SchemaCoerceValidation,
+                },
+                "activate_version": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": SchemaActivateVersionValidation,
+                },
+            },
+            "crud": CrudPolicy(
+                create_schema=SchemaDefinitionCreateValidation,
+                update_schema=SchemaDefinitionUpdateValidation,
+            ),
+        },
+        {
+            "set": "SchemaBindings",
+            "entity": "SchemaBinding",
+            "description": "Schema binding contracts targeting ACP entity sets/actions",
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "soft_delete": SoftDeletePolicy(),
+            "crud": CrudPolicy(
+                create_schema=SchemaBindingCreateValidation,
+                update_schema=SchemaBindingUpdateValidation,
             ),
         },
     )

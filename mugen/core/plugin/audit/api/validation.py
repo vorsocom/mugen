@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import uuid
 from typing import Literal
 
 from pydantic import NonNegativeInt, PositiveInt, model_validator
@@ -50,14 +51,17 @@ class AuditEventRunLifecycleValidation(IValidationBase):
     max_batches: PositiveInt | None = None
     dry_run: bool = False
     now_override: datetime | None = None
-    phases: list[
-        Literal[
-            "seal_backlog",
-            "redact_due",
-            "tombstone_expired",
-            "purge_due",
+    phases: (
+        list[
+            Literal[
+                "seal_backlog",
+                "redact_due",
+                "tombstone_expired",
+                "purge_due",
+            ]
         ]
-    ] | None = None
+        | None
+    ) = None
 
 
 class AuditEventVerifyChainValidation(IValidationBase):
@@ -74,3 +78,54 @@ class AuditEventSealBacklogValidation(IValidationBase):
 
     batch_size: PositiveInt | None = None
     max_batches: PositiveInt | None = None
+
+
+class AuditCorrelationResolveTraceValidation(IValidationBase):
+    """Validate payload for resolve_trace actions."""
+
+    tenant_id: uuid.UUID | None = None
+    trace_id: str | None = None
+    correlation_id: str | None = None
+    request_id: str | None = None
+    max_rows: PositiveInt | None = None
+
+    @model_validator(mode="after")
+    def _validate_reference(self) -> "AuditCorrelationResolveTraceValidation":
+        trace = (self.trace_id or "").strip()
+        correlation = (self.correlation_id or "").strip()
+        request = (self.request_id or "").strip()
+
+        if trace == "" and correlation == "" and request == "":
+            raise ValueError("Provide TraceId, CorrelationId, or RequestId.")
+
+        self.trace_id = trace or None
+        self.correlation_id = correlation or None
+        self.request_id = request or None
+        return self
+
+
+class AuditBizTraceInspectTraceValidation(IValidationBase):
+    """Validate payload for inspect_trace actions."""
+
+    tenant_id: uuid.UUID | None = None
+    trace_id: str | None = None
+    correlation_id: str | None = None
+    request_id: str | None = None
+    stage: str | None = None
+    max_rows: PositiveInt | None = None
+
+    @model_validator(mode="after")
+    def _validate_reference(self) -> "AuditBizTraceInspectTraceValidation":
+        trace = (self.trace_id or "").strip()
+        correlation = (self.correlation_id or "").strip()
+        request = (self.request_id or "").strip()
+        stage = (self.stage or "").strip()
+
+        if trace == "" and correlation == "" and request == "":
+            raise ValueError("Provide TraceId, CorrelationId, or RequestId.")
+
+        self.trace_id = trace or None
+        self.correlation_id = correlation or None
+        self.request_id = request or None
+        self.stage = stage or None
+        return self

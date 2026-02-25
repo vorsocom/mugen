@@ -794,6 +794,66 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ex.exception.code, 400)
         self.assertEqual(emit.await_args.kwargs["outcome"], "invalid")
 
+    async def test_create_entity_replay_short_circuit_paths(self) -> None:
+        actor_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        replay_response = SimpleNamespace(tag="replay")
+
+        svc = SimpleNamespace(
+            create=AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+        )
+        non_tenant_registry = _FakeRegistry(
+            resource=_resource(create_schema=("Name",)),
+            service=svc,
+            tenant_scoped=False,
+        )
+        tenant_registry = _FakeRegistry(
+            resource=_resource(create_schema=("TenantId", "Name")),
+            service=svc,
+            tenant_scoped=True,
+        )
+
+        with (
+            patch.object(
+                crud_mod,
+                "acquire_idempotency",
+                new=AsyncMock(
+                    return_value={"enabled": True, "replay_response": replay_response}
+                ),
+            ),
+            patch.object(crud_mod, "enforce_schema_bindings", new=AsyncMock()),
+            patch.object(crud_mod, "emit_biz_trace_event", new=AsyncMock()),
+            patch.object(crud_mod, "emit_audit_event", new=AsyncMock()),
+            patch.object(crud_mod, "commit_idempotency_success", new=AsyncMock()),
+            patch.object(crud_mod, "commit_idempotency_failure", new=AsyncMock()),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users",
+                method="POST",
+                json={"Name": "Alice"},
+            ):
+                result = await crud_mod.create_entity.__wrapped__(
+                    entity_set="Users",
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: non_tenant_registry,
+                )
+            self.assertIs(result, replay_response)
+
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+                method="POST",
+                json={"Name": "Alice"},
+            ):
+                result = await crud_mod.create_entity_tenant.__wrapped__(
+                    tenant_id=str(tenant_id),
+                    entity_set="Users",
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: tenant_registry,
+                )
+            self.assertIs(result, replay_response)
+
     async def test_create_entity_tenant_paths(self) -> None:
         tenant_id = uuid.uuid4()
         actor_id = uuid.uuid4()

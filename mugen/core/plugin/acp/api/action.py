@@ -1,6 +1,7 @@
 """Implements action API endpoints for EDM entity sets."""
 
 import uuid
+import time
 from typing import Any
 
 from pydantic import ValidationError
@@ -10,8 +11,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.plugin.acp.api.audit import emit_audit_event
+from mugen.core.plugin.acp.api.audit import emit_audit_event, emit_biz_trace_event
 from mugen.core.plugin.acp.api.decorator.auth import permission_required
+from mugen.core.plugin.acp.api.foundation import (
+    acquire_idempotency,
+    commit_idempotency_failure,
+    commit_idempotency_success,
+    enforce_schema_bindings,
+)
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 
@@ -61,6 +68,12 @@ def _tenant_scope_mode(
         return _SCOPE_OPTIONAL
 
     return _SCOPE_REQUIRED
+
+
+def _action_response_parts(result: Any) -> tuple[int, Any]:
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], int):
+        return int(result[1]), result[0]
+    return 200, result
 
 
 @api.post("core/acp/v1/<entity_set>/$action/<action>")
@@ -119,6 +132,42 @@ async def dispatch_entity_set_action(
     except ValidationError as e:
         abort(400, str(e))
 
+    await enforce_schema_bindings(
+        registry=registry,
+        tenant_id=None,
+        resource_namespace=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        payload=data,
+        binding_kind="action",
+    )
+
+    idempotency_state = await acquire_idempotency(
+        registry=registry,
+        tenant_id=None,
+        entity_set=entity_set,
+        action_name=action,
+        payload=data,
+    )
+    replay_response = idempotency_state.get("replay_response")
+    if replay_response is not None:
+        return replay_response
+
+    started_at = time.perf_counter()
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="start",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        details={
+            "operation": "action",
+            "handler": handler_name,
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+
     try:
         result = await handler(
             auth_user_id=auth_user_uuid,
@@ -139,6 +188,30 @@ async def dispatch_entity_set_action(
             request_id=request_id,
             correlation_id=correlation_id,
         )
+        await emit_biz_trace_event(
+            registry=registry,
+            stage="error",
+            source_plugin=resource.namespace,
+            entity_set=entity_set,
+            action_name=action,
+            status_code=500,
+            duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+            details={
+                "operation": "action",
+                "handler": handler_name,
+                "error": str(e),
+            },
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        await commit_idempotency_failure(
+            registry=registry,
+            idempotency_state=idempotency_state,
+            response_code=500,
+            response_payload={"Error": "Action execution failed."},
+            error_code="error",
+            error_message=str(e),
+        )
         abort(500)
 
     await emit_audit_event(
@@ -153,6 +226,29 @@ async def dispatch_entity_set_action(
         meta={"handler": handler_name},
         request_id=request_id,
         correlation_id=correlation_id,
+    )
+
+    response_code, response_payload = _action_response_parts(result)
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="finish",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        status_code=response_code,
+        duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+        details={
+            "operation": "action",
+            "handler": handler_name,
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+    await commit_idempotency_success(
+        registry=registry,
+        idempotency_state=idempotency_state,
+        response_code=response_code,
+        response_payload=response_payload,
     )
 
     return result
@@ -222,6 +318,43 @@ async def dispatch_entity_set_action_tenant(
     except ValidationError as e:
         abort(400, str(e))
 
+    await enforce_schema_bindings(
+        registry=registry,
+        tenant_id=tenant_uuid,
+        resource_namespace=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        payload=data,
+        binding_kind="action",
+    )
+
+    idempotency_state = await acquire_idempotency(
+        registry=registry,
+        tenant_id=tenant_uuid,
+        entity_set=entity_set,
+        action_name=action,
+        payload=data,
+    )
+    replay_response = idempotency_state.get("replay_response")
+    if replay_response is not None:
+        return replay_response
+
+    started_at = time.perf_counter()
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="start",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        tenant_id=tenant_uuid,
+        details={
+            "operation": "action",
+            "handler": handler_name,
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+
     where = {"tenant_id": tenant_uuid}
 
     try:
@@ -247,6 +380,31 @@ async def dispatch_entity_set_action_tenant(
             request_id=request_id,
             correlation_id=correlation_id,
         )
+        await emit_biz_trace_event(
+            registry=registry,
+            stage="error",
+            source_plugin=resource.namespace,
+            entity_set=entity_set,
+            action_name=action,
+            tenant_id=tenant_uuid,
+            status_code=500,
+            duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+            details={
+                "operation": "action",
+                "handler": handler_name,
+                "error": str(e),
+            },
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        await commit_idempotency_failure(
+            registry=registry,
+            idempotency_state=idempotency_state,
+            response_code=500,
+            response_payload={"Error": "Action execution failed."},
+            error_code="error",
+            error_message=str(e),
+        )
         abort(500)
 
     await emit_audit_event(
@@ -262,6 +420,30 @@ async def dispatch_entity_set_action_tenant(
         meta={"handler": handler_name},
         request_id=request_id,
         correlation_id=correlation_id,
+    )
+
+    response_code, response_payload = _action_response_parts(result)
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="finish",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        tenant_id=tenant_uuid,
+        status_code=response_code,
+        duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+        details={
+            "operation": "action",
+            "handler": handler_name,
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+    await commit_idempotency_success(
+        registry=registry,
+        idempotency_state=idempotency_state,
+        response_code=response_code,
+        response_payload=response_payload,
     )
 
     return result
@@ -330,6 +512,42 @@ async def dispatch_entity_action(
     except ValidationError as e:
         abort(400, str(e))
 
+    await enforce_schema_bindings(
+        registry=registry,
+        tenant_id=None,
+        resource_namespace=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        payload=data,
+        binding_kind="action",
+    )
+
+    idempotency_state = await acquire_idempotency(
+        registry=registry,
+        tenant_id=None,
+        entity_set=entity_set,
+        action_name=action,
+        payload=data,
+    )
+    replay_response = idempotency_state.get("replay_response")
+    if replay_response is not None:
+        return replay_response
+
+    started_at = time.perf_counter()
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="start",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        details={
+            "operation": "action",
+            "handler": handler_name,
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+
     try:
         result = await handler(
             entity_id=entity_uuid,
@@ -352,6 +570,30 @@ async def dispatch_entity_action(
             request_id=request_id,
             correlation_id=correlation_id,
         )
+        await emit_biz_trace_event(
+            registry=registry,
+            stage="error",
+            source_plugin=resource.namespace,
+            entity_set=entity_set,
+            action_name=action,
+            status_code=500,
+            duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+            details={
+                "operation": "action",
+                "handler": handler_name,
+                "error": str(e),
+            },
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        await commit_idempotency_failure(
+            registry=registry,
+            idempotency_state=idempotency_state,
+            response_code=500,
+            response_payload={"Error": "Action execution failed."},
+            error_code="error",
+            error_message=str(e),
+        )
         abort(500)
 
     await emit_audit_event(
@@ -367,6 +609,29 @@ async def dispatch_entity_action(
         meta={"handler": handler_name},
         request_id=request_id,
         correlation_id=correlation_id,
+    )
+
+    response_code, response_payload = _action_response_parts(result)
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="finish",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        status_code=response_code,
+        duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+        details={
+            "operation": "action",
+            "handler": handler_name,
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+    await commit_idempotency_success(
+        registry=registry,
+        idempotency_state=idempotency_state,
+        response_code=response_code,
+        response_payload=response_payload,
     )
 
     return result
@@ -442,6 +707,43 @@ async def dispatch_entity_action_tenant(
     except ValidationError as e:
         abort(400, str(e))
 
+    await enforce_schema_bindings(
+        registry=registry,
+        tenant_id=tenant_uuid,
+        resource_namespace=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        payload=data,
+        binding_kind="action",
+    )
+
+    idempotency_state = await acquire_idempotency(
+        registry=registry,
+        tenant_id=tenant_uuid,
+        entity_set=entity_set,
+        action_name=action,
+        payload=data,
+    )
+    replay_response = idempotency_state.get("replay_response")
+    if replay_response is not None:
+        return replay_response
+
+    started_at = time.perf_counter()
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="start",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        tenant_id=tenant_uuid,
+        details={
+            "operation": "action",
+            "handler": handler_name,
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+
     where = {"tenant_id": tenant_uuid, "id": entity_uuid}
 
     try:
@@ -469,6 +771,31 @@ async def dispatch_entity_action_tenant(
             request_id=request_id,
             correlation_id=correlation_id,
         )
+        await emit_biz_trace_event(
+            registry=registry,
+            stage="error",
+            source_plugin=resource.namespace,
+            entity_set=entity_set,
+            action_name=action,
+            tenant_id=tenant_uuid,
+            status_code=500,
+            duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+            details={
+                "operation": "action",
+                "handler": handler_name,
+                "error": str(e),
+            },
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        await commit_idempotency_failure(
+            registry=registry,
+            idempotency_state=idempotency_state,
+            response_code=500,
+            response_payload={"Error": "Action execution failed."},
+            error_code="error",
+            error_message=str(e),
+        )
         abort(500)
 
     await emit_audit_event(
@@ -485,6 +812,30 @@ async def dispatch_entity_action_tenant(
         meta={"handler": handler_name},
         request_id=request_id,
         correlation_id=correlation_id,
+    )
+
+    response_code, response_payload = _action_response_parts(result)
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="finish",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=action,
+        tenant_id=tenant_uuid,
+        status_code=response_code,
+        duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+        details={
+            "operation": "action",
+            "handler": handler_name,
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+    await commit_idempotency_success(
+        registry=registry,
+        idempotency_state=idempotency_state,
+        response_code=response_code,
+        response_payload=response_payload,
     )
 
     return result

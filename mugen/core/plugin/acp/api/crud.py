@@ -1,6 +1,7 @@
 """Implements CRUD API endpoints for EDM entity sets."""
 
 import uuid
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,7 +17,13 @@ from mugen.core.contract.gateway.storage.rdbms.crud_base import (
     ICrudServiceWithRowVersion,
 )
 from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
-from mugen.core.plugin.acp.api.audit import emit_audit_event
+from mugen.core.plugin.acp.api.audit import emit_audit_event, emit_biz_trace_event
+from mugen.core.plugin.acp.api.foundation import (
+    acquire_idempotency,
+    commit_idempotency_failure,
+    commit_idempotency_success,
+    enforce_schema_bindings,
+)
 from mugen.core.plugin.acp.api.decorator.auth import permission_required
 from mugen.core.plugin.acp.api.decorator.rgql import rgql_enabled
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
@@ -443,6 +450,42 @@ async def create_entity(
         tenant_scoped=False,
     )
 
+    await enforce_schema_bindings(
+        registry=registry,
+        tenant_id=None,
+        resource_namespace=resource.namespace,
+        entity_set=entity_set,
+        action_name=None,
+        payload=create_data,
+        binding_kind="create",
+    )
+
+    idempotency_state = await acquire_idempotency(
+        registry=registry,
+        tenant_id=None,
+        entity_set=entity_set,
+        action_name=None,
+        payload=create_data,
+    )
+    replay_response = idempotency_state.get("replay_response")
+    if replay_response is not None:
+        return replay_response
+
+    started_at = time.perf_counter()
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="start",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=None,
+        details={
+            "operation": "create",
+            "payload_keys": sorted(list(create_data.keys())),
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+
     svc: ICrudService = registry.get_edm_service(resource.service_key)
     try:
         created = await svc.create(create_data)
@@ -461,6 +504,35 @@ async def create_entity(
             request_id=request_id,
             correlation_id=correlation_id,
         )
+
+        status_detail = message or "Create operation failed."
+        await emit_biz_trace_event(
+            registry=registry,
+            stage="error",
+            source_plugin=resource.namespace,
+            entity_set=entity_set,
+            action_name=None,
+            status_code=status_code,
+            duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+            details={
+                "operation": "create",
+                "error": status_detail,
+                "outcome": outcome,
+            },
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        await commit_idempotency_failure(
+            registry=registry,
+            idempotency_state=idempotency_state,
+            response_code=status_code,
+            response_payload={
+                "Error": status_detail,
+                "Outcome": outcome,
+            },
+            error_code=outcome,
+            error_message=status_detail,
+        )
         if message is None:
             abort(status_code)
         abort(status_code, message)
@@ -478,6 +550,29 @@ async def create_entity(
         after=created,
         request_id=request_id,
         correlation_id=correlation_id,
+    )
+
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="finish",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=None,
+        status_code=201,
+        duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+        details={
+            "operation": "create",
+            "entity_id": str(created.id),
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+    await commit_idempotency_success(
+        registry=registry,
+        idempotency_state=idempotency_state,
+        response_code=201,
+        response_payload="",
+        result_ref=str(created.id),
     )
 
     return "", 201
@@ -545,6 +640,43 @@ async def create_entity_tenant(
     if resource.edm_type_name == "ACP.TenantInvitation" and actor_id is not None:
         create_data["invited_by_user_id"] = actor_id
 
+    await enforce_schema_bindings(
+        registry=registry,
+        tenant_id=tenant_uuid,
+        resource_namespace=resource.namespace,
+        entity_set=entity_set,
+        action_name=None,
+        payload=create_data,
+        binding_kind="create",
+    )
+
+    idempotency_state = await acquire_idempotency(
+        registry=registry,
+        tenant_id=tenant_uuid,
+        entity_set=entity_set,
+        action_name=None,
+        payload=create_data,
+    )
+    replay_response = idempotency_state.get("replay_response")
+    if replay_response is not None:
+        return replay_response
+
+    started_at = time.perf_counter()
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="start",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=None,
+        tenant_id=tenant_uuid,
+        details={
+            "operation": "create",
+            "payload_keys": sorted(list(create_data.keys())),
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+
     svc: ICrudService = registry.get_edm_service(resource.service_key)
     try:
         created = await svc.create(create_data)
@@ -564,6 +696,36 @@ async def create_entity_tenant(
             request_id=request_id,
             correlation_id=correlation_id,
         )
+
+        status_detail = message or "Create operation failed."
+        await emit_biz_trace_event(
+            registry=registry,
+            stage="error",
+            source_plugin=resource.namespace,
+            entity_set=entity_set,
+            action_name=None,
+            tenant_id=tenant_uuid,
+            status_code=status_code,
+            duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+            details={
+                "operation": "create",
+                "error": status_detail,
+                "outcome": outcome,
+            },
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        await commit_idempotency_failure(
+            registry=registry,
+            idempotency_state=idempotency_state,
+            response_code=status_code,
+            response_payload={
+                "Error": status_detail,
+                "Outcome": outcome,
+            },
+            error_code=outcome,
+            error_message=status_detail,
+        )
         if message is None:
             abort(status_code)
         abort(status_code, message)
@@ -582,6 +744,30 @@ async def create_entity_tenant(
         after=created,
         request_id=request_id,
         correlation_id=correlation_id,
+    )
+
+    await emit_biz_trace_event(
+        registry=registry,
+        stage="finish",
+        source_plugin=resource.namespace,
+        entity_set=entity_set,
+        action_name=None,
+        tenant_id=tenant_uuid,
+        status_code=201,
+        duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+        details={
+            "operation": "create",
+            "entity_id": str(created.id),
+        },
+        request_id=request_id,
+        correlation_id=correlation_id,
+    )
+    await commit_idempotency_success(
+        registry=registry,
+        idempotency_state=idempotency_state,
+        response_code=201,
+        response_payload="",
+        result_ref=str(created.id),
     )
 
     return "", 201

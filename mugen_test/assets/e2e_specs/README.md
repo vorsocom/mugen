@@ -10,7 +10,11 @@ To run the whole template suite with automatic unique placeholder injection:
 
 ## Plugin Coverage
 
-- `acp`: `acp/acp-tenant-invitation-redeem.template.json`
+- `acp`:
+  - `acp/acp-tenant-invitation-redeem.template.json`
+  - `acp/acp-e2e-dedup-ledger.template.json`
+  - `acp/acp-e2e-schema-registry.template.json`
+- `audit`: `audit/audit-e2e-correlation-observability.template.json`
 - `ops_case`: `ops_case/ops-case-e2e-lifecycle.template.json`
 - `ops_sla`: `ops_sla/ops-sla-e2e-clock-lifecycle.template.json`
 - `ops_workflow`: `ops_workflow/ops-workflow-e2e-definition-smoke.template.json`
