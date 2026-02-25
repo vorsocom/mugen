@@ -22,8 +22,12 @@ Downstream services must adopt these primitives without breaking existing
 
 - Keep current plugin boundaries and entity-set names.
 - Preserve existing `approve`/`reject` actions as compatibility wrappers.
+- Auto-create a legacy bridge decision request when a pending approval task has
+  no linked open decision request.
 - Treat non-approval obligations as downstream responsibilities.
 - Standardize on policy trace propagation using `TraceId` where available.
+- Guarantee approval-request failures are compensated so instance state is not
+  persisted as `awaiting_approval` without a linked open decision request.
 
 ## Core vs Downstream Boundary
 

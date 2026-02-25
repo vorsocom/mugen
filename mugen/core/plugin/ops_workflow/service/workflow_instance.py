@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from pydantic import ValidationError
 from quart import abort
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
@@ -126,6 +127,37 @@ class WorkflowInstanceService(
             return None
         clean = str(value).strip()
         return clean or None
+
+    @classmethod
+    def _normalize_optional_note(cls, value: str | None) -> str | None:
+        return cls._normalize_optional_text(value)
+
+    @staticmethod
+    def _safe_decision_open_validation(
+        **values: Any,
+    ) -> WorkflowDecisionRequestOpenValidation:
+        try:
+            return WorkflowDecisionRequestOpenValidation(**values)
+        except ValidationError:
+            abort(400, "Decision request open payload is invalid.")
+
+    @staticmethod
+    def _safe_decision_resolve_validation(
+        **values: Any,
+    ) -> WorkflowDecisionRequestResolveValidation:
+        try:
+            return WorkflowDecisionRequestResolveValidation(**values)
+        except ValidationError:
+            abort(400, "Decision request resolve payload is invalid.")
+
+    @staticmethod
+    def _safe_decision_cancel_validation(
+        **values: Any,
+    ) -> WorkflowDecisionRequestCancelValidation:
+        try:
+            return WorkflowDecisionRequestCancelValidation(**values)
+        except ValidationError:
+            abort(400, "Decision request cancel payload is invalid.")
 
     @classmethod
     def _integrity_constraint_name(cls, error: IntegrityError) -> str | None:
@@ -349,6 +381,138 @@ class WorkflowInstanceService(
         if int(decision_request.row_version or 0) <= 0:
             abort(409, "Decision request RowVersion is invalid.")
         return decision_request
+
+    async def _get_or_create_legacy_decision_request(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        workflow_instance_id: uuid.UUID,
+        workflow_task: WorkflowTaskDE,
+        auth_user_id: uuid.UUID,
+        trace_id: str | None = None,
+        note: str | None = None,
+    ) -> tuple[WorkflowDecisionRequestDE, bool]:
+        if workflow_task.id is None:
+            abort(409, "Pending approval task identifier is missing.")
+
+        existing = await self._find_open_decision_request(
+            tenant_id=tenant_id,
+            workflow_instance_id=workflow_instance_id,
+            workflow_task_id=workflow_task.id,
+        )
+        if existing is not None:
+            if existing.id is None:
+                abort(409, "Decision request identifier is missing.")
+            if int(existing.row_version or 0) <= 0:
+                abort(409, "Decision request RowVersion is invalid.")
+            return existing, False
+
+        bridge_open_data = self._safe_decision_open_validation(
+            trace_id=self._normalize_optional_text(trace_id),
+            template_key="workflow.approval.legacy_bridge",
+            requester_actor_json={"UserId": str(auth_user_id)},
+            assigned_to_json={
+                "AssigneeUserId": self._uuid_text(workflow_task.assignee_user_id),
+                "QueueName": self._normalize_optional_text(workflow_task.queue_name),
+            },
+            options_json={"LegacyBridge": True},
+            context_json={
+                "WorkflowInstanceId": str(workflow_instance_id),
+                "WorkflowTaskId": str(workflow_task.id),
+                "LegacyBridgeCreated": True,
+            },
+            workflow_instance_id=workflow_instance_id,
+            workflow_task_id=workflow_task.id,
+            note=self._normalize_optional_note(note),
+        )
+        await self._decision_request_service.action_open(
+            tenant_id=tenant_id,
+            where={"tenant_id": tenant_id},
+            auth_user_id=auth_user_id,
+            data=bridge_open_data,
+        )
+
+        bridged = await self._find_open_decision_request(
+            tenant_id=tenant_id,
+            workflow_instance_id=workflow_instance_id,
+            workflow_task_id=workflow_task.id,
+        )
+        if bridged is None:
+            abort(409, "Legacy bridge decision request was not created.")
+        if bridged.id is None:
+            abort(409, "Decision request identifier is missing.")
+        if int(bridged.row_version or 0) <= 0:
+            abort(409, "Decision request RowVersion is invalid.")
+        return bridged, True
+
+    async def _compensate_advance_decision_open_failure(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        where: Mapping[str, Any],
+        current: WorkflowInstanceDE,
+        task: WorkflowTaskDE,
+        auth_user_id: uuid.UUID,
+    ) -> None:
+        now = self._now_utc()
+
+        try:
+            compensated_instance = await self.update(
+                where=where,
+                changes={
+                    "status": "active",
+                    "pending_transition_id": None,
+                    "pending_task_id": None,
+                    "last_actor_user_id": auth_user_id,
+                },
+            )
+        except SQLAlchemyError:
+            abort(500)
+
+        if compensated_instance is None:
+            abort(500, "Workflow instance compensation failed after decision open.")
+
+        if task.id is None:
+            return
+
+        try:
+            cancelled_task = await self._task_service.update(
+                where={
+                    "tenant_id": tenant_id,
+                    "id": task.id,
+                    "workflow_instance_id": entity_id,
+                },
+                changes={
+                    "status": "cancelled",
+                    "completed_at": now,
+                    "cancelled_at": now,
+                    "completed_by_user_id": auth_user_id,
+                    "outcome": "decision_open_failed",
+                },
+            )
+        except SQLAlchemyError:
+            abort(500)
+
+        if cancelled_task is None:
+            abort(500, "Approval task compensation failed after decision open.")
+
+        if cancelled_task.id is None:
+            return
+
+        await self._append_event(
+            tenant_id=tenant_id,
+            workflow_instance_id=entity_id,
+            workflow_task_id=cancelled_task.id,
+            event_type="task_completed",
+            actor_user_id=auth_user_id,
+            from_state_id=current.current_state_id,
+            to_state_id=current.current_state_id,
+            payload={
+                "outcome": "decision_open_failed",
+                "reason": "decision_open_failed",
+            },
+        )
 
     async def _resolve_transition_policy_binding(
         self,
@@ -1103,6 +1267,7 @@ class WorkflowInstanceService(
             return replay_result
 
         expected_row_version = int(data.row_version)
+        normalized_note = self._normalize_optional_note(data.note)
         current = await self._get_for_action(
             where=where,
             expected_row_version=expected_row_version,
@@ -1174,6 +1339,7 @@ class WorkflowInstanceService(
             return replay_result
 
         expected_row_version = int(data.row_version)
+        normalized_note = self._normalize_optional_note(data.note)
         current = await self._get_for_action(
             where=where,
             expected_row_version=expected_row_version,
@@ -1219,7 +1385,7 @@ class WorkflowInstanceService(
         require_approval_from_policy, require_reason_note = self._obligation_flags(
             obligations
         )
-        if require_reason_note and self._normalize_optional_text(data.note) is None:
+        if require_reason_note and normalized_note is None:
             abort(400, "This transition requires a non-empty Note.")
 
         requires_approval = (
@@ -1261,6 +1427,35 @@ class WorkflowInstanceService(
             if task.id is None:
                 abort(409, "Approval task identifier is missing.")
 
+            open_data = self._safe_decision_open_validation(
+                trace_id=(
+                    str(policy_summary.get("TraceId"))
+                    if isinstance(policy_summary, Mapping)
+                    and policy_summary.get("TraceId") is not None
+                    else self._client_action_key(data)
+                ),
+                template_key="workflow.approval",
+                requester_actor_json={"UserId": str(auth_user_id)},
+                assigned_to_json={
+                    "AssigneeUserId": (
+                        str(assignee_user_id) if assignee_user_id else None
+                    ),
+                    "QueueName": queue_name,
+                },
+                options_json={
+                    "TransitionKey": transition.key,
+                },
+                context_json={
+                    "WorkflowInstanceId": str(entity_id),
+                    "WorkflowTaskId": str(task.id),
+                    "WorkflowTransitionId": self._uuid_text(transition.id),
+                    "PolicySummary": policy_summary,
+                },
+                workflow_instance_id=entity_id,
+                workflow_task_id=task.id,
+                note=normalized_note,
+            )
+
             await self._update_instance_with_row_version(
                 where=where,
                 expected_row_version=expected_row_version,
@@ -1272,41 +1467,26 @@ class WorkflowInstanceService(
                 },
             )
 
-            open_result, _open_status = (
-                await self._decision_request_service.action_open(
-                    tenant_id=tenant_id,
-                    where={"tenant_id": tenant_id},
-                    auth_user_id=auth_user_id,
-                    data=WorkflowDecisionRequestOpenValidation(
-                        trace_id=(
-                            str(policy_summary.get("TraceId"))
-                            if isinstance(policy_summary, Mapping)
-                            and policy_summary.get("TraceId") is not None
-                            else self._client_action_key(data)
-                        ),
-                        template_key="workflow.approval",
-                        requester_actor_json={"UserId": str(auth_user_id)},
-                        assigned_to_json={
-                            "AssigneeUserId": (
-                                str(assignee_user_id) if assignee_user_id else None
-                            ),
-                            "QueueName": queue_name,
-                        },
-                        options_json={
-                            "TransitionKey": transition.key,
-                        },
-                        context_json={
-                            "WorkflowInstanceId": str(entity_id),
-                            "WorkflowTaskId": str(task.id),
-                            "WorkflowTransitionId": self._uuid_text(transition.id),
-                            "PolicySummary": policy_summary,
-                        },
-                        workflow_instance_id=entity_id,
-                        workflow_task_id=task.id,
-                        note=data.note,
-                    ),
+            try:
+                open_result, _open_status = (
+                    await self._decision_request_service.action_open(
+                        tenant_id=tenant_id,
+                        where={"tenant_id": tenant_id},
+                        auth_user_id=auth_user_id,
+                        data=open_data,
+                    )
                 )
-            )
+            except Exception:
+                await self._compensate_advance_decision_open_failure(
+                    tenant_id=tenant_id,
+                    entity_id=entity_id,
+                    where=where,
+                    current=current,
+                    task=task,
+                    auth_user_id=auth_user_id,
+                )
+                raise
+
             decision_request_id = (
                 str(open_result.get("DecisionRequestId"))
                 if isinstance(open_result, Mapping)
@@ -1322,7 +1502,7 @@ class WorkflowInstanceService(
                 actor_user_id=auth_user_id,
                 from_state_id=current.current_state_id,
                 to_state_id=transition.to_state_id,
-                note=data.note,
+                note=normalized_note,
                 payload={
                     "transition_key": transition.key,
                     "requires_approval": True,
@@ -1362,7 +1542,7 @@ class WorkflowInstanceService(
                 transition=transition,
                 auth_user_id=auth_user_id,
                 event_type="advanced",
-                note=data.note,
+                note=normalized_note,
                 payload={
                     "transition_key": transition.key,
                     "requires_approval": False,
@@ -1401,6 +1581,7 @@ class WorkflowInstanceService(
             return replay_result
 
         expected_row_version = int(data.row_version)
+        approve_note = self._normalize_optional_note(data.note)
         current = await self._get_for_action(
             where=where,
             expected_row_version=expected_row_version,
@@ -1432,10 +1613,25 @@ class WorkflowInstanceService(
         if pending_task.status not in self._ACTIVE_TASK_STATUS:
             abort(409, "Pending approval task is not actionable.")
 
-        decision_request = await self._require_open_decision_request(
-            tenant_id=tenant_id,
-            workflow_instance_id=entity_id,
-            workflow_task_id=current.pending_task_id,
+        decision_request, legacy_bridge_created = (
+            await self._get_or_create_legacy_decision_request(
+                tenant_id=tenant_id,
+                workflow_instance_id=entity_id,
+                workflow_task=pending_task,
+                auth_user_id=auth_user_id,
+                trace_id=self._client_action_key(data),
+                note=approve_note,
+            )
+        )
+        resolve_data = self._safe_decision_resolve_validation(
+            row_version=int(decision_request.row_version or 0),
+            outcome="approved",
+            outcome_json={
+                "transition_key": transition.key,
+                "workflow_instance_id": str(entity_id),
+                "workflow_task_id": str(current.pending_task_id),
+            },
+            note=approve_note,
         )
         await self._decision_request_service.action_resolve(
             tenant_id=tenant_id,
@@ -1445,16 +1641,7 @@ class WorkflowInstanceService(
                 "id": decision_request.id,
             },
             auth_user_id=auth_user_id,
-            data=WorkflowDecisionRequestResolveValidation(
-                row_version=int(decision_request.row_version or 0),
-                outcome="approved",
-                outcome_json={
-                    "transition_key": transition.key,
-                    "workflow_instance_id": str(entity_id),
-                    "workflow_task_id": str(current.pending_task_id),
-                },
-                note=data.note,
-            ),
+            data=resolve_data,
         )
 
         now = self._now_utc()
@@ -1487,11 +1674,12 @@ class WorkflowInstanceService(
             transition=transition,
             auth_user_id=auth_user_id,
             event_type="approved",
-            note=data.note,
+            note=approve_note,
             payload={
                 "transition_key": transition.key,
                 "task_id": str(completed_task.id),
                 "decision_request_id": str(decision_request.id),
+                "legacy_bridge_created": legacy_bridge_created,
             },
         )
 
@@ -1525,6 +1713,8 @@ class WorkflowInstanceService(
             return replay_result
 
         expected_row_version = int(data.row_version)
+        reject_reason = self._normalize_optional_text(data.reason)
+        reject_note = self._normalize_optional_note(data.note)
         current = await self._get_for_action(
             where=where,
             expected_row_version=expected_row_version,
@@ -1547,13 +1737,21 @@ class WorkflowInstanceService(
         if pending_task.status not in self._ACTIVE_TASK_STATUS:
             abort(409, "Pending approval task is not actionable.")
 
-        decision_request = await self._require_open_decision_request(
-            tenant_id=tenant_id,
-            workflow_instance_id=entity_id,
-            workflow_task_id=current.pending_task_id,
+        decision_request, legacy_bridge_created = (
+            await self._get_or_create_legacy_decision_request(
+                tenant_id=tenant_id,
+                workflow_instance_id=entity_id,
+                workflow_task=pending_task,
+                auth_user_id=auth_user_id,
+                trace_id=self._client_action_key(data),
+                note=reject_note,
+            )
         )
-        reject_reason = self._normalize_optional_text(data.reason)
-        reject_note = self._normalize_optional_text(data.note)
+        cancel_data = self._safe_decision_cancel_validation(
+            row_version=int(decision_request.row_version or 0),
+            reason=reject_reason,
+            note=reject_note,
+        )
         await self._decision_request_service.action_cancel(
             tenant_id=tenant_id,
             entity_id=decision_request.id,
@@ -1562,11 +1760,7 @@ class WorkflowInstanceService(
                 "id": decision_request.id,
             },
             auth_user_id=auth_user_id,
-            data=WorkflowDecisionRequestCancelValidation(
-                row_version=int(decision_request.row_version or 0),
-                reason=reject_reason,
-                note=reject_note,
-            ),
+            data=cancel_data,
         )
 
         outcome = reject_reason or "rejected"
@@ -1609,10 +1803,11 @@ class WorkflowInstanceService(
             actor_user_id=auth_user_id,
             from_state_id=current.current_state_id,
             to_state_id=current.current_state_id,
-            note=data.note,
+            note=reject_note,
             payload={
                 "reason": reject_reason,
                 "decision_request_id": str(decision_request.id),
+                "legacy_bridge_created": legacy_bridge_created,
                 "status": "active",
             },
         )
@@ -1657,6 +1852,8 @@ class WorkflowInstanceService(
             abort(409, "Completed/cancelled instances cannot be cancelled again.")
 
         now = self._now_utc()
+        cancel_reason = self._normalize_optional_text(data.reason)
+        cancel_note = self._normalize_optional_note(data.note)
         cancelled_decision_request_id: str | None = None
 
         decision_request = await self._find_open_decision_request(
@@ -1674,18 +1871,17 @@ class WorkflowInstanceService(
             and decision_request.id is not None
             and int(decision_request.row_version or 0) > 0
         ):
-            cancel_reason = self._normalize_optional_text(data.reason)
-            cancel_note = self._normalize_optional_text(data.note)
+            cancel_data = self._safe_decision_cancel_validation(
+                row_version=int(decision_request.row_version or 0),
+                reason=cancel_reason,
+                note=cancel_note,
+            )
             await self._decision_request_service.action_cancel(
                 tenant_id=tenant_id,
                 entity_id=decision_request.id,
                 where={"tenant_id": tenant_id, "id": decision_request.id},
                 auth_user_id=auth_user_id,
-                data=WorkflowDecisionRequestCancelValidation(
-                    row_version=int(decision_request.row_version or 0),
-                    reason=cancel_reason,
-                    note=cancel_note,
-                ),
+                data=cancel_data,
             )
             cancelled_decision_request_id = str(decision_request.id)
 
@@ -1726,7 +1922,7 @@ class WorkflowInstanceService(
             changes={
                 "status": "cancelled",
                 "cancelled_at": now,
-                "cancel_reason": self._normalize_optional_text(data.reason),
+                "cancel_reason": cancel_reason,
                 "pending_transition_id": None,
                 "pending_task_id": None,
                 "last_actor_user_id": auth_user_id,
@@ -1740,9 +1936,9 @@ class WorkflowInstanceService(
             actor_user_id=auth_user_id,
             from_state_id=current.current_state_id,
             to_state_id=current.current_state_id,
-            note=data.note,
+            note=cancel_note,
             payload={
-                "reason": self._normalize_optional_text(data.reason),
+                "reason": cancel_reason,
                 "decision_request_id": cancelled_decision_request_id,
                 "status": "cancelled",
             },
