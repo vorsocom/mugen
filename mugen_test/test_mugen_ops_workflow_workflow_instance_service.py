@@ -181,6 +181,185 @@ class TestMugenOpsWorkflowWorkflowInstanceService(unittest.IsolatedAsyncioTestCa
         self.assertIsNone(payload["note"])
         self.assertIsNone(payload["payload"])
 
+    async def test_append_event_retries_sequence_conflict_then_succeeds(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+        state_id = uuid.uuid4()
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance", rsg=Mock()
+        )
+        svc._event_seq_cache[(tenant_id, instance_id)] = 9
+        svc._event_service.list = AsyncMock(return_value=[WorkflowEventDE(event_seq=10)])
+        svc._event_service.count = AsyncMock(return_value=0)
+        svc._event_service.create = AsyncMock(
+            side_effect=[
+                IntegrityError(
+                    "insert",
+                    {"event_seq": 10},
+                    Exception(
+                        (
+                            "duplicate key value violates unique constraint "
+                            '"ux_ops_wf_event_tenant_instance_event_seq"'
+                        )
+                    ),
+                ),
+                WorkflowEventDE(id=uuid.uuid4()),
+            ]
+        )
+
+        await svc._append_event(
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            event_type="advanced",
+            actor_user_id=None,
+            from_state_id=state_id,
+            to_state_id=state_id,
+        )
+
+        self.assertEqual(svc._event_service.create.await_count, 2)
+        first_event_seq = svc._event_service.create.await_args_list[0].args[0]["event_seq"]
+        second_event_seq = svc._event_service.create.await_args_list[1].args[0][
+            "event_seq"
+        ]
+        self.assertEqual(first_event_seq, 10)
+        self.assertEqual(second_event_seq, 11)
+        self.assertEqual(svc._event_seq_cache[(tenant_id, instance_id)], 11)
+        svc._event_service.list.assert_awaited_once()
+
+    async def test_append_event_conflicts_exhausted_returns_409(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance", rsg=Mock()
+        )
+        svc._event_seq_cache[(tenant_id, instance_id)] = 5
+        svc._event_service.list = AsyncMock(return_value=[WorkflowEventDE(event_seq=5)])
+        svc._event_service.count = AsyncMock(return_value=0)
+        seq_conflict = IntegrityError(
+            "insert",
+            {"event_seq": 6},
+            Exception(
+                (
+                    "duplicate key value violates unique constraint "
+                    '"ux_ops_wf_event_tenant_instance_event_seq"'
+                )
+            ),
+        )
+        svc._event_service.create = AsyncMock(
+            side_effect=[
+                seq_conflict,
+                seq_conflict,
+                seq_conflict,
+                seq_conflict,
+                seq_conflict,
+            ]
+        )
+
+        with patch.object(workflow_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._append_event(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    event_type="advanced",
+                    actor_user_id=None,
+                    from_state_id=None,
+                    to_state_id=None,
+                )
+            self.assertEqual(ex.exception.code, 409)
+
+        self.assertEqual(svc._event_service.create.await_count, 5)
+
+    async def test_append_event_non_sequence_integrity_error_returns_500(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance", rsg=Mock()
+        )
+        svc._event_service.list = AsyncMock(return_value=[WorkflowEventDE(event_seq=1)])
+        svc._event_service.count = AsyncMock(return_value=0)
+        svc._event_service.create = AsyncMock(
+            side_effect=IntegrityError(
+                "insert",
+                {"event_seq": 2},
+                Exception(
+                    'duplicate key value violates unique constraint "ux_other_constraint"'
+                ),
+            )
+        )
+
+        with patch.object(workflow_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._append_event(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    event_type="advanced",
+                    actor_user_id=None,
+                    from_state_id=None,
+                    to_state_id=None,
+                )
+            self.assertEqual(ex.exception.code, 500)
+
+    def test_integrity_constraint_name_prefers_diag_constraint_name(self) -> None:
+        orig = Exception("duplicate")
+        orig.diag = type(  # type: ignore[attr-defined]
+            "Diag",
+            (),
+            {"constraint_name": "ux_ops_wf_event_tenant_instance_event_seq"},
+        )()
+        error = IntegrityError("insert", {"event_seq": 1}, orig)
+
+        self.assertEqual(
+            WorkflowInstanceService._integrity_constraint_name(error),
+            "ux_ops_wf_event_tenant_instance_event_seq",
+        )
+
+    async def test_append_event_with_zero_max_attempts_noops(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance", rsg=Mock()
+        )
+        svc._EVENT_APPEND_MAX_ATTEMPTS = 0
+        svc._event_service.create = AsyncMock()
+
+        await svc._append_event(
+            tenant_id=tenant_id,
+            workflow_instance_id=instance_id,
+            event_type="advanced",
+            actor_user_id=None,
+            from_state_id=None,
+            to_state_id=None,
+        )
+
+        svc._event_service.create.assert_not_awaited()
+
+    async def test_append_event_sqlalchemy_error_returns_500(self) -> None:
+        tenant_id = uuid.uuid4()
+        instance_id = uuid.uuid4()
+
+        svc = WorkflowInstanceService(
+            table="ops_workflow_workflow_instance", rsg=Mock()
+        )
+        svc._event_service.list = AsyncMock(return_value=[WorkflowEventDE(event_seq=1)])
+        svc._event_service.count = AsyncMock(return_value=0)
+        svc._event_service.create = AsyncMock(side_effect=SQLAlchemyError("boom"))
+
+        with patch.object(workflow_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                await svc._append_event(
+                    tenant_id=tenant_id,
+                    workflow_instance_id=instance_id,
+                    event_type="advanced",
+                    actor_user_id=None,
+                    from_state_id=None,
+                    to_state_id=None,
+                )
+            self.assertEqual(ex.exception.code, 500)
+
     async def test_get_update_and_resolver_helper_branches(self) -> None:
         tenant_id = uuid.uuid4()
         instance_id = uuid.uuid4()

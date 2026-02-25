@@ -7,7 +7,7 @@ import uuid
 from typing import Any, Mapping
 
 from quart import abort
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from mugen.core.contract.gateway.storage.rdbms.crud_base import (
     ICrudServiceWithRowVersion,
@@ -36,6 +36,8 @@ class WorkItemService(
     """A CRUD/action service for canonical work-item envelope handling."""
 
     _EVENT_TABLE = "channel_orchestration_orchestration_event"
+    _TRACE_UNIQUE_CONSTRAINT = "ux_chorch_work_item__tenant_trace_id"
+    _REPLAY_TELEMETRY_MAX_ATTEMPTS = 3
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
         super().__init__(
@@ -89,6 +91,79 @@ class WorkItemService(
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt.astimezone(timezone.utc).isoformat()
         return value
+
+    @classmethod
+    def _integrity_constraint_name(cls, error: IntegrityError) -> str | None:
+        orig = getattr(error, "orig", None)
+        diag = getattr(orig, "diag", None)
+        constraint_name = getattr(diag, "constraint_name", None)
+        if isinstance(constraint_name, str) and constraint_name.strip():
+            return constraint_name.strip()
+
+        message = str(error)
+        if cls._TRACE_UNIQUE_CONSTRAINT in message:
+            return cls._TRACE_UNIQUE_CONSTRAINT
+
+        return None
+
+    @classmethod
+    def _is_trace_unique_conflict(cls, error: IntegrityError) -> bool:
+        return cls._integrity_constraint_name(error) == cls._TRACE_UNIQUE_CONSTRAINT
+
+    @staticmethod
+    def _replay_response(*, work_item: WorkItemDE, trace_id: str) -> tuple[dict, int]:
+        return (
+            {
+                "Decision": "replay",
+                "WorkItemId": str(work_item.id),
+                "TraceId": trace_id,
+            },
+            200,
+        )
+
+    async def _bump_replay_telemetry(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        work_item_id: uuid.UUID,
+        auth_user_id: uuid.UUID,
+        current: WorkItemDE | None = None,
+    ) -> WorkItemDE | None:
+        where = {"tenant_id": tenant_id, "id": work_item_id}
+        candidate = current
+
+        for _attempt in range(self._REPLAY_TELEMETRY_MAX_ATTEMPTS):
+            if candidate is None:
+                try:
+                    candidate = await self.get(where)
+                except SQLAlchemyError:
+                    abort(500)
+            if candidate is None:
+                return None
+
+            now = self._now_utc()
+            try:
+                updated = await self.update_with_row_version(
+                    where=where,
+                    expected_row_version=int(candidate.row_version or 1),
+                    changes={
+                        "replay_count": int(candidate.replay_count or 0) + 1,
+                        "last_replayed_at": now,
+                        "last_actor_user_id": auth_user_id,
+                    },
+                )
+            except RowVersionConflict:
+                candidate = None
+                continue
+            except SQLAlchemyError:
+                abort(500)
+
+            if updated is not None:
+                return updated
+
+            candidate = None
+
+        return None
 
     async def _append_event(
         self,
@@ -193,30 +268,57 @@ class WorkItemService(
 
         existing = await self.get({"tenant_id": tenant_id, "trace_id": trace_id})
         if existing is not None:
-            return (
-                {
-                    "Decision": "replay",
-                    "WorkItemId": str(existing.id),
-                    "TraceId": trace_id,
-                },
-                200,
-            )
+            if existing.id is not None:
+                updated = await self._bump_replay_telemetry(
+                    tenant_id=tenant_id,
+                    work_item_id=existing.id,
+                    auth_user_id=auth_user_id,
+                    current=existing,
+                )
+                if updated is not None:
+                    existing = updated
+            return self._replay_response(work_item=existing, trace_id=trace_id)
 
-        created = await self.create(
-            {
-                "tenant_id": tenant_id,
-                "trace_id": trace_id,
-                "source": data.source.strip(),
-                "participants": self._canonicalize(data.participants),
-                "content": self._canonicalize(data.content),
-                "attachments": self._canonicalize(data.attachments),
-                "signals": self._canonicalize(data.signals),
-                "extractions": self._canonicalize(data.extractions),
-                "linked_case_id": data.linked_case_id,
-                "linked_workflow_instance_id": data.linked_workflow_instance_id,
-                "last_actor_user_id": auth_user_id,
-            }
-        )
+        try:
+            created = await self.create(
+                {
+                    "tenant_id": tenant_id,
+                    "trace_id": trace_id,
+                    "source": data.source.strip(),
+                    "participants": self._canonicalize(data.participants),
+                    "content": self._canonicalize(data.content),
+                    "attachments": self._canonicalize(data.attachments),
+                    "signals": self._canonicalize(data.signals),
+                    "extractions": self._canonicalize(data.extractions),
+                    "linked_case_id": data.linked_case_id,
+                    "linked_workflow_instance_id": data.linked_workflow_instance_id,
+                    "last_actor_user_id": auth_user_id,
+                }
+            )
+        except IntegrityError as error:
+            if not self._is_trace_unique_conflict(error):
+                abort(500)
+
+            try:
+                existing = await self.get({"tenant_id": tenant_id, "trace_id": trace_id})
+            except SQLAlchemyError:
+                abort(500)
+
+            if existing is None:
+                abort(500)
+
+            if existing.id is not None:
+                updated = await self._bump_replay_telemetry(
+                    tenant_id=tenant_id,
+                    work_item_id=existing.id,
+                    auth_user_id=auth_user_id,
+                    current=existing,
+                )
+                if updated is not None:
+                    existing = updated
+            return self._replay_response(work_item=existing, trace_id=trace_id)
+        except SQLAlchemyError:
+            abort(500)
 
         if created.id is not None:
             await self._append_event(
@@ -303,7 +405,7 @@ class WorkItemService(
         tenant_id: uuid.UUID,
         entity_id: uuid.UUID | None,
         where: Mapping[str, Any],
-        auth_user_id: uuid.UUID,  # noqa: ARG002
+        auth_user_id: uuid.UUID,
         data: WorkItemReplayValidation,  # noqa: ARG002
     ) -> tuple[dict[str, Any], int]:
         """Return canonical work-item envelope payload for deterministic replay."""
@@ -320,6 +422,16 @@ class WorkItemService(
 
         if current is None:
             abort(404, "Work item not found.")
+
+        if current.id is not None:
+            updated = await self._bump_replay_telemetry(
+                tenant_id=tenant_id,
+                work_item_id=current.id,
+                auth_user_id=auth_user_id,
+                current=current,
+            )
+            if updated is not None:
+                current = updated
 
         payload = {
             "WorkItemId": str(current.id),
