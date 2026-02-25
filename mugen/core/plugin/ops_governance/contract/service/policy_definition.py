@@ -25,3 +25,15 @@ class IPolicyDefinitionService(ICrudService[PolicyDefinitionDE], ABC):
         data: IValidationBase,
     ) -> tuple[dict[str, Any], int]:
         """Evaluate a policy and append a decision log event."""
+
+    @abstractmethod
+    async def action_activate_version(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        where: Mapping[str, Any],
+        auth_user_id: uuid.UUID,
+        data: IValidationBase,
+    ) -> tuple[dict[str, Any], int]:
+        """Activate one policy version and deactivate siblings by code."""

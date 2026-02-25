@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 import uuid
 
-from pydantic import NonNegativeInt, model_validator
+from pydantic import Field, NonNegativeInt, model_validator
 
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 
@@ -75,8 +75,10 @@ class PolicyDefinitionCreateValidation(IValidationBase):
     rule_ref: str | None = None
 
     evaluation_mode: str = "advisory"
+    engine: str = "dsl"
     is_active: bool = True
 
+    document_json: dict[str, Any] = Field(default_factory=dict)
     attributes: dict[str, Any] | None = None
 
     @model_validator(mode="after")
@@ -93,6 +95,8 @@ class PolicyDefinitionCreateValidation(IValidationBase):
             raise ValueError("RuleRef cannot be empty if provided.")
         if not (self.evaluation_mode or "").strip():
             raise ValueError("EvaluationMode must be non-empty.")
+        if not (self.engine or "").strip():
+            raise ValueError("Engine must be non-empty.")
         return self
 
 
@@ -233,12 +237,17 @@ class EvaluatePolicyActionValidation(IValidationBase):
 
     row_version: NonNegativeInt
 
+    trace_id: str | None = None
+
     subject_namespace: str
     subject_id: uuid.UUID | None = None
     subject_ref: str | None = None
 
-    decision: str
-    outcome: str = "applied"
+    input_json: dict[str, Any] | None = None
+    actor_json: dict[str, Any] | None = None
+
+    decision: str | None = None
+    outcome: str | None = None
 
     reason: str | None = None
     request_context: dict[str, Any] | None = None
@@ -252,12 +261,37 @@ class EvaluatePolicyActionValidation(IValidationBase):
             raise ValueError("Provide SubjectId or SubjectRef.")
         if self.subject_ref is not None and not (self.subject_ref or "").strip():
             raise ValueError("SubjectRef cannot be empty if provided.")
-        if not (self.decision or "").strip():
-            raise ValueError("Decision must be non-empty.")
-        if not (self.outcome or "").strip():
-            raise ValueError("Outcome must be non-empty.")
+        if self.trace_id is not None and not (self.trace_id or "").strip():
+            raise ValueError("TraceId cannot be empty if provided.")
+
+        if self.decision is not None:
+            if not (self.decision or "").strip():
+                raise ValueError("Decision cannot be empty if provided.")
+            if self.outcome is not None and not (self.outcome or "").strip():
+                raise ValueError("Outcome cannot be empty if provided.")
+            if self.reason is not None and not (self.reason or "").strip():
+                raise ValueError("Reason cannot be empty if provided.")
+            return self
+
+        if self.input_json is None:
+            raise ValueError("InputJson must be provided in PDP mode.")
+        if self.outcome is not None:
+            raise ValueError("Outcome is supported only in legacy explicit mode.")
         if self.reason is not None and not (self.reason or "").strip():
             raise ValueError("Reason cannot be empty if provided.")
+        return self
+
+
+class ActivatePolicyVersionActionValidation(IValidationBase):
+    """Validate payload for activate_version actions."""
+
+    row_version: NonNegativeInt
+    version: NonNegativeInt
+
+    @model_validator(mode="after")
+    def _validate_fields(self) -> "ActivatePolicyVersionActionValidation":
+        if int(self.version) <= 0:
+            raise ValueError("Version must be > 0.")
         return self
 
 

@@ -8,7 +8,14 @@ from datetime import datetime
 import enum
 import uuid
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKeyConstraint, Index, String
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    String,
+)
 from sqlalchemy import UniqueConstraint, Uuid
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import CITEXT, ENUM as PGENUM, JSONB
@@ -45,6 +52,22 @@ class PolicyDecisionLog(ModelBase, TenantScopedMixin):
         Uuid,
         nullable=False,
         index=True,
+    )
+
+    trace_id: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+
+    policy_key: Mapped[str | None] = mapped_column(
+        CITEXT(64),
+        nullable=True,
+    )
+
+    policy_version: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
     )
 
     subject_namespace: Mapped[str] = mapped_column(
@@ -111,6 +134,21 @@ class PolicyDecisionLog(ModelBase, TenantScopedMixin):
         nullable=True,
     )
 
+    actor_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+    input_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+    decision_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
     attributes: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
@@ -144,6 +182,14 @@ class PolicyDecisionLog(ModelBase, TenantScopedMixin):
             "reason IS NULL OR length(btrim(reason)) > 0",
             name="ck_ops_gov_policy_decision_log__reason_nonempty_if_set",
         ),
+        CheckConstraint(
+            "trace_id IS NULL OR length(btrim(trace_id)) > 0",
+            name="ck_ops_gov_policy_decision_log__trace_id_nonempty_if_set",
+        ),
+        CheckConstraint(
+            "policy_key IS NULL OR length(btrim(policy_key)) > 0",
+            name="ck_ops_gov_policy_decision_log__policy_key_nonempty_if_set",
+        ),
         UniqueConstraint(
             "tenant_id",
             "id",
@@ -154,6 +200,11 @@ class PolicyDecisionLog(ModelBase, TenantScopedMixin):
             "tenant_id",
             "policy_definition_id",
             "evaluated_at",
+        ),
+        Index(
+            "ix_ops_gov_policy_decision_log__tenant_trace",
+            "tenant_id",
+            "trace_id",
         ),
         {"schema": "mugen"},
     )

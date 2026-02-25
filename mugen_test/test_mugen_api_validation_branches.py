@@ -26,6 +26,7 @@ from mugen.core.plugin.ops_case.api.validation import (
     CaseLinkCreateValidation,
 )
 from mugen.core.plugin.ops_governance.api.validation import (
+    ActivatePolicyVersionActionValidation,
     ApplyRetentionActionValidation,
     ConsentRecordCreateValidation,
     DataHandlingRecordCreateValidation,
@@ -77,6 +78,10 @@ from mugen.core.plugin.ops_workflow.api.validation import (
     WorkflowAssignTaskValidation,
     WorkflowCancelInstanceValidation,
     WorkflowCompensateValidation,
+    WorkflowDecisionRequestCancelValidation,
+    WorkflowDecisionRequestExpireOverdueValidation,
+    WorkflowDecisionRequestOpenValidation,
+    WorkflowDecisionRequestResolveValidation,
     WorkflowRejectValidation,
     WorkflowStartInstanceValidation,
 )
@@ -327,6 +332,12 @@ class TestMugenApiValidationBranches(unittest.TestCase):
                 client_action_key=" ",
             )
         with self.assertRaises(ValidationError):
+            WorkflowAdvanceValidation(
+                row_version=1,
+                transition_key="next",
+                policy_code=" ",
+            )
+        with self.assertRaises(ValidationError):
             WorkflowApproveValidation(row_version=1, client_action_key=" ")
         with self.assertRaises(ValidationError):
             WorkflowRejectValidation(row_version=1, client_action_key=" ")
@@ -334,11 +345,48 @@ class TestMugenApiValidationBranches(unittest.TestCase):
             WorkflowCancelInstanceValidation(row_version=1, client_action_key=" ")
         with self.assertRaises(ValidationError):
             WorkflowCompensateValidation(row_version=1, transition_key=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowDecisionRequestOpenValidation(template_key=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowDecisionRequestOpenValidation(template_key="ok", trace_id=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowDecisionRequestOpenValidation(template_key="ok", note=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowDecisionRequestResolveValidation(row_version=1, outcome=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowDecisionRequestResolveValidation(
+                row_version=1,
+                outcome="approved",
+                reason=" ",
+            )
+        with self.assertRaises(ValidationError):
+            WorkflowDecisionRequestResolveValidation(
+                row_version=1,
+                outcome="approved",
+                note=" ",
+            )
+        with self.assertRaises(ValidationError):
+            WorkflowDecisionRequestCancelValidation(row_version=1, reason=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowDecisionRequestCancelValidation(row_version=1, note=" ")
+        with self.assertRaises(ValidationError):
+            WorkflowDecisionRequestExpireOverdueValidation(limit=0)
+        with self.assertRaises(ValidationError):
+            WorkflowDecisionRequestExpireOverdueValidation(limit=1, note=" ")
 
         valid_advance = WorkflowAdvanceValidation(row_version=1, transition_key="next")
         self.assertIsNotNone(valid_advance)
         valid_assign = WorkflowAssignTaskValidation(row_version=1, queue_name="ops")
         self.assertIsNotNone(valid_assign)
+        valid_open = WorkflowDecisionRequestOpenValidation(
+            template_key="workflow.approval"
+        )
+        self.assertIsNotNone(valid_open)
+        valid_resolve = WorkflowDecisionRequestResolveValidation(
+            row_version=1,
+            outcome="approved",
+        )
+        self.assertIsNotNone(valid_resolve)
 
     def test_knowledge_pack_validators(self) -> None:
         base_entry = {
@@ -940,6 +988,14 @@ class TestMugenApiValidationBranches(unittest.TestCase):
                 name="n",
                 evaluation_mode=" ",
             )
+        with self.assertRaises(ValidationError):
+            PolicyDefinitionCreateValidation(
+                row_version=1,
+                tenant_id=tenant_id,
+                code="c",
+                name="n",
+                engine=" ",
+            )
         self.assertIsNotNone(
             PolicyDefinitionCreateValidation(
                 row_version=1,
@@ -1137,6 +1193,36 @@ class TestMugenApiValidationBranches(unittest.TestCase):
                 decision="allow",
                 reason=" ",
             )
+        with self.assertRaises(ValidationError):
+            EvaluatePolicyActionValidation(
+                row_version=1,
+                subject_namespace="ns",
+                subject_ref="ref",
+                trace_id=" ",
+                decision="allow",
+            )
+        with self.assertRaises(ValidationError):
+            EvaluatePolicyActionValidation(
+                row_version=1,
+                subject_namespace="ns",
+                subject_ref="ref",
+            )
+        with self.assertRaises(ValidationError):
+            EvaluatePolicyActionValidation(
+                row_version=1,
+                subject_namespace="ns",
+                subject_ref="ref",
+                input_json={"risk": "low"},
+                outcome="applied",
+            )
+        with self.assertRaises(ValidationError):
+            EvaluatePolicyActionValidation(
+                row_version=1,
+                subject_namespace="ns",
+                subject_ref="ref",
+                input_json={"risk": "low"},
+                reason=" ",
+            )
         self.assertIsNotNone(
             EvaluatePolicyActionValidation(
                 row_version=1,
@@ -1225,3 +1311,5 @@ class TestMugenApiValidationBranches(unittest.TestCase):
             )
         )
         self.assertIsNotNone(RevokeDelegationActionValidation(row_version=1))
+        with self.assertRaises(ValidationError):
+            ActivatePolicyVersionActionValidation(row_version=1, version=0)

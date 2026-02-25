@@ -16,6 +16,9 @@ class PolicyDecisionLogDE(BaseDE, TenantScopedDEMixin):
     """A domain entity for append-only policy decision outcomes."""
 
     policy_definition_id: uuid.UUID | None = None
+    trace_id: str | None = None
+    policy_key: str | None = None
+    policy_version: int | None = None
 
     subject_namespace: str | None = None
     subject_id: uuid.UUID | None = None
@@ -29,6 +32,9 @@ class PolicyDecisionLogDE(BaseDE, TenantScopedDEMixin):
     evaluator_user_id: uuid.UUID | None = None
 
     request_context: dict[str, Any] | None = None
+    actor_json: dict[str, Any] | None = None
+    input_json: dict[str, Any] | None = None
+    decision_json: dict[str, Any] | None = None
     attributes: dict[str, Any] | None = None
 
     retention_until: datetime | None = None

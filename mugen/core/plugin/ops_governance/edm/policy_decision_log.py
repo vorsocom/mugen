@@ -26,6 +26,9 @@ policy_decision_log_type = EdmType(
             TypeRef("Edm.Guid"),
             nullable=False,
         ),
+        "TraceId": EdmProperty("TraceId", TypeRef("Edm.String")),
+        "PolicyKey": EdmProperty("PolicyKey", TypeRef("Edm.String")),
+        "PolicyVersion": EdmProperty("PolicyVersion", TypeRef("Edm.Int64")),
         "SubjectNamespace": EdmProperty(
             "SubjectNamespace",
             TypeRef("Edm.String"),
@@ -44,6 +47,24 @@ policy_decision_log_type = EdmType(
         "EvaluatorUserId": EdmProperty("EvaluatorUserId", TypeRef("Edm.Guid")),
         "RequestContext": EdmProperty(
             "RequestContext",
+            TypeRef("Edm.String"),
+            filterable=False,
+            sortable=False,
+        ),
+        "ActorJson": EdmProperty(
+            "ActorJson",
+            TypeRef("Edm.String"),
+            filterable=False,
+            sortable=False,
+        ),
+        "InputJson": EdmProperty(
+            "InputJson",
+            TypeRef("Edm.String"),
+            filterable=False,
+            sortable=False,
+        ),
+        "DecisionJson": EdmProperty(
+            "DecisionJson",
             TypeRef("Edm.String"),
             filterable=False,
             sortable=False,

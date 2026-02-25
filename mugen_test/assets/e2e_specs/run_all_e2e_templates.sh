@@ -130,6 +130,7 @@ declare -a SPECS=(
   "mugen_test/assets/e2e_specs/ops_case/ops-case-e2e-lifecycle.template.json"
   "mugen_test/assets/e2e_specs/ops_sla/ops-sla-e2e-clock-lifecycle.template.json"
   "mugen_test/assets/e2e_specs/ops_workflow/ops-workflow-e2e-definition-smoke.template.json"
+  "mugen_test/assets/e2e_specs/ops_workflow/ops-workflow-e2e-decision-request.template.json"
   "mugen_test/assets/e2e_specs/ops_metering/ops-metering-e2e-meter-definition-smoke.template.json"
   "mugen_test/assets/e2e_specs/billing/billing-e2e-account-product-smoke.template.json"
   "mugen_test/assets/e2e_specs/ops_vpn/ops-vpn-e2e-vendor-lifecycle.template.json"

@@ -107,6 +107,9 @@ create_payload="$(echo "$spec_json" | jq -c '.create_payload')"
 lookup_field="$(echo "$spec_json" | jq -r '.lookup.field // "Title"')"
 lookup_value="$(echo "$spec_json" | jq -r '.lookup.value // empty')"
 status_field="$(echo "$spec_json" | jq -r '.status_field // "Status"')"
+skip_create="$(echo "$spec_json" | jq -r '.skip_create // false')"
+seed_entity_id="$(echo "$spec_json" | jq -r '.seed_entity_id // empty')"
+seed_row_version="$(echo "$spec_json" | jq -r '.seed_row_version // empty')"
 
 spawn_hypercorn="$(echo "$spec_json" | jq -r '.runtime.spawn_hypercorn // false')"
 hypercorn_cmd="$(echo "$spec_json" | jq -r '.runtime.hypercorn_cmd // empty')"
@@ -132,7 +135,11 @@ if [[ -z "$entity_set" || "$entity_set" == "null" ]]; then
   echo "ERROR: entity_set is required" >&2
   exit 1
 fi
-if [[ -z "$create_payload" || "$create_payload" == "null" ]]; then
+if [[ "$skip_create" != "true" && "$skip_create" != "false" ]]; then
+  echo "ERROR: skip_create must be boolean (true/false)." >&2
+  exit 1
+fi
+if [[ "$skip_create" != "true" && ( -z "$create_payload" || "$create_payload" == "null" ) ]]; then
   echo "ERROR: create_payload is required" >&2
   exit 1
 fi
@@ -233,36 +240,47 @@ if [[ -z "$tenant_id" ]]; then
 fi
 echo "TENANT: $tenant_id"
 
-create_code="$(curl -sk -o /tmp/acp_http_e2e_create.out -w "%{http_code}" \
-  -H "$auth_header" -H "Content-Type: application/json" \
-  -X POST "$base_url/tenants/$tenant_id/$entity_set" \
-  -d "$create_payload")"
-echo "CREATE $entity_set: $create_code"
-if [[ "$create_code" != "201" ]]; then
-  echo "ERROR: create failed" >&2
-  cat /tmp/acp_http_e2e_create.out >&2
-  exit 1
-fi
+entity_json="{}"
+entity_id=""
+row_version=""
+entity_status=""
 
-if [[ -z "$lookup_value" || "$lookup_value" == "null" ]]; then
-  lookup_value="$(echo "$create_payload" | jq -r --arg f "$lookup_field" '.[$f] // empty')"
-fi
-if [[ -z "$lookup_value" ]]; then
-  echo "ERROR: could not determine lookup.value; set lookup.value in spec" >&2
-  exit 1
-fi
+if [[ "$skip_create" == "true" ]]; then
+  entity_id="$seed_entity_id"
+  row_version="$seed_row_version"
+  echo "SKIP CREATE: true | ENTITY ID: ${entity_id:-<unset>} | ROW_VERSION: ${row_version:-<unset>}"
+else
+  create_code="$(curl -sk -o /tmp/acp_http_e2e_create.out -w "%{http_code}" \
+    -H "$auth_header" -H "Content-Type: application/json" \
+    -X POST "$base_url/tenants/$tenant_id/$entity_set" \
+    -d "$create_payload")"
+  echo "CREATE $entity_set: $create_code"
+  if [[ "$create_code" != "201" ]]; then
+    echo "ERROR: create failed" >&2
+    cat /tmp/acp_http_e2e_create.out >&2
+    exit 1
+  fi
 
-entity_json="$(curl -sk -H "$auth_header" "$base_url/tenants/$tenant_id/$entity_set" \
-  | jq -c --arg f "$lookup_field" --arg v "$lookup_value" '.value[] | select(.[$f] == $v)' \
-  | tail -n1)"
-entity_id="$(echo "$entity_json" | jq -r '.Id // empty')"
-row_version="$(echo "$entity_json" | jq -r '.RowVersion // empty')"
-if [[ -z "$entity_id" || -z "$row_version" ]]; then
-  echo "ERROR: could not resolve created entity via lookup ${lookup_field}=${lookup_value}" >&2
-  exit 1
+  if [[ -z "$lookup_value" || "$lookup_value" == "null" ]]; then
+    lookup_value="$(echo "$create_payload" | jq -r --arg f "$lookup_field" '.[$f] // empty')"
+  fi
+  if [[ -z "$lookup_value" ]]; then
+    echo "ERROR: could not determine lookup.value; set lookup.value in spec" >&2
+    exit 1
+  fi
+
+  entity_json="$(curl -sk -H "$auth_header" "$base_url/tenants/$tenant_id/$entity_set" \
+    | jq -c --arg f "$lookup_field" --arg v "$lookup_value" '.value[] | select(.[$f] == $v)' \
+    | tail -n1)"
+  entity_id="$(echo "$entity_json" | jq -r '.Id // empty')"
+  row_version="$(echo "$entity_json" | jq -r '.RowVersion // empty')"
+  if [[ -z "$entity_id" || -z "$row_version" ]]; then
+    echo "ERROR: could not resolve created entity via lookup ${lookup_field}=${lookup_value}" >&2
+    exit 1
+  fi
+  entity_status="$(echo "$entity_json" | jq -r --arg sf "$status_field" '.[$sf] // ""')"
+  echo "ENTITY ID: $entity_id | ROW_VERSION: $row_version | ${status_field}: $entity_status"
 fi
-entity_status="$(echo "$entity_json" | jq -r --arg sf "$status_field" '.[$sf] // ""')"
-echo "ENTITY ID: $entity_id | ROW_VERSION: $row_version | ${status_field}: $entity_status"
 
 actions_count="$(echo "$spec_json" | jq -r '.actions | length')"
 if [[ "$actions_count" -gt 0 ]]; then
@@ -272,28 +290,67 @@ if [[ "$actions_count" -gt 0 ]]; then
     target="$(echo "$step" | jq -r '.target // "entity"')"
     expect_code="$(echo "$step" | jq -r '.expect_code // 204')"
     payload_template="$(echo "$step" | jq -c '.payload // {}')"
+    capture_entity_id_field="$(echo "$step" | jq -r '.capture_entity_id_field // empty')"
+    capture_row_version_field="$(echo "$step" | jq -r '.capture_row_version_field // empty')"
+    refresh_entity_after_action="$(echo "$step" | jq -r '.refresh_entity_after_action // false')"
     payload="$(replace_placeholders "$payload_template" "$row_version" "$entity_id" "$tenant_id" "$user_id")"
 
-    if [[ "$target" == "entity_set" ]]; then
+    if [[ "$target" == "entity_set" || "$target" == "set" ]]; then
       action_url="$base_url/tenants/$tenant_id/$entity_set/\$action/$action_name"
     else
+      if [[ -z "$entity_id" ]]; then
+        echo "ERROR: action $action_name targets entity but entity_id is empty." >&2
+        exit 1
+      fi
       action_url="$base_url/tenants/$tenant_id/$entity_set/$entity_id/\$action/$action_name"
     fi
 
-    code="$(curl -sk -o "/tmp/acp_http_e2e_action_${i}.out" -w "%{http_code}" \
+    action_output_file="/tmp/acp_http_e2e_action_${i}.out"
+    code="$(curl -sk -o "$action_output_file" -w "%{http_code}" \
       -H "$auth_header" -H "Content-Type: application/json" \
       -X POST "$action_url" -d "$payload")"
     echo "ACTION $action_name: $code"
     if [[ "$code" != "$expect_code" ]]; then
       echo "ERROR: action $action_name expected $expect_code got $code" >&2
-      cat "/tmp/acp_http_e2e_action_${i}.out" >&2
+      cat "$action_output_file" >&2
       exit 1
     fi
 
-    if [[ "$target" == "entity" ]]; then
+    if [[ -n "$capture_entity_id_field" ]]; then
+      captured_entity_id="$(jq -r --arg field "$capture_entity_id_field" '.[$field] // empty' "$action_output_file")"
+      if [[ -z "$captured_entity_id" ]]; then
+        echo "ERROR: action $action_name did not return capture_entity_id_field=$capture_entity_id_field" >&2
+        cat "$action_output_file" >&2
+        exit 1
+      fi
+      entity_id="$captured_entity_id"
+      echo "CAPTURE ENTITY ID ($capture_entity_id_field): $entity_id"
+    fi
+
+    if [[ -n "$capture_row_version_field" ]]; then
+      captured_row_version="$(jq -r --arg field "$capture_row_version_field" '.[$field] // empty' "$action_output_file")"
+      if [[ -z "$captured_row_version" ]]; then
+        echo "ERROR: action $action_name did not return capture_row_version_field=$capture_row_version_field" >&2
+        cat "$action_output_file" >&2
+        exit 1
+      fi
+      row_version="$captured_row_version"
+      echo "CAPTURE ROW VERSION ($capture_row_version_field): $row_version"
+    fi
+
+    if [[ "$target" == "entity" || "$refresh_entity_after_action" == "true" ]]; then
+      if [[ -z "$entity_id" ]]; then
+        echo "ERROR: action $action_name requested entity refresh but entity_id is empty." >&2
+        exit 1
+      fi
       entity_json="$(curl -sk -H "$auth_header" "$base_url/tenants/$tenant_id/$entity_set/$entity_id")"
       row_version="$(echo "$entity_json" | jq -r '.RowVersion // empty')"
       entity_status="$(echo "$entity_json" | jq -r --arg sf "$status_field" '.[$sf] // ""')"
+      if [[ -z "$row_version" ]]; then
+        echo "ERROR: could not resolve RowVersion for entity $entity_id after action $action_name." >&2
+        echo "$entity_json" >&2
+        exit 1
+      fi
       echo "STATE AFTER $action_name: ROW_VERSION=$row_version ${status_field}=$entity_status"
     fi
   done
@@ -301,6 +358,10 @@ fi
 
 expected_final_status="$(echo "$spec_json" | jq -r '.assertions.final_status // empty')"
 if [[ -n "$expected_final_status" ]]; then
+  if [[ -z "$entity_id" ]]; then
+    echo "ERROR: assertions.final_status requires entity_id, but none is available." >&2
+    exit 1
+  fi
   entity_json="$(curl -sk -H "$auth_header" "$base_url/tenants/$tenant_id/$entity_set/$entity_id")"
   current_final_status="$(echo "$entity_json" | jq -r --arg sf "$status_field" '.[$sf] // ""')"
   echo "ASSERT FINAL STATUS: expected=$expected_final_status actual=$current_final_status"
@@ -312,6 +373,10 @@ fi
 
 expected_seq_count="$(echo "$spec_json" | jq -r '.assertions.expected_event_sequence | length // 0')"
 if [[ "$expected_seq_count" -gt 0 ]]; then
+  if [[ -z "$entity_id" ]]; then
+    echo "ERROR: event sequence assertion requires entity_id, but none is available." >&2
+    exit 1
+  fi
   event_set="$(echo "$spec_json" | jq -r '.assertions.event_entity_set')"
   event_id_field="$(echo "$spec_json" | jq -r '.assertions.event_entity_id_field // "CaseId"')"
   event_type_field="$(echo "$spec_json" | jq -r '.assertions.event_type_field // "EventType"')"

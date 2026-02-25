@@ -2,25 +2,25 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Last Updated: 2026-02-25
 
 ## Context
 
-`ops_governance` provides generic ACP resources for consent/delegation records,
-policy definitions, policy decision logs, retention policies, and data handling
-records. Core intentionally does not implement legal/business-specific policy
-engines or enforcement workers.
+`ops_governance` now includes a core PDP for `OpsPolicyDefinitions` with
+`dsl` document evaluation, decision outcomes (`allow/deny/warn/review`), and
+obligation emission into immutable decision logs.
 
-Downstream plugins still need to execute real actions (redact/erase/notify/
-route-to-review) and map them to domain objects. That orchestration belongs
-outside core.
+Downstream plugins still need to execute domain side effects (redact/erase/
+notify/route-to-review) and map policy obligations onto business objects and
+workers. That orchestration remains outside core.
 
 ## Decision
 
-- Keep `ops_governance` in core as metadata + immutable governance history.
-- Implement enforcement workers and legal/business rules in downstream plugins.
+- Keep `ops_governance` in core for policy definition versioning, PDP
+  evaluation, and immutable governance history.
+- Keep non-approval obligation execution in downstream workers.
 - Treat `OpsPolicyDecisionLogs` and `OpsDataHandlingRecords` as the auditable
-  control-plane ledger for downstream execution.
+  control-plane ledger for downstream execution and replay safety.
 - Route downstream job outcomes back into `OpsDataHandlingRecords` status fields
   and rely on ACP audit events for request/action traceability.
 
@@ -29,16 +29,21 @@ outside core.
 - Core responsibilities:
   - CRUD/action surface for governance records through ACP.
   - Immutable history for consent/delegation and policy decisions.
+  - `evaluate_policy` PDP execution on policy `DocumentJson` with obligation
+    pass-through.
+  - `activate_version` action enforcement for single active policy version per
+    `(tenant, code)`.
   - Generic retention/action metadata and request tracking.
   - Audit emission through existing ACP + `audit` plugin integration.
 - Downstream responsibilities:
-  - Policy rule evaluation logic and legal interpretation.
+  - Policy document authoring lifecycle (promotion/review) per tenant/product.
   - Domain-specific target resolution (which records/files/messages to affect).
-  - Execution jobs (redaction/erasure/export/notification) and retries.
+  - Execution jobs (redaction/erasure/export/notification) and retries for
+    obligations not enforced directly in core workflow paths.
   - SLA/alerting/reporting for compliance operations.
 - Why this boundary:
-  - Enforcement logic is jurisdiction- and product-specific, changes frequently,
-    and should not hard-code into reusable core plugin contracts.
+  - Core PDP ensures deterministic decision logging, while obligation side
+    effects stay jurisdiction- and product-specific.
 
 ## Implementation Sketch
 
@@ -70,14 +75,15 @@ Indexes:
 
 Recommended downstream flow:
 
-1. Read active `OpsRetentionPolicies` / `OpsPolicyDefinitions` for tenant scope.
-2. For each apply/evaluate trigger, create/update downstream work item.
-3. Worker resolves domain targets and executes concrete action.
-4. Update `OpsDataHandlingRecords` (`RequestStatus`, `CompletedAt`,
+1. Manage policy document versions in `OpsPolicyDefinitions` and activate one
+   version per policy code.
+2. Call `evaluate_policy` with `InputJson` and optional `ActorJson`/`TraceId`.
+3. Use returned obligations to schedule downstream side-effect work.
+4. Worker resolves domain targets and executes concrete action.
+5. Update `OpsDataHandlingRecords` (`RequestStatus`, `CompletedAt`,
    `ResolutionNote`, `HandledByUserId`, `Meta`) via ACP CRUD.
-5. For policy evaluation outcomes, append entries through
-   `evaluate_policy` action and treat `OpsPolicyDecisionLogs` as immutable
-   evidence.
+6. Treat `OpsPolicyDecisionLogs` as immutable evidence for audit and
+   investigations.
 
 ### Operational Notes
 
@@ -89,18 +95,23 @@ Recommended downstream flow:
 ## Validation
 
 - Unit tests:
-  - rule-to-work-item mapping for each supported action type.
+  - policy document version activation and single-active constraints.
+  - rule-to-work-item mapping for each downstream obligation type.
   - idempotent retry behavior per `data_handling_record_id`.
 - Integration tests:
+  - ACP action `evaluate_policy` -> obligation fan-out -> downstream work item
+    queued.
   - ACP action `apply_retention_action` -> downstream work item queued.
   - worker completion updates `OpsDataHandlingRecords` to `completed`.
   - worker failure updates status/retry metadata correctly.
 - E2E checks:
   - include ACP HTTP action coverage (`evaluate_policy`,
-    `apply_retention_action`) plus downstream worker run assertions.
+    `activate_version`, `apply_retention_action`) plus downstream worker run
+    assertions.
 
 ## Risks / Open Questions
 
+- Weak policy document governance can drift obligations from legal intent.
 - Jurisdiction-specific retention semantics may require per-tenant policy packs.
 - Large-domain target expansion may need batching and async fan-out controls.
 - Downstream compensation strategy is needed for partial failures.

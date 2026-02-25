@@ -17,7 +17,9 @@ To run the whole template suite with automatic unique placeholder injection:
 - `audit`: `audit/audit-e2e-correlation-observability.template.json`
 - `ops_case`: `ops_case/ops-case-e2e-lifecycle.template.json`
 - `ops_sla`: `ops_sla/ops-sla-e2e-clock-lifecycle.template.json`
-- `ops_workflow`: `ops_workflow/ops-workflow-e2e-definition-smoke.template.json`
+- `ops_workflow`:
+  - `ops_workflow/ops-workflow-e2e-definition-smoke.template.json`
+  - `ops_workflow/ops-workflow-e2e-decision-request.template.json`
 - `ops_metering`: `ops_metering/ops-metering-e2e-meter-definition-smoke.template.json`
 - `billing`: `billing/billing-e2e-account-product-smoke.template.json`
 - `ops_vpn`: `ops_vpn/ops-vpn-e2e-vendor-lifecycle.template.json`
