@@ -28,6 +28,9 @@ from mugen.core.plugin.ops_governance.contract.service.retention_policy import (
     IRetentionPolicyService,
 )
 from mugen.core.plugin.ops_governance.domain import RetentionClassDE, RetentionPolicyDE
+from mugen.core.plugin.ops_governance.domain.resource_type import (
+    canonicalize_resource_type,
+)
 from mugen.core.plugin.ops_governance.service.data_handling_record import (
     DataHandlingRecordService,
 )
@@ -94,12 +97,10 @@ class RetentionPolicyService(
 
     @staticmethod
     def _normalize_resource_type(value: str | None) -> str:
-        text = str(value or "").strip().lower().replace("-", "_")
-        if text in {"audit_event", "auditevent", "audit"}:
-            return "audit_event"
-        if text in {"evidence_blob", "evidenceblob", "evidence"}:
-            return "evidence_blob"
-        abort(400, f"Unsupported resource type: {value!r}.")
+        try:
+            return canonicalize_resource_type(value)
+        except ValueError:
+            abort(400, f"Unsupported resource type: {value!r}.")
 
     async def _get_for_action(
         self,

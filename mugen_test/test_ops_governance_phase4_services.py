@@ -108,10 +108,25 @@ class TestOpsGovernancePhase4Services(unittest.IsolatedAsyncioTestCase):
             list_where,
             {
                 "tenant_id": tenant_id,
-                "resource_type": "audit_event",
                 "is_active": True,
             },
         )
+
+        alias_row = RetentionClassDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            code="audit-legacy",
+            name="Audit Legacy",
+            resource_type="audit",
+            is_active=True,
+        )
+        svc.list = AsyncMock(return_value=[alias_row])
+        resolved_alias = await svc.resolve_active_for_resource_type(
+            tenant_id=tenant_id,
+            resource_type="audit_event",
+        )
+        self.assertIsNotNone(resolved_alias)
+        self.assertEqual(resolved_alias.id, alias_row.id)
 
         svc.list = AsyncMock(return_value=[])
         self.assertIsNone(
@@ -129,12 +144,93 @@ class TestOpsGovernancePhase4Services(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(resolved)
         self.assertEqual(resolved.id, row.id)
 
-        svc.list = AsyncMock(return_value=[row, row])
+        svc.list = AsyncMock(return_value=[row, alias_row])
         with self.assertRaises(RetentionClassResolutionError):
             await svc.resolve_active_for_resource_type(
                 tenant_id=tenant_id,
                 resource_type="audit_event",
             )
+
+        svc.list = AsyncMock(
+            return_value=[
+                RetentionClassDE(
+                    id=uuid.uuid4(),
+                    tenant_id=tenant_id,
+                    code="bad",
+                    name="Bad",
+                    resource_type="other",
+                    is_active=True,
+                )
+            ]
+        )
+        with self.assertRaises(RetentionClassResolutionError):
+            await svc.resolve_active_for_resource_type(
+                tenant_id=tenant_id,
+                resource_type="audit_event",
+            )
+
+        created_id = uuid.uuid4()
+        svc._rsg.insert_one = AsyncMock(
+            return_value={
+                "id": created_id,
+                "tenant_id": tenant_id,
+                "code": "audit-default",
+                "name": "Audit",
+                "resource_type": "audit_event",
+                "is_active": True,
+            }
+        )
+        created = await svc.create(
+            {
+                "tenant_id": tenant_id,
+                "code": "audit-default",
+                "name": "Audit",
+                "resource_type": "audit",
+                "is_active": True,
+            }
+        )
+        self.assertEqual(created.id, created_id)
+        self.assertEqual(created.resource_type, "audit_event")
+        self.assertEqual(
+            svc._rsg.insert_one.await_args.args[1]["resource_type"],
+            "audit_event",
+        )
+
+        updated_id = uuid.uuid4()
+        svc._rsg.update_one = AsyncMock(
+            return_value={
+                "id": updated_id,
+                "tenant_id": tenant_id,
+                "resource_type": "evidence_blob",
+            }
+        )
+        updated = await svc.update(
+            {"tenant_id": tenant_id, "id": updated_id},
+            {"resource_type": "evidenceblob"},
+        )
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated.resource_type, "evidence_blob")
+        self.assertEqual(
+            svc._rsg.update_one.await_args.kwargs["changes"]["resource_type"],
+            "evidence_blob",
+        )
+
+        unchanged = await svc.update(
+            {"tenant_id": tenant_id, "id": updated_id},
+            {"name": "Updated"},
+        )
+        self.assertIsNotNone(unchanged)
+        self.assertNotIn(
+            "resource_type",
+            svc._rsg.update_one.await_args.kwargs["changes"],
+        )
+
+        svc.list = AsyncMock(return_value=[row])
+        no_match = await svc.resolve_active_for_resource_type(
+            tenant_id=tenant_id,
+            resource_type="evidence_blob",
+        )
+        self.assertIsNone(no_match)
 
     async def test_legal_hold_service_paths(self) -> None:
         tenant_id = uuid.uuid4()

@@ -17,6 +17,9 @@ from mugen.core.plugin.ops_governance.contract.service.legal_hold import (
     ILegalHoldService,
 )
 from mugen.core.plugin.ops_governance.domain import LegalHoldDE, RetentionClassDE
+from mugen.core.plugin.ops_governance.domain.resource_type import (
+    canonicalize_resource_type,
+)
 from mugen.core.plugin.ops_governance.service.lifecycle_action_log import (
     LifecycleActionLogService,
 )
@@ -83,7 +86,7 @@ class LegalHoldService(
     @staticmethod
     def _normalize_resource_type(value: str | None) -> str:
         try:
-            return RetentionClassService.normalize_resource_type(value)
+            return canonicalize_resource_type(value)
         except ValueError:
             abort(400, "ResourceType must be audit_event or evidence_blob.")
 

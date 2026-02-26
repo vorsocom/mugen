@@ -7,6 +7,16 @@ import uuid
 from pydantic import Field, NonNegativeInt, PositiveInt, model_validator
 
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
+from mugen.core.plugin.ops_governance.domain.resource_type import (
+    canonicalize_resource_type,
+)
+
+
+def _normalize_resource_type_or_error(value: str | None) -> str:
+    try:
+        return canonicalize_resource_type(value)
+    except ValueError as exc:
+        raise ValueError("ResourceType must be audit_event or evidence_blob.") from exc
 
 
 class ConsentRecordCreateValidation(IValidationBase):
@@ -356,6 +366,7 @@ class RetentionClassCreateValidation(IValidationBase):
             raise ValueError("Name must be non-empty.")
         if not (self.resource_type or "").strip():
             raise ValueError("ResourceType must be non-empty.")
+        self.resource_type = _normalize_resource_type_or_error(self.resource_type)
         if self.description is not None and not (self.description or "").strip():
             raise ValueError("Description cannot be empty if provided.")
         return self
@@ -376,6 +387,7 @@ class LegalHoldCreateValidation(IValidationBase):
     def _validate_fields(self) -> "LegalHoldCreateValidation":
         if not (self.resource_type or "").strip():
             raise ValueError("ResourceType must be non-empty.")
+        self.resource_type = _normalize_resource_type_or_error(self.resource_type)
         if not (self.reason or "").strip():
             raise ValueError("Reason must be non-empty.")
         return self
@@ -395,6 +407,7 @@ class LegalHoldPlaceHoldActionValidation(IValidationBase):
     def _validate_fields(self) -> "LegalHoldPlaceHoldActionValidation":
         if not (self.resource_type or "").strip():
             raise ValueError("ResourceType must be non-empty.")
+        self.resource_type = _normalize_resource_type_or_error(self.resource_type)
         if not (self.reason or "").strip():
             raise ValueError("Reason must be non-empty.")
         return self
