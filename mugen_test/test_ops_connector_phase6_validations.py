@@ -11,6 +11,7 @@ from mugen.core.plugin.ops_connector.api.validation import (
     ConnectorInstanceTestConnectionValidation,
     ConnectorRetryPolicyValidation,
     ConnectorTypeCreateValidation,
+    ConnectorTypeUpdateValidation,
 )
 
 
@@ -193,6 +194,65 @@ class TestOpsConnectorPhase6Validations(unittest.TestCase):
                         "InputSchema": {"Key": "ops.connector.input", "Version": "x"}
                     }
                 },
+            )
+
+    def test_connector_type_update_validation_accepts_partial_payload(self) -> None:
+        payload = ConnectorTypeUpdateValidation(
+            display_name="  Updated Connector  ",
+            is_active=False,
+        )
+        self.assertEqual(payload.display_name, "Updated Connector")
+        self.assertFalse(payload.is_active)
+
+    def test_connector_type_update_validation_accepts_http_json_adapter_kind(
+        self,
+    ) -> None:
+        payload = ConnectorTypeUpdateValidation(adapter_kind=" HTTP_JSON ")
+        self.assertEqual(payload.adapter_kind, "http_json")
+
+    def test_connector_type_update_validation_accepts_non_empty_key(self) -> None:
+        payload = ConnectorTypeUpdateValidation(key=" connector_key ")
+        self.assertEqual(payload.key, "connector_key")
+
+    def test_connector_type_update_validation_rejects_empty_patch(self) -> None:
+        with self.assertRaises(ValidationError):
+            ConnectorTypeUpdateValidation()
+
+    def test_connector_type_update_validation_rejects_empty_key(self) -> None:
+        with self.assertRaises(ValidationError):
+            ConnectorTypeUpdateValidation(key=" ")
+
+    def test_connector_type_update_validation_rejects_empty_display_name(
+        self,
+    ) -> None:
+        with self.assertRaises(ValidationError):
+            ConnectorTypeUpdateValidation(display_name=" ")
+
+    def test_connector_type_update_validation_rejects_invalid_adapter_kind(
+        self,
+    ) -> None:
+        with self.assertRaises(ValidationError):
+            ConnectorTypeUpdateValidation(adapter_kind="grpc")
+
+    def test_connector_type_update_validation_rejects_empty_adapter_kind(
+        self,
+    ) -> None:
+        with self.assertRaises(ValidationError):
+            ConnectorTypeUpdateValidation(adapter_kind=" ")
+
+    def test_connector_type_update_validation_rejects_malformed_capabilities_json(
+        self,
+    ) -> None:
+        with self.assertRaises(ValidationError):
+            ConnectorTypeUpdateValidation(capabilities_json=[])
+
+        with self.assertRaises(ValidationError):
+            ConnectorTypeUpdateValidation(
+                capabilities_json={
+                    "probe": {
+                        "PathTemplate": "missing-leading-slash",
+                    }
+                }
             )
 
     def test_connector_instance_create_validation_requires_type_reference(self) -> None:

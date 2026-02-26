@@ -30,6 +30,7 @@ from mugen.core.plugin.ops_connector.api.validation import (
     ConnectorInstanceInvokeValidation,
     ConnectorInstanceTestConnectionValidation,
     ConnectorTypeCreateValidation,
+    ConnectorTypeUpdateValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -75,14 +76,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=ConnectorTypeCreateValidation,
-                update_schema=(
-                    "Key",
-                    "DisplayName",
-                    "AdapterKind",
-                    "CapabilitiesJson",
-                    "IsActive",
-                    "Attributes",
-                ),
+                update_schema=ConnectorTypeUpdateValidation,
             ),
         },
         {

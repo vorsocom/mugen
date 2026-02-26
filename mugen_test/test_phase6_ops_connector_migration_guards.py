@@ -33,6 +33,14 @@ class TestPhase6OpsConnectorMigrationGuards(unittest.TestCase):
         self.assertIn("tr_guard_ops_connector_call_log_update", text)
         self.assertIn("tr_guard_ops_connector_call_log_delete", text)
         self.assertIn("ops_connector_call_log is immutable", text)
+        self.assertIn("INSERT INTO mugen.admin_key_ref", text)
+        self.assertIn("AND purpose = 'ops_connector_secret'", text)
+        self.assertIn("AND key_id = 'ops_connector_default'", text)
+        self.assertIn("DELETE FROM mugen.admin_key_ref", text)
+        self.assertIn(
+            "AND attributes ->> 'seed_source' = 'phase6_ops_connector';",
+            text,
+        )
 
     def test_phase6_reseed_migration_reapplies_manifest(self) -> None:
         migration = (

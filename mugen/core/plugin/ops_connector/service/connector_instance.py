@@ -1377,104 +1377,180 @@ class ConnectorInstanceService(  # pragma: no cover
         if isinstance(replay, tuple) and len(replay) == 2:
             payload = replay[0]
             code = int(replay[1])
+
+            finished_at = self._now_utc()
+            duration_ms = max(0, int((finished_at - started_at).total_seconds() * 1000))
+
+            await self._emit_connector_biz_trace(
+                stage="finish",
+                tenant_id=tenant_id,
+                action_name="invoke",
+                trace_id=trace_id,
+                status_code=code,
+                duration_ms=duration_ms,
+                details={
+                    "Operation": "invoke",
+                    "CapabilityName": configured_capability_name,
+                    "Replay": True,
+                    "Idempotent": True,
+                    "StatusCode": code,
+                    "duration_ms": duration_ms,
+                },
+            )
             return payload, code
 
-        input_schema_ref = self._schema_ref(capability, "InputSchema")
-        await self._validate_input_schema(
-            tenant_id=tenant_id,
-            schema_ref=input_schema_ref,
-            payload=data.input_json,
-        )
-
-        output_schema_ref = self._schema_ref(capability, "OutputSchema")
-
-        secret = await self._resolve_secret_material(
-            tenant_id=tenant_id,
-            secret_ref=str(current.secret_ref),
-        )
-        secret_text = secret.secret.decode("utf-8", errors="ignore")
-
-        base_url = self._resolve_base_url(current)
-        timeout_seconds, max_retries, retry_backoff_seconds, retry_status_codes = (
-            self._resolve_retry_policy(instance=current, capability=capability)
-        )
-
-        method, url, params, _unused, body_text, body_json = self._invoke_request_spec(
-            base_url=base_url,
-            capability=capability,
-            input_json=data.input_json,
-        )
-
-        headers = self._resolve_headers(
-            instance=current,
-            capability=capability,
-            secret_text=secret_text,
-        )
-
-        execution = await self._execute_http_request(
-            method=method,
-            url=url,
-            headers=headers,
-            params=params,
-            body_text=body_text,
-            body_json=body_json,
-            timeout_seconds=timeout_seconds,
-            max_retries=max_retries,
-            retry_backoff_seconds=retry_backoff_seconds,
-            retry_status_codes=retry_status_codes,
-        )
-
-        finished_at = self._now_utc()
-        duration_ms = max(0, int((finished_at - started_at).total_seconds() * 1000))
-        http_status_code = int(execution.get("status_code") or 0)
-        attempt_count = int(execution.get("attempt_count") or 1)
-
-        redacted_request = self._redact_payload(
-            {
-                "Method": method,
-                "Url": url,
-                "Params": params,
-                "Headers": headers,
-                "InputPlacement": self._normalize_optional_text(
-                    capability.get("InputPlacement")
-                )
-                or "json",
-                "InputJson": data.input_json,
-            },
-            redacted_keys=cfg.redacted_keys,
-        )
-        redacted_response = self._redact_payload(
-            self._json_safe(execution.get("payload")),
-            redacted_keys=cfg.redacted_keys,
-        )
-        response_hash = (
-            self._sha256_hex(redacted_response)
-            if redacted_response is not None
-            else None
-        )
-
-        if bool(execution.get("ok")):
-            output_errors = await self._validate_output_schema(
+        try:
+            input_schema_ref = self._schema_ref(capability, "InputSchema")
+            await self._validate_input_schema(
                 tenant_id=tenant_id,
-                schema_ref=output_schema_ref,
-                payload=execution.get("payload"),
+                schema_ref=input_schema_ref,
+                payload=data.input_json,
             )
-            if output_errors:
-                error_json = {
-                    "Code": "output_schema_invalid",
-                    "Errors": output_errors,
-                }
-                escalation_json = await self._run_failure_escalation(
+            output_schema_ref = self._schema_ref(capability, "OutputSchema")
+
+            secret = await self._resolve_secret_material(
+                tenant_id=tenant_id,
+                secret_ref=str(current.secret_ref),
+            )
+            secret_text = secret.secret.decode("utf-8", errors="ignore")
+
+            base_url = self._resolve_base_url(current)
+            timeout_seconds, max_retries, retry_backoff_seconds, retry_status_codes = (
+                self._resolve_retry_policy(instance=current, capability=capability)
+            )
+
+            method, url, params, _unused, body_text, body_json = self._invoke_request_spec(
+                base_url=base_url,
+                capability=capability,
+                input_json=data.input_json,
+            )
+
+            headers = self._resolve_headers(
+                instance=current,
+                capability=capability,
+                secret_text=secret_text,
+            )
+
+            execution = await self._execute_http_request(
+                method=method,
+                url=url,
+                headers=headers,
+                params=params,
+                body_text=body_text,
+                body_json=body_json,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+                retry_backoff_seconds=retry_backoff_seconds,
+                retry_status_codes=retry_status_codes,
+            )
+
+            finished_at = self._now_utc()
+            duration_ms = max(0, int((finished_at - started_at).total_seconds() * 1000))
+            http_status_code = int(execution.get("status_code") or 0)
+            attempt_count = int(execution.get("attempt_count") or 1)
+
+            redacted_request = self._redact_payload(
+                {
+                    "Method": method,
+                    "Url": url,
+                    "Params": params,
+                    "Headers": headers,
+                    "InputPlacement": self._normalize_optional_text(
+                        capability.get("InputPlacement")
+                    )
+                    or "json",
+                    "InputJson": data.input_json,
+                },
+                redacted_keys=cfg.redacted_keys,
+            )
+            redacted_response = self._redact_payload(
+                self._json_safe(execution.get("payload")),
+                redacted_keys=cfg.redacted_keys,
+            )
+            response_hash = (
+                self._sha256_hex(redacted_response)
+                if redacted_response is not None
+                else None
+            )
+
+            if bool(execution.get("ok")):
+                output_errors = await self._validate_output_schema(
                     tenant_id=tenant_id,
-                    auth_user_id=auth_user_id,
-                    escalation_policy_key=current.escalation_policy_key,
-                    trace_id=trace_id,
-                    connector_instance_id=current.id,
-                    capability_name=configured_capability_name,
-                    request_hash=request_hash,
-                    http_status_code=http_status_code,
-                    error_json=error_json,
+                    schema_ref=output_schema_ref,
+                    payload=execution.get("payload"),
                 )
+                if output_errors:
+                    error_json = {
+                        "Code": "output_schema_invalid",
+                        "Errors": output_errors,
+                    }
+                    escalation_json = await self._run_failure_escalation(
+                        tenant_id=tenant_id,
+                        auth_user_id=auth_user_id,
+                        escalation_policy_key=current.escalation_policy_key,
+                        trace_id=trace_id,
+                        connector_instance_id=current.id,
+                        capability_name=configured_capability_name,
+                        request_hash=request_hash,
+                        http_status_code=http_status_code,
+                        error_json=error_json,
+                    )
+
+                    call_log_id = await self._persist_call_log(
+                        tenant_id=tenant_id,
+                        trace_id=trace_id,
+                        connector_instance_id=current.id,
+                        capability_name=configured_capability_name,
+                        client_action_key=self._normalize_optional_text(
+                            data.client_action_key
+                        ),
+                        request_json=redacted_request,
+                        request_hash=request_hash,
+                        response_json=redacted_response,
+                        response_hash=response_hash,
+                        status="failed",
+                        http_status_code=http_status_code,
+                        attempt_count=attempt_count,
+                        duration_ms=duration_ms,
+                        error_json=error_json,
+                        escalation_json=escalation_json,
+                        auth_user_id=auth_user_id,
+                    )
+
+                    response_payload = {
+                        "ConnectorCallLogId": str(call_log_id),
+                        "TraceId": trace_id,
+                        "CapabilityName": configured_capability_name,
+                        "Status": "failed",
+                        "HttpStatusCode": http_status_code,
+                        "AttemptCount": attempt_count,
+                        "OutputJson": self._json_safe(execution.get("payload")),
+                        "Idempotent": False,
+                    }
+
+                    await self._commit_dedup_failure(
+                        state=dedup_state,
+                        response_code=502,
+                        response_payload=response_payload,
+                        error_code="output_schema_invalid",
+                        error_message="; ".join(output_errors),
+                    )
+
+                    await self._emit_connector_biz_trace(
+                        stage="error",
+                        tenant_id=tenant_id,
+                        action_name="invoke",
+                        trace_id=trace_id,
+                        status_code=502,
+                        duration_ms=duration_ms,
+                        details={
+                            "Operation": "invoke",
+                            "CapabilityName": configured_capability_name,
+                            "ErrorCode": "output_schema_invalid",
+                        },
+                    )
+
+                    return response_payload, 502
 
                 call_log_id = await self._persist_call_log(
                     tenant_id=tenant_id,
@@ -1488,12 +1564,12 @@ class ConnectorInstanceService(  # pragma: no cover
                     request_hash=request_hash,
                     response_json=redacted_response,
                     response_hash=response_hash,
-                    status="failed",
+                    status="ok",
                     http_status_code=http_status_code,
                     attempt_count=attempt_count,
                     duration_ms=duration_ms,
-                    error_json=error_json,
-                    escalation_json=escalation_json,
+                    error_json=None,
+                    escalation_json=None,
                     auth_user_id=auth_user_id,
                 )
 
@@ -1501,36 +1577,56 @@ class ConnectorInstanceService(  # pragma: no cover
                     "ConnectorCallLogId": str(call_log_id),
                     "TraceId": trace_id,
                     "CapabilityName": configured_capability_name,
-                    "Status": "failed",
+                    "Status": "ok",
                     "HttpStatusCode": http_status_code,
                     "AttemptCount": attempt_count,
                     "OutputJson": self._json_safe(execution.get("payload")),
                     "Idempotent": False,
                 }
 
-                await self._commit_dedup_failure(
+                await self._commit_dedup_success(
                     state=dedup_state,
-                    response_code=502,
+                    response_code=200,
                     response_payload=response_payload,
-                    error_code="output_schema_invalid",
-                    error_message="; ".join(output_errors),
                 )
 
                 await self._emit_connector_biz_trace(
-                    stage="error",
+                    stage="finish",
                     tenant_id=tenant_id,
                     action_name="invoke",
                     trace_id=trace_id,
-                    status_code=502,
+                    status_code=200,
                     duration_ms=duration_ms,
                     details={
                         "Operation": "invoke",
                         "CapabilityName": configured_capability_name,
-                        "ErrorCode": "output_schema_invalid",
+                        "AttemptCount": attempt_count,
                     },
                 )
 
-                return response_payload, 502
+                return response_payload, 200
+
+            gateway_code = 504 if bool(execution.get("timeout")) else 502
+            error_json = {
+                "Code": "connector_invoke_failed",
+                "Timeout": bool(execution.get("timeout")),
+                "TransportError": self._normalize_optional_text(
+                    execution.get("transport_error")
+                ),
+                "HttpStatusCode": http_status_code,
+            }
+
+            escalation_json = await self._run_failure_escalation(
+                tenant_id=tenant_id,
+                auth_user_id=auth_user_id,
+                escalation_policy_key=current.escalation_policy_key,
+                trace_id=trace_id,
+                connector_instance_id=current.id,
+                capability_name=configured_capability_name,
+                request_hash=request_hash,
+                http_status_code=http_status_code,
+                error_json=error_json,
+            )
 
             call_log_id = await self._persist_call_log(
                 tenant_id=tenant_id,
@@ -1542,12 +1638,12 @@ class ConnectorInstanceService(  # pragma: no cover
                 request_hash=request_hash,
                 response_json=redacted_response,
                 response_hash=response_hash,
-                status="ok",
+                status="failed",
                 http_status_code=http_status_code,
                 attempt_count=attempt_count,
                 duration_ms=duration_ms,
-                error_json=None,
-                escalation_json=None,
+                error_json=error_json,
+                escalation_json=escalation_json,
                 auth_user_id=auth_user_id,
             )
 
@@ -1555,111 +1651,86 @@ class ConnectorInstanceService(  # pragma: no cover
                 "ConnectorCallLogId": str(call_log_id),
                 "TraceId": trace_id,
                 "CapabilityName": configured_capability_name,
-                "Status": "ok",
+                "Status": "failed",
                 "HttpStatusCode": http_status_code,
                 "AttemptCount": attempt_count,
                 "OutputJson": self._json_safe(execution.get("payload")),
                 "Idempotent": False,
             }
 
-            await self._commit_dedup_success(
+            await self._commit_dedup_failure(
                 state=dedup_state,
-                response_code=200,
+                response_code=gateway_code,
                 response_payload=response_payload,
+                error_code="connector_invoke_failed",
+                error_message=(
+                    self._normalize_optional_text(execution.get("transport_error"))
+                    or "Connector invoke failed."
+                ),
             )
 
             await self._emit_connector_biz_trace(
-                stage="finish",
+                stage="error",
                 tenant_id=tenant_id,
                 action_name="invoke",
                 trace_id=trace_id,
-                status_code=200,
+                status_code=gateway_code,
                 duration_ms=duration_ms,
                 details={
                     "Operation": "invoke",
                     "CapabilityName": configured_capability_name,
                     "AttemptCount": attempt_count,
+                    "Timeout": bool(execution.get("timeout")),
                 },
             )
 
-            return response_payload, 200
-
-        gateway_code = 504 if bool(execution.get("timeout")) else 502
-        error_json = {
-            "Code": "connector_invoke_failed",
-            "Timeout": bool(execution.get("timeout")),
-            "TransportError": self._normalize_optional_text(
-                execution.get("transport_error")
-            ),
-            "HttpStatusCode": http_status_code,
-        }
-
-        escalation_json = await self._run_failure_escalation(
-            tenant_id=tenant_id,
-            auth_user_id=auth_user_id,
-            escalation_policy_key=current.escalation_policy_key,
-            trace_id=trace_id,
-            connector_instance_id=current.id,
-            capability_name=configured_capability_name,
-            request_hash=request_hash,
-            http_status_code=http_status_code,
-            error_json=error_json,
-        )
-
-        call_log_id = await self._persist_call_log(
-            tenant_id=tenant_id,
-            trace_id=trace_id,
-            connector_instance_id=current.id,
-            capability_name=configured_capability_name,
-            client_action_key=self._normalize_optional_text(data.client_action_key),
-            request_json=redacted_request,
-            request_hash=request_hash,
-            response_json=redacted_response,
-            response_hash=response_hash,
-            status="failed",
-            http_status_code=http_status_code,
-            attempt_count=attempt_count,
-            duration_ms=duration_ms,
-            error_json=error_json,
-            escalation_json=escalation_json,
-            auth_user_id=auth_user_id,
-        )
-
-        response_payload = {
-            "ConnectorCallLogId": str(call_log_id),
-            "TraceId": trace_id,
-            "CapabilityName": configured_capability_name,
-            "Status": "failed",
-            "HttpStatusCode": http_status_code,
-            "AttemptCount": attempt_count,
-            "OutputJson": self._json_safe(execution.get("payload")),
-            "Idempotent": False,
-        }
-
-        await self._commit_dedup_failure(
-            state=dedup_state,
-            response_code=gateway_code,
-            response_payload=response_payload,
-            error_code="connector_invoke_failed",
-            error_message=(
-                self._normalize_optional_text(execution.get("transport_error"))
-                or "Connector invoke failed."
-            ),
-        )
-
-        await self._emit_connector_biz_trace(
-            stage="error",
-            tenant_id=tenant_id,
-            action_name="invoke",
-            trace_id=trace_id,
-            status_code=gateway_code,
-            duration_ms=duration_ms,
-            details={
-                "Operation": "invoke",
+            return response_payload, gateway_code
+        except HTTPException as exc:
+            status_code = int(exc.code or 500)
+            failure_description = (
+                self._normalize_optional_text(str(getattr(exc, "description", "")))
+                or "Connector invoke failed before execution."
+            )
+            failure_payload = {
+                "TraceId": trace_id,
                 "CapabilityName": configured_capability_name,
-                "AttemptCount": attempt_count,
-                "Timeout": bool(execution.get("timeout")),
-            },
-        )
-
-        return response_payload, gateway_code
+                "Status": "failed",
+                "HttpStatusCode": status_code,
+                "AttemptCount": 0,
+                "OutputJson": None,
+                "Idempotent": False,
+                "Error": {
+                    "Code": "invoke_http_exception",
+                    "Description": failure_description,
+                },
+            }
+            await self._commit_dedup_failure(
+                state=dedup_state,
+                response_code=status_code,
+                response_payload=failure_payload,
+                error_code="invoke_http_exception",
+                error_message=failure_description,
+            )
+            raise
+        except Exception:
+            failure_payload = {
+                "TraceId": trace_id,
+                "CapabilityName": configured_capability_name,
+                "Status": "failed",
+                "HttpStatusCode": 500,
+                "AttemptCount": 0,
+                "OutputJson": None,
+                "Idempotent": False,
+                "Error": {
+                    "Code": "invoke_unexpected_exception",
+                    "Description": "Connector invoke raised an unexpected error.",
+                },
+            }
+            await self._commit_dedup_failure(
+                state=dedup_state,
+                response_code=500,
+                response_payload=failure_payload,
+                error_code="invoke_unexpected_exception",
+                error_message="Connector invoke raised an unexpected error.",
+            )
+            raise
