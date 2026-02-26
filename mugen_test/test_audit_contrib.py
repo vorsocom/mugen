@@ -33,6 +33,8 @@ from mugen.core.plugin.audit.api.validation import (
     AuditEventRunLifecycleValidation,
     AuditEventSealBacklogValidation,
     AuditEventVerifyChainValidation,
+    EvidenceBlobRegisterValidation,
+    EvidenceBlobVerifyHashValidation,
 )
 from mugen.core.plugin.audit.contrib import contribute
 
@@ -58,6 +60,7 @@ class TestAuditContrib(unittest.TestCase):
                 "AuditEvents",
                 "AuditCorrelationLinks",
                 "AuditBizTraceEvents",
+                "EvidenceBlobs",
             },
         )
 
@@ -99,4 +102,14 @@ class TestAuditContrib(unittest.TestCase):
         self.assertEqual(
             biz_trace_resource.capabilities.actions["inspect_trace"]["schema"],
             AuditBizTraceInspectTraceValidation,
+        )
+
+        evidence_resource = resources_by_set["EvidenceBlobs"]
+        self.assertEqual(
+            evidence_resource.capabilities.actions["register"]["schema"],
+            EvidenceBlobRegisterValidation,
+        )
+        self.assertEqual(
+            evidence_resource.capabilities.actions["verify_hash"]["schema"],
+            EvidenceBlobVerifyHashValidation,
         )

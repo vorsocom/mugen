@@ -33,6 +33,12 @@ from mugen.core.plugin.acp.api.validation.foundation import (
     DedupCommitFailureValidation,
     DedupCommitSuccessValidation,
     DedupRecordCreateValidation,
+    KeyRefCreateValidation,
+    KeyRefLifecycleValidation,
+    KeyRefRotateValidation,
+    PluginCapabilityGrantCreateValidation,
+    PluginCapabilityGrantGrantValidation,
+    PluginCapabilityGrantRevokeValidation,
     SchemaActivateVersionValidation,
     SchemaBindingCreateValidation,
     SchemaBindingUpdateValidation,
@@ -237,3 +243,81 @@ class TestMugenAcpValidationFoundation(unittest.TestCase):
 
         payload = SchemaActivateVersionValidation(key=" sample ", version=2)
         self.assertEqual(payload.key, "sample")
+
+    def test_key_ref_validation_models(self) -> None:
+        payload = KeyRefCreateValidation(
+            purpose=" audit_hmac ",
+            key_id=" key-001 ",
+            provider="  ",
+            status=" ACTIVE ",
+        )
+        self.assertEqual(payload.purpose, "audit_hmac")
+        self.assertEqual(payload.key_id, "key-001")
+        self.assertEqual(payload.provider, "local")
+        self.assertEqual(payload.status, "active")
+
+        with self.assertRaises(ValidationError):
+            KeyRefCreateValidation(purpose=" ", key_id="k")
+        with self.assertRaises(ValidationError):
+            KeyRefCreateValidation(purpose="p", key_id=" ")
+        with self.assertRaises(ValidationError):
+            KeyRefCreateValidation(purpose="p", key_id="k", status="oops")
+        self.assertIsNone(
+            KeyRefCreateValidation(purpose="p", key_id="k", status=None).status
+        )
+
+        rotate = KeyRefRotateValidation(
+            purpose=" audit_hmac ",
+            key_id=" key-002 ",
+            provider=" ",
+        )
+        self.assertEqual(rotate.provider, "local")
+        self.assertEqual(
+            KeyRefRotateValidation(
+                purpose="audit_hmac",
+                key_id="key-003",
+                provider="vault",
+            ).provider,
+            "vault",
+        )
+        with self.assertRaises(ValidationError):
+            KeyRefRotateValidation(purpose=" ", key_id="k")
+        with self.assertRaises(ValidationError):
+            KeyRefRotateValidation(purpose="p", key_id=" ")
+
+        lifecycle = KeyRefLifecycleValidation(row_version=1, reason=" rotated ")
+        self.assertEqual(lifecycle.reason, "rotated")
+        self.assertIsNone(KeyRefLifecycleValidation(row_version=1, reason=None).reason)
+        with self.assertRaises(ValidationError):
+            KeyRefLifecycleValidation(row_version=1, reason=" ")
+
+    def test_plugin_capability_grant_validation_models(self) -> None:
+        payload = PluginCapabilityGrantCreateValidation(
+            plugin_key=" com.vorsocomputing.mugen.audit ",
+            capabilities=[
+                " Evidence.Register ",
+                "evidence.register",
+                " evidence.verify ",
+            ],
+        )
+        self.assertEqual(payload.plugin_key, "com.vorsocomputing.mugen.audit")
+        self.assertEqual(payload.capabilities, ["evidence.register", "evidence.verify"])
+
+        with self.assertRaises(ValidationError):
+            PluginCapabilityGrantCreateValidation(plugin_key=" ", capabilities=["cap"])
+        with self.assertRaises(ValidationError):
+            PluginCapabilityGrantCreateValidation(plugin_key="plug", capabilities=[" "])
+
+        granted = PluginCapabilityGrantGrantValidation(
+            plugin_key="plugin",
+            capabilities=["cap.one"],
+        )
+        self.assertEqual(granted.capabilities, ["cap.one"])
+
+        revoked = PluginCapabilityGrantRevokeValidation(row_version=3, reason=" done ")
+        self.assertEqual(revoked.reason, "done")
+        self.assertIsNone(
+            PluginCapabilityGrantRevokeValidation(row_version=3, reason=None).reason
+        )
+        with self.assertRaises(ValidationError):
+            PluginCapabilityGrantRevokeValidation(row_version=3, reason=" ")

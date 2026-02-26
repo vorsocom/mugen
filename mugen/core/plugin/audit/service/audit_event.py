@@ -26,6 +26,8 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
     ScalarFilter,
     ScalarFilterOp,
 )
+from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
+from mugen.core.plugin.acp.contract.service import IKeyRefService
 from mugen.core.plugin.audit.contract.service.audit_event import IAuditEventService
 from mugen.core.plugin.audit.domain import AuditEventDE
 from mugen.core.plugin.audit.service.lifecycle_runner import AuditLifecycleRunner
@@ -40,6 +42,10 @@ _MAX_CHAIN_MISMATCH_DETAILS = 100
 
 def _config_provider():
     return di.container.config  # pragma: no cover
+
+
+def _registry_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
 
 
 class AuditEventService(  # pragma: no cover
@@ -80,6 +86,7 @@ class AuditEventService(  # pragma: no cover
         table: str,
         rsg: IRelationalStorageGateway,
         config_provider=_config_provider,
+        registry_provider=_registry_provider,
         max_chain_retries: int = 8,
         **kwargs,
     ):
@@ -90,6 +97,7 @@ class AuditEventService(  # pragma: no cover
             **kwargs,
         )
         self._config_provider = config_provider
+        self._registry_provider = registry_provider
         self._max_chain_retries = max(1, int(max_chain_retries))
 
     @staticmethod
@@ -223,7 +231,33 @@ class AuditEventService(  # pragma: no cover
         fail_closed = bool(getattr(emit_cfg, "fail_closed", False))
         return active_kid, keys, fail_closed
 
-    def _active_hash_material(self) -> tuple[str, bytes]:
+    def _safe_registry(self) -> IAdminRegistry | None:
+        try:
+            return self._registry_provider()
+        except Exception:  # pylint: disable=broad-except
+            return None
+
+    async def _active_hash_material(
+        self,
+        *,
+        tenant_id: uuid.UUID | None,
+    ) -> tuple[str, bytes]:
+        registry = self._safe_registry()
+        if registry is not None:
+            try:
+                resource = registry.get_resource("KeyRefs")
+                key_ref_svc: IKeyRefService = registry.get_edm_service(
+                    resource.service_key
+                )
+                resolved = await key_ref_svc.resolve_secret_for_purpose(
+                    tenant_id=tenant_id,
+                    purpose="audit_hmac",
+                )
+                if resolved is not None:
+                    return resolved.key_id, resolved.secret
+            except Exception:  # pylint: disable=broad-except
+                pass
+
         active_kid, keys, fail_closed = self._hash_chain_config()
         secret = self._resolve_secret(keys.get(active_kid))
         if secret is None:
@@ -377,10 +411,7 @@ class AuditEventService(  # pragma: no cover
         occurred_at = self._to_aware_utc(row.get("occurred_at"))
         row["occurred_at"] = occurred_at or now
 
-        row["scope_key"] = str(
-            row.get("scope_key")
-            or self._scope_key(row)
-        )
+        row["scope_key"] = str(row.get("scope_key") or self._scope_key(row))
         row["changed_fields"] = self._normalize_changed_fields(
             row.get("changed_fields")
         )
@@ -394,7 +425,9 @@ class AuditEventService(  # pragma: no cover
             or self._snapshot_hash(row.get("after_snapshot"))
         )
 
-        hash_key_id, secret = self._active_hash_material()
+        hash_key_id, secret = await self._active_hash_material(
+            tenant_id=row.get("tenant_id"),
+        )
         return await self._insert_chained_event(
             row=row,
             hash_key_id=hash_key_id,
@@ -811,7 +844,6 @@ class AuditEventService(  # pragma: no cover
         elif tenant_id is not None:
             where["tenant_id"] = tenant_id
 
-        hash_key_id, secret = self._active_hash_material()
         last_error: Exception | None = None
 
         for _ in range(self._max_chain_retries):
@@ -828,6 +860,9 @@ class AuditEventService(  # pragma: no cover
                     ):
                         return False
 
+                    hash_key_id, secret = await self._active_hash_material(
+                        tenant_id=row.get("tenant_id"),
+                    )
                     row_version = int(row.get("row_version") or 0)
                     scope_key = str(row.get("scope_key") or self._scope_key(row))
                     before_hash = str(

@@ -2,6 +2,7 @@
 
 __all__ = [
     "EXT_SERVICE_ADMIN_REGISTRY",
+    "EXT_SERVICE_ADMIN_SANDBOX_ENFORCER",
     "EXT_SERVICE_ADMIN_SVC_AUTH",
     "EXT_SERVICE_ADMIN_SVC_JWT",
     "build_container",
@@ -37,6 +38,7 @@ from mugen.core.contract.service.user import IUserService
 from .injector import DependencyInjector
 
 EXT_SERVICE_ADMIN_REGISTRY = "admin_registry"
+EXT_SERVICE_ADMIN_SANDBOX_ENFORCER = "admin_sandbox_enforcer"
 EXT_SERVICE_ADMIN_SVC_JWT = "admin_svc_jwt"
 EXT_SERVICE_ADMIN_SVC_AUTH = "admin_svc_auth"
 

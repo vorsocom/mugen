@@ -5,10 +5,12 @@ __all__ = [
     "GlobalPermissionEntryDE",
     "GlobalRoleMembershipDE",
     "GlobalRoleDE",
+    "KeyRefDE",
     "PermissionEntryDE",
     "PermissionObjectDE",
     "PermissionTypeDE",
     "PersonDE",
+    "PluginCapabilityGrantDE",
     "RefreshTokenDE",
     "RoleDE",
     "RoleMembershipDE",
@@ -28,10 +30,14 @@ from mugen.core.plugin.acp.domain.global_permission_entry import (
 )
 from mugen.core.plugin.acp.domain.global_role import GlobalRoleDE
 from mugen.core.plugin.acp.domain.global_role_membership import GlobalRoleMembershipDE
+from mugen.core.plugin.acp.domain.key_ref import KeyRefDE
 from mugen.core.plugin.acp.domain.permission_entry import PermissionEntryDE
 from mugen.core.plugin.acp.domain.permission_object import PermissionObjectDE
 from mugen.core.plugin.acp.domain.permission_type import PermissionTypeDE
 from mugen.core.plugin.acp.domain.person import PersonDE
+from mugen.core.plugin.acp.domain.plugin_capability_grant import (
+    PluginCapabilityGrantDE,
+)
 from mugen.core.plugin.acp.domain.refresh_token import RefreshTokenDE
 from mugen.core.plugin.acp.domain.role import RoleDE
 from mugen.core.plugin.acp.domain.role_membership import RoleMembershipDE

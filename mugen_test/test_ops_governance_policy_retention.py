@@ -91,6 +91,7 @@ class TestOpsGovernancePolicyRetention(unittest.IsolatedAsyncioTestCase):
         policy_id = uuid.uuid4()
         actor_id = uuid.uuid4()
         subject_id = uuid.uuid4()
+        evidence_blob_id = uuid.uuid4()
         now = datetime(2026, 2, 13, 19, 40, tzinfo=timezone.utc)
 
         svc = RetentionPolicyService(
@@ -132,6 +133,7 @@ class TestOpsGovernancePolicyRetention(unittest.IsolatedAsyncioTestCase):
                 request_status="pending",
                 note="queued for downstream processor",
                 meta={"request_id": "REQ-1001"},
+                evidence_blob_id=evidence_blob_id,
             ),
         )
 
@@ -141,6 +143,7 @@ class TestOpsGovernancePolicyRetention(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handling_payload["request_type"], "redaction")
         self.assertEqual(handling_payload["request_status"], "pending")
         self.assertEqual(handling_payload["subject_id"], subject_id)
+        self.assertEqual(handling_payload["evidence_blob_id"], evidence_blob_id)
 
         update_changes = svc.update_with_row_version.await_args.kwargs["changes"]
         self.assertEqual(update_changes["last_action_type"], "redaction")

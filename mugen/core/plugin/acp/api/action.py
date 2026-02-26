@@ -2,7 +2,7 @@
 
 import uuid
 import time
-from typing import Any
+from typing import Any, Mapping
 
 from pydantic import ValidationError
 from quart import abort, request
@@ -21,6 +21,10 @@ from mugen.core.plugin.acp.api.foundation import (
 )
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
+from mugen.core.plugin.acp.contract.service.sandbox_enforcer import (
+    CapabilityDeniedError,
+    ISandboxEnforcer,
+)
 
 # pylint: disable=too-many-arguments
 # ylint: disable=too-many-positional-arguments
@@ -37,6 +41,10 @@ def _logger_provider():
 
 def _registry_provider():
     return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
+
+
+def _sandbox_enforcer_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_SANDBOX_ENFORCER)
 
 
 def _entity_name(edm_type_name: str) -> str:
@@ -76,6 +84,108 @@ def _action_response_parts(result: Any) -> tuple[int, Any]:
     return 200, result
 
 
+def _optional_uuid(value: Any) -> uuid.UUID | None:
+    if value is None:
+        return None
+    if isinstance(value, uuid.UUID):
+        return value
+
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _required_capabilities(action_cap: Mapping[str, Any] | None) -> tuple[str, ...]:
+    if action_cap is None:
+        return ()
+
+    raw = action_cap.get("required_capabilities")
+    if raw is None:
+        return ()
+
+    if isinstance(raw, str):
+        text = raw.strip()
+        return (text,) if text else ()
+
+    if not isinstance(raw, (list, tuple, set)):
+        return ()
+
+    output: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        capability = str(item or "").strip()
+        if capability == "" or capability in seen:
+            continue
+        seen.add(capability)
+        output.append(capability)
+    return tuple(output)
+
+
+async def _enforce_required_capabilities(
+    *,
+    action_cap: Mapping[str, Any] | None,
+    tenant_id: uuid.UUID | None,
+    plugin_key: str,
+    action: str,
+    auth_user_uuid: uuid.UUID,
+    entity_set: str,
+    entity: str,
+    entity_id: uuid.UUID | None,
+    request_id: str | None,
+    correlation_id: str | None,
+    registry: IAdminRegistry,
+    sandbox_enforcer_provider,
+) -> None:
+    required = _required_capabilities(action_cap)
+    if not required:
+        return
+
+    enforcer: ISandboxEnforcer = sandbox_enforcer_provider()
+    base_context = {
+        "entity_set": entity_set,
+        "action_name": action,
+        "entity_id": str(entity_id) if entity_id is not None else None,
+        "request_id": request_id,
+        "correlation_id": correlation_id,
+    }
+
+    for capability in required:
+        try:
+            await enforcer.require(
+                tenant_id=tenant_id,
+                plugin_key=plugin_key,
+                capability=capability,
+                context=base_context,
+            )
+        except CapabilityDeniedError as exc:
+            deny_meta = {
+                "plugin_key": plugin_key,
+                "capability": capability,
+                "context": dict(base_context),
+                "sandbox_context": dict(exc.context),
+            }
+            await emit_audit_event(
+                registry=registry,
+                entity_set=entity_set,
+                entity=entity,
+                entity_id=entity_id,
+                operation="capability_denied",
+                action_name=action,
+                outcome="denied",
+                source_plugin=plugin_key,
+                actor_id=auth_user_uuid,
+                tenant_id=tenant_id,
+                meta=deny_meta,
+                request_id=request_id,
+                correlation_id=correlation_id,
+            )
+            abort(
+                403,
+                ("Capability requirement denied: " f"{plugin_key}:{capability}"),
+            )
+
+
 @api.post("core/acp/v1/<entity_set>/$action/<action>")
 @permission_required(action_kw="action")
 async def dispatch_entity_set_action(
@@ -84,6 +194,7 @@ async def dispatch_entity_set_action(
     auth_user: str,
     logger_provider=_logger_provider,
     registry_provider=_registry_provider,
+    sandbox_enforcer_provider=_sandbox_enforcer_provider,
     **_,
 ) -> Any:
     """Dispatch an action for an EDM entity set."""
@@ -131,6 +242,25 @@ async def dispatch_entity_set_action(
         action_data = schema.model_validate(data)
     except ValidationError as e:
         abort(400, str(e))
+
+    tenant_for_capability = None
+    if scope_mode == _SCOPE_OPTIONAL:
+        tenant_for_capability = _optional_uuid(getattr(action_data, "tenant_id", None))
+
+    await _enforce_required_capabilities(
+        action_cap=action_cap,
+        tenant_id=tenant_for_capability,
+        plugin_key=resource.namespace,
+        action=action,
+        auth_user_uuid=auth_user_uuid,
+        entity_set=entity_set,
+        entity=entity,
+        entity_id=None,
+        request_id=request_id,
+        correlation_id=correlation_id,
+        registry=registry,
+        sandbox_enforcer_provider=sandbox_enforcer_provider,
+    )
 
     await enforce_schema_bindings(
         registry=registry,
@@ -263,6 +393,7 @@ async def dispatch_entity_set_action_tenant(
     auth_user: str,
     logger_provider=_logger_provider,
     registry_provider=_registry_provider,
+    sandbox_enforcer_provider=_sandbox_enforcer_provider,
     **_,
 ) -> Any:
     """Dispatch a tenant-scoped action for an EDM entity."""
@@ -317,6 +448,21 @@ async def dispatch_entity_set_action_tenant(
         action_data = schema.model_validate(data)
     except ValidationError as e:
         abort(400, str(e))
+
+    await _enforce_required_capabilities(
+        action_cap=action_cap,
+        tenant_id=tenant_uuid,
+        plugin_key=resource.namespace,
+        action=action,
+        auth_user_uuid=auth_user_uuid,
+        entity_set=entity_set,
+        entity=entity,
+        entity_id=None,
+        request_id=request_id,
+        correlation_id=correlation_id,
+        registry=registry,
+        sandbox_enforcer_provider=sandbox_enforcer_provider,
+    )
 
     await enforce_schema_bindings(
         registry=registry,
@@ -458,6 +604,7 @@ async def dispatch_entity_action(
     auth_user: str,
     logger_provider=_logger_provider,
     registry_provider=_registry_provider,
+    sandbox_enforcer_provider=_sandbox_enforcer_provider,
     **_,
 ) -> Any:
     """Dispatch an action for an EDM entity."""
@@ -511,6 +658,25 @@ async def dispatch_entity_action(
         action_data = schema.model_validate(data)
     except ValidationError as e:
         abort(400, str(e))
+
+    tenant_for_capability = None
+    if scope_mode == _SCOPE_OPTIONAL:
+        tenant_for_capability = _optional_uuid(getattr(action_data, "tenant_id", None))
+
+    await _enforce_required_capabilities(
+        action_cap=action_cap,
+        tenant_id=tenant_for_capability,
+        plugin_key=resource.namespace,
+        action=action,
+        auth_user_uuid=auth_user_uuid,
+        entity_set=entity_set,
+        entity=entity,
+        entity_id=entity_uuid,
+        request_id=request_id,
+        correlation_id=correlation_id,
+        registry=registry,
+        sandbox_enforcer_provider=sandbox_enforcer_provider,
+    )
 
     await enforce_schema_bindings(
         registry=registry,
@@ -647,6 +813,7 @@ async def dispatch_entity_action_tenant(
     auth_user: str,
     logger_provider=_logger_provider,
     registry_provider=_registry_provider,
+    sandbox_enforcer_provider=_sandbox_enforcer_provider,
     **_,
 ) -> Any:
     """Dispatch a tenant-scoped action for an EDM entity."""
@@ -706,6 +873,21 @@ async def dispatch_entity_action_tenant(
         action_data = schema.model_validate(data)
     except ValidationError as e:
         abort(400, str(e))
+
+    await _enforce_required_capabilities(
+        action_cap=action_cap,
+        tenant_id=tenant_uuid,
+        plugin_key=resource.namespace,
+        action=action,
+        auth_user_uuid=auth_user_uuid,
+        entity_set=entity_set,
+        entity=entity,
+        entity_id=entity_uuid,
+        request_id=request_id,
+        correlation_id=correlation_id,
+        registry=registry,
+        sandbox_enforcer_provider=sandbox_enforcer_provider,
+    )
 
     await enforce_schema_bindings(
         registry=registry,

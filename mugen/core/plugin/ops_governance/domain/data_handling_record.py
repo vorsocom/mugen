@@ -31,5 +31,6 @@ class DataHandlingRecordDE(BaseDE, TenantScopedDEMixin):
     resolution_note: str | None = None
     handled_by_user_id: uuid.UUID | None = None
     evidence_ref: str | None = None
+    evidence_blob_id: uuid.UUID | None = None
 
     meta: dict[str, Any] | None = None
