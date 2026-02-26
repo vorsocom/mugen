@@ -268,7 +268,7 @@ class AuditEventService(  # pragma: no cover
             secret = _DEFAULT_HASH_SECRET
         return active_kid, secret.encode("utf-8")
 
-    def _secret_for_kid(self, hash_key_id: str | None) -> bytes | None:
+    def _config_secret_for_kid(self, hash_key_id: str | None) -> bytes | None:
         key_id = (hash_key_id or _DEFAULT_HASH_KEY_ID).strip() or _DEFAULT_HASH_KEY_ID
         _, keys, _ = self._hash_chain_config()
         secret = self._resolve_secret(keys.get(key_id))
@@ -277,6 +277,42 @@ class AuditEventService(  # pragma: no cover
         if key_id == _DEFAULT_HASH_KEY_ID:
             return _DEFAULT_HASH_SECRET.encode("utf-8")
         return None
+
+    async def _secret_for_kid(
+        self,
+        *,
+        tenant_id: uuid.UUID | None,
+        hash_key_id: str | None,
+        key_cache: dict[tuple[uuid.UUID | None, str], bytes | None],
+    ) -> bytes | None:
+        key_id = (hash_key_id or _DEFAULT_HASH_KEY_ID).strip() or _DEFAULT_HASH_KEY_ID
+        cache_key = (tenant_id, key_id.casefold())
+        if cache_key in key_cache:
+            return key_cache[cache_key]
+
+        secret: bytes | None = None
+        registry = self._safe_registry()
+        if registry is not None:
+            try:
+                resource = registry.get_resource("KeyRefs")
+                key_ref_svc: IKeyRefService = registry.get_edm_service(
+                    resource.service_key
+                )
+                resolved = await key_ref_svc.resolve_secret_for_key_id(
+                    tenant_id=tenant_id,
+                    purpose="audit_hmac",
+                    key_id=key_id,
+                )
+                if resolved is not None:
+                    secret = resolved.secret
+            except Exception:  # pylint: disable=broad-except
+                secret = None
+
+        if secret is None:
+            secret = self._config_secret_for_kid(key_id)
+
+        key_cache[cache_key] = secret
+        return secret
 
     @staticmethod
     def _scope_key(values: Mapping[str, Any]) -> str:
@@ -1097,6 +1133,7 @@ class AuditEventService(  # pragma: no cover
         batch_size: int,
         max_batches: int,
         dry_run: bool,
+        purge_grace_days_override: int | None = None,
     ) -> dict[str, Any]:
         rows_tombstoned = 0
         batches = 0
@@ -1104,7 +1141,11 @@ class AuditEventService(  # pragma: no cover
             tenant_id=tenant_id,
             non_tenant_only=non_tenant_only,
         )
-        grace_days = self._default_purge_grace_days()
+        grace_days = (
+            self._default_purge_grace_days()
+            if purge_grace_days_override is None
+            else max(0, int(purge_grace_days_override))
+        )
 
         for _ in range(max_batches):
             rows = await self.list(
@@ -1290,6 +1331,12 @@ class AuditEventService(  # pragma: no cover
         return max(1, int(value))
 
     @staticmethod
+    def _resolve_optional_nonnegative_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        return max(0, int(value))
+
+    @staticmethod
     def _resolve_phases(raw_phases: Sequence[str] | None) -> list[str]:
         phases = list(raw_phases or _DEFAULT_PHASES)
         seen: set[str] = set()
@@ -1313,6 +1360,9 @@ class AuditEventService(  # pragma: no cover
         batch_size = self._resolve_batch_size(getattr(data, "batch_size", None))
         max_batches = self._resolve_max_batches(getattr(data, "max_batches", None))
         dry_run = bool(getattr(data, "dry_run", False))
+        purge_grace_days_override = self._resolve_optional_nonnegative_int(
+            getattr(data, "purge_grace_days_override", None)
+        )
         now = self._to_aware_utc(getattr(data, "now_override", None)) or self._now_utc()
         phases = self._resolve_phases(getattr(data, "phases", None))
 
@@ -1347,6 +1397,7 @@ class AuditEventService(  # pragma: no cover
                     batch_size=batch_size,
                     max_batches=max_batches,
                     dry_run=dry_run,
+                    purge_grace_days_override=purge_grace_days_override,
                 )
                 continue
 
@@ -1453,6 +1504,7 @@ class AuditEventService(  # pragma: no cover
 
         chain_state: dict[str, dict[str, Any]] = {}
         mismatches: list[dict[str, Any]] = []
+        secret_cache: dict[tuple[uuid.UUID | None, str], bytes | None] = {}
         checked = 0
         for event in events:
             checked += 1
@@ -1474,7 +1526,11 @@ class AuditEventService(  # pragma: no cover
                 if str(event.prev_entry_hash or _GENESIS_HASH) != expected_prev:
                     reasons.append("prev_hash_mismatch")
 
-                secret = self._secret_for_kid(event.hash_key_id)
+                secret = await self._secret_for_kid(
+                    tenant_id=event.tenant_id,
+                    hash_key_id=event.hash_key_id,
+                    key_cache=secret_cache,
+                )
                 if secret is None:
                     reasons.append("missing_hash_key")
                 else:

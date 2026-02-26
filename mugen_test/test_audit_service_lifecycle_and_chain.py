@@ -62,6 +62,69 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class _KeyRefService:
+    def __init__(self, key_id: str, secret: bytes):
+        self._key_id = key_id
+        self._secret = secret
+        self.purpose_calls: list[dict[str, object]] = []
+        self.key_id_calls: list[dict[str, object]] = []
+
+    async def resolve_secret_for_purpose(
+        self,
+        *,
+        tenant_id: uuid.UUID | None,
+        purpose: str,
+    ):
+        self.purpose_calls.append(
+            {
+                "tenant_id": tenant_id,
+                "purpose": purpose,
+            }
+        )
+        return SimpleNamespace(
+            key_id=self._key_id,
+            secret=self._secret,
+            provider="local",
+        )
+
+    async def resolve_secret_for_key_id(
+        self,
+        *,
+        tenant_id: uuid.UUID | None,
+        purpose: str,
+        key_id: str,
+    ):
+        self.key_id_calls.append(
+            {
+                "tenant_id": tenant_id,
+                "purpose": purpose,
+                "key_id": key_id,
+            }
+        )
+        if key_id.strip().lower() != self._key_id.strip().lower():
+            return None
+        return SimpleNamespace(
+            key_id=self._key_id,
+            secret=self._secret,
+            provider="local",
+        )
+
+
+class _Registry:
+    def __init__(self, key_ref_service: _KeyRefService):
+        self._key_ref_service = key_ref_service
+
+    def get_resource(self, name: str):
+        if name != "KeyRefs":
+            raise KeyError(name)
+        return SimpleNamespace(service_key=name)
+
+    def get_edm_service(self, service_key: str):
+        if service_key != "KeyRefs":
+            raise KeyError(service_key)
+        return self._key_ref_service
+
+
 class _FakeUow:
     def __init__(self, gateway: "_FakeRsg"):
         self._gateway = gateway
@@ -356,6 +419,76 @@ class TestAuditServiceLifecycleAndChain(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ex.exception.code, 409)
         self.assertIsNotNone(created.entry_hash)
 
+    async def test_verify_chain_with_keyrefs_only_secret_resolution(self):
+        tenant_id = uuid.uuid4()
+        key_ref_service = _KeyRefService(
+            key_id="tenant-chain-key-1",
+            secret=b"tenant-chain-secret",
+        )
+        service = AuditEventService(
+            table="audit_event",
+            rsg=self.gateway,
+            config_provider=lambda: SimpleNamespace(
+                audit=SimpleNamespace(
+                    lifecycle=SimpleNamespace(
+                        purge_grace_days=7,
+                        batch_size_default=50,
+                    ),
+                    hash_chain=SimpleNamespace(
+                        active_key_id="not-used",
+                        keys={},
+                    ),
+                    emit=SimpleNamespace(fail_closed=False),
+                )
+            ),
+            registry_provider=lambda: _Registry(key_ref_service),
+        )
+        now = _now_utc()
+        created = await service.create(
+            {
+                "tenant_id": tenant_id,
+                "actor_id": uuid.uuid4(),
+                "entity_set": "Users",
+                "entity": "User",
+                "entity_id": uuid.uuid4(),
+                "operation": "create",
+                "action_name": "create",
+                "occurred_at": now,
+                "outcome": "success",
+                "request_id": "req-keyref-only",
+                "correlation_id": "corr-keyref-only",
+                "source_plugin": "com.test.audit",
+                "changed_fields": ["email"],
+                "before_snapshot": None,
+                "after_snapshot": {"email": "x@example.com"},
+                "meta": {"case": "keyrefs-only"},
+                "retention_until": now + timedelta(days=30),
+                "redaction_due_at": now + timedelta(days=7),
+            }
+        )
+        self.assertEqual(created.hash_key_id, "tenant-chain-key-1")
+
+        summary, status = await service.action_verify_chain(
+            tenant_id=tenant_id,
+            where={"tenant_id": tenant_id},
+            auth_user_id=uuid.uuid4(),
+            data=SimpleNamespace(
+                from_occurred_at=None,
+                to_occurred_at=None,
+                max_rows=100,
+                require_clean=False,
+            ),
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(summary["IsValid"])
+        self.assertEqual(summary["MismatchCount"], 0)
+        self.assertGreaterEqual(len(key_ref_service.purpose_calls), 1)
+        self.assertEqual(len(key_ref_service.key_id_calls), 1)
+        self.assertEqual(
+            key_ref_service.key_id_calls[0]["tenant_id"],
+            tenant_id,
+        )
+
     async def test_redact_and_legal_hold_conflict(self):
         event = await self._create_event()
         before_hash = event.before_snapshot_hash
@@ -467,6 +600,7 @@ class TestAuditServiceLifecycleAndChain(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_lifecycle_and_seal_backlog_paths(self):
         old_time = _now_utc() - timedelta(days=10)
+        run_now = _now_utc()
         redact_event = await self._create_event(
             redaction_due_at=old_time,
             retention_until=_now_utc() + timedelta(days=10),
@@ -482,7 +616,8 @@ class TestAuditServiceLifecycleAndChain(unittest.IsolatedAsyncioTestCase):
                 batch_size=100,
                 max_batches=3,
                 dry_run=False,
-                now_override=_now_utc(),
+                now_override=run_now,
+                purge_grace_days_override=5,
                 phases=["redact_due", "tombstone_expired"],
             ),
         )
@@ -492,6 +627,10 @@ class TestAuditServiceLifecycleAndChain(unittest.IsolatedAsyncioTestCase):
         by_id = {str(row["id"]): row for row in self.gateway.tables["audit_event"]}
         self.assertIsNotNone(by_id[str(redact_event.id)]["redacted_at"])
         self.assertIsNotNone(by_id[str(tombstone_event.id)]["tombstoned_at"])
+        self.assertEqual(
+            by_id[str(tombstone_event.id)]["purge_due_at"],
+            run_now + timedelta(days=5),
+        )
 
         rerun, status = await self.service.entity_set_action_run_lifecycle(
             auth_user_id=uuid.uuid4(),
@@ -499,7 +638,8 @@ class TestAuditServiceLifecycleAndChain(unittest.IsolatedAsyncioTestCase):
                 batch_size=100,
                 max_batches=1,
                 dry_run=False,
-                now_override=_now_utc(),
+                now_override=run_now,
+                purge_grace_days_override=5,
                 phases=["redact_due", "tombstone_expired"],
             ),
         )

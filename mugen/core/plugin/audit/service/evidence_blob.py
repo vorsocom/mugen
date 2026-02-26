@@ -922,6 +922,7 @@ class EvidenceBlobService(
         batch_size: int,
         max_batches: int,
         now: datetime,
+        purge_grace_days_override: int | None = None,
     ) -> dict[str, Any]:
         base: dict[str, Any] = {}
         if tenant_id is not None:
@@ -953,7 +954,11 @@ class EvidenceBlobService(
 
         processed = 0
         batches = 0
-        grace_days = self._default_purge_grace_days()
+        grace_days = (
+            self._default_purge_grace_days()
+            if purge_grace_days_override is None
+            else max(0, int(purge_grace_days_override))
+        )
         while batches < max_batches:
             try:
                 rows = await self.list(
@@ -1105,6 +1110,7 @@ class EvidenceBlobService(
         batch_size: int,
         max_batches: int,
         now_override: datetime | None = None,
+        purge_grace_days_override: int | None = None,
     ) -> dict[str, Any]:
         now = self._to_aware_utc(now_override) or self._now_utc()
 
@@ -1122,6 +1128,7 @@ class EvidenceBlobService(
                 batch_size=batch_size,
                 max_batches=max_batches,
                 now=now,
+                purge_grace_days_override=purge_grace_days_override,
             ),
             "purge_due": await self._phase_purge_due(
                 tenant_id=tenant_id,

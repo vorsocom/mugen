@@ -647,6 +647,95 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+        resolver.resolve.reset_mock()
+        tenant_key_row = KeyRefDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            purpose="audit_hmac",
+            key_id="Audit-Key-Tenant",
+            status="active",
+            provider="local",
+        )
+        svc.list = AsyncMock(return_value=[tenant_key_row])
+        resolved = await svc.resolve_secret_for_key_id(
+            tenant_id=tenant_id,
+            purpose="audit_hmac",
+            key_id="audit-key-tenant",
+        )
+        self.assertIsNotNone(resolved)
+        resolver.resolve.assert_called_once_with(tenant_key_row)
+
+        resolver.resolve.reset_mock()
+        global_retired = KeyRefDE(
+            id=uuid.uuid4(),
+            tenant_id=GLOBAL_TENANT_ID,
+            purpose="audit_hmac",
+            key_id="Audit-Key-Global",
+            status="retired",
+            provider="local",
+        )
+        svc.list = AsyncMock(side_effect=[[], [], [], [global_retired]])
+        resolved = await svc.resolve_secret_for_key_id(
+            tenant_id=tenant_id,
+            purpose="audit_hmac",
+            key_id="AUDIT-KEY-GLOBAL",
+        )
+        self.assertIsNotNone(resolved)
+        resolver.resolve.assert_called_once_with(global_retired)
+
+        resolver.resolve.reset_mock()
+        destroyed = KeyRefDE(
+            id=uuid.uuid4(),
+            tenant_id=GLOBAL_TENANT_ID,
+            purpose="audit_hmac",
+            key_id="Destroyed-Key",
+            status="destroyed",
+            provider="local",
+        )
+        svc.list = AsyncMock(side_effect=[[destroyed], []])
+        self.assertIsNone(
+            await svc.resolve_secret_for_key_id(
+                tenant_id=None,
+                purpose="audit_hmac",
+                key_id="destroyed-key",
+            )
+        )
+        resolver.resolve.assert_not_called()
+
+        resolver.resolve.reset_mock()
+        svc.list = AsyncMock(
+            side_effect=[
+                [
+                    KeyRefDE(
+                        id=uuid.uuid4(),
+                        tenant_id=GLOBAL_TENANT_ID,
+                        purpose="audit_hmac",
+                        key_id="other-key",
+                        status="active",
+                        provider="local",
+                    )
+                ],
+                [],
+            ]
+        )
+        self.assertIsNone(
+            await svc.resolve_secret_for_key_id(
+                tenant_id=None,
+                purpose="audit_hmac",
+                key_id="wanted-key",
+            )
+        )
+        resolver.resolve.assert_not_called()
+
+        svc.list = AsyncMock(side_effect=SQLAlchemyError("boom"))
+        with self.assertRaises(HTTPException) as ctx:
+            await svc.resolve_secret_for_key_id(
+                tenant_id=None,
+                purpose="audit_hmac",
+                key_id="wanted-key",
+            )
+        self.assertEqual(ctx.exception.code, 500)
+
 
 class TestPluginCapabilityGrantService(unittest.IsolatedAsyncioTestCase):
     """Covers grant/revoke resolution and capability lookup precedence."""

@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
+from mugen.core.contract.gateway.storage.rdbms.types import FilterGroup
 from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 from mugen.core.plugin.acp.contract.service.key_provider import ResolvedKeyMaterial
 from mugen.core.plugin.acp.contract.service.key_ref import IKeyRefService
@@ -476,3 +477,68 @@ class KeyRefService(
             return None
 
         return self._key_material_resolver.resolve(active)
+
+    async def _resolve_for_key_id_in_scope(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        purpose: str,
+        key_id: str,
+    ) -> KeyRefDE | None:
+        key_id_folded = key_id.casefold()
+        for status in ("active", "retired"):
+            try:
+                rows = await self.list(
+                    filter_groups=[
+                        FilterGroup(
+                            where={
+                                "tenant_id": tenant_id,
+                                "purpose": purpose,
+                                "status": status,
+                            }
+                        )
+                    ]
+                )
+            except SQLAlchemyError:
+                abort(500)
+
+            for row in rows:
+                if str(row.status or "").strip().lower() not in {"active", "retired"}:
+                    continue
+                if str(row.key_id or "").strip().casefold() == key_id_folded:
+                    return row
+
+        return None
+
+    async def resolve_secret_for_key_id(
+        self,
+        *,
+        tenant_id: uuid.UUID | None,
+        purpose: str,
+        key_id: str,
+    ) -> ResolvedKeyMaterial | None:
+        normalized_purpose = self._normalize_required_text(
+            purpose,
+            field_name="Purpose",
+        )
+        normalized_key_id = self._normalize_required_text(
+            key_id,
+            field_name="KeyId",
+        )
+
+        normalized_tenant = self._normalize_tenant_id(tenant_id)
+        resolved_ref = await self._resolve_for_key_id_in_scope(
+            tenant_id=normalized_tenant,
+            purpose=normalized_purpose,
+            key_id=normalized_key_id,
+        )
+        if resolved_ref is None and normalized_tenant != GLOBAL_TENANT_ID:
+            resolved_ref = await self._resolve_for_key_id_in_scope(
+                tenant_id=GLOBAL_TENANT_ID,
+                purpose=normalized_purpose,
+                key_id=normalized_key_id,
+            )
+
+        if resolved_ref is None:
+            return None
+        return self._key_material_resolver.resolve(resolved_ref)
