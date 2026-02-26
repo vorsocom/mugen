@@ -129,6 +129,15 @@ contrib = "mugen.core.plugin.ops_reporting.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
+path = "mugen.core.plugin.ops_connector.fw_ext"
+enabled = true
+name = "com.vorsocomputing.mugen.ops_connector"
+namespace = "com.vorsocomputing.mugen.ops_connector"
+models = "mugen.core.plugin.ops_connector.model"
+contrib = "mugen.core.plugin.ops_connector.contrib"
+
+[[mugen.modules.core.plugins]]
+type = "fw"
 path = "mugen.core.plugin.billing.fw_ext"
 enabled = true
 name = "com.vorsocomputing.mugen.billing"
@@ -251,6 +260,18 @@ issuer = "<issuer>"
 kid = "<kid>"
 alg = "EdDSA"
 pem = "-----BEGIN PRIVATE KEY-----\\n<replace-with-private-key>\\n-----END PRIVATE KEY-----\\n"
+
+[acp.key_management.providers.local.keys.ops_connector_secret]
+ops_connector_default = "dev-ops-connector-secret"
+
+# === OPS CONNECTOR ===
+[ops_connector]
+timeout_seconds_default = 10.0
+max_retries_default = 2
+retry_backoff_seconds_default = 0.5
+retry_status_codes_default = [429, 500, 502, 503, 504]
+secret_purpose = "ops_connector_secret"
+redacted_keys = ["password", "token", "secret", "authorization", "api_key"]
 
 # === AWS Bedrock ===
 [aws.bedrock]
