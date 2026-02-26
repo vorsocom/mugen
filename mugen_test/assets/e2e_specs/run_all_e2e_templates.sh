@@ -138,6 +138,8 @@ declare -a SPECS=(
   "mugen_test/assets/e2e_specs/ops_governance/ops-governance-e2e-policy-evaluate.template.json"
   "mugen_test/assets/e2e_specs/ops_reporting/ops-reporting-e2e-aggregation.template.json"
   "mugen_test/assets/e2e_specs/ops_reporting/ops-reporting-e2e-snapshot.template.json"
+  "mugen_test/assets/e2e_specs/ops_reporting/ops-reporting-e2e-snapshot-verify.template.json"
+  "mugen_test/assets/e2e_specs/ops_reporting/ops-reporting-e2e-export.template.json"
   "mugen_test/assets/e2e_specs/channel_orchestration/channel-orchestration-e2e-conversation.template.json"
   "mugen_test/assets/e2e_specs/channel_orchestration/channel-orchestration-e2e-blocklist.template.json"
   "mugen_test/assets/e2e_specs/web/web-e2e-rest-sse-core.template.json"

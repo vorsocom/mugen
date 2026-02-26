@@ -28,6 +28,11 @@ class ReportSnapshotDE(BaseDE, TenantScopedDEMixin):
 
     summary_json: dict[str, Any] | None = None
 
+    trace_id: str | None = None
+    provenance_json: dict[str, Any] | None = None
+    manifest_hash: str | None = None
+    signature_json: dict[str, Any] | None = None
+
     generated_at: datetime | None = None
     published_at: datetime | None = None
     archived_at: datetime | None = None

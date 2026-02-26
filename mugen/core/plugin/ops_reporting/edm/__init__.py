@@ -6,6 +6,8 @@ __all__ = [
     "aggregation_job_type",
     "report_definition_type",
     "report_snapshot_type",
+    "export_job_type",
+    "export_item_type",
     "kpi_threshold_type",
 ]
 
@@ -14,4 +16,6 @@ from mugen.core.plugin.ops_reporting.edm.metric_series import metric_series_type
 from mugen.core.plugin.ops_reporting.edm.aggregation_job import aggregation_job_type
 from mugen.core.plugin.ops_reporting.edm.report_definition import report_definition_type
 from mugen.core.plugin.ops_reporting.edm.report_snapshot import report_snapshot_type
+from mugen.core.plugin.ops_reporting.edm.export_job import export_job_type
+from mugen.core.plugin.ops_reporting.edm.export_item import export_item_type
 from mugen.core.plugin.ops_reporting.edm.kpi_threshold import kpi_threshold_type

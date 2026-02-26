@@ -13,6 +13,8 @@ from mugen.core.plugin.ops_reporting.contrib import contribute
 from mugen.core.plugin.ops_reporting.service.aggregation_job import (
     AggregationJobService,
 )
+from mugen.core.plugin.ops_reporting.service.export_item import ExportItemService
+from mugen.core.plugin.ops_reporting.service.export_job import ExportJobService
 from mugen.core.plugin.ops_reporting.service.kpi_threshold import KpiThresholdService
 from mugen.core.plugin.ops_reporting.service.metric_definition import (
     MetricDefinitionService,
@@ -67,6 +69,8 @@ class TestOpsReportingContribBinding(unittest.TestCase):
         aggregation_jobs = registry.get_resource("OpsReportingAggregationJobs")
         report_defs = registry.get_resource("OpsReportingReportDefinitions")
         snapshots = registry.get_resource("OpsReportingReportSnapshots")
+        export_jobs = registry.get_resource("OpsReportingExportJobs")
+        export_items = registry.get_resource("OpsReportingExportItems")
         thresholds = registry.get_resource("OpsReportingKpiThresholds")
 
         self.assertIn("ops_reporting_metric_definition", fake_rsg.tables)
@@ -74,6 +78,8 @@ class TestOpsReportingContribBinding(unittest.TestCase):
         self.assertIn("ops_reporting_aggregation_job", fake_rsg.tables)
         self.assertIn("ops_reporting_report_definition", fake_rsg.tables)
         self.assertIn("ops_reporting_report_snapshot", fake_rsg.tables)
+        self.assertIn("ops_reporting_export_job", fake_rsg.tables)
+        self.assertIn("ops_reporting_export_item", fake_rsg.tables)
         self.assertIn("ops_reporting_kpi_threshold", fake_rsg.tables)
 
         self.assertIsInstance(
@@ -97,6 +103,14 @@ class TestOpsReportingContribBinding(unittest.TestCase):
             ReportSnapshotService,
         )
         self.assertIsInstance(
+            registry.get_edm_service(export_jobs.service_key),
+            ExportJobService,
+        )
+        self.assertIsInstance(
+            registry.get_edm_service(export_items.service_key),
+            ExportItemService,
+        )
+        self.assertIsInstance(
             registry.get_edm_service(thresholds.service_key),
             KpiThresholdService,
         )
@@ -106,9 +120,19 @@ class TestOpsReportingContribBinding(unittest.TestCase):
         self.assertIn("generate_snapshot", snapshots.capabilities.actions)
         self.assertIn("publish_snapshot", snapshots.capabilities.actions)
         self.assertIn("archive_snapshot", snapshots.capabilities.actions)
+        self.assertIn("verify_snapshot", snapshots.capabilities.actions)
+        self.assertIn("create_export", export_jobs.capabilities.actions)
+        self.assertIn("build_export", export_jobs.capabilities.actions)
+        self.assertIn("verify_export", export_jobs.capabilities.actions)
 
         metric_type = registry.schema.get_type("OPSREPORTING.MetricDefinition")
         self.assertEqual(metric_type.entity_set_name, "OpsReportingMetricDefinitions")
 
         snapshot_type = registry.schema.get_type("OPSREPORTING.ReportSnapshot")
         self.assertEqual(snapshot_type.entity_set_name, "OpsReportingReportSnapshots")
+
+        export_job_type = registry.schema.get_type("OPSREPORTING.ExportJob")
+        self.assertEqual(export_job_type.entity_set_name, "OpsReportingExportJobs")
+
+        export_item_type = registry.schema.get_type("OPSREPORTING.ExportItem")
+        self.assertEqual(export_item_type.entity_set_name, "OpsReportingExportItems")

@@ -28,6 +28,9 @@ from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.ops_reporting.api.validation import (
     AggregationJobCreateValidation,
+    ExportJobBuildValidation,
+    ExportJobCreateValidation,
+    ExportJobVerifyValidation,
     KpiThresholdCreateValidation,
     MetricDefinitionCreateValidation,
     MetricRecomputeWindowValidation,
@@ -37,6 +40,7 @@ from mugen.core.plugin.ops_reporting.api.validation import (
     ReportSnapshotCreateValidation,
     ReportSnapshotGenerateValidation,
     ReportSnapshotPublishValidation,
+    ReportSnapshotVerifyValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -208,7 +212,54 @@ def contribute(
                     "schema": ReportSnapshotArchiveValidation,
                     "confirm": "Archive this report snapshot?",
                 },
+                "verify_snapshot": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": ReportSnapshotVerifyValidation,
+                    "confirm": "Verify this report snapshot integrity metadata?",
+                },
             },
+        },
+        {
+            "set": "OpsReportingExportJobs",
+            "entity": "ExportJob",
+            "description": (
+                "Deterministic export bundle jobs that create signed manifests and"
+                " item-ledger proof data."
+            ),
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": True,
+            "crud": CrudPolicy(),
+            "actions": {
+                "create_export": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": ExportJobCreateValidation,
+                    "confirm": "Create a queued export job?",
+                },
+                "build_export": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": ExportJobBuildValidation,
+                    "confirm": "Build this export job and finalize its manifest?",
+                },
+                "verify_export": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": ExportJobVerifyValidation,
+                    "confirm": "Verify this export manifest and item hashes?",
+                },
+            },
+        },
+        {
+            "set": "OpsReportingExportItems",
+            "entity": "ExportItem",
+            "description": (
+                "Read-only export item ledger rows containing canonicalized payload"
+                " hashes."
+            ),
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "crud": CrudPolicy(),
         },
         {
             "set": "OpsReportingKpiThresholds",

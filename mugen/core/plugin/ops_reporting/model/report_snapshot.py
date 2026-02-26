@@ -88,6 +88,28 @@ class ReportSnapshot(ModelBase, TenantScopedMixin):
         nullable=True,
     )
 
+    trace_id: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+
+    provenance_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+    manifest_hash: Mapped[str | None] = mapped_column(
+        CITEXT(64),
+        nullable=True,
+        index=True,
+    )
+
+    signature_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
     generated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
@@ -163,9 +185,15 @@ class ReportSnapshot(ModelBase, TenantScopedMixin):
             name="ck_ops_reporting_report_snapshot__note_nonempty_if_set",
         ),
         CheckConstraint(
-            (
-                "report_definition_id IS NOT NULL OR metric_codes IS NOT NULL"
-            ),
+            "trace_id IS NULL OR length(btrim(trace_id)) > 0",
+            name="ck_ops_reporting_report_snapshot__trace_id_nonempty_if_set",
+        ),
+        CheckConstraint(
+            "manifest_hash IS NULL OR length(btrim(manifest_hash)) > 0",
+            name="ck_ops_reporting_report_snapshot__manifest_hash_nonempty_if_set",
+        ),
+        CheckConstraint(
+            ("report_definition_id IS NOT NULL OR metric_codes IS NOT NULL"),
             name="ck_ops_reporting_report_snapshot__metric_source_required",
         ),
         CheckConstraint(
