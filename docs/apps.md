@@ -10,29 +10,43 @@ Before starting, ensure the following:
 
 2. You are familiar with basic command-line usage and have Git installed on your system.
 
-## Creating a New Application Repository
+## Creating a Downstream Repository
 
-To simplify integration and keep your project up-to-date with muGen releases, create a Git repository (downstream) that tracks the muGen core (upstream). The key principle is: **NEVER modify the muGen core**. This ensures you can easily update your project with changes from the upstream repository without encountering conflicts.
+To simplify long-term maintenance, treat your application repository as
+downstream and the official `vorsocom/mugen` repository as upstream. The key
+principle is: **never modify `mugen/core`**.
 
-### Step 1: Set Up Your Project Repository
+### Step 1: Clone muGen
 
-First, create a new directory for your application and initialize it as a Git repository. This sets up your project folder and prepares it for tracking changes.
+Start from the upstream codebase so your downstream repository has the same
+baseline structure and history.
 
 ```shell
-~$ mkdir genapp
-~$ cd genapp
-~$ git init
+~$ git clone git@github.com:vorsocom/mugen.git hrms-agent
+~$ cd hrms-agent
 ```
 
-Next, create a file for tracking application-specific metadata. This file will help you document important details about your project. For this guide, we'll use a Python file named `downstream.py`:
+### Step 2: Rewire Remotes
+
+Rename the cloned `origin` remote to `upstream`, then point `origin` to your
+new downstream repository.
+
+```shell
+~$ git remote rename origin upstream
+~$ git remote set-url --push upstream PUSH_DISABLED
+~$ git remote add origin [downstream-repo-url]
+~$ git remote -v
+```
+
+### Step 3: Add Downstream Tracking Metadata
+
+Create a downstream tracking file in the repository root.
 
 ```shell
 ~$ touch downstream.py
 ```
 
-### Step 2: Add Project Metadata
-
-Open `downstream.py` in a text editor and add the following basic project metadata. This information helps keep track of your application's details and can be used within your code:
+Populate it with project-specific metadata:
 
 ```python
 """Custom metadata for the downstream application."""
@@ -44,52 +58,84 @@ __email__ = "Project contact email"
 __version__ = "0.0.0"
 ```
 
-### Step 3: Commit Your Changes
+### Step 4: Publish Downstream Main and Develop
 
-Use the metadata file for your initial commit to the repository. Committing is the process of saving changes in Git. The project repository will be associated with a remote named `origin`:
+Commit the downstream tracking file, then push both `main` and `develop` to
+your downstream `origin`.
 
 ```shell
 ~$ git add downstream.py
-~$ git commit -m "Initial commit"
-~$ git branch -M main
-~$ git remote add origin [project-repo-url]
+~$ git commit -m "chore: initialize downstream metadata"
 ~$ git push -u origin main
 ~$ git checkout -b develop
 ~$ git push -u origin develop
 ```
 
-- `git add downstream.py` stages the file for committing.
-- `git commit -m "Initial commit"` saves the changes with a message.
-- `git branch -M main` renames the default branch to "main."
-- `git remote add origin [project-repo-url]` connects your local repository to the remote repository on GitHub.
-- `git push -u origin main` uploads your main branch to GitHub.
-- `git checkout -b develop` creates and switches to a new branch called "develop."
-- `git push -u origin develop` pushes the new branch to the remote repository.
+## Downstream Development Boundary
 
-## Integrating muGen
+During feature development:
 
-### Step 4: Merge Upstream/main onto Develop
+- Keep downstream application logic in `mugen/extension`.
+- Leave `mugen/core` unchanged.
+- Wire downstream extensions through `mugen.toml`.
 
-Now you’ll integrate muGen into your project. This involves setting up the upstream repository (muGen's official repository) and merging its main branch into your "develop" branch.
+This boundary keeps upstream merges small and conflict-resistant.
+
+## Updating Downstream With Upstream Changes
+
+When you need upstream updates, pull `upstream main` while on your downstream
+`develop` branch (which fetches and merges in one step).
 
 ```shell
-# Ensure you are on the development branch.
 ~$ git checkout develop
-
-# Add the upstream repository.
-~$ git remote add upstream git@github.com:vorsocom/mugen.git
-
-# Prevent accidental pushes to the upstream repository.
-~$ git remote set-url --push upstream PUSH_DISABLED
-
-# Fetch the latest changes from the upstream repository.
-~$ git fetch upstream main:upstream/main --no-tags
-
-# Merge the upstream main branch into your develop branch.
-~$ git merge upstream/main
-
-# Push the updated develop branch to your GitHub repository.
+~$ git pull upstream main
 ~$ git push origin develop
+```
+
+## Recommended Guardrails for Downstream Repositories
+
+The baseline flow above works well for small teams. For larger teams or
+frequent upstream syncs, add the following safeguards.
+
+### 1) Merge Upstream Through a Sync Branch and PR
+
+Instead of updating `develop` directly, perform upstream integration on a
+temporary branch and merge it through code review:
+
+```shell
+~$ git checkout develop
+~$ git pull origin develop --ff-only
+~$ git checkout -b chore/sync-upstream-YYYYMMDD
+~$ git pull upstream main
+~$ git push -u origin chore/sync-upstream-YYYYMMDD
+```
+
+Then open a PR from the sync branch into `develop`.
+
+### 2) Enforce the Core Boundary in CI
+
+Protect `mugen/core` from accidental edits in downstream feature work.
+Add a CI check that fails when non-sync PRs include paths under `mugen/core/`.
+
+### 3) Track Upstream Baseline in `downstream.py`
+
+Keep a machine-readable record of the upstream revision used by downstream:
+
+```python
+__upstream_repo__ = "vorsocom/mugen"
+__upstream_branch__ = "main"
+__upstream_sync_ref__ = "vX.Y.Z or <commit-sha>"
+```
+
+Update `__upstream_sync_ref__` each time you merge upstream.
+
+### 4) Run Full Gates for Every Upstream Sync
+
+After each upstream merge, run full tests, full E2E validation, and confirm
+coverage stays at `100%` before merging to `develop`.
+
+```shell
+~$ bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh --python "$(poetry run which python)"
 ```
 
 ### Step 5: Create the muGen Configuration File
