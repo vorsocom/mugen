@@ -556,6 +556,20 @@ class TestMugenGatewayStorageKeyvalRelational(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(migrated_fresh["payload"], b"payload-new")
         self.assertEqual(marker["codec"], "application/json")
 
+        logger.reset_mock()
+        with (
+            patch("mugen.core.gateway.storage.keyval.relational.os.path.exists", return_value=True),
+            patch.object(
+                gateway,
+                "_read_dbm_entries",  # pylint: disable=protected-access
+                side_effect=AssertionError("legacy import should be skipped when marker exists"),
+            ),
+        ):
+            await gateway._maybe_import_legacy_dbm()  # pylint: disable=protected-access
+        logger.info.assert_called_with(
+            "Legacy keyval import marker found; skipping startup import."
+        )
+
         failing_gateway = _new_gateway(engine=_MemoryRelationalEngine(), config=config, logger=Mock())
         with (
             patch("mugen.core.gateway.storage.keyval.relational.os.path.exists", return_value=True),
