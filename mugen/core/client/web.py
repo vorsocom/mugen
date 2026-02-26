@@ -1676,24 +1676,27 @@ class DefaultWebClient(IWebClient):
         status: str,
         error: str | None,
     ) -> None:
+        normalized_status = str(status).strip().lower()
+        is_done = normalized_status == "done"
         async with self._storage_lock:
             if self._using_relational_web_storage():
                 async with self._relational_session() as session:
                     await session.execute(
                         sa_text(
                             "UPDATE mugen.web_queue_job "
-                            "SET status = :status, "
+                            "SET status = CAST(:status AS mugen.citext), "
                             "lease_expires_at = NULL, "
                             "updated_at = now(), "
                             "error_message = :error_message, "
                             "completed_at = CASE "
-                            "WHEN :status = 'done' THEN now() "
+                            "WHEN :is_done THEN now() "
                             "ELSE NULL "
                             "END "
                             "WHERE job_id = :job_id"
                         ),
                         {
-                            "status": status,
+                            "status": normalized_status,
+                            "is_done": is_done,
                             "error_message": error,
                             "job_id": job_id,
                         },
@@ -1705,11 +1708,11 @@ class DefaultWebClient(IWebClient):
                 if str(queue_job.get("id")) != job_id:
                     continue
 
-                queue_job["status"] = status
+                queue_job["status"] = normalized_status
                 queue_job["lease_expires_at"] = None
                 queue_job["updated_at"] = self._utc_now_iso()
                 queue_job["error"] = error
-                if status == "done":
+                if normalized_status == "done":
                     queue_job["completed_at"] = self._utc_now_iso()
                 await self._write_queue_state_unlocked(queue_state)
                 return
