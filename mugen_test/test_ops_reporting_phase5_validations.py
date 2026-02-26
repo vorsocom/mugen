@@ -116,7 +116,10 @@ class TestOpsReportingPhase5Validations(unittest.TestCase):
     def test_export_job_build_and_verify_validation_defaults(self) -> None:
         valid_build = ExportJobBuildValidation(row_version=2)
         self.assertFalse(valid_build.force)
-        self.assertTrue(valid_build.sign)
+        self.assertIsNone(valid_build.sign)
+
+        explicit_unsigned = ExportJobBuildValidation(row_version=2, sign=False)
+        self.assertFalse(explicit_unsigned.sign)
 
         with self.assertRaises(ValidationError):
             ExportJobBuildValidation(

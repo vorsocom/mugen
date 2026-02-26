@@ -20,6 +20,8 @@ class ExportJobDE(BaseDE, TenantScopedDEMixin):
 
     export_type: str | None = None
     spec_json: dict[str, Any] | None = None
+    default_sign: bool | None = None
+    default_signature_key_id: str | None = None
 
     status: str | None = None
 

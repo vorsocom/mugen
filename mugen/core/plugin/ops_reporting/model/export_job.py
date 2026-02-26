@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -56,6 +57,17 @@ class ExportJob(ModelBase, TenantScopedMixin):
         JSONB,
         nullable=False,
         server_default=sa_text("'{}'::jsonb"),
+    )
+
+    default_sign: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=sa_text("true"),
+    )
+
+    default_signature_key_id: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
     )
 
     status: Mapped[str] = mapped_column(
@@ -131,6 +143,13 @@ class ExportJob(ModelBase, TenantScopedMixin):
         CheckConstraint(
             "jsonb_typeof(spec_json) = 'object'",
             name="ck_ops_reporting_export_job__spec_json_object",
+        ),
+        CheckConstraint(
+            (
+                "default_signature_key_id IS NULL OR "
+                "length(btrim(default_signature_key_id)) > 0"
+            ),
+            name="ck_ops_reporting_export_job__default_sig_key_id_nonempty",
         ),
         CheckConstraint(
             "manifest_hash IS NULL OR length(btrim(manifest_hash)) > 0",
