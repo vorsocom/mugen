@@ -121,7 +121,10 @@ class TestMugenOpsReportingReportSnapshotService(unittest.IsolatedAsyncioTestCas
         sample_dt = datetime(2026, 2, 14, 12, 0)
         aware_dt = datetime(2026, 2, 14, 12, 30, tzinfo=timezone.utc)
 
-        self.assertEqual(ReportSnapshotService._json_safe(sample_uuid), str(sample_uuid))
+        self.assertEqual(
+            ReportSnapshotService._json_safe(sample_uuid),
+            str(sample_uuid),
+        )
         self.assertEqual(
             ReportSnapshotService._json_safe(sample_dt),
             sample_dt.replace(tzinfo=timezone.utc).isoformat(),
@@ -479,6 +482,7 @@ class TestMugenOpsReportingReportSnapshotService(unittest.IsolatedAsyncioTestCas
             window_start=datetime(2026, 2, 14, 12, 0, tzinfo=timezone.utc),
             window_end=datetime(2026, 2, 14, 13, 0, tzinfo=timezone.utc),
             scope_key="__all__",
+            trace_id="trace-existing",
         )
         svc._get_for_action = AsyncMock(return_value=current)
         svc._resolve_metric_codes = AsyncMock(return_value=["m1"])
@@ -510,6 +514,7 @@ class TestMugenOpsReportingReportSnapshotService(unittest.IsolatedAsyncioTestCas
         self.assertEqual(
             generate_changes["summary_json"]["generated_at"], now.isoformat()
         )
+        self.assertEqual(generate_changes["trace_id"], "trace-existing")
         self.assertIsNotNone(generate_changes["provenance_json"])
         self.assertIsNotNone(generate_changes["manifest_hash"])
         self.assertIsNone(generate_changes["note"])
@@ -632,6 +637,7 @@ class TestMugenOpsReportingReportSnapshotService(unittest.IsolatedAsyncioTestCas
             window_start=datetime(2026, 2, 14, 12, 0, tzinfo=timezone.utc),
             window_end=datetime(2026, 2, 14, 13, 0, tzinfo=timezone.utc),
             scope_key="__all__",
+            trace_id="trace-before",
         )
 
         svc = ReportSnapshotService(table="ops_reporting_report_snapshot", rsg=Mock())

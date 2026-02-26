@@ -656,7 +656,11 @@ class ReportSnapshotService(
         )
         window_start, window_end = self._resolve_window(snapshot=current, data=data)
         scope_key = self._normalize_scope_key(data.scope_key or current.scope_key)
-        trace_id = self._normalize_optional_text(data.trace_id)
+        trace_id = (
+            self._normalize_optional_text(data.trace_id)
+            if data.trace_id is not None
+            else self._normalize_optional_text(current.trace_id)
+        )
 
         metrics, provenance_metrics = await self._build_metric_summary_with_provenance(
             tenant_id=tenant_id,

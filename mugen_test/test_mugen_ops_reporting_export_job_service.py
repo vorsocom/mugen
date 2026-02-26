@@ -44,6 +44,72 @@ class TestMugenOpsReportingExportJobService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved, "registry-service")
         mocked.assert_called_once_with(export_job_mod.di.EXT_SERVICE_ADMIN_REGISTRY)
 
+    def _build_ready_service(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        export_job_id: uuid.UUID,
+        now: datetime,
+        default_sign: bool,
+        default_signature_key_id: str | None,
+    ) -> ExportJobService:
+        svc = ExportJobService(
+            table="ops_reporting_export_job",
+            rsg=Mock(),
+            registry_provider=lambda: None,
+        )
+        svc._now_utc = Mock(return_value=now)
+        svc._rsg.delete_many = AsyncMock()
+
+        current = ExportJobDE(
+            id=export_job_id,
+            tenant_id=tenant_id,
+            row_version=2,
+            status="queued",
+            export_type="report_snapshot_pack",
+            spec_json={
+                "ResourceRefs": {
+                    "OpsWorkflowTasks": [str(uuid.uuid4())],
+                }
+            },
+            default_sign=default_sign,
+            default_signature_key_id=default_signature_key_id,
+        )
+        running = ExportJobDE(
+            id=export_job_id,
+            tenant_id=tenant_id,
+            row_version=3,
+            status="running",
+            export_type="report_snapshot_pack",
+            spec_json=current.spec_json,
+            created_at=now,
+            default_sign=default_sign,
+            default_signature_key_id=default_signature_key_id,
+        )
+
+        svc._get_for_action = AsyncMock(return_value=current)
+        svc._update_with_row_version = AsyncMock(return_value=running)
+        svc._fetch_resource_payload = AsyncMock(
+            return_value={
+                "id": "task-1",
+                "tenant_id": str(tenant_id),
+                "row_version": 9,
+            }
+        )
+        svc._build_snapshot_proof = AsyncMock(return_value=None)
+        svc._build_audit_chain_proof = AsyncMock(return_value=None)
+        svc._export_item_service.create = AsyncMock()
+        svc.update = AsyncMock(
+            return_value=ExportJobDE(
+                id=export_job_id,
+                tenant_id=tenant_id,
+                row_version=4,
+                status="completed",
+            )
+        )
+
+        return svc
+
     async def test_action_create_export_queued(self) -> None:
         tenant_id = uuid.uuid4()
         actor_id = uuid.uuid4()
@@ -83,6 +149,12 @@ class TestMugenOpsReportingExportJobService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["ExportJobId"], str(export_job_id))
         self.assertEqual(result["Status"], "queued")
         self.assertEqual(result["TraceId"], "trace-1")
+        self.assertTrue(result["DefaultSign"])
+        self.assertIsNone(result["DefaultSignatureKeyId"])
+
+        create_payload = svc.create.await_args.args[0]
+        self.assertTrue(create_payload["default_sign"])
+        self.assertIsNone(create_payload["default_signature_key_id"])
 
     async def test_action_create_export_policy_deny_blocks(self) -> None:
         tenant_id = uuid.uuid4()
@@ -254,6 +326,120 @@ class TestMugenOpsReportingExportJobService(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(idempotent_result["Idempotent"])
+
+    async def test_action_build_export_uses_job_sign_false_default_when_omitted(
+        self,
+    ) -> None:
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        export_job_id = uuid.uuid4()
+        now = datetime(2026, 2, 14, 20, 0, tzinfo=timezone.utc)
+
+        svc = self._build_ready_service(
+            tenant_id=tenant_id,
+            export_job_id=export_job_id,
+            now=now,
+            default_sign=False,
+            default_signature_key_id="ops-key-default",
+        )
+        svc._resolve_signing_material = AsyncMock(
+            return_value=SimpleNamespace(
+                key_id="ops-key-default",
+                secret=b"secret",
+                provider="local",
+            )
+        )
+
+        result, status = await svc.action_build_export(
+            tenant_id=tenant_id,
+            entity_id=export_job_id,
+            where={"tenant_id": tenant_id, "id": export_job_id},
+            auth_user_id=actor_id,
+            data=ExportJobBuildValidation(row_version=2),
+        )
+
+        self.assertEqual(status, 200)
+        self.assertFalse(result["Signed"])
+        svc._resolve_signing_material.assert_not_awaited()
+
+        changes = svc.update.await_args.kwargs["changes"]
+        self.assertIsNone(changes["signature_json"])
+
+    async def test_action_build_export_uses_job_signing_defaults_when_omitted(
+        self,
+    ) -> None:
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        export_job_id = uuid.uuid4()
+        now = datetime(2026, 2, 14, 20, 0, tzinfo=timezone.utc)
+
+        svc = self._build_ready_service(
+            tenant_id=tenant_id,
+            export_job_id=export_job_id,
+            now=now,
+            default_sign=True,
+            default_signature_key_id="ops-key-default",
+        )
+        svc._resolve_signing_material = AsyncMock(
+            return_value=SimpleNamespace(
+                key_id="ops-key-default",
+                secret=b"secret",
+                provider="local",
+            )
+        )
+
+        result, status = await svc.action_build_export(
+            tenant_id=tenant_id,
+            entity_id=export_job_id,
+            where={"tenant_id": tenant_id, "id": export_job_id},
+            auth_user_id=actor_id,
+            data=ExportJobBuildValidation(row_version=2),
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(result["Signed"])
+        svc._resolve_signing_material.assert_awaited_once_with(
+            tenant_id=tenant_id,
+            signature_key_id="ops-key-default",
+        )
+
+        changes = svc.update.await_args.kwargs["changes"]
+        self.assertEqual(changes["signature_json"]["key_id"], "ops-key-default")
+
+    async def test_action_build_export_explicit_sign_false_overrides_job_default(
+        self,
+    ) -> None:
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        export_job_id = uuid.uuid4()
+        now = datetime(2026, 2, 14, 20, 0, tzinfo=timezone.utc)
+
+        svc = self._build_ready_service(
+            tenant_id=tenant_id,
+            export_job_id=export_job_id,
+            now=now,
+            default_sign=True,
+            default_signature_key_id="ops-key-default",
+        )
+        svc._resolve_signing_material = AsyncMock(
+            return_value=SimpleNamespace(
+                key_id="ops-key-default",
+                secret=b"secret",
+                provider="local",
+            )
+        )
+
+        result, status = await svc.action_build_export(
+            tenant_id=tenant_id,
+            entity_id=export_job_id,
+            where={"tenant_id": tenant_id, "id": export_job_id},
+            auth_user_id=actor_id,
+            data=ExportJobBuildValidation(row_version=2, sign=False),
+        )
+
+        self.assertEqual(status, 200)
+        self.assertFalse(result["Signed"])
+        svc._resolve_signing_material.assert_not_awaited()
 
     async def test_action_verify_export_tamper_and_require_clean(self) -> None:
         tenant_id = uuid.uuid4()

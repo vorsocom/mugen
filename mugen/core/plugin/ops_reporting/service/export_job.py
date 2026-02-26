@@ -697,6 +697,10 @@ class ExportJobService(  # pragma: no cover
         trace_id = self._normalize_optional_text(data.trace_id)
         export_type = str(data.export_type).strip().lower()
         spec_json = self._canonical_spec_json(data.spec_json)
+        default_sign = bool(data.sign)
+        default_signature_key_id = self._normalize_optional_text(
+            data.signature_key_id
+        )
 
         policy_decision_json: dict[str, Any] | None = None
         if data.policy_definition_id is not None:
@@ -716,6 +720,8 @@ class ExportJobService(  # pragma: no cover
                     "trace_id": trace_id,
                     "export_type": export_type,
                     "spec_json": spec_json,
+                    "default_sign": default_sign,
+                    "default_signature_key_id": default_signature_key_id,
                     "status": "queued",
                     "export_ref": self._normalize_optional_text(
                         spec_json.get("ExportRef")
@@ -739,6 +745,8 @@ class ExportJobService(  # pragma: no cover
                 "Status": str(created.status),
                 "RowVersion": int(created.row_version or 0),
                 "TraceId": trace_id,
+                "DefaultSign": default_sign,
+                "DefaultSignatureKeyId": default_signature_key_id,
             },
             201,
         )
@@ -801,6 +809,23 @@ class ExportJobService(  # pragma: no cover
 
         if running.id is None:
             abort(409, "Export job identifier is missing.")
+
+        job_default_sign = (
+            bool(running.default_sign)
+            if running.default_sign is not None
+            else True
+        )
+        job_default_signature_key_id = self._normalize_optional_text(
+            running.default_signature_key_id
+        )
+        effective_sign = (
+            bool(data.sign) if data.sign is not None else job_default_sign
+        )
+        effective_signature_key_id = (
+            self._normalize_optional_text(data.signature_key_id)
+            if data.signature_key_id is not None
+            else job_default_signature_key_id
+        )
 
         try:
             spec_json = self._canonical_spec_json(running.spec_json)
@@ -884,10 +909,10 @@ class ExportJobService(  # pragma: no cover
             manifest_hash = self._sha256_hex(manifest_json)
 
             signature_json: dict[str, Any] | None = None
-            if bool(data.sign):
+            if effective_sign:
                 material = await self._resolve_signing_material(
                     tenant_id=tenant_id,
-                    signature_key_id=data.signature_key_id,
+                    signature_key_id=effective_signature_key_id,
                 )
                 signature_json = self._build_signature_json(
                     manifest_hash=manifest_hash,

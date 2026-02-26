@@ -339,7 +339,7 @@ class ExportJobBuildValidation(IValidationBase):
 
     row_version: NonNegativeInt
     force: bool = False
-    sign: bool = True
+    sign: bool | None = None
     signature_key_id: str | None = None
 
     @model_validator(mode="after")

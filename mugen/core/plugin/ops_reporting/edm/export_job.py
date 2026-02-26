@@ -29,6 +29,15 @@ export_job_type = EdmType(
             filterable=False,
             sortable=False,
         ),
+        "DefaultSign": EdmProperty(
+            "DefaultSign",
+            TypeRef("Edm.Boolean"),
+            nullable=False,
+        ),
+        "DefaultSignatureKeyId": EdmProperty(
+            "DefaultSignatureKeyId",
+            TypeRef("Edm.String"),
+        ),
         "Status": EdmProperty("Status", TypeRef("Edm.String"), nullable=False),
         "ManifestJson": EdmProperty(
             "ManifestJson",
