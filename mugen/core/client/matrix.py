@@ -55,7 +55,7 @@ from nio.responses import (
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
-from mugen.core.contract.service.ipc import IIPCService
+from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core.utility.processing_signal import (
@@ -98,6 +98,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     _matrix_event_hook_command: str = "matrix_event"
 
+    _matrix_event_hook_payload_version: int = 1
+
+    _default_matrix_ipc_queue_size: int = 256
+
     _sync_key: str = "matrix_client_sync_next_batch"
 
     # pylint: disable=too-many-arguments
@@ -125,6 +129,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._messaging_service = messaging_service
         self._user_service = user_service
         self._direct_room_ids: set[str] = set()
+        self._matrix_ipc_queue_size = self._resolve_matrix_ipc_queue_size()
+        self._matrix_ipc_queue: asyncio.Queue | None = None
+        self._matrix_ipc_worker_task: asyncio.Task | None = None
+        self._matrix_ipc_worker_stop = asyncio.Event()
 
         ## Callbacks
         # Invite Room Events.
@@ -151,6 +159,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     async def __aenter__(self) -> "DefaultMatrixClient":
         """Initialisation."""
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
+        self._start_matrix_ipc_worker()
         if self._keyval_storage_gateway.get("client_access_token") is None:
             # Load password and device name from storage.
             pw = self._config.matrix.client.password
@@ -191,10 +200,80 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Finalisation."""
         self._logging_gateway.debug("DefaultMatrixClient.__aexit__")
+        await self._stop_matrix_ipc_worker()
         try:
             await self.client_session.close()
         except AttributeError:
             ...
+
+    def _resolve_matrix_ipc_queue_size(self) -> int:
+        raw_value = getattr(
+            getattr(getattr(self._config, "matrix", SimpleNamespace()), "ipc", None),
+            "queue_size",
+            self._default_matrix_ipc_queue_size,
+        )
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            parsed = self._default_matrix_ipc_queue_size
+        if parsed <= 0:
+            return self._default_matrix_ipc_queue_size
+        return parsed
+
+    def _start_matrix_ipc_worker(self) -> None:
+        if self._ipc_service is None:
+            return
+        if self._matrix_ipc_worker_task is not None and not self._matrix_ipc_worker_task.done():
+            return
+        self._matrix_ipc_worker_stop.clear()
+        self._matrix_ipc_queue = asyncio.Queue(maxsize=self._matrix_ipc_queue_size)
+        self._matrix_ipc_worker_task = asyncio.create_task(
+            self._matrix_ipc_worker_loop(),
+            name="mugen.matrix.ipc.worker",
+        )
+
+    async def _stop_matrix_ipc_worker(self) -> None:
+        self._matrix_ipc_worker_stop.set()
+        task = self._matrix_ipc_worker_task
+        self._matrix_ipc_worker_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                ...
+        self._matrix_ipc_queue = None
+
+    async def _dispatch_matrix_ipc_request(
+        self,
+        request_payload: IPCCommandRequest,
+    ) -> None:
+        if self._ipc_service is None:
+            return
+        handle_ipc_request = getattr(self._ipc_service, "handle_ipc_request", None)
+        if not callable(handle_ipc_request):
+            return
+        maybe_dispatch = handle_ipc_request(request_payload)
+        if inspect.isawaitable(maybe_dispatch):
+            await maybe_dispatch
+
+    async def _matrix_ipc_worker_loop(self) -> None:
+        while self._matrix_ipc_worker_stop.is_set() is not True:
+            queue = self._matrix_ipc_queue
+            if queue is None:
+                await asyncio.sleep(0.05)
+                continue
+            try:
+                payload = await asyncio.wait_for(queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                continue
+            try:
+                await self._dispatch_matrix_ipc_request(payload)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self._logging_gateway.warning(
+                    "Matrix event extension dispatch failed."
+                    f" error={type(exc).__name__}: {exc}"
+                )
 
     @property
     def sync_token(self) -> str:
@@ -558,16 +637,16 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if self._ipc_service is None:
             return
 
-        handle_ipc_request = getattr(self._ipc_service, "handle_ipc_request", None)
-        if not callable(handle_ipc_request):
+        if not callable(getattr(self._ipc_service, "handle_ipc_request", None)):
             return
 
         event_type = type(event).__name__ if event is not None else "UnknownEvent"
         room_id = getattr(room, "room_id", None)
-        payload = {
-            "response_queue": asyncio.Queue(),
-            "command": self._matrix_event_hook_command,
-            "data": {
+        payload = IPCCommandRequest(
+            platform="matrix",
+            command=self._matrix_event_hook_command,
+            data={
+                "version": self._matrix_event_hook_payload_version,
                 "callback": callback_name,
                 "event_type": event_type,
                 "reason": reason,
@@ -585,18 +664,32 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 ),
                 "event": event,
             },
-        }
+        )
+        self._start_matrix_ipc_worker()
+        if self._matrix_ipc_queue is None:
+            async def _dispatch_without_worker() -> None:
+                try:
+                    await self._dispatch_matrix_ipc_request(payload)
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    self._logging_gateway.warning(
+                        "Matrix event extension dispatch failed."
+                        f" callback={callback_name}"
+                        f" event={event_type}"
+                        f" error={type(exc).__name__}: {exc}"
+                    )
+
+            asyncio.create_task(_dispatch_without_worker())
+            return
 
         try:
-            maybe_dispatch = handle_ipc_request("matrix", payload)
-            if inspect.isawaitable(maybe_dispatch):
-                await maybe_dispatch
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._matrix_ipc_queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            self._increment_matrix_metric("matrix.ipc.dispatch.queue_full_drop_new")
             self._logging_gateway.warning(
-                "Matrix event extension dispatch failed."
+                "Matrix event extension dispatch skipped."
                 f" callback={callback_name}"
                 f" event={event_type}"
-                f" error={type(exc).__name__}: {exc}"
+                " reason=queue_full_drop_new"
             )
 
     async def _handle_non_core_event_callback(

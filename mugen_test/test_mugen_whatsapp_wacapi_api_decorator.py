@@ -24,6 +24,7 @@ def _make_config(
     *,
     platforms: list[str] | None = None,
     verify_ip: bool = False,
+    trust_forwarded_for: bool = False,
     basedir: str = "",
     allow_file: str = "",
     app_secret: str = "app-secret",
@@ -36,6 +37,7 @@ def _make_config(
             servers=SimpleNamespace(
                 allowed=allow_file,
                 verify_ip=verify_ip,
+                trust_forwarded_for=trust_forwarded_for,
             ),
         ),
     )
@@ -208,14 +210,47 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await guarded(), {"ok": True})
 
         logger = Mock()
-        guarded = whatsapp_decorator.whatsapp_server_ip_allow_list_required(
-            _ok_handler,
-            config_provider=lambda: SimpleNamespace(whatsapp=SimpleNamespace()),
-            logger_provider=lambda: logger,
-        )
-        self.assertEqual(await guarded(), {"ok": True})
+        with (
+            patch.object(whatsapp_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                whatsapp_decorator,
+                "request",
+                new=SimpleNamespace(remote_addr="10.0.0.10", headers={}),
+            ),
+        ):
+            guarded = whatsapp_decorator.whatsapp_server_ip_allow_list_required(
+                _ok_handler,
+                config_provider=lambda: SimpleNamespace(whatsapp=SimpleNamespace()),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded()
+            self.assertEqual(ex.exception.code, 500)
+        logger.error.assert_called_once_with("WhatsApp IP verification configuration missing.")
+
+        logger = Mock()
+        with (
+            patch.object(whatsapp_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                whatsapp_decorator,
+                "request",
+                new=SimpleNamespace(remote_addr="10.0.0.10", headers={}),
+            ),
+        ):
+            guarded = whatsapp_decorator.whatsapp_server_ip_allow_list_required(
+                _ok_handler,
+                config_provider=lambda: SimpleNamespace(
+                    whatsapp=SimpleNamespace(
+                        servers=SimpleNamespace(verify_ip="yes")
+                    )
+                ),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded()
+            self.assertEqual(ex.exception.code, 500)
         logger.error.assert_called_once_with(
-            "WhatsApp ip verification requirement unknown."
+            "WhatsApp IP verification configuration invalid."
         )
 
         guarded_factory = whatsapp_decorator.whatsapp_server_ip_allow_list_required(
@@ -231,7 +266,8 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                 whatsapp_decorator,
                 "request",
                 new=SimpleNamespace(
-                    access_route=["10.0.0.9"], remote_addr=None, headers={}
+                    remote_addr=None,
+                    headers={},
                 ),
             ),
         ):
@@ -262,7 +298,7 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                 patch.object(
                     whatsapp_decorator,
                     "request",
-                    new=SimpleNamespace(access_route=[], remote_addr=None, headers={}),
+                    new=SimpleNamespace(remote_addr=None, headers={}),
                 ),
             ):
                 guarded = whatsapp_decorator.whatsapp_server_ip_allow_list_required(
@@ -288,8 +324,7 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                     whatsapp_decorator,
                     "request",
                     new=SimpleNamespace(
-                        access_route=["not-an-ip"],
-                        remote_addr=None,
+                        remote_addr="not-an-ip",
                         headers={},
                     ),
                 ),
@@ -315,8 +350,7 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                     whatsapp_decorator,
                     "request",
                     new=SimpleNamespace(
-                        access_route=["203.0.113.10"],
-                        remote_addr=None,
+                        remote_addr="203.0.113.10",
                         headers={},
                     ),
                 ),
@@ -341,8 +375,7 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                 whatsapp_decorator,
                 "request",
                 new=SimpleNamespace(
-                    access_route=["10.0.0.10"],
-                    remote_addr=None,
+                    remote_addr="10.0.0.10",
                     headers={},
                 ),
             ):
@@ -350,6 +383,26 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                     _ok_handler,
                     config_provider=lambda: _make_config(
                         verify_ip=True,
+                        basedir=tmpdir,
+                        allow_file=allow_file,
+                    ),
+                    logger_provider=lambda: Mock(),
+                )
+                self.assertEqual(await guarded(), {"ok": True})
+
+            with patch.object(
+                whatsapp_decorator,
+                "request",
+                new=SimpleNamespace(
+                    remote_addr="10.0.0.10",
+                    headers={"X-Forwarded-For": ""},
+                ),
+            ):
+                guarded = whatsapp_decorator.whatsapp_server_ip_allow_list_required(
+                    _ok_handler,
+                    config_provider=lambda: _make_config(
+                        verify_ip=True,
+                        trust_forwarded_for=True,
                         basedir=tmpdir,
                         allow_file=allow_file,
                     ),
@@ -367,8 +420,7 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                     whatsapp_decorator,
                     "request",
                     new=SimpleNamespace(
-                        access_route=["10.0.0.10"],
-                        remote_addr=None,
+                        remote_addr="10.0.0.10",
                         headers={},
                     ),
                 ),
@@ -388,3 +440,26 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                 logger.error.assert_called_once_with(
                     "Invalid CIDR entry in WhatsApp allow list."
                 )
+
+            with open(f"{tmpdir}/{allow_file}", "w", encoding="utf8") as file:
+                file.write("10.0.0.0/24\n")
+
+            with patch.object(
+                whatsapp_decorator,
+                "request",
+                new=SimpleNamespace(
+                    remote_addr="203.0.113.5",
+                    headers={"X-Forwarded-For": "10.0.0.42, 203.0.113.1"},
+                ),
+            ):
+                guarded = whatsapp_decorator.whatsapp_server_ip_allow_list_required(
+                    _ok_handler,
+                    config_provider=lambda: _make_config(
+                        verify_ip=True,
+                        trust_forwarded_for=True,
+                        basedir=tmpdir,
+                        allow_file=allow_file,
+                    ),
+                    logger_provider=lambda: Mock(),
+                )
+                self.assertEqual(await guarded(), {"ok": True})

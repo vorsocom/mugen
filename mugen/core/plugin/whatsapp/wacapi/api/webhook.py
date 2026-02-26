@@ -2,7 +2,6 @@
 Implements webhook endpoints for the WhatsApp Cloud API (WACAPI).
 """
 
-import asyncio
 from types import SimpleNamespace
 
 from quart import abort, request
@@ -10,7 +9,7 @@ from quart import abort, request
 from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.service.ipc import IIPCService
+from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
 from mugen.core.plugin.whatsapp.wacapi.api.decorator import (
     whatsapp_platform_required,
     whatsapp_request_signature_verification_required,
@@ -88,22 +87,17 @@ async def whatsapp_wacapi_event(
         logger.debug("`data` is not a dict.")
         abort(400)
 
-    # Queue allowing IPC queue consumer to send back a response.
-    response_queue = asyncio.Queue()
-
-    await ipc_svc.handle_ipc_request(
-        "whatsapp",
-        {
-            "response_queue": response_queue,
-            "command": "whatsapp_wacapi_event",
-            "data": data,
-        },
+    response = await ipc_svc.handle_ipc_request(
+        IPCCommandRequest(
+            platform="whatsapp",
+            command="whatsapp_wacapi_event",
+            data=data,
+        )
     )
-
-    try:
-        response = await asyncio.wait_for(response_queue.get(), timeout=10.0)
-    except asyncio.TimeoutError:
-        logger.error("Timed out waiting for IPC response on 'whatsapp'.")
-        abort(504)
-
-    return response
+    if response.errors:
+        logger.warning(
+            "WhatsApp webhook processed with IPC errors"
+            f" command=whatsapp_wacapi_event"
+            f" error_count={len(response.errors)}"
+        )
+    return {"response": "OK"}

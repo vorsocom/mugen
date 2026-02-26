@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from mugen.core.contract.service.ipc import IPCAggregateError, IPCAggregateResult
 from mugen.core.plugin.whatsapp.wacapi.api import webhook
 
 
@@ -187,14 +188,18 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
 
     async def test_event_success_path(self) -> None:
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
-
-        async def _enqueue_response(platform: str, payload: dict):
-            self.assertEqual(platform, "whatsapp")
-            self.assertEqual(payload["command"], "whatsapp_wacapi_event")
-            await payload["response_queue"].put({"response": "OK"})
-
         ipc_service = SimpleNamespace(
-            handle_ipc_request=AsyncMock(side_effect=_enqueue_response)
+            handle_ipc_request=AsyncMock(
+                return_value=IPCAggregateResult(
+                    platform="whatsapp",
+                    command="whatsapp_wacapi_event",
+                    expected_handlers=1,
+                    received=1,
+                    duration_ms=2,
+                    results=[],
+                    errors=[],
+                )
+            )
         )
         with patch.object(
             webhook,
@@ -208,35 +213,41 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response, {"response": "OK"})
         ipc_service.handle_ipc_request.assert_awaited_once()
+        request_payload = ipc_service.handle_ipc_request.await_args.args[0]
+        self.assertEqual(request_payload.platform, "whatsapp")
+        self.assertEqual(request_payload.command, "whatsapp_wacapi_event")
+        self.assertEqual(request_payload.data, {"entry": []})
 
-    async def test_event_timeout_path_logs_whatsapp_label(self) -> None:
+    async def test_event_returns_ok_and_logs_when_ipc_has_errors(self) -> None:
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
-        ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock(return_value=None))
         logger = Mock()
-
-        async def _timeout(_awaitable, timeout: float):
-            _ = timeout
-            _awaitable.close()
-            raise TimeoutError()
-
-        with (
-            patch.object(webhook, "abort", side_effect=_abort_raiser),
-            patch.object(
-                webhook,
-                "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
-            ),
-            patch(
-                "mugen.core.plugin.whatsapp.wacapi.api.webhook.asyncio.wait_for",
-                _timeout,
-            ),
-        ):
-            with self.assertRaises(_AbortCalled) as ex:
-                await endpoint(
-                    ipc_provider=lambda: ipc_service,
-                    logger_provider=lambda: logger,
+        ipc_service = SimpleNamespace(
+            handle_ipc_request=AsyncMock(
+                return_value=IPCAggregateResult(
+                    platform="whatsapp",
+                    command="whatsapp_wacapi_event",
+                    expected_handlers=1,
+                    received=1,
+                    duration_ms=4,
+                    results=[],
+                    errors=[
+                        IPCAggregateError(
+                            code="timeout",
+                            error="Timeout waiting for IPC handler response.",
+                            handler="X",
+                        )
+                    ],
                 )
-            self.assertEqual(ex.exception.code, 504)
-            logger.error.assert_called_once_with(
-                "Timed out waiting for IPC response on 'whatsapp'."
             )
+        )
+        with patch.object(
+            webhook,
+            "request",
+            new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
+        ):
+            response = await endpoint(
+                ipc_provider=lambda: ipc_service,
+                logger_provider=lambda: logger,
+            )
+        self.assertEqual(response, {"response": "OK"})
+        logger.warning.assert_called_once()

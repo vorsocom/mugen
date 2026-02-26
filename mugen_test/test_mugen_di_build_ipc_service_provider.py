@@ -245,13 +245,13 @@ class TestDIBuildIPCService(unittest.TestCase):
                 class DummyIPCServiceClass(IIPCService):
                     """Dummy IPC class."""
 
-                    def __init__(self, logging_gateway):
+                    def __init__(self, config, logging_gateway):
                         pass
 
                     def register_ipc_extension(self, ext):
                         pass
 
-                    async def handle_ipc_request(self, platform, ipc_payload):
+                    async def handle_ipc_request(self, request):
                         pass
 
                 DummyIPCServiceClass.__module__ = "valid_ipc_module"

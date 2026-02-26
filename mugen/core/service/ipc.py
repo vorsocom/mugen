@@ -3,110 +3,229 @@
 __all__ = ["DefaultIPCService"]
 
 import asyncio
+from time import perf_counter
+from types import SimpleNamespace
 from typing import Any
 
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.service.ipc import IIPCService
+from mugen.core.contract.service.ipc import (
+    IIPCService,
+    IPCCommandRequest,
+    IPCHandlerResult,
+    IPCAggregateError,
+    IPCAggregateResult,
+)
 
 
 class DefaultIPCService(IIPCService):
     """An implementation of IIPCService."""
 
-    _ipc_extensions: list[IIPCExtension] = []
+    _default_timeout_seconds: float = 10.0
+
+    _default_timeout_max_seconds: float = 30.0
 
     def __init__(
         self,
-        logging_gateway: ILoggingGateway,
+        config: SimpleNamespace | None = None,
+        logging_gateway: ILoggingGateway | None = None,
     ) -> None:
+        self._config = config
         self._logging_gateway = logging_gateway
+        self._ipc_extensions: list[IIPCExtension] = []
+        self._ipc_extension_keys: set[tuple[str, tuple[str, ...], tuple[str, ...]]] = (
+            set()
+        )
+        self._timeout_seconds = self._resolve_timeout_setting(
+            ("ipc", "dispatch", "timeout_seconds"),
+            self._default_timeout_seconds,
+        )
+        self._timeout_max_seconds = self._resolve_timeout_setting(
+            ("ipc", "dispatch", "max_timeout_seconds"),
+            self._default_timeout_max_seconds,
+        )
+        if self._timeout_max_seconds < self._timeout_seconds:
+            self._timeout_max_seconds = self._timeout_seconds
 
-    async def handle_ipc_request(self, platform: str, ipc_payload: dict) -> None:
-        # Process by IPC extensions.
-        command = ipc_payload.get("command")
-        caller_q: asyncio.Queue = ipc_payload["response_queue"]
+    def _resolve_timeout_setting(
+        self,
+        path: tuple[str, ...],
+        fallback: float,
+    ) -> float:
+        cursor: Any = self._config
+        for token in path:
+            if cursor is None:
+                return fallback
+            cursor = getattr(cursor, token, None)
+        if cursor in [None, ""]:
+            return fallback
+        try:
+            parsed = float(cursor)
+        except (TypeError, ValueError):
+            return fallback
+        if parsed <= 0:
+            return fallback
+        return parsed
 
-        # 1) Identify all matching handlers
+    def _resolve_timeout_seconds(self, request: IPCCommandRequest) -> float:
+        timeout_seconds = request.timeout_seconds
+        if timeout_seconds is None:
+            return self._timeout_seconds
+        try:
+            parsed = float(timeout_seconds)
+        except (TypeError, ValueError):
+            return self._timeout_seconds
+        if parsed <= 0:
+            return self._timeout_seconds
+        if parsed > self._timeout_max_seconds:
+            return self._timeout_max_seconds
+        return parsed
+
+    @staticmethod
+    def _normalize_handler_name(ext: IIPCExtension) -> str:
+        return type(ext).__name__
+
+    def _extension_key(
+        self,
+        ext: IIPCExtension,
+    ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+        platforms = tuple(sorted(str(item) for item in ext.platforms))
+        commands = tuple(sorted(str(item) for item in ext.ipc_commands))
+        return (
+            self._normalize_handler_name(ext),
+            platforms,
+            commands,
+        )
+
+    async def _run_handler(
+        self,
+        *,
+        ext: IIPCExtension,
+        request: IPCCommandRequest,
+        timeout_seconds: float,
+    ) -> tuple[str, IPCHandlerResult | IPCAggregateError]:
+        handler_name = self._normalize_handler_name(ext)
+        try:
+            result = await asyncio.wait_for(
+                ext.process_ipc_command(request),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            return (
+                "error",
+                IPCAggregateError(
+                    code="timeout",
+                    error="Timeout waiting for IPC handler response.",
+                    handler=handler_name,
+                ),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return (
+                "error",
+                IPCAggregateError(
+                    code="handler_exception",
+                    error=f"Unhandled exception: {exc}",
+                    handler=handler_name,
+                ),
+            )
+
+        if not isinstance(result, IPCHandlerResult):
+            return (
+                "error",
+                IPCAggregateError(
+                    code="invalid_handler_result",
+                    error="IPC handler returned unsupported result type.",
+                    handler=handler_name,
+                ),
+            )
+
+        normalized_result = IPCHandlerResult(
+            handler=handler_name,
+            response=result.response if isinstance(result.response, dict) else {},
+            ok=bool(result.ok),
+            code=result.code,
+            error=result.error,
+        )
+
+        if normalized_result.ok is not True:
+            return (
+                "error",
+                IPCAggregateError(
+                    code=normalized_result.code or "handler_error",
+                    error=normalized_result.error or "IPC handler returned an error.",
+                    handler=handler_name,
+                ),
+            )
+        return ("result", normalized_result)
+
+    async def handle_ipc_request(self, request: IPCCommandRequest) -> IPCAggregateResult:
+        started = perf_counter()
+        command = request.command
+        platform = request.platform
         handlers: list[IIPCExtension] = []
         for ext in self._ipc_extensions:
-            if ext.platforms and platform not in ext.platforms:
+            if not ext.platform_supported(platform):
                 continue
             if command in ext.ipc_commands:
                 handlers.append(ext)
 
         if not handlers:
-            await caller_q.put(
-                {
-                    "response": {
-                        "command": command,
-                        "results": [],
-                        "errors": [{"error": "Not Found"}],
-                    }
-                }
+            duration_ms = int(max(0, (perf_counter() - started) * 1000))
+            return IPCAggregateResult(
+                platform=platform,
+                command=command,
+                expected_handlers=0,
+                received=1,
+                duration_ms=duration_ms,
+                results=[],
+                errors=[
+                    IPCAggregateError(
+                        code="not_found",
+                        error="Not Found",
+                        handler=None,
+                    )
+                ],
             )
-            return
 
-        # 2) Fan out using an internal queue so we can aggregate
-        internal_q: asyncio.Queue = asyncio.Queue()
-        timeout_s = 10.0  # choose what’s appropriate
-
-        async def run_handler(ext: IIPCExtension) -> None:
-            handler_name = type(ext).__name__
-            payload = dict(ipc_payload)
-            payload["response_queue"] = internal_q
-            payload["handler"] = handler_name
-            try:
-                await ext.process_ipc_command(payload)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                # Ensure exactly one response even on exceptions.
-                await internal_q.put(
-                    {
-                        "handler": handler_name,
-                        "ok": False,
-                        "error": f"Unhandled exception: {exc}",
-                    }
+        timeout_seconds = self._resolve_timeout_seconds(request)
+        task_results = await asyncio.gather(
+            *[
+                self._run_handler(
+                    ext=ext,
+                    request=request,
+                    timeout_seconds=timeout_seconds,
                 )
+                for ext in handlers
+            ],
+            return_exceptions=False,
+        )
 
-        tasks = [asyncio.create_task(run_handler(ext)) for ext in handlers]
-
-        # 3) Collect up to N responses (or timeout)
-        expected = len(handlers)
-        results: list[dict[str, Any]] = []
-        errors: list[dict[str, Any]] = []
-
-        async def collect_one() -> dict[str, Any]:
-            return await asyncio.wait_for(internal_q.get(), timeout=timeout_s)
-
-        for _ in range(expected):
-            try:
-                msg = await collect_one()
-            except asyncio.TimeoutError:
-                errors.append({"error": "Timeout waiting for IPC handler response"})
-                break
-
-            if msg.get("ok") is False:
-                errors.append(msg)
+        results: list[IPCHandlerResult] = []
+        errors: list[IPCAggregateError] = []
+        for item_type, item in task_results:
+            if item_type == "result":
+                results.append(item)
             else:
-                results.append(msg)
+                errors.append(item)
 
-        # Ensure tasks are cleaned up (don’t let them leak)
-        for t in tasks:
-            if not t.done():
-                t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-        # 4) Put a single aggregated response back to caller
-        await caller_q.put(
-            {
-                "response": {
-                    "command": command,
-                    "expected_handlers": expected,
-                    "received": len(results) + len(errors),
-                    "results": results,  # each entry includes "handler" + "response"
-                    "errors": errors,
-                }
-            }
+        duration_ms = int(max(0, (perf_counter() - started) * 1000))
+        return IPCAggregateResult(
+            platform=platform,
+            command=command,
+            expected_handlers=len(handlers),
+            received=len(results) + len(errors),
+            duration_ms=duration_ms,
+            results=results,
+            errors=errors,
         )
 
     def register_ipc_extension(self, ext: IIPCExtension) -> None:
+        if ext in self._ipc_extensions:
+            raise ValueError("IPC extension already registered (instance duplicate).")
+        ext_key = self._extension_key(ext)
+        if ext_key in self._ipc_extension_keys:
+            raise ValueError(
+                "IPC extension already registered (logical duplicate)."
+            )
+        self._ipc_extension_keys.add(ext_key)
         self._ipc_extensions.append(ext)

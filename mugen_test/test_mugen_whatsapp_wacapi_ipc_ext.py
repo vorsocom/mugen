@@ -1,11 +1,13 @@
 """Unit tests for mugen.core.plugin.whatsapp.wacapi.ipc_ext."""
 
 import asyncio
-import json
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.whatsapp.wacapi.ipc_ext import WhatsAppWACAPIIPCExtension
 
 
@@ -65,12 +67,15 @@ def _make_status_event(status: dict) -> dict:
     }
 
 
-def _make_payload(data: dict, command: str = "whatsapp_wacapi_event") -> dict:
-    return {
-        "command": command,
-        "data": data,
-        "response_queue": asyncio.Queue(),
-    }
+def _make_request(
+    data: dict,
+    command: str = "whatsapp_wacapi_event",
+) -> IPCCommandRequest:
+    return IPCCommandRequest(
+        platform="whatsapp",
+        command=command,
+        data=data,
+    )
 
 
 def _make_messaging_service():
@@ -135,34 +140,39 @@ def _make_user_service(known_users=None):
     )
 
 
-class _MemoryKeyVal:
+class _MemoryRelational:
     def __init__(self):
-        self.store = {}
+        self.event_dedup: dict[tuple[str, str], dict] = {}
+        self.dead_letters: list[dict] = []
 
-    def close(self) -> None:
-        return None
+    async def insert_one(self, table: str, record: dict) -> dict:
+        if table == "whatsapp_wacapi_event_dedup":
+            key = (record["event_type"], record["dedupe_key"])
+            if key in self.event_dedup:
+                raise IntegrityError("insert", {}, Exception("duplicate"))
+            self.event_dedup[key] = dict(record)
+            return dict(record)
+        if table == "whatsapp_wacapi_event_dead_letter":
+            self.dead_letters.append(dict(record))
+            return dict(record)
+        raise ValueError(f"Unsupported table: {table}")
 
-    def get(self, key: str, _decode: bool = True):
-        return self.store.get(key)
-
-    def has_key(self, key: str) -> bool:
-        return key in self.store
-
-    def keys(self) -> list[str]:
-        return list(self.store.keys())
-
-    def put(self, key: str, value):
-        self.store[key] = value
-
-    def remove(self, key: str):
-        return self.store.pop(key, None)
+    async def update_one(self, table: str, where: dict, changes: dict) -> dict | None:
+        if table != "whatsapp_wacapi_event_dedup":
+            raise ValueError(f"Unsupported table: {table}")
+        key = (where.get("event_type"), where.get("dedupe_key"))
+        existing = self.event_dedup.get(key)
+        if existing is None:
+            return None
+        existing.update(changes)
+        return dict(existing)
 
 
 def _new_extension(
     *,
     config,
     client=None,
-    keyval_storage_gateway=None,
+    relational_storage_gateway=None,
     messaging_service=None,
     user_service=None,
     logging_gateway=None,
@@ -170,7 +180,9 @@ def _new_extension(
     return WhatsAppWACAPIIPCExtension(
         config=config,
         logging_gateway=logging_gateway or Mock(),
-        keyval_storage_gateway=keyval_storage_gateway or _MemoryKeyVal(),
+        relational_storage_gateway=(
+            relational_storage_gateway or _MemoryRelational()
+        ),
         messaging_service=messaging_service or _make_messaging_service(),
         user_service=user_service or _make_user_service(),
         whatsapp_client=client or _make_client(),
@@ -199,12 +211,24 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ext.ipc_commands, ["whatsapp_wacapi_event"])
 
         with patch.object(ext, "_wacapi_event", new=AsyncMock()) as event_handler:
-            await ext.process_ipc_command(
-                {"command": "whatsapp_wacapi_event", "data": {}}
+            handled = await ext.process_ipc_command(
+                _make_request(
+                    {},
+                    command="whatsapp_wacapi_event",
+                )
             )
-            await ext.process_ipc_command({"command": "unknown", "data": {}})
+            unknown = await ext.process_ipc_command(
+                _make_request(
+                    {},
+                    command="unknown",
+                )
+            )
 
         event_handler.assert_awaited_once()
+        self.assertEqual(handled.response, {"response": "OK"})
+        self.assertTrue(handled.ok)
+        self.assertFalse(unknown.ok)
+        self.assertEqual(unknown.code, "not_found")
 
     async def test_extract_api_data_handles_missing_failed_and_non_dict(self) -> None:
         logging_gateway = Mock()
@@ -351,7 +375,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             messaging_service=messaging_service,
             user_service=user_service,
         )
-        payload = _make_payload(
+        payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-1",
@@ -368,7 +392,6 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             message="Beta only",
             recipient="15550001",
         )
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
         messaging_service.handle_text_message.assert_not_awaited()
         user_service.add_known_user.assert_not_called()
 
@@ -407,7 +430,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             messaging_service=messaging_service,
             user_service=user_service,
         )
-        payload = _make_payload(
+        payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-2",
@@ -447,7 +470,6 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             state="stop",
             message_id="wamid-2",
         )
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
 
     async def test_processing_signal_failure_does_not_block_message_processing(
         self,
@@ -591,7 +613,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             messaging_service=messaging_service,
             user_service=_make_user_service(known_users={"15550031": "known"}),
         )
-        payload = _make_payload(
+        payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-extended",
@@ -611,7 +633,6 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         client.send_sticker_message.assert_awaited_once()
         client.send_reaction_message.assert_awaited_once()
         self.assertEqual(client.upload_media.await_count, 0)
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
 
     async def test_interactive_and_button_messages_route_to_text_handler(self) -> None:
         cases = [
@@ -646,7 +667,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     messaging_service=messaging_service,
                     user_service=_make_user_service(known_users={"15550088": "known"}),
                 )
-                payload = _make_payload(
+                payload = _make_request(
                     _make_message_event(
                         incoming_message,
                         sender="15550088",
@@ -661,15 +682,12 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     sender="15550088",
                     message=expected_text,
                 )
-                self.assertEqual(
-                    (await payload["response_queue"].get())["response"], "OK"
-                )
 
     async def test_button_message_without_extractable_text_delegates_to_handlers(
         self,
     ) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
-        payload = _make_payload(
+        payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-button-empty",
@@ -810,7 +828,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     messaging_service=messaging_service,
                     user_service=user_service,
                 )
-                payload = _make_payload(
+                payload = _make_request(
                     _make_message_event(
                         {
                             "id": f"wamid-{message_type}",
@@ -834,9 +852,6 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     mime_type,
                 )
                 getattr(messaging_service, handler_name).assert_awaited_once()
-                self.assertEqual(
-                    (await payload["response_queue"].get())["response"], "OK"
-                )
 
     async def test_media_events_skip_handlers_when_media_lookup_or_download_missing(
         self,
@@ -869,7 +884,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                             known_users={"15550021": "known"}
                         ),
                     )
-                    payload = _make_payload(
+                    payload = _make_request(
                         _make_message_event(
                             {
                                 "id": f"wamid-{mode}-{message_type}",
@@ -896,20 +911,16 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                             mime_type,
                         )
                     getattr(messaging_service, handler_name).assert_not_awaited()
-                    self.assertEqual(
-                        (await payload["response_queue"].get())["response"],
-                        "OK",
-                    )
 
     async def test_message_event_fans_out_all_messages(self) -> None:
         messaging_service = _make_messaging_service()
         ext = _new_extension(
             config=_make_config(beta_active=False),
-            keyval_storage_gateway=_MemoryKeyVal(),
+            relational_storage_gateway=_MemoryRelational(),
             messaging_service=messaging_service,
             user_service=_make_user_service(known_users={"15550100": "known"}),
         )
-        payload = _make_payload(
+        payload = _make_request(
             {
                 "entry": [
                     {
@@ -957,11 +968,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="15550100",
             message="second",
         )
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
 
     async def test_status_event_routes_to_message_handlers(self) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
-        payload = _make_payload(
+        payload = _make_request(
             _make_status_event({"id": "st-1", "status": "delivered"})
         )
 
@@ -974,11 +984,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             message={"id": "st-1", "status": "delivered"},
             message_type="status",
         )
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
 
     async def test_status_event_fans_out_all_statuses(self) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
-        payload = _make_payload(
+        payload = _make_request(
             {
                 "entry": [
                     {
@@ -1011,19 +1020,18 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             message={"id": "st-fanout-2", "status": "read"},
             message_type="status",
         )
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
 
     async def test_malformed_message_item_does_not_block_valid_message(self) -> None:
         logging_gateway = Mock()
         messaging_service = _make_messaging_service()
         ext = _new_extension(
             config=_make_config(beta_active=False),
-            keyval_storage_gateway=_MemoryKeyVal(),
+            relational_storage_gateway=_MemoryRelational(),
             messaging_service=messaging_service,
             user_service=_make_user_service(known_users={"15550110": "known"}),
             logging_gateway=logging_gateway,
         )
-        payload = _make_payload(
+        payload = _make_request(
             {
                 "entry": [
                     {
@@ -1069,12 +1077,12 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         ext = _new_extension(
             config=_make_config(beta_active=False),
-            keyval_storage_gateway=_MemoryKeyVal(),
+            relational_storage_gateway=_MemoryRelational(),
             messaging_service=messaging_service,
             user_service=_make_user_service(known_users={"15550044": "known"}),
             logging_gateway=logging_gateway,
         )
-        first_payload = _make_payload(
+        first_payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-dupe-1",
@@ -1084,7 +1092,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 sender="15550044",
             )
         )
-        second_payload = _make_payload(
+        second_payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-dupe-1",
@@ -1105,12 +1113,6 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             message="hello",
         )
         logging_gateway.debug.assert_any_call("Skip duplicate WhatsApp message event.")
-        self.assertEqual(
-            (await first_payload["response_queue"].get())["response"], "OK"
-        )
-        self.assertEqual(
-            (await second_payload["response_queue"].get())["response"], "OK"
-        )
 
     async def test_duplicate_status_event_is_acknowledged_without_rerouting(
         self,
@@ -1118,13 +1120,13 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         ext = _new_extension(
             config=_make_config(beta_active=False),
-            keyval_storage_gateway=_MemoryKeyVal(),
+            relational_storage_gateway=_MemoryRelational(),
             logging_gateway=logging_gateway,
         )
-        first_payload = _make_payload(
+        first_payload = _make_request(
             _make_status_event({"id": "st-dupe", "status": "delivered"})
         )
-        second_payload = _make_payload(
+        second_payload = _make_request(
             _make_status_event({"id": "st-dupe", "status": "delivered"})
         )
 
@@ -1139,56 +1141,166 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             message_type="status",
         )
         logging_gateway.debug.assert_any_call("Skip duplicate WhatsApp status event.")
-        self.assertEqual(
-            (await first_payload["response_queue"].get())["response"], "OK"
-        )
-        self.assertEqual(
-            (await second_payload["response_queue"].get())["response"], "OK"
-        )
 
-    def test_seen_event_key_helpers_handle_invalid_payloads_and_trim(self) -> None:
-        keyval = _MemoryKeyVal()
+    async def test_relational_dedupe_insert_and_duplicate_paths(self) -> None:
+        relational = _MemoryRelational()
         ext = _new_extension(
             config=_make_config(beta_active=False),
-            keyval_storage_gateway=keyval,
-        )
-        self.assertEqual(
-            ext._load_seen_event_keys(), []
-        )  # pylint: disable=protected-access
-
-        keyval.put(ext._seen_event_keys_key, "{")
-        self.assertEqual(
-            ext._load_seen_event_keys(), []
-        )  # pylint: disable=protected-access
-
-        keyval.put(ext._seen_event_keys_key, json.dumps({"not": "a-list"}))
-        self.assertEqual(
-            ext._load_seen_event_keys(), []
-        )  # pylint: disable=protected-access
-
-        ext._seen_event_keys_max = 2  # pylint: disable=protected-access
-        self.assertFalse(
-            ext._is_duplicate_event(
-                "message", {"id": "evt-1"}
-            )  # pylint: disable=protected-access
+            relational_storage_gateway=relational,
         )
         self.assertFalse(
-            ext._is_duplicate_event(
-                "message", {"id": "evt-2"}
-            )  # pylint: disable=protected-access
-        )
-        self.assertFalse(
-            ext._is_duplicate_event(
-                "message", {"id": "evt-3"}
-            )  # pylint: disable=protected-access
+            await ext._is_duplicate_event("message", {"id": "evt-1"})  # pylint: disable=protected-access
         )
         self.assertTrue(
-            ext._is_duplicate_event(
-                "message", {"id": "evt-3"}
-            )  # pylint: disable=protected-access
+            await ext._is_duplicate_event("message", {"id": "evt-1"})  # pylint: disable=protected-access
         )
-        saved_keys = json.loads(keyval.get(ext._seen_event_keys_key))
-        self.assertEqual(len(saved_keys), 2)
+        self.assertEqual(ext._metrics["whatsapp.ipc.dedupe.miss"], 1)  # pylint: disable=protected-access
+        self.assertEqual(ext._metrics["whatsapp.ipc.dedupe.hit"], 1)  # pylint: disable=protected-access
+
+    async def test_resolve_event_dedupe_ttl_seconds_fallback_paths(self) -> None:
+        cfg_invalid = _make_config(beta_active=False)
+        cfg_invalid.whatsapp.webhook = SimpleNamespace(dedupe_ttl_seconds="invalid")
+        ext_invalid = _new_extension(config=cfg_invalid)
+        self.assertEqual(
+            ext_invalid._event_dedup_ttl_seconds,  # pylint: disable=protected-access
+            86400,
+        )
+
+        cfg_non_positive = _make_config(beta_active=False)
+        cfg_non_positive.whatsapp.webhook = SimpleNamespace(dedupe_ttl_seconds=0)
+        ext_non_positive = _new_extension(config=cfg_non_positive)
+        self.assertEqual(
+            ext_non_positive._event_dedup_ttl_seconds,  # pylint: disable=protected-access
+            86400,
+        )
+
+    async def test_record_dead_letter_failure_increments_metric(self) -> None:
+        class _DeadLetterFailingGateway:
+            async def insert_one(self, _table: str, _record: dict) -> dict:
+                raise SQLAlchemyError("boom")
+
+            async def update_one(self, _table: str, _where: dict, _changes: dict):
+                return None
+
+        logger = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            logging_gateway=logger,
+            relational_storage_gateway=_DeadLetterFailingGateway(),
+        )
+
+        await ext._record_dead_letter(  # pylint: disable=protected-access
+            event_type="webhook",
+            event_payload={"id": "x"},
+            reason_code="processing_exception",
+            error_message="boom",
+        )
+        self.assertEqual(
+            ext._metrics["whatsapp.ipc.dead_letter.write_failure"],  # pylint: disable=protected-access
+            1,
+        )
+        logger.error.assert_called_once()
+
+    async def test_duplicate_event_update_error_is_tolerated(self) -> None:
+        class _UpdateFailGateway(_MemoryRelational):
+            async def insert_one(self, table: str, record: dict) -> dict:
+                if table == "whatsapp_wacapi_event_dedup":
+                    raise IntegrityError("insert", {}, Exception("duplicate"))
+                return await super().insert_one(table, record)
+
+            async def update_one(self, _table: str, _where: dict, _changes: dict):
+                raise SQLAlchemyError("update-failed")
+
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            relational_storage_gateway=_UpdateFailGateway(),
+        )
+        self.assertTrue(
+            await ext._is_duplicate_event("message", {"id": "evt-1"})  # pylint: disable=protected-access
+        )
+        self.assertEqual(ext._metrics["whatsapp.ipc.dedupe.hit"], 1)  # pylint: disable=protected-access
+
+    async def test_duplicate_event_storage_error_is_recorded(self) -> None:
+        class _InsertFailGateway:
+            async def insert_one(self, _table: str, _record: dict) -> dict:
+                raise SQLAlchemyError("insert-failed")
+
+            async def update_one(self, _table: str, _where: dict, _changes: dict):
+                return None
+
+        logger = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            logging_gateway=logger,
+            relational_storage_gateway=_InsertFailGateway(),
+        )
+        self.assertFalse(
+            await ext._is_duplicate_event("message", {"id": "evt-1"})  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            ext._metrics["whatsapp.ipc.dedupe.error"],  # pylint: disable=protected-access
+            1,
+        )
+        logger.error.assert_called_once()
+
+    async def test_wacapi_event_handles_non_dict_request_payload(self) -> None:
+        logger = Mock()
+        relational = _MemoryRelational()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            logging_gateway=logger,
+            relational_storage_gateway=relational,
+        )
+        await ext._wacapi_event(  # pylint: disable=protected-access
+            IPCCommandRequest(
+                platform="whatsapp",
+                command="whatsapp_wacapi_event",
+                data=[],  # type: ignore[arg-type]
+            )
+        )
+        self.assertEqual(
+            ext._metrics["whatsapp.ipc.event.malformed"],  # pylint: disable=protected-access
+            1,
+        )
+        self.assertEqual(relational.dead_letters[0]["reason_code"], "malformed_payload")
+        logger.error.assert_any_call("Malformed WhatsApp event payload.")
+
+    async def test_wacapi_event_processing_exception_records_dead_letter(self) -> None:
+        logger = Mock()
+        relational = _MemoryRelational()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            logging_gateway=logger,
+            relational_storage_gateway=relational,
+        )
+        payload = _make_request(
+            _make_message_event(
+                {
+                    "id": "wamid-crash",
+                    "type": "text",
+                    "text": {"body": "hello"},
+                }
+            )
+        )
+        with patch.object(
+            ext,
+            "_process_message_event",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            await ext._wacapi_event(payload)  # pylint: disable=protected-access
+
+        self.assertEqual(
+            ext._metrics["whatsapp.ipc.event.processed_failed"],  # pylint: disable=protected-access
+            1,
+        )
+        self.assertEqual(
+            relational.dead_letters[-1]["reason_code"],
+            "processing_exception",
+        )
+        logger.error.assert_any_call(
+            "Unhandled WhatsApp event processing failure."
+            " error=RuntimeError: boom"
+        )
 
     def test_get_contact_for_sender_edge_paths(self) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
@@ -1216,7 +1328,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         messaging_service = _make_messaging_service()
         ext = _new_extension(
             config=_make_config(beta_active=False),
-            keyval_storage_gateway=_MemoryKeyVal(),
+            relational_storage_gateway=_MemoryRelational(),
             messaging_service=messaging_service,
             logging_gateway=logging_gateway,
         )
@@ -1238,7 +1350,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         user_service = _make_user_service(known_users={})
         ext = _new_extension(
             config=_make_config(beta_active=False),
-            keyval_storage_gateway=_MemoryKeyVal(),
+            relational_storage_gateway=_MemoryRelational(),
             messaging_service=messaging_service,
             user_service=user_service,
         )
@@ -1299,7 +1411,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         ext = _new_extension(
             config=_make_config(beta_active=False),
-            keyval_storage_gateway=_MemoryKeyVal(),
+            relational_storage_gateway=_MemoryRelational(),
             logging_gateway=logging_gateway,
             user_service=_make_user_service(known_users={"15550130": "known"}),
         )
@@ -1320,12 +1432,11 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             config=_make_config(beta_active=False),
             logging_gateway=logging_gateway,
         )
-        payload = _make_payload({"entry": "bad"})
+        payload = _make_request({"entry": "bad"})
 
         await ext._wacapi_event(payload)  # pylint: disable=protected-access
 
         logging_gateway.error.assert_any_call("Malformed WhatsApp event payload.")
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
 
     async def test_wacapi_event_skips_invalid_entry_change_and_value_items(
         self,
@@ -1335,7 +1446,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             config=_make_config(beta_active=False),
             logging_gateway=logging_gateway,
         )
-        payload = _make_payload(
+        payload = _make_request(
             {
                 "entry": [
                     "bad-entry",
@@ -1354,7 +1465,6 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         await ext._wacapi_event(payload)  # pylint: disable=protected-access
 
         logging_gateway.error.assert_not_called()
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
 
     async def test_wacapi_event_logs_malformed_status_item_and_continues(self) -> None:
         logging_gateway = Mock()
@@ -1362,7 +1472,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             config=_make_config(beta_active=False),
             logging_gateway=logging_gateway,
         )
-        payload = _make_payload(
+        payload = _make_request(
             {
                 "entry": [
                     {
@@ -1391,7 +1501,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
 
     async def test_event_with_no_messages_or_statuses_still_acknowledges(self) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
-        payload = _make_payload(
+        payload = _make_request(
             {
                 "entry": [
                     {
@@ -1407,11 +1517,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
 
         await ext._wacapi_event(payload)  # pylint: disable=protected-access
 
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
-
     async def test_unknown_message_type_delegates_to_message_handlers(self) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
-        payload = _make_payload(
+        payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-unknown",
@@ -1436,7 +1544,6 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             message_type="unknown",
             sender="15550010",
         )
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
 
     async def test_beta_active_user_in_allow_list_continues_processing(self) -> None:
         client = _make_client()
@@ -1447,7 +1554,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             messaging_service=messaging_service,
             user_service=_make_user_service(known_users={"15550011": "known"}),
         )
-        payload = _make_payload(
+        payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-allow",
@@ -1506,7 +1613,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             user_service=_make_user_service(known_users={"15550012": "known"}),
             logging_gateway=logging_gateway,
         )
-        payload = _make_payload(
+        payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-upload-error",
@@ -1559,7 +1666,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             messaging_service=messaging_service,
             user_service=_make_user_service(known_users={"15550014": "known"}),
         )
-        payload = _make_payload(
+        payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-upload-none",
@@ -1609,7 +1716,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             messaging_service=messaging_service,
             user_service=_make_user_service(known_users={"15550015": "known"}),
         )
-        payload = _make_payload(
+        payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-upload-empty",
@@ -1675,7 +1782,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             user_service=_make_user_service(known_users={"15550013": "known"}),
             logging_gateway=logging_gateway,
         )
-        payload = _make_payload(
+        payload = _make_request(
             _make_message_event(
                 {
                     "id": "wamid-send-error",
@@ -1703,23 +1810,20 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             config=_make_config(beta_active=False),
             logging_gateway=logging_gateway,
         )
-        payload = _make_payload({"entry": []})
+        payload = _make_request({"entry": []})
 
         await ext._wacapi_event(payload)  # pylint: disable=protected-access
 
         logging_gateway.error.assert_any_call("Malformed WhatsApp event payload.")
-        self.assertEqual((await payload["response_queue"].get())["response"], "OK")
 
-    async def test_malformed_event_without_response_queue_still_returns(self) -> None:
+    async def test_malformed_event_request_still_returns(self) -> None:
         logging_gateway = Mock()
         ext = _new_extension(
             config=_make_config(beta_active=False),
             logging_gateway=logging_gateway,
         )
 
-        await ext._wacapi_event(
-            {"data": {"entry": []}}
-        )  # pylint: disable=protected-access
+        await ext._wacapi_event(_make_request({"entry": []}))  # pylint: disable=protected-access
 
         logging_gateway.error.assert_any_call("Malformed WhatsApp event payload.")
 

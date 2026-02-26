@@ -168,13 +168,13 @@ class TestWhatsAppWacapiIpcFallbacks(unittest.TestCase):
         whatsapp_client = object()
         config = SimpleNamespace()
         logging_gateway = object()
-        keyval_storage_gateway = object()
+        relational_storage_gateway = object()
         messaging_service = object()
         user_service = object()
         fallback_whatsapp_client = []
         fallback_config = []
         fallback_logging_gateway = []
-        fallback_keyval_storage_gateway = []
+        fallback_relational_storage_gateway = []
         fallback_messaging_service = []
         fallback_user_service = []
 
@@ -186,7 +186,7 @@ class TestWhatsAppWacapiIpcFallbacks(unittest.TestCase):
                     whatsapp_client=fallback_whatsapp_client,
                     config=fallback_config,
                     logging_gateway=fallback_logging_gateway,
-                    keyval_storage_gateway=fallback_keyval_storage_gateway,
+                    relational_storage_gateway=fallback_relational_storage_gateway,
                     messaging_service=fallback_messaging_service,
                     user_service=fallback_user_service,
                 ),
@@ -196,7 +196,7 @@ class TestWhatsAppWacapiIpcFallbacks(unittest.TestCase):
                 whatsapp_client=whatsapp_client,
                 config=config,
                 logging_gateway=logging_gateway,
-                keyval_storage_gateway=keyval_storage_gateway,
+                relational_storage_gateway=relational_storage_gateway,
                 messaging_service=messaging_service,
                 user_service=user_service,
             )
@@ -204,7 +204,7 @@ class TestWhatsAppWacapiIpcFallbacks(unittest.TestCase):
         self.assertIs(ext._client, whatsapp_client)
         self.assertIs(ext._config, config)
         self.assertIs(ext._logging_gateway, logging_gateway)
-        self.assertIs(ext._keyval_storage_gateway, keyval_storage_gateway)
+        self.assertIs(ext._relational_storage_gateway, relational_storage_gateway)
         self.assertIs(ext._messaging_service, messaging_service)
         self.assertIs(ext._user_service, user_service)
 
@@ -212,7 +212,7 @@ class TestWhatsAppWacapiIpcFallbacks(unittest.TestCase):
         fallback_whatsapp_client = object()
         fallback_config = SimpleNamespace()
         fallback_logging_gateway = object()
-        fallback_keyval_storage_gateway = object()
+        fallback_relational_storage_gateway = object()
         fallback_messaging_service = object()
         fallback_user_service = object()
 
@@ -224,7 +224,7 @@ class TestWhatsAppWacapiIpcFallbacks(unittest.TestCase):
                     whatsapp_client=fallback_whatsapp_client,
                     config=fallback_config,
                     logging_gateway=fallback_logging_gateway,
-                    keyval_storage_gateway=fallback_keyval_storage_gateway,
+                    relational_storage_gateway=fallback_relational_storage_gateway,
                     messaging_service=fallback_messaging_service,
                     user_service=fallback_user_service,
                 ),
@@ -235,6 +235,9 @@ class TestWhatsAppWacapiIpcFallbacks(unittest.TestCase):
         self.assertIs(ext._client, fallback_whatsapp_client)
         self.assertIs(ext._config, fallback_config)
         self.assertIs(ext._logging_gateway, fallback_logging_gateway)
-        self.assertIs(ext._keyval_storage_gateway, fallback_keyval_storage_gateway)
+        self.assertIs(
+            ext._relational_storage_gateway,  # pylint: disable=protected-access
+            fallback_relational_storage_gateway,
+        )
         self.assertIs(ext._messaging_service, fallback_messaging_service)
         self.assertIs(ext._user_service, fallback_user_service)

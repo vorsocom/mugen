@@ -165,7 +165,10 @@ class MyFWExtension(IFWExtension):
 
 ### Inter-process Communication (IPC) Extensions
 
-IPC extensions handle background tasks, push notifications, and scheduled operations. Implement the `IIPCExtension` interface to create an IPC extension.
+IPC extensions handle background tasks, push notifications, and scheduled
+operations. Implement the `IIPCExtension` interface to create an IPC extension.
+IPC handlers now use a typed request/response contract and must return an
+`IPCHandlerResult` value (no queue side effects).
 
 **Setup Code:**
 
@@ -175,6 +178,7 @@ IPC extensions handle background tasks, push notifications, and scheduled operat
 __all__ = ["MyIPCExtension"]
 
 from mugen.core.contract.extension.ipc import IIPCExtension
+from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 
 
 class MyIPCExtension(IIPCExtension):
@@ -190,11 +194,21 @@ class MyIPCExtension(IIPCExtension):
         """Get the list of IPC commands processed by this extension."""
         return ["ping", "status"]
 
-    async def process_ipc_command(self, payload: dict) -> None:
+    async def process_ipc_command(
+        self,
+        request: IPCCommandRequest,
+    ) -> IPCHandlerResult:
         """Process an IPC command."""
-        print(f"Processing IPC command: {payload}")
-        # Implement command processing logic here
+        print(f"Processing IPC command: {request.command}")
+        return IPCHandlerResult(
+            handler=type(self).__name__,
+            response={"status": "ok"},
+        )
 ```
+
+For WhatsApp webhook IPC handlers, transport ACK remains a fast `200`/`OK`,
+while processing reliability uses relational dedupe and dead-letter records for
+recovery and observability.
 
 ### Message Handler (MH) Extensions
 

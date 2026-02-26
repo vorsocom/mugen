@@ -17,6 +17,7 @@ from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
+from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 
 
 def _ipc_provider():
@@ -1015,8 +1016,15 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             def ipc_commands(self) -> list[str]:
                 """Get the list of ipc commands processed by this provider.."""
 
-            async def process_ipc_command(self, payload: dict) -> None:
+            async def process_ipc_command(
+                self,
+                request: IPCCommandRequest,
+            ) -> IPCHandlerResult:
                 """Process an IPC command."""
+                return IPCHandlerResult(
+                    handler=type(self).__name__,
+                    response={"command": request.command},
+                )
 
 
         with (
@@ -1077,8 +1085,15 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             def ipc_commands(self) -> list[str]:
                 """Get the list of ipc commands processed by this provider.."""
 
-            async def process_ipc_command(self, payload: dict) -> None:
+            async def process_ipc_command(
+                self,
+                request: IPCCommandRequest,
+            ) -> IPCHandlerResult:
                 """Process an IPC command."""
+                return IPCHandlerResult(
+                    handler=type(self).__name__,
+                    response={"command": request.command},
+                )
 
 
         with (

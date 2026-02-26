@@ -111,16 +111,19 @@ class TestDependencyInjector(unittest.TestCase):
         class DummyIPCServiceClass(IIPCService):
             """Dummy IPC class."""
 
-            def __init__(self, logging_gateway):
+            def __init__(self, config, logging_gateway):
                 pass
 
             def register_ipc_extension(self, ext):
                 pass
 
-            async def handle_ipc_request(self, platform, ipc_payload):
+            async def handle_ipc_request(self, request):
                 pass
 
-        ipc_service = DummyIPCServiceClass(logging_gateway=logging_gateway)
+        ipc_service = DummyIPCServiceClass(
+            config=config,
+            logging_gateway=logging_gateway,
+        )
 
         # Key-Value Storage Gateway
         class DummyKeyValStorageGatewayClass(IKeyValStorageGateway):

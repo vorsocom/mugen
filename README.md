@@ -52,7 +52,7 @@ muGen runs on the same asyncio event loop as [Quart](https://palletsprojects.com
 muGen supports various types of extensions, which can be platform-agnostic or specific, and are activated at different stages of the message lifecycle. The extensions allow developers to customize how the application behaves in response to user interactions. These extension types are:
 
 1. **Framework (FW) Extensions:** These operate outside the message lifecycle, adding core functionalities like API endpoints. They are initialized during application startup.
-2. **Inter-process Communication (IPC) Extensions:** These handle incoming requests to execute commands, enabling tasks such as running scheduled jobs and processing push API requests.
+2. **Inter-process Communication (IPC) Extensions:** These handle incoming requests to execute commands using a typed request/result contract, enabling tasks such as running scheduled jobs and processing push API requests.
 3. **Message Handler (MH) Extensions:** These manage non-text input, such as images or audio, and handle their processing within the system.
 4. **Context (CTX) Extensions:** These provide additional context for the language model by injecting information into conversation histories.
 5. **Retrieval Augmented Generation (RAG) Extensions:** These perform knowledge retrieval from external sources, enriching the language model's context with relevant information.
