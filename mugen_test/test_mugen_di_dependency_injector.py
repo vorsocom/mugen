@@ -194,16 +194,16 @@ class TestDependencyInjector(unittest.TestCase):
             def __init__(self, keyval_storage_gateway, logging_gateway):
                 pass
 
-            def add_known_user(self, user_id, displayname, room_id):
+            async def add_known_user(self, user_id, displayname, room_id):
                 pass
 
-            def get_known_users_list(self):
+            async def get_known_users_list(self):
                 pass
 
-            def get_user_display_name(self, user_id):
+            async def get_user_display_name(self, user_id):
                 pass
 
-            def save_known_users_list(self, known_users):
+            async def save_known_users_list(self, known_users):
                 pass
 
         user_service = DummyUserServiceClass(

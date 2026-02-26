@@ -13,6 +13,11 @@ platforms = [
   # "whatsapp",
 ]
 storage.keyval.dbm.path = "/absolute/path/to/data/storage.db"
+storage.keyval.dbm.allow_non_dev = false
+storage.keyval.relational.namespace_default = "core"
+storage.keyval.relational.list_limit_default = 200
+storage.keyval.legacy_import.enabled = true
+storage.keyval.legacy_import.dbm_path = "/absolute/path/to/data/storage.db"
 
 [mugen.commands]
 clear = "..."
@@ -20,6 +25,8 @@ clear = "..."
 [mugen.messaging]
 # Max number of chat history messages persisted and forwarded to completion context.
 history_max_messages = 40
+# Max CAS retries for chat-history persistence across workers/processes.
+history_save_cas_retries = 5
 # Timeout in seconds for extension callbacks (CP/CTX/RAG/RPP/CT).
 extension_timeout_seconds = 10.0
 # If true, CT extensions with non-empty triggers only run on trigger matches.
@@ -41,7 +48,7 @@ gateway.completion = "mugen.core.gateway.completion.bedrock"
 # gateway.email = "mugen.core.gateway.email.ses"
 # gateway.knowledge = "mugen.core.gateway.knowledge.qdrant"
 gateway.logging = "mugen.core.gateway.logging.standard"
-gateway.storage.keyval = "mugen.core.gateway.storage.keyval.dbm"
+gateway.storage.keyval = "mugen.core.gateway.storage.keyval.relational"
 gateway.storage.relational = "mugen.core.gateway.storage.rdbms.sqla.sqla_gateway"
 
 service.ipc = "mugen.core.service.ipc"

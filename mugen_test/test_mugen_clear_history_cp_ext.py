@@ -3,13 +3,16 @@
 import json
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, Mock
 
+from mugen.core.contract.gateway.storage.keyval_model import KeyValConflictError
 from mugen.core.plugin.command.clear_history.cp_ext import ClearChatHistoryICPExtension
 
 
 class _MemoryKeyVal:
     def __init__(self):
         self.store = {}
+        self._versions: dict[str, int] = {}
 
     def has_key(self, key: str) -> bool:
         return key in self.store
@@ -19,6 +22,53 @@ class _MemoryKeyVal:
 
     def put(self, key: str, value):
         self.store[key] = value
+        self._versions[key] = int(self._versions.get(key, 0)) + 1
+
+    async def get_json(self, key: str):
+        payload = self.store.get(key)
+        if payload in [None, ""]:
+            return None
+        if isinstance(payload, bytes):
+            try:
+                payload = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        try:
+            loaded = json.loads(payload)
+        except (TypeError, ValueError):
+            return None
+        return loaded
+
+    async def get_entry(self, key: str):
+        if key not in self.store:
+            return None
+        return SimpleNamespace(
+            row_version=int(self._versions.get(key, 1)),
+        )
+
+    async def put_json(
+        self,
+        key: str,
+        value,
+        *,
+        expected_row_version: int | None = None,
+    ) -> None:
+        current_row_version = 0 if key not in self.store else int(
+            self._versions.get(key, 1)
+        )
+        if (
+            expected_row_version is not None
+            and int(expected_row_version) != current_row_version
+        ):
+            raise KeyValConflictError(
+                namespace="default",
+                key=key,
+                expected_row_version=int(expected_row_version),
+                current_row_version=current_row_version,
+            )
+
+        self.store[key] = json.dumps(value, ensure_ascii=True)
+        self._versions[key] = 1 if current_row_version == 0 else current_row_version + 1
 
 
 def _make_config(command: str = "/clear") -> SimpleNamespace:
@@ -62,7 +112,7 @@ class TestMugenClearHistoryCpExt(unittest.IsolatedAsyncioTestCase):
         ext = self._new_ext(keyval=keyval)
 
         self.assertEqual(
-            ext._load_chat_history("room-2"), {"messages": []}
+            await ext._load_chat_history("room-2"), {"messages": []}
         )  # pylint: disable=protected-access
 
         history = {
@@ -71,25 +121,25 @@ class TestMugenClearHistoryCpExt(unittest.IsolatedAsyncioTestCase):
                 {"role": "assistant", "content": "b"},
             ]
         }
-        ext._save_chat_history("room-2", history)  # pylint: disable=protected-access
-        loaded = ext._load_chat_history("room-2")  # pylint: disable=protected-access
+        await ext._save_chat_history("room-2", history)  # pylint: disable=protected-access
+        loaded = await ext._load_chat_history("room-2")  # pylint: disable=protected-access
         self.assertEqual(loaded, history)
 
         keyval.store["chat_history:room-2"] = "{"
         self.assertEqual(
-            ext._load_chat_history("room-2"),
+            await ext._load_chat_history("room-2"),
             {"messages": []},
         )
 
         keyval.store["chat_history:room-2"] = b"\xff"
         self.assertEqual(
-            ext._load_chat_history("room-2"),
+            await ext._load_chat_history("room-2"),
             {"messages": []},
         )
 
         keyval.store["chat_history:room-2"] = json.dumps(["not-a-dict"])
         self.assertEqual(
-            ext._load_chat_history("room-2"),
+            await ext._load_chat_history("room-2"),
             {"messages": []},
         )
 
@@ -104,10 +154,10 @@ class TestMugenClearHistoryCpExt(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        ext._save_chat_history("room-3", history)  # pylint: disable=protected-access
-        ext._clear_chat_history("room-3", keep=2)  # pylint: disable=protected-access
+        await ext._save_chat_history("room-3", history)  # pylint: disable=protected-access
+        await ext._clear_chat_history("room-3", keep=2)  # pylint: disable=protected-access
         self.assertEqual(
-            ext._load_chat_history("room-3")[
+            (await ext._load_chat_history("room-3"))[
                 "messages"
             ],  # pylint: disable=protected-access
             [
@@ -116,20 +166,94 @@ class TestMugenClearHistoryCpExt(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-        ext._save_chat_history("room-3", history)  # pylint: disable=protected-access
-        ext._clear_chat_history("room-3", keep=-1)  # pylint: disable=protected-access
+        await ext._save_chat_history("room-3", history)  # pylint: disable=protected-access
+        await ext._clear_chat_history("room-3", keep=-1)  # pylint: disable=protected-access
         self.assertEqual(
-            ext._load_chat_history("room-3")[
+            (await ext._load_chat_history("room-3"))[
                 "messages"
             ],  # pylint: disable=protected-access
             [{"role": "user", "content": "m3"}],
         )
 
-        ext._save_chat_history("room-3", history)  # pylint: disable=protected-access
-        ext._clear_chat_history("room-3", keep=0)  # pylint: disable=protected-access
+        await ext._save_chat_history("room-3", history)  # pylint: disable=protected-access
+        await ext._clear_chat_history("room-3", keep=0)  # pylint: disable=protected-access
         self.assertEqual(
-            ext._load_chat_history("room-3")[
+            (await ext._load_chat_history("room-3"))[
                 "messages"
             ],  # pylint: disable=protected-access
             [],
+        )
+
+    async def test_save_chat_history_conflict_fallback_and_retry_config_default(self) -> None:
+        keyval = Mock()
+        keyval.get_entry = AsyncMock(return_value=SimpleNamespace(row_version=1))
+        keyval.put_json = AsyncMock(
+            side_effect=[
+                KeyValConflictError(
+                    namespace="default",
+                    key="chat_history:room-x",
+                    expected_row_version=1,
+                    current_row_version=2,
+                ),
+                KeyValConflictError(
+                    namespace="default",
+                    key="chat_history:room-x",
+                    expected_row_version=1,
+                    current_row_version=2,
+                ),
+                KeyValConflictError(
+                    namespace="default",
+                    key="chat_history:room-x",
+                    expected_row_version=1,
+                    current_row_version=2,
+                ),
+                KeyValConflictError(
+                    namespace="default",
+                    key="chat_history:room-x",
+                    expected_row_version=1,
+                    current_row_version=2,
+                ),
+                KeyValConflictError(
+                    namespace="default",
+                    key="chat_history:room-x",
+                    expected_row_version=1,
+                    current_row_version=2,
+                ),
+                None,
+            ]
+        )
+        ext = ClearChatHistoryICPExtension(
+            config=SimpleNamespace(
+                mugen=SimpleNamespace(
+                    commands=SimpleNamespace(clear="/clear"),
+                    messaging=SimpleNamespace(history_save_cas_retries=0),
+                )
+            ),
+            keyval_storage_gateway=keyval,
+        )
+
+        self.assertEqual(
+            ext._history_save_cas_retries,  # pylint: disable=protected-access
+            ext._default_history_save_cas_retries,  # pylint: disable=protected-access
+        )
+
+        await ext._save_chat_history(  # pylint: disable=protected-access
+            "room-x",
+            {"messages": []},
+        )
+        self.assertEqual(keyval.put_json.await_count, 6)
+
+    async def test_retry_config_non_integer_uses_default(self) -> None:
+        ext = ClearChatHistoryICPExtension(
+            config=SimpleNamespace(
+                mugen=SimpleNamespace(
+                    commands=SimpleNamespace(clear="/clear"),
+                    messaging=SimpleNamespace(history_save_cas_retries="bad"),
+                )
+            ),
+            keyval_storage_gateway=_MemoryKeyVal(),
+        )
+        self.assertEqual(
+            ext._history_save_cas_retries,  # pylint: disable=protected-access
+            ext._default_history_save_cas_retries,  # pylint: disable=protected-access
         )

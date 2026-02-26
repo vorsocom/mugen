@@ -580,7 +580,7 @@ async def run_matrix_client(
 
             # Cleanup device list and trust known devices.
             # matrix_client.cleanup_known_user_devices_list()
-            client.trust_known_user_devices()
+            await client.trust_known_user_devices()
 
         retry_attempt = 0
         while True:

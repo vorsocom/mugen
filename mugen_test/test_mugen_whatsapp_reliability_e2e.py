@@ -119,8 +119,10 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             mh_extensions=[],
         )
         user_service = SimpleNamespace(
-            get_known_users_list=Mock(return_value={"15551230001": "Known User"}),
-            add_known_user=Mock(),
+            get_known_users_list=AsyncMock(
+                return_value={"15551230001": "Known User"}
+            ),
+            add_known_user=AsyncMock(),
         )
         client = SimpleNamespace(
             send_text_message=AsyncMock(return_value={"ok": True, "data": {}}),
@@ -188,8 +190,10 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             mh_extensions=[],
         )
         user_service = SimpleNamespace(
-            get_known_users_list=Mock(return_value={"15551230001": "Known User"}),
-            add_known_user=Mock(),
+            get_known_users_list=AsyncMock(
+                return_value={"15551230001": "Known User"}
+            ),
+            add_known_user=AsyncMock(),
         )
 
         whatsapp_client = DefaultWhatsAppClient(

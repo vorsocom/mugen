@@ -17,6 +17,7 @@ from mugen.core.contract.gateway.completion import (
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.storage.keyval_model import KeyValConflictError
 from mugen.core.contract.service.messaging import IMessagingService
 
 
@@ -44,6 +45,7 @@ class DefaultTextMHExtension(IMHExtension):
     """An implmentation of IMHExtension for text messages across all platforms."""
 
     _default_history_max_messages: int = 40
+    _default_history_save_cas_retries: int = 5
     _default_extension_timeout_seconds: float = 10.0
     _default_ct_trigger_prefilter_enabled: bool = True
     _completion_error_message: str = "Error: failed to generate response."
@@ -83,6 +85,7 @@ class DefaultTextMHExtension(IMHExtension):
         )
 
         self._history_max_messages = self._resolve_history_max_messages()
+        self._history_save_cas_retries = self._resolve_history_save_cas_retries()
         self._extension_timeout_seconds = self._resolve_extension_timeout_seconds()
         self._ct_trigger_prefilter_enabled = self._resolve_ct_trigger_prefilter_enabled()
 
@@ -141,7 +144,7 @@ class DefaultTextMHExtension(IMHExtension):
 
         room_lock = self._get_room_lock(room_id)
         async with room_lock:
-            chat_history = self._load_chat_history(room_id)
+            chat_history = await self._load_chat_history(room_id)
             history_messages = self._trim_history_messages(chat_history["messages"])
             thread_messages = [*history_messages, {"role": "user", "content": user_message}]
 
@@ -213,7 +216,7 @@ class DefaultTextMHExtension(IMHExtension):
                 persisted_history = {
                     "messages": self._trim_history_messages(persisted_messages)
                 }
-                self._save_chat_history(room_id, persisted_history)
+                await self._save_chat_history(room_id, persisted_history)
 
                 # Log assistant message if conversation debugging flag set.
                 if self._debug_conversation_enabled():
@@ -695,28 +698,15 @@ class DefaultTextMHExtension(IMHExtension):
         except (TypeError, ValueError):
             return str(payload)
 
-    def _load_chat_history(self, room_id: str) -> dict | None:
+    async def _load_chat_history(self, room_id: str) -> dict | None:
         history_key = f"chat_history:{room_id}"
-        if self._keyval_storage_gateway.has_key(history_key):
-            payload = self._keyval_storage_gateway.get(history_key, False)
-            if isinstance(payload, bytes):
-                try:
-                    payload = payload.decode("utf-8")
-                except UnicodeDecodeError:
-                    return {"messages": []}
-            try:
-                loaded = json.loads(payload)
-            except (json.JSONDecodeError, TypeError):
-                return {"messages": []}
-
-            if isinstance(loaded, dict):
-                normalized_messages = self._normalize_completion_message_list(
-                    loaded.get("messages"),
-                    stage="chat_history.load",
-                )
-                return {"messages": normalized_messages}
-
-            return {"messages": []}
+        payload = await self._keyval_storage_gateway.get_json(history_key)
+        if isinstance(payload, dict):
+            normalized_messages = self._normalize_completion_message_list(
+                payload.get("messages"),
+                stage="chat_history.load",
+            )
+            return {"messages": normalized_messages}
 
         return {"messages": []}
 
@@ -726,9 +716,37 @@ class DefaultTextMHExtension(IMHExtension):
 
         return messages[-self._history_max_messages :]
 
-    def _save_chat_history(self, room_id: str, history: dict) -> None:
+    async def _save_chat_history(self, room_id: str, history: dict) -> None:
         history_key = f"chat_history:{room_id}"
-        self._keyval_storage_gateway.put(history_key, json.dumps(history, ensure_ascii=True))
+        for _ in range(self._history_save_cas_retries):
+            entry = await self._keyval_storage_gateway.get_entry(history_key)
+            expected_row_version = 0
+            if entry is not None:
+                expected_row_version = int(entry.row_version)
+            try:
+                await self._keyval_storage_gateway.put_json(
+                    history_key,
+                    history,
+                    expected_row_version=expected_row_version,
+                )
+                return
+            except KeyValConflictError:
+                continue
+
+        await self._keyval_storage_gateway.put_json(history_key, history)
+
+    def _resolve_history_save_cas_retries(self) -> int:
+        messaging_config = self._messaging_config()
+        configured_value = getattr(
+            messaging_config,
+            "history_save_cas_retries",
+            self._default_history_save_cas_retries,
+        )
+        if isinstance(configured_value, int) and not isinstance(configured_value, bool):
+            if configured_value > 0:
+                return configured_value
+
+        return self._default_history_save_cas_retries
 
     def _resolve_history_max_messages(self) -> int:
         messaging_config = self._messaging_config()

@@ -539,7 +539,7 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                     web_client_provider=lambda: web_client,
                 )
             self.assertEqual(ex.exception.code, 500)
-            logger.exception.assert_called()
+            logger.error.assert_called_once_with("Failed to enqueue web message: boom")
 
     async def test_messages_create_media_validation(self) -> None:
         endpoint = unwrap(chat.web_messages_create)
@@ -1443,7 +1443,9 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
                         )
                 self.assertEqual(ex.exception.code, expected_code)
                 if expected_code == 500:
-                    logger.exception.assert_called()
+                    logger.error.assert_called_once_with(
+                        "Failed to enqueue web message: boom"
+                    )
 
     async def test_events_stream_uses_last_event_id_header_precedence(self) -> None:
         endpoint = unwrap(chat.web_events_stream)

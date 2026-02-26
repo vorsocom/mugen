@@ -38,7 +38,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
             set_displayname = unittest.mock.AsyncMock()
             sync_forever = unittest.mock.AsyncMock()
             sync_token = unittest.mock.MagicMock()
-            trust_known_user_devices = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
 
             async def __aenter__(self) -> None:
                 """Initialisation routine."""
@@ -85,7 +85,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
             set_displayname = unittest.mock.AsyncMock()
             sync_forever = unittest.mock.AsyncMock()
             sync_token = unittest.mock.MagicMock()
-            trust_known_user_devices = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
 
             async def __aenter__(self) -> None:
                 """Initialisation routine."""
@@ -133,7 +133,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
                 side_effect=asyncio.exceptions.CancelledError
             )
             sync_token = unittest.mock.MagicMock()
-            trust_known_user_devices = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
 
             async def __aenter__(self) -> None:
                 """Initialisation routine."""
@@ -177,7 +177,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
                 side_effect=[RuntimeError("temporary sync error"), None]
             )
             sync_token = unittest.mock.MagicMock()
-            trust_known_user_devices = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
 
             async def __aenter__(self) -> None:
                 return self
@@ -230,7 +230,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
                 side_effect=RuntimeError("M_UNKNOWN_TOKEN")
             )
             sync_token = unittest.mock.MagicMock()
-            trust_known_user_devices = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
 
             async def __aenter__(self) -> None:
                 return self
@@ -284,7 +284,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
             set_displayname = unittest.mock.AsyncMock()
             sync_forever = unittest.mock.AsyncMock(side_effect=RuntimeError("network"))
             sync_token = unittest.mock.MagicMock()
-            trust_known_user_devices = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
 
             async def __aenter__(self) -> None:
                 return self
