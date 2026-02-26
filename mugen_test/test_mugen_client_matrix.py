@@ -273,14 +273,73 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
         client._logging_gateway = Mock()
         client._keyval_storage_gateway = Mock()
+        client._keyval_data: dict[str, str | bytes] = {}
+
+        def _sync_get(key: str, decode: bool = True):  # noqa: ARG001
+            return client._keyval_data.get(key)
+
+        def _sync_put(key: str, value: str | bytes):
+            client._keyval_data[key] = value
+
+        def _sync_remove(key: str):
+            return client._keyval_data.pop(key, None)
+
+        async def _get_text(key: str, namespace: str | None = None):  # noqa: ARG001
+            value = client._keyval_data.get(key)
+            if value is None:
+                return None
+            if isinstance(value, bytes):
+                return value.decode("utf-8")
+            return str(value)
+
+        async def _put_text(
+            key: str,
+            value: str,
+            namespace: str | None = None,  # noqa: ARG001
+            expected_row_version: int | None = None,  # noqa: ARG001
+            ttl_seconds: float | None = None,  # noqa: ARG001
+        ):
+            client._keyval_data[key] = value
+            return None
+
+        async def _put_json(
+            key: str,
+            value,
+            namespace: str | None = None,  # noqa: ARG001
+            expected_row_version: int | None = None,  # noqa: ARG001
+            ttl_seconds: float | None = None,  # noqa: ARG001
+        ):
+            client._keyval_data[key] = json.dumps(
+                value, ensure_ascii=True, separators=(",", ":")
+            )
+            return None
+
+        client._keyval_storage_gateway.get = Mock(side_effect=_sync_get)
+        client._keyval_storage_gateway.put = Mock(side_effect=_sync_put)
+        client._keyval_storage_gateway.remove = Mock(side_effect=_sync_remove)
+        client._keyval_storage_gateway.has_key = Mock(
+            side_effect=lambda key: key in client._keyval_data
+        )
+        client._keyval_storage_gateway.keys = Mock(
+            side_effect=lambda: list(client._keyval_data.keys())
+        )
+        client._keyval_storage_gateway.get_text = AsyncMock(side_effect=_get_text)
+        client._keyval_storage_gateway.put_text = AsyncMock(side_effect=_put_text)
+        client._keyval_storage_gateway.put_json = AsyncMock(side_effect=_put_json)
         client._messaging_service = Mock()
-        client._user_service = Mock()
+        client._user_service = SimpleNamespace(
+            add_known_user=AsyncMock(),
+            get_known_users_list=AsyncMock(return_value={}),
+            get_user_display_name=AsyncMock(return_value=""),
+            save_known_users_list=AsyncMock(),
+        )
         client._ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock())
         client._direct_room_ids = set()
         client._matrix_ipc_queue_size = 256
         client._matrix_ipc_queue = None
         client._matrix_ipc_worker_task = None
         client._matrix_ipc_worker_stop = asyncio.Event()
+        client._sync_token = None
         client.access_token = "access-token"
         client.user_id = "@assistant:example.com"
         client.login = AsyncMock()
@@ -426,8 +485,8 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             "client_device_id": "dev",
             "client_user_id": "@assistant:example.com",
         }
-        client._keyval_storage_gateway.get = Mock(
-            side_effect=lambda key, *_: values[key]
+        client._keyval_storage_gateway.get_text = AsyncMock(
+            side_effect=lambda key, *_: values.get(key)
         )
 
         result = await client.__aenter__()
@@ -440,7 +499,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     async def test_aenter_password_login_success_saves_credentials(self) -> None:
         client = self._client()
-        client._keyval_storage_gateway.get = Mock(return_value=None)
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
         client.login = AsyncMock(
             return_value=_FakeLoginResponse("access", "device-1", "@user:example.com")
         )
@@ -449,12 +508,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             result = await client.__aenter__()
 
         self.assertIs(result, client)
-        self.assertEqual(client._keyval_storage_gateway.put.call_count, 3)
+        self.assertEqual(client._keyval_storage_gateway.put_text.await_count, 3)
         client.load_store.assert_called_once_with()
 
     async def test_aenter_password_login_failure_raises_runtime_error(self) -> None:
         client = self._client()
-        client._keyval_storage_gateway.get = Mock(return_value=None)
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
         client.login = AsyncMock(return_value=object())
 
         with (
@@ -475,14 +534,13 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_token_property_reads_storage(self) -> None:
         client = self._client()
-        client._keyval_storage_gateway.get = Mock(return_value="next-batch")
+        client._sync_token = "next-batch"  # pylint: disable=protected-access
         self.assertEqual(client.sync_token, "next-batch")
 
     async def test_cleanup_and_trust_known_user_devices_list(self) -> None:
         client = self._client()
         known_devices = {"@user:example.com": ["DEV-1"]}
-        client._keyval_storage_gateway.has_key = Mock(return_value=True)
-        client._keyval_storage_gateway.get = Mock(
+        client._keyval_storage_gateway.get_text = AsyncMock(
             return_value=json.dumps(known_devices),
         )
         client.device_store = _DeviceStore(
@@ -494,34 +552,33 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        client.cleanup_known_user_devices_list()
+        await client.cleanup_known_user_devices_list()
 
-        persisted = json.loads(client._keyval_storage_gateway.put.call_args.args[1])
+        persisted = client._keyval_storage_gateway.put_json.await_args.args[1]
         self.assertEqual(persisted["@user:example.com"], ["DEV-1", "DEV-2"])
 
         client.verify_device = Mock()
-        client.trust_known_user_devices()
+        await client.trust_known_user_devices()
         self.assertEqual(client.verify_device.call_count, 1)
 
     async def test_cleanup_and_trust_known_user_devices_no_stored_key(self) -> None:
         client = self._client()
-        client._keyval_storage_gateway.has_key = Mock(return_value=False)
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
 
-        client.cleanup_known_user_devices_list()
-        client.trust_known_user_devices()
+        await client.cleanup_known_user_devices_list()
+        await client.trust_known_user_devices()
 
-        client._keyval_storage_gateway.put.assert_not_called()
+        client._keyval_storage_gateway.put_json.assert_not_awaited()
         client.verify_device.assert_not_called()
 
     async def test_known_devices_invalid_payload_is_ignored(self) -> None:
         client = self._client()
-        client._keyval_storage_gateway.has_key = Mock(return_value=True)
-        client._keyval_storage_gateway.get = Mock(return_value="{")
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value="{")
 
-        client.cleanup_known_user_devices_list()
-        client.trust_known_user_devices()
+        await client.cleanup_known_user_devices_list()
+        await client.trust_known_user_devices()
 
-        client._keyval_storage_gateway.put.assert_not_called()
+        client._keyval_storage_gateway.put_json.assert_not_awaited()
         client.verify_device.assert_not_called()
         self.assertGreaterEqual(client._logging_gateway.warning.call_count, 1)
 
@@ -529,21 +586,19 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         client = self._client()
-        client._keyval_storage_gateway.has_key = Mock(return_value=True)
-
-        client._keyval_storage_gateway.get = Mock(return_value=b"\xff")
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
         self.assertEqual(
-            client._load_known_devices(), {}
+            await client._load_known_devices(), {}
         )  # pylint: disable=protected-access
 
-        client._keyval_storage_gateway.get = Mock(
+        client._keyval_storage_gateway.get_text = AsyncMock(
             return_value=json.dumps(["not-a-dict"])
         )
         self.assertEqual(
-            client._load_known_devices(), {}
+            await client._load_known_devices(), {}
         )  # pylint: disable=protected-access
 
-        client._keyval_storage_gateway.get = Mock(
+        client._keyval_storage_gateway.get_text = AsyncMock(
             return_value=json.dumps(
                 {
                     "@user:example.com": "DEV-1",
@@ -552,7 +607,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertEqual(
-            client._load_known_devices(),  # pylint: disable=protected-access
+            await client._load_known_devices(),  # pylint: disable=protected-access
             {"@other:example.com": ["DEV-2", "3"]},
         )
 
@@ -564,23 +619,22 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.device_store = _DeviceStore(
             {"@user:example.com": {"DEV-1": object(), "DEV-2": object()}}
         )
-        client._keyval_storage_gateway.has_key = Mock(return_value=False)
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
 
-        client.verify_user_devices("@user:example.com")
+        await client.verify_user_devices("@user:example.com")
 
         self.assertEqual(client.verify_device.call_count, 2)
-        self.assertEqual(client._keyval_storage_gateway.put.call_count, 2)
+        self.assertEqual(client._keyval_storage_gateway.put_json.await_count, 2)
 
         known = {"@user:example.com": ["DEV-1", "DEV-2"]}
         client.verify_device.reset_mock()
-        client._keyval_storage_gateway.put.reset_mock()
-        client._keyval_storage_gateway.has_key = Mock(return_value=True)
-        client._keyval_storage_gateway.get = Mock(return_value=json.dumps(known))
+        client._keyval_storage_gateway.put_json.reset_mock()
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value=json.dumps(known))
 
-        client.verify_user_devices("@user:example.com")
+        await client.verify_user_devices("@user:example.com")
 
         client.verify_device.assert_not_called()
-        client._keyval_storage_gateway.put.assert_not_called()
+        client._keyval_storage_gateway.put_json.assert_not_awaited()
 
     async def test_verify_user_devices_supports_device_store_without_get(self) -> None:
         client = self._client()
@@ -588,20 +642,20 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.device_store = _DeviceStoreNoGet(
             {"@user:example.com": {"DEV-1": object(), "DEV-2": object()}}
         )
-        client._keyval_storage_gateway.has_key = Mock(return_value=False)
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
 
-        client.verify_user_devices("@user:example.com")
+        await client.verify_user_devices("@user:example.com")
 
         self.assertEqual(client.verify_device.call_count, 2)
-        self.assertEqual(client._keyval_storage_gateway.put.call_count, 2)
+        self.assertEqual(client._keyval_storage_gateway.put_json.await_count, 2)
 
         client.verify_device.reset_mock()
-        client._keyval_storage_gateway.put.reset_mock()
+        client._keyval_storage_gateway.put_json.reset_mock()
 
-        client.verify_user_devices("@missing:example.com")
+        await client.verify_user_devices("@missing:example.com")
 
         client.verify_device.assert_not_called()
-        client._keyval_storage_gateway.put.assert_not_called()
+        client._keyval_storage_gateway.put_json.assert_not_awaited()
 
     async def test_verify_user_devices_strict_known_only_verifies_known_devices(
         self,
@@ -611,15 +665,14 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.device_store = _DeviceStore(
             {"@user:example.com": {"DEV-1": object(), "DEV-2": object()}}
         )
-        client._keyval_storage_gateway.has_key = Mock(return_value=True)
-        client._keyval_storage_gateway.get = Mock(
+        client._keyval_storage_gateway.get_text = AsyncMock(
             return_value=json.dumps({"@user:example.com": ["DEV-1"]})
         )
 
-        client.verify_user_devices("@user:example.com")
+        await client.verify_user_devices("@user:example.com")
 
         self.assertEqual(client.verify_device.call_count, 1)
-        client._keyval_storage_gateway.put.assert_not_called()
+        client._keyval_storage_gateway.put_json.assert_not_awaited()
         self.assertIn(
             "mode=strict_known",
             client._logging_gateway.warning.call_args.args[0],
@@ -637,12 +690,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.device_store = _DeviceStore(
             {"@user:example.com": {"DEV-1": object(), "DEV-2": object()}}
         )
-        client._keyval_storage_gateway.has_key = Mock(return_value=False)
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
 
-        client.verify_user_devices("@user:example.com")
+        await client.verify_user_devices("@user:example.com")
 
         self.assertEqual(client.verify_device.call_count, 1)
-        client._keyval_storage_gateway.put.assert_not_called()
+        client._keyval_storage_gateway.put_json.assert_not_awaited()
         self.assertIn(
             "reason=not_in_allowlist",
             client._logging_gateway.warning.call_args.args[0],
@@ -725,10 +778,10 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await client._validate_message(room, not_direct))
 
         client._is_direct_message = AsyncMock(return_value=True)
-        client.verify_user_devices = Mock()
+        client.verify_user_devices = AsyncMock()
         valid_message = SimpleNamespace(sender="@user:example.com", event_id="$e3")
         self.assertTrue(await client._validate_message(room, valid_message))
-        client.verify_user_devices.assert_called_with("@user:example.com")
+        client.verify_user_devices.assert_awaited_with("@user:example.com")
         client.room_read_markers.assert_awaited_with("!room:test", "$e3", "$e3")
 
         malformed_sender = SimpleNamespace(sender="invalid-user-id", event_id="$e4")
@@ -956,7 +1009,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
     async def test_cb_invite_member_event_reject_and_accept_paths(self) -> None:
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
-        client.verify_user_devices = Mock()
+        client.verify_user_devices = AsyncMock()
         client._mark_room_as_direct = AsyncMock()
 
         event = SimpleNamespace(content={"membership": "join"}, sender="@u:example.com")
@@ -1002,7 +1055,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._mark_room_as_direct.assert_awaited_once_with(
             "@u:example.com", "!room:test"
         )
-        client._user_service.add_known_user.assert_called_once_with(
+        client._user_service.add_known_user.assert_awaited_once_with(
             "@u:example.com",
             "User",
             "!room:test",
@@ -1043,7 +1096,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
         client._config.matrix.invites.direct_only = False
-        client.verify_user_devices = Mock()
+        client.verify_user_devices = AsyncMock()
         client._mark_room_as_direct = AsyncMock()
         client.get_profile = AsyncMock(return_value=_FakeProfileGetResponse("User"))
         event = SimpleNamespace(content={"membership": "invite"}, sender="@u:example.com")
@@ -1083,7 +1136,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
         client._config.mugen.beta.active = True
-        client.verify_user_devices = Mock()
+        client.verify_user_devices = AsyncMock()
         client._mark_room_as_direct = AsyncMock()
         client.get_profile = AsyncMock(return_value=object())
         event = SimpleNamespace(
@@ -1098,7 +1151,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._mark_room_as_direct.assert_awaited_once_with(
             "@beta:example.com", "!room:test"
         )
-        client._user_service.add_known_user.assert_not_called()
+        client._user_service.add_known_user.assert_not_awaited()
 
     async def test_callback_skip_logging_for_stubbed_paths(self) -> None:
         client = self._client()
@@ -1905,7 +1958,8 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         await client._cb_sync_response(response)
 
-        client._keyval_storage_gateway.put.assert_called_once_with(
+        client._keyval_storage_gateway.put_text.assert_awaited_once_with(
             client._sync_key,
             "next-token",
         )
+        self.assertEqual(client.sync_token, "next-token")

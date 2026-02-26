@@ -1,5 +1,6 @@
 """Unit tests for mugen.core.gateway.storage.keyval.dbm.DBMKeyValStorageGateway."""
 
+import asyncio
 import _gdbm
 import os
 from types import SimpleNamespace
@@ -13,12 +14,18 @@ def _make_config(
     *,
     path: str = "/tmp/test-keyval.db",
     basedir: str | None = None,
+    environment: str = "development",
+    allow_non_dev: bool = False,
 ) -> SimpleNamespace:
     config = SimpleNamespace(
         mugen=SimpleNamespace(
+            environment=environment,
             storage=SimpleNamespace(
                 keyval=SimpleNamespace(
-                    dbm=SimpleNamespace(path=path),
+                    dbm=SimpleNamespace(
+                        path=path,
+                        allow_non_dev=allow_non_dev,
+                    ),
                 )
             )
         )
@@ -104,6 +111,33 @@ class TestMugenGatewayStorageKeyvalDbm(unittest.TestCase):
         open_db.assert_called_once_with("/srv/mugen/data/storage.db", "c", 0o600)
         makedirs.assert_called_once_with("/srv/mugen/data", exist_ok=True)
         chmod.assert_called_once_with("/srv/mugen/data/storage.db", 0o600)
+
+    def test_init_blocks_non_dev_when_override_not_set(self) -> None:
+        config = _make_config(environment="production", allow_non_dev=False)
+        logging_gateway = Mock()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            DBMKeyValStorageGateway(config, logging_gateway)
+
+        self.assertIn("disabled for non-development use", str(ctx.exception))
+        logging_gateway.error.assert_called_once()
+
+    def test_init_allows_non_dev_when_override_enabled(self) -> None:
+        storage = _FakeStorage()
+        config = _make_config(environment="production", allow_non_dev=True)
+        logging_gateway = Mock()
+
+        with (
+            patch("mugen.core.gateway.storage.keyval.dbm.os.makedirs"),
+            patch("mugen.core.gateway.storage.keyval.dbm.os.chmod"),
+            patch(
+                "mugen.core.gateway.storage.keyval.dbm._gdbm.open",
+                return_value=storage,
+            ) as open_db,
+        ):
+            DBMKeyValStorageGateway(config, logging_gateway)
+
+        open_db.assert_called_once()
 
     def test_init_uses_absolute_path(self) -> None:
         storage = _FakeStorage()
@@ -231,6 +265,27 @@ class TestMugenGatewayStorageKeyvalDbm(unittest.TestCase):
 
         gateway.close()
         self.assertTrue(storage.closed)
+
+    def test_aclose_calls_close(self) -> None:
+        storage = _FakeStorage()
+        logging_gateway = Mock()
+
+        with (
+            patch("mugen.core.gateway.storage.keyval.dbm.os.makedirs"),
+            patch("mugen.core.gateway.storage.keyval.dbm.os.chmod"),
+            patch(
+                "mugen.core.gateway.storage.keyval.dbm._gdbm.open",
+                return_value=storage,
+            ),
+        ):
+            gateway = DBMKeyValStorageGateway(_make_config(), logging_gateway)
+
+        close_spy = Mock(wraps=gateway.close)
+        gateway.close = close_spy
+
+        asyncio.run(gateway.aclose())
+
+        close_spy.assert_called_once()
 
     def test_get_returns_none_for_invalid_utf8(self) -> None:
         storage = _FakeStorage(initial={b"alpha": b"\xff"})

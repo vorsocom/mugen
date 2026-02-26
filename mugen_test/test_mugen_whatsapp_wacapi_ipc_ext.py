@@ -135,8 +135,8 @@ def _make_client():
 
 def _make_user_service(known_users=None):
     return SimpleNamespace(
-        get_known_users_list=Mock(return_value=dict(known_users or {})),
-        add_known_user=Mock(),
+        get_known_users_list=AsyncMock(return_value=dict(known_users or {})),
+        add_known_user=AsyncMock(),
     )
 
 
@@ -393,7 +393,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             recipient="15550001",
         )
         messaging_service.handle_text_message.assert_not_awaited()
-        user_service.add_known_user.assert_not_called()
+        user_service.add_known_user.assert_not_awaited()
 
     async def test_text_event_processes_and_sends_all_response_types(self) -> None:
         client = _make_client()
@@ -449,7 +449,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="15550003",
             message="incoming",
         )
-        user_service.add_known_user.assert_called_once_with(
+        user_service.add_known_user.assert_awaited_once_with(
             "15550003",
             "Test User",
             "15550003",
@@ -1364,7 +1364,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 "text": {"body": "hello"},
             },
         )
-        user_service.add_known_user.assert_called_with(
+        user_service.add_known_user.assert_awaited_with(
             "15550120",
             "15550120",
             "15550120",
@@ -1386,7 +1386,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 "text": {"body": "hello"},
             },
         )
-        user_service.add_known_user.assert_called_with(
+        user_service.add_known_user.assert_awaited_with(
             "15550121",
             "15550121",
             "15550121",
@@ -1401,7 +1401,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 "text": {"body": "hello"},
             },
         )
-        user_service.add_known_user.assert_called_with(
+        user_service.add_known_user.assert_awaited_with(
             "15550122",
             "15550122",
             "15550122",

@@ -655,7 +655,7 @@ async def web_messages_create(  # pylint: disable=too-many-locals,too-many-branc
             abort(400, str(exc))
         except Exception as exc:  # pylint: disable=broad-exception-caught
             _remove_files_if_exist(persisted_file_paths)
-            logger.exception("Failed to enqueue web message: %s", exc)
+            logger.error(f"Failed to enqueue web message: {exc}")
             abort(500)
 
         return jsonify(response_payload), 202
@@ -747,7 +747,7 @@ async def web_messages_create(  # pylint: disable=too-many-locals,too-many-branc
         abort(400, str(exc))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         _remove_file_if_exists(file_path)
-        logger.exception("Failed to enqueue web message: %s", exc)
+        logger.error(f"Failed to enqueue web message: {exc}")
         abort(500)
 
     return jsonify(response_payload), 202
@@ -786,7 +786,7 @@ async def web_events_stream(
     except ValueError as exc:
         abort(400, str(exc))
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.exception("Failed to open web event stream: %s", exc)
+        logger.error(f"Failed to open web event stream: {exc}")
         abort(500)
 
     return Response(

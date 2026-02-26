@@ -8,9 +8,12 @@ __all__ = [
     "build_container",
     "container",
     "reset_container",
+    "shutdown_container",
 ]
 
+import asyncio
 from importlib import import_module
+import inspect
 import logging
 import os
 import sys
@@ -422,6 +425,7 @@ _PROVIDER_SPECS = {
             ("config", "config"),
             ("ipc_service", "ipc_service"),
             ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("relational_storage_gateway", "relational_storage_gateway"),
             ("logging_gateway", "logging_gateway"),
             ("messaging_service", "messaging_service"),
             ("user_service", "user_service"),
@@ -593,6 +597,96 @@ def _build_container() -> DependencyInjector:
     return injector
 
 
+def _shutdown_provider(
+    provider_name: str,
+    provider: object | None,
+    logger: ILoggingGateway | logging.Logger,
+) -> None:
+    """Best-effort shutdown for one provider instance."""
+    if provider is None:
+        return
+
+    maybe_awaitable = None
+
+    close = getattr(provider, "close", None)
+    if callable(close):
+        try:
+            maybe_awaitable = close()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(f"Failed to close provider ({provider_name}): {exc}")
+            return
+    else:
+        aclose = getattr(provider, "aclose", None)
+        if not callable(aclose):
+            return
+        try:
+            maybe_awaitable = aclose()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(f"Failed to invoke provider aclose ({provider_name}): {exc}")
+            return
+
+    if inspect.isawaitable(maybe_awaitable) is not True:
+        return
+
+    try:
+        asyncio.run(maybe_awaitable)
+        return
+    except RuntimeError:
+        ...
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning(f"Failed to await provider aclose ({provider_name}): {exc}")
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning(
+            f"Could not await provider aclose and no running loop exists ({provider_name})."
+        )
+        return
+
+    loop.create_task(maybe_awaitable)
+
+
+def _shutdown_injector(injector: DependencyInjector | None) -> None:
+    """Best-effort provider cleanup for an injector instance."""
+    if injector is None:
+        return
+
+    logger: ILoggingGateway | logging.Logger = getattr(
+        injector,
+        "logging_gateway",
+        logging.getLogger(),
+    )
+
+    seen: set[int] = set()
+    for spec in _PROVIDER_SPECS.values():
+        provider = getattr(injector, spec.injector_attr, None)
+        if provider is None:
+            continue
+
+        provider_id = id(provider)
+        if provider_id in seen:
+            setattr(injector, spec.injector_attr, None)
+            continue
+
+        seen.add(provider_id)
+        _shutdown_provider(spec.provider_name, provider, logger)
+        setattr(injector, spec.injector_attr, None)
+
+    try:
+        ext_services = dict(getattr(injector, "ext_services", {}))
+    except Exception:  # pylint: disable=broad-exception-caught
+        ext_services = {}
+
+    for name, service in ext_services.items():
+        service_id = id(service)
+        if service_id in seen:
+            continue
+        seen.add(service_id)
+        _shutdown_provider(f"ext_service:{name}", service, logger)
+
+
 class _ContainerProxy:
     """Lazy proxy for the application-wide dependency injector."""
 
@@ -602,12 +696,19 @@ class _ContainerProxy:
     def build(self, *, force: bool = False) -> DependencyInjector:
         """Build and cache the injector if needed."""
         if force or self._injector is None:
+            if force and self._injector is not None:
+                _shutdown_injector(self._injector)
             self._injector = _build_container()
         return self._injector
 
+    def shutdown(self) -> None:
+        """Shutdown providers and clear the cached injector."""
+        _shutdown_injector(self._injector)
+        self._injector = None
+
     def reset(self) -> None:
         """Reset the cached injector."""
-        self._injector = None
+        self.shutdown()
 
     def __getattr__(self, name: str):
         return getattr(self.build(), name)
@@ -630,3 +731,8 @@ def build_container(*, force: bool = False) -> DependencyInjector:
 def reset_container() -> None:
     """Reset cached injector state (primarily for tests)."""
     container.reset()
+
+
+def shutdown_container() -> None:
+    """Shutdown all providers and clear the cached injector."""
+    container.shutdown()

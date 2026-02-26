@@ -7,12 +7,14 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from mugen.core.contract.gateway.completion import CompletionGatewayError
+from mugen.core.contract.gateway.storage.keyval_model import KeyValConflictError
 from mugen.core.plugin.message_handler.text.mh_ext import DefaultTextMHExtension
 
 
 class _MemoryKeyVal:
     def __init__(self):
         self.store = {}
+        self._versions: dict[str, int] = {}
 
     def has_key(self, key: str) -> bool:
         return key in self.store
@@ -22,6 +24,53 @@ class _MemoryKeyVal:
 
     def put(self, key: str, value):
         self.store[key] = value
+        self._versions[key] = int(self._versions.get(key, 0)) + 1
+
+    async def get_json(self, key: str):
+        payload = self.store.get(key)
+        if payload in [None, ""]:
+            return None
+        if isinstance(payload, bytes):
+            try:
+                payload = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        try:
+            loaded = json.loads(payload)
+        except (TypeError, ValueError):
+            return None
+        return loaded
+
+    async def get_entry(self, key: str):
+        if key not in self.store:
+            return None
+        return SimpleNamespace(
+            row_version=int(self._versions.get(key, 1)),
+        )
+
+    async def put_json(
+        self,
+        key: str,
+        value,
+        *,
+        expected_row_version: int | None = None,
+    ) -> None:
+        current_row_version = 0 if key not in self.store else int(
+            self._versions.get(key, 1)
+        )
+        if (
+            expected_row_version is not None
+            and int(expected_row_version) != current_row_version
+        ):
+            raise KeyValConflictError(
+                namespace="default",
+                key=key,
+                expected_row_version=int(expected_row_version),
+                current_row_version=current_row_version,
+            )
+
+        self.store[key] = json.dumps(value, ensure_ascii=True)
+        self._versions[key] = 1 if current_row_version == 0 else current_row_version + 1
 
 
 class _BaseExt:
@@ -877,13 +926,13 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         )
 
         keyval.store["chat_history:room-14"] = b"\xff"
-        self.assertEqual(ext._load_chat_history("room-14"), {"messages": []})
+        self.assertEqual(await ext._load_chat_history("room-14"), {"messages": []})
 
         keyval.store["chat_history:room-14"] = "{"
-        self.assertEqual(ext._load_chat_history("room-14"), {"messages": []})
+        self.assertEqual(await ext._load_chat_history("room-14"), {"messages": []})
 
         keyval.store["chat_history:room-14"] = json.dumps(["not-a-dict"])
-        self.assertEqual(ext._load_chat_history("room-14"), {"messages": []})
+        self.assertEqual(await ext._load_chat_history("room-14"), {"messages": []})
 
         invalid_cfg_ext = DefaultTextMHExtension(
             completion_gateway=Mock(get_completion=AsyncMock(return_value=None)),
@@ -910,6 +959,10 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             invalid_cfg_ext._default_extension_timeout_seconds,
         )
         self.assertEqual(
+            invalid_cfg_ext._history_save_cas_retries,
+            invalid_cfg_ext._default_history_save_cas_retries,
+        )
+        self.assertEqual(
             invalid_cfg_ext._ct_trigger_prefilter_enabled,
             invalid_cfg_ext._default_ct_trigger_prefilter_enabled,
         )
@@ -921,6 +974,7 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
                     debug_conversation=False,
                     messaging=SimpleNamespace(
                         history_max_messages="bad",
+                        history_save_cas_retries="bad",
                         extension_timeout_seconds="bad",
                         ct_trigger_prefilter_enabled=True,
                     ),
@@ -937,6 +991,10 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             non_numeric_cfg_ext._extension_timeout_seconds,
             non_numeric_cfg_ext._default_extension_timeout_seconds,
+        )
+        self.assertEqual(
+            non_numeric_cfg_ext._history_save_cas_retries,
+            non_numeric_cfg_ext._default_history_save_cas_retries,
         )
 
         no_mugen_cfg_ext = DefaultTextMHExtension(
@@ -1007,3 +1065,76 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response, [{"type": "text", "content": "assistant answer"}])
         unsupported_rpp.preprocess_response.assert_not_awaited()
         unsupported_ct.process_message.assert_not_awaited()
+
+    async def test_save_chat_history_conflict_fallback_and_retry_config_default(self) -> None:
+        keyval = Mock()
+        keyval.get_entry = AsyncMock(return_value=SimpleNamespace(row_version=1))
+        keyval.put_json = AsyncMock(
+            side_effect=[
+                KeyValConflictError(
+                    namespace="default",
+                    key="chat_history:room-cas",
+                    expected_row_version=1,
+                    current_row_version=2,
+                ),
+                KeyValConflictError(
+                    namespace="default",
+                    key="chat_history:room-cas",
+                    expected_row_version=1,
+                    current_row_version=2,
+                ),
+                KeyValConflictError(
+                    namespace="default",
+                    key="chat_history:room-cas",
+                    expected_row_version=1,
+                    current_row_version=2,
+                ),
+                KeyValConflictError(
+                    namespace="default",
+                    key="chat_history:room-cas",
+                    expected_row_version=1,
+                    current_row_version=2,
+                ),
+                KeyValConflictError(
+                    namespace="default",
+                    key="chat_history:room-cas",
+                    expected_row_version=1,
+                    current_row_version=2,
+                ),
+                None,
+            ]
+        )
+        ext = self._new_ext(
+            completion_result=SimpleNamespace(content="unused"),
+            messaging_service=_make_messaging_service(),
+            keyval=keyval,
+            debug_conversation=False,
+        )
+
+        await ext._save_chat_history(  # pylint: disable=protected-access
+            "room-cas",
+            {"messages": []},
+        )
+        self.assertEqual(keyval.put_json.await_count, 6)
+
+        retry_cfg_ext = DefaultTextMHExtension(
+            completion_gateway=Mock(get_completion=AsyncMock(return_value=None)),
+            config=SimpleNamespace(
+                mugen=SimpleNamespace(
+                    debug_conversation=False,
+                    messaging=SimpleNamespace(
+                        history_save_cas_retries=0,
+                        history_max_messages=40,
+                        extension_timeout_seconds=10.0,
+                        ct_trigger_prefilter_enabled=True,
+                    ),
+                )
+            ),
+            keyval_storage_gateway=_MemoryKeyVal(),
+            logging_gateway=Mock(),
+            messaging_service=_make_messaging_service(),
+        )
+        self.assertEqual(
+            retry_cfg_ext._history_save_cas_retries,  # pylint: disable=protected-access
+            retry_cfg_ext._default_history_save_cas_retries,  # pylint: disable=protected-access
+        )

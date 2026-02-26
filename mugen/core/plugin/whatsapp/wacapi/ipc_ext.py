@@ -367,7 +367,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 )
                 return
 
-        known_users = self._user_service.get_known_users_list()
+        known_users = await self._user_service.get_known_users_list()
         known_users = known_users if isinstance(known_users, dict) else {}
         if sender not in known_users.keys():
             profile_name = sender
@@ -378,7 +378,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                     if isinstance(contact_name, str) and contact_name != "":
                         profile_name = contact_name
             self._logging_gateway.debug(f"New WhatsApp contact: {sender}")
-            self._user_service.add_known_user(
+            await self._user_service.add_known_user(
                 sender,
                 profile_name,
                 sender,

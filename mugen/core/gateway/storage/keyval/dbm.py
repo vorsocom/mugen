@@ -2,10 +2,11 @@
 
 __all__ = ["DBMKeyValStorageGateway"]
 
+import asyncio
 import os
 from types import SimpleNamespace
+import threading
 import _gdbm
-
 
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
@@ -27,6 +28,8 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
     ) -> None:
         self._config = config
         self._logging_gateway = logging_gateway
+        self._lock = threading.RLock()
+        self._validate_environment_policy()
         configured_path = self._config.mugen.storage.keyval.dbm.path
         self._storage_path = self._resolve_storage_path(configured_path)
 
@@ -47,6 +50,43 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
             ) from exc
 
         self._harden_storage_permissions()
+
+    def _validate_environment_policy(self) -> None:
+        environment = getattr(
+            getattr(self._config, "mugen", SimpleNamespace()),
+            "environment",
+            "development",
+        )
+        allow_non_dev = getattr(
+            getattr(
+                getattr(
+                    getattr(
+                        getattr(self._config, "mugen", SimpleNamespace()),
+                        "storage",
+                        SimpleNamespace(),
+                    ),
+                    "keyval",
+                    SimpleNamespace(),
+                ),
+                "dbm",
+                SimpleNamespace(),
+            ),
+            "allow_non_dev",
+            False,
+        )
+
+        if bool(allow_non_dev):
+            return
+
+        if str(environment).strip().lower() in {"development", "dev", "testing"}:
+            return
+
+        self._logging_gateway.error(
+            "DBM key-value backend is blocked outside development/test environments. "
+            "Use relational keyval or set mugen.storage.keyval.dbm.allow_non_dev=true "
+            "to override explicitly."
+        )
+        raise RuntimeError("DBM key-value backend is disabled for non-development use.")
 
     def _resolve_storage_path(self, configured_path: str) -> str:
         if os.path.isabs(configured_path):
@@ -71,12 +111,14 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
                 f"Could not set DBM file permissions to 0o600 ({exc})."
             )
 
-    def put(self, key: str, value: str) -> None:
-        self._storage[key] = value
+    def put(self, key: str, value: str | bytes) -> None:
+        with self._lock:
+            self._storage[key] = value
 
     def get(self, key: str, decode: bool = True) -> str | bytes | None:
         try:
-            value = self._storage.get(key)
+            with self._lock:
+                value = self._storage.get(key)
         except (_gdbm.error, OSError) as exc:
             self._logging_gateway.warning(f"Failed to read DBM key {key!r} ({exc}).")
             return None
@@ -103,7 +145,8 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
 
     def keys(self) -> list[str]:
         try:
-            raw_keys = self._storage.keys()
+            with self._lock:
+                raw_keys = self._storage.keys()
         except (_gdbm.error, OSError) as exc:
             self._logging_gateway.warning(f"Failed to list DBM keys ({exc}).")
             return []
@@ -131,7 +174,8 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
 
     def remove(self, key: str) -> str | bytes | None:
         try:
-            value = self._storage.get(key)
+            with self._lock:
+                value = self._storage.get(key)
         except (_gdbm.error, OSError) as exc:
             self._logging_gateway.warning(
                 f"Failed to read DBM key before remove {key!r} ({exc})."
@@ -143,8 +187,9 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
             return None
 
         try:
-            del self._storage[key]
-            return value
+            with self._lock:
+                del self._storage[key]
+                return value
         except KeyError:
             self._logging_gateway.warning(f"DBM key missing during remove: {key!r}.")
         except (_gdbm.error, OSError) as exc:
@@ -153,7 +198,8 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
 
     def has_key(self, key: str) -> bool:
         try:
-            return key in self._storage
+            with self._lock:
+                return key in self._storage
         except (_gdbm.error, OSError, TypeError) as exc:
             self._logging_gateway.warning(
                 f"Failed membership check for DBM key {key!r} ({exc})."
@@ -162,8 +208,12 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
 
     def close(self) -> None:
         try:
-            self._storage.close()
+            with self._lock:
+                self._storage.close()
         except (_gdbm.error, OSError) as exc:
             self._logging_gateway.warning(
                 f"Failed to close DBM key-value store ({exc})."
             )
+
+    async def aclose(self) -> None:
+        await asyncio.to_thread(self.close)

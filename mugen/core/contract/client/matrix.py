@@ -31,13 +31,13 @@ class IMatrixClient(ABC, AsyncClient):
         """Get the next_batch token."""
 
     @abstractmethod
-    def cleanup_known_user_devices_list(self) -> None:
+    async def cleanup_known_user_devices_list(self) -> None:
         """Clean up known user devices list."""
 
     @abstractmethod
-    def trust_known_user_devices(self) -> None:
+    async def trust_known_user_devices(self) -> None:
         """Trust all known user devices."""
 
     @abstractmethod
-    def verify_user_devices(self, user_id: str) -> None:
+    async def verify_user_devices(self, user_id: str) -> None:
         """Verify all of a user's devices."""

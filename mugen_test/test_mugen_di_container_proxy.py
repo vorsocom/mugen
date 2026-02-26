@@ -42,6 +42,27 @@ class TestDIContainerProxy(unittest.TestCase):
 
         self.assertEqual(build_mock.call_count, 2)
 
+    def test_build_container_force_calls_shutdown_on_previous_injector(self):
+        """build_container(force=True) should shutdown the old injector before rebuild."""
+        first = object()
+        second = object()
+
+        di.reset_container()
+        with (
+            unittest.mock.patch(
+                "mugen.core.di._build_container",
+                side_effect=[first, second],
+            ) as build_mock,
+            unittest.mock.patch(
+                "mugen.core.di._shutdown_injector",
+            ) as shutdown_mock,
+        ):
+            self.assertIs(di.build_container(), first)
+            self.assertIs(di.build_container(force=True), second)
+
+        self.assertEqual(build_mock.call_count, 2)
+        shutdown_mock.assert_called_once_with(first)
+
     def test_reset_container_clears_cache(self):
         """reset_container should drop cached injector for the next build."""
         first = object()
@@ -57,3 +78,22 @@ class TestDIContainerProxy(unittest.TestCase):
             self.assertIs(di.build_container(), second)
 
         self.assertEqual(build_mock.call_count, 2)
+
+    def test_reset_container_calls_shutdown_on_cached_injector(self):
+        """reset_container should trigger shutdown for the cached injector."""
+        first = object()
+
+        di.reset_container()
+        with (
+            unittest.mock.patch(
+                "mugen.core.di._build_container",
+                return_value=first,
+            ),
+            unittest.mock.patch(
+                "mugen.core.di._shutdown_injector",
+            ) as shutdown_mock,
+        ):
+            self.assertIs(di.build_container(), first)
+            di.reset_container()
+
+        shutdown_mock.assert_called_once_with(first)

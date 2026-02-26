@@ -2,12 +2,12 @@
 
 __all__ = ["ClearChatHistoryICPExtension"]
 
-import json
 from types import SimpleNamespace
 
 
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.storage.keyval_model import KeyValConflictError
 from mugen.core import di
 
 
@@ -22,6 +22,8 @@ def _keyval_storage_gateway_provider():
 class ClearChatHistoryICPExtension(ICPExtension):
     """An implementation of ICPExtension to clear chat history."""
 
+    _default_history_save_cas_retries: int = 5
+
     def __init__(  # pylint: disable=too-many-arguments
         self,
         config: SimpleNamespace | None = None,
@@ -33,6 +35,7 @@ class ClearChatHistoryICPExtension(ICPExtension):
             if keyval_storage_gateway is not None
             else _keyval_storage_gateway_provider()
         )
+        self._history_save_cas_retries = self._resolve_history_save_cas_retries()
 
     @property
     def platforms(self) -> list[str]:
@@ -48,14 +51,14 @@ class ClearChatHistoryICPExtension(ICPExtension):
         room_id: str,
         user_id: str,
     ) -> list[dict] | None:
-        return self._handle_clear_command(room_id)
+        return await self._handle_clear_command(room_id)
 
-    def _handle_clear_command(
+    async def _handle_clear_command(
         self,
         room_id: str,
     ) -> list[dict]:
         # Clear chat history.
-        self._clear_chat_history(room_id)
+        await self._clear_chat_history(room_id)
         return [
             {
                 "type": "text",
@@ -63,9 +66,9 @@ class ClearChatHistoryICPExtension(ICPExtension):
             },
         ]
 
-    def _clear_chat_history(self, room_id: str, keep: int = 0) -> None:
+    async def _clear_chat_history(self, room_id: str, keep: int = 0) -> None:
         # Get the attention thread.
-        history = self._load_chat_history(room_id)
+        history = await self._load_chat_history(room_id)
 
         if keep == 0:
             history["messages"] = []
@@ -73,27 +76,42 @@ class ClearChatHistoryICPExtension(ICPExtension):
             history["messages"] = history["messages"][-abs(keep) :]
 
         # Persist the cleared thread.
-        self._save_chat_history(room_id, history)
+        await self._save_chat_history(room_id, history)
 
-    def _load_chat_history(self, room_id: str) -> dict | None:
+    async def _load_chat_history(self, room_id: str) -> dict | None:
         history_key = f"chat_history:{room_id}"
-        if self._keyval_storage_gateway.has_key(history_key):
-            payload = self._keyval_storage_gateway.get(history_key, False)
-            if isinstance(payload, bytes):
-                try:
-                    payload = payload.decode("utf-8")
-                except UnicodeDecodeError:
-                    return {"messages": []}
-            try:
-                loaded = json.loads(payload)
-            except (json.JSONDecodeError, TypeError):
-                return {"messages": []}
-            if isinstance(loaded, dict) and isinstance(loaded.get("messages"), list):
-                return loaded
-            return {"messages": []}
+        loaded = await self._keyval_storage_gateway.get_json(history_key)
+        if isinstance(loaded, dict) and isinstance(loaded.get("messages"), list):
+            return loaded
 
         return {"messages": []}
 
-    def _save_chat_history(self, room_id: str, history: dict) -> None:
+    async def _save_chat_history(self, room_id: str, history: dict) -> None:
         history_key = f"chat_history:{room_id}"
-        self._keyval_storage_gateway.put(history_key, json.dumps(history))
+        for _ in range(self._history_save_cas_retries):
+            entry = await self._keyval_storage_gateway.get_entry(history_key)
+            expected_row_version = 0
+            if entry is not None:
+                expected_row_version = int(entry.row_version)
+            try:
+                await self._keyval_storage_gateway.put_json(
+                    history_key,
+                    history,
+                    expected_row_version=expected_row_version,
+                )
+                return
+            except KeyValConflictError:
+                continue
+
+        await self._keyval_storage_gateway.put_json(history_key, history)
+
+    def _resolve_history_save_cas_retries(self) -> int:
+        raw_value = getattr(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "messaging", None),
+            "history_save_cas_retries",
+            self._default_history_save_cas_retries,
+        )
+        if isinstance(raw_value, int) and not isinstance(raw_value, bool):
+            if raw_value > 0:
+                return raw_value
+        return self._default_history_save_cas_retries

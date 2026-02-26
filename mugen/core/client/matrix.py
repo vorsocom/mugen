@@ -133,6 +133,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._matrix_ipc_queue: asyncio.Queue | None = None
         self._matrix_ipc_worker_task: asyncio.Task | None = None
         self._matrix_ipc_worker_stop = asyncio.Event()
+        self._sync_token: str | None = None
 
         ## Callbacks
         # Invite Room Events.
@@ -160,7 +161,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         """Initialisation."""
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
         self._start_matrix_ipc_worker()
-        if self._keyval_storage_gateway.get("client_access_token") is None:
+        stored_access_token = await self._keyval_storage_gateway.get_text(
+            "client_access_token"
+        )
+        if stored_access_token is None:
             # Load password and device name from storage.
             pw = self._config.matrix.client.password
             dn = self._config.matrix.client.device
@@ -174,15 +178,22 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 self._logging_gateway.debug("Saving credentials.")
 
                 # Save credentials.
-                self._keyval_storage_gateway.put(
+                await self._keyval_storage_gateway.put_text(
                     "client_access_token", resp.access_token
                 )
-                self._keyval_storage_gateway.put("client_device_id", resp.device_id)
-                self._keyval_storage_gateway.put("client_user_id", resp.user_id)
+                await self._keyval_storage_gateway.put_text(
+                    "client_device_id", resp.device_id
+                )
+                await self._keyval_storage_gateway.put_text(
+                    "client_user_id", resp.user_id
+                )
                 self.access_token = resp.access_token
                 self.device_id = resp.device_id
                 self.user_id = resp.user_id
                 self.load_store()
+                self._sync_token = await self._keyval_storage_gateway.get_text(
+                    self._sync_key
+                )
                 return self
             else:
                 self._logging_gateway.error("Password login failed.")
@@ -191,9 +202,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # Otherwise the config file exists, so we'll use the stored credentials.
         self._logging_gateway.debug("Login using saved credentials.")
         # open the file in read-only mode.
-        self.access_token = self._keyval_storage_gateway.get("client_access_token")
-        self.device_id = self._keyval_storage_gateway.get("client_device_id")
-        self.user_id = self._keyval_storage_gateway.get("client_user_id")
+        self.access_token = stored_access_token
+        self.device_id = await self._keyval_storage_gateway.get_text("client_device_id")
+        self.user_id = await self._keyval_storage_gateway.get_text("client_user_id")
+        self._sync_token = await self._keyval_storage_gateway.get_text(self._sync_key)
         self.load_store()
         return self
 
@@ -278,19 +290,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     @property
     def sync_token(self) -> str:
         """Get the key to access the sync key from persistent storage."""
-        return self._keyval_storage_gateway.get(self._sync_key)
+        return "" if self._sync_token is None else self._sync_token
 
-    def _load_known_devices(self) -> dict[str, list[str]]:
-        if not self._keyval_storage_gateway.has_key(self._known_devices_list_key):
+    async def _load_known_devices(self) -> dict[str, list[str]]:
+        payload = await self._keyval_storage_gateway.get_text(self._known_devices_list_key)
+        if payload is None:
             return {}
 
-        payload = self._keyval_storage_gateway.get(self._known_devices_list_key, False)
-        if isinstance(payload, bytes):
-            try:
-                payload = payload.decode("utf-8")
-            except UnicodeDecodeError:
-                self._logging_gateway.warning("Invalid known devices payload; resetting.")
-                return {}
         try:
             loaded = json.loads(payload)
         except (json.JSONDecodeError, TypeError):
@@ -310,16 +316,16 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             known_devices[user_id] = [str(device_id) for device_id in devices]
         return known_devices
 
-    def _save_known_devices(self, known_devices: dict[str, list[str]]) -> None:
-        self._keyval_storage_gateway.put(
+    async def _save_known_devices(self, known_devices: dict[str, list[str]]) -> None:
+        await self._keyval_storage_gateway.put_json(
             self._known_devices_list_key,
-            json.dumps(known_devices),
+            known_devices,
         )
 
-    def cleanup_known_user_devices_list(self) -> None:
+    async def cleanup_known_user_devices_list(self) -> None:
         """Clean up known user devices list."""
         self._logging_gateway.debug("Cleaning up known user devices.")
-        known_devices = self._load_known_devices()
+        known_devices = await self._load_known_devices()
         if not known_devices:
             return
 
@@ -331,12 +337,12 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             known_devices[user_id] = active_devices
 
         # Persist changes.
-        self._save_known_devices(known_devices)
+        await self._save_known_devices(known_devices)
 
-    def trust_known_user_devices(self) -> None:
+    async def trust_known_user_devices(self) -> None:
         """Trust all known user devices."""
         self._logging_gateway.debug("Trusting all known user devices.")
-        known_devices = self._load_known_devices()
+        known_devices = await self._load_known_devices()
         for user_id in known_devices.keys():
             self._logging_gateway.debug(f"User: {user_id}")
             for device_id, olm_device in self.device_store[user_id].items():
@@ -529,7 +535,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 f"Matrix media cleanup failed for temp file: {file_path}."
             )
 
-    def verify_user_devices(self, user_id: str) -> None:
+    async def verify_user_devices(self, user_id: str) -> None:
         """Verify all of a user's devices."""
         self._logging_gateway.debug(f"Verifying all user devices ({user_id}).")
         mode = self._resolve_device_trust_mode()
@@ -537,7 +543,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if mode == self._device_trust_mode_allowlist:
             allowlist = self._resolve_device_trust_allowlist()
 
-        known_devices = self._load_known_devices()
+        known_devices = await self._load_known_devices()
         try:
             user_devices = self.device_store[user_id]
         except KeyError:
@@ -585,7 +591,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 self.verify_device(olm_device)
 
                 # Persist changes to the known devices list.
-                self._save_known_devices(known_devices)
+                await self._save_known_devices(known_devices)
 
     def _log_skipped_callback(
         self,
@@ -827,7 +833,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return
 
         # Verify user devices.
-        self.verify_user_devices(event.sender)
+        await self.verify_user_devices(event.sender)
 
         # Join room.
         await self.join(room.room_id)
@@ -843,7 +849,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # Get profile and add user to list of known users if required.
         resp = await self.get_profile(event.sender)
         if isinstance(resp, ProfileGetResponse):
-            self._user_service.add_known_user(
+            await self._user_service.add_known_user(
                 event.sender, resp.displayname, room.room_id
             )
 
@@ -933,7 +939,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             return False
 
         # Verify user devices.
-        self.verify_user_devices(sender_id)
+        await self.verify_user_devices(sender_id)
 
         # Set the room read marker to indicate that the assistant has read the
         # message.
@@ -1102,7 +1108,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     # Responses
     async def _cb_sync_response(self, resp: SyncResponse):
         """Handle SyncResponses."""
-        self._keyval_storage_gateway.put(self._sync_key, resp.next_batch)
+        await self._keyval_storage_gateway.put_text(self._sync_key, resp.next_batch)
+        self._sync_token = resp.next_batch
 
     ## Utilities.
     def _normalize_direct_rooms(self, payload: object) -> dict[str, list[str]]:

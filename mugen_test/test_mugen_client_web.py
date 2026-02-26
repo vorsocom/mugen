@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import io
 import json
 import os
@@ -13,6 +14,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from mugen.core.client.web import DefaultWebClient
+from mugen.core.contract.gateway.storage.keyval_model import KeyValEntry, KeyValListPage
 
 
 class _InMemoryKeyVal:
@@ -36,6 +38,178 @@ class _InMemoryKeyVal:
 
     def remove(self, key: str) -> str | bytes | None:
         return self._store.pop(key, None)
+
+    async def get_entry(
+        self,
+        key: str,
+        *,
+        namespace: str | None = None,
+        include_expired: bool = False,  # noqa: ARG002
+    ) -> KeyValEntry | None:
+        raw = self.get(key, decode=False)
+        if raw is None:
+            return None
+
+        if isinstance(raw, bytes):
+            payload = raw
+            codec = "bytes"
+        else:
+            payload = str(raw).encode("utf-8")
+            codec = "text/utf-8"
+
+        return KeyValEntry(
+            namespace=namespace or "default",
+            key=key,
+            payload=payload,
+            codec=codec,
+            row_version=1,
+        )
+
+    async def put_json(
+        self,
+        key: str,
+        value: dict | list,
+        *,
+        namespace: str | None = None,
+        expected_row_version: int | None = None,  # noqa: ARG002
+        ttl_seconds: float | None = None,  # noqa: ARG002
+    ) -> KeyValEntry:
+        self.put(
+            key,
+            json.dumps(value, ensure_ascii=True, separators=(",", ":")),
+        )
+        entry = await self.get_entry(key, namespace=namespace)
+        assert entry is not None
+        return entry
+
+    async def delete(
+        self,
+        key: str,
+        *,
+        namespace: str | None = None,
+        expected_row_version: int | None = None,  # noqa: ARG002
+    ) -> KeyValEntry | None:
+        removed = self.remove(key)
+        if removed is None:
+            return None
+        if isinstance(removed, bytes):
+            payload = removed
+            codec = "bytes"
+        else:
+            payload = str(removed).encode("utf-8")
+            codec = "text/utf-8"
+        return KeyValEntry(
+            namespace=namespace or "default",
+            key=key,
+            payload=payload,
+            codec=codec,
+            row_version=1,
+        )
+
+    async def list_keys(
+        self,
+        *,
+        prefix: str = "",
+        namespace: str | None = None,  # noqa: ARG002
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> KeyValListPage:
+        keys = sorted([key for key in self.keys() if key.startswith(prefix)])
+        start_index = 0
+        if cursor not in [None, ""]:
+            for index, item in enumerate(keys):
+                if item > str(cursor):
+                    start_index = index
+                    break
+            else:
+                return KeyValListPage(keys=[], next_cursor=None)
+
+        page_limit = int(limit or len(keys) or 1)
+        if page_limit <= 0:
+            page_limit = 1
+
+        page_keys = keys[start_index : start_index + page_limit]
+        next_cursor = None
+        if (start_index + page_limit) < len(keys):
+            next_cursor = page_keys[-1]
+        return KeyValListPage(keys=page_keys, next_cursor=next_cursor)
+
+
+class _SequenceMappings:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def one_or_none(self):
+        return self._rows[0] if self._rows else None
+
+    def one(self):
+        if not self._rows:
+            raise AssertionError("expected one row")
+        return self._rows[0]
+
+    def all(self):
+        return list(self._rows)
+
+
+class _SequenceResult:
+    def __init__(
+        self,
+        *,
+        rows=None,
+        scalar_value=None,
+        first_value=None,
+        fetchall_rows=None,
+    ):
+        self._rows = list(rows or [])
+        self._scalar_value = scalar_value
+        self._first_value = first_value
+        self._fetchall_rows = list(fetchall_rows or [])
+
+    def mappings(self):
+        return _SequenceMappings(self._rows)
+
+    def scalar(self):
+        return self._scalar_value
+
+    def first(self):
+        if self._first_value is not None:
+            return self._first_value
+        if self._rows:
+            return self._rows[0]
+        return None
+
+    def fetchall(self):
+        if self._fetchall_rows:
+            return list(self._fetchall_rows)
+        return list(self._rows)
+
+
+class _SequenceSession:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls: list[tuple[str, dict]] = []
+
+    async def execute(self, stmt, params=None):
+        sql = str(stmt)
+        args = dict(params or {})
+        self.calls.append((sql, args))
+        if not self._responses:
+            raise AssertionError(f"Unexpected SQL call: {sql}")
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        if callable(response):
+            return response(sql, args)
+        return response
+
+
+def _force_relational_session(client: DefaultWebClient, session: _SequenceSession) -> None:
+    @asynccontextmanager
+    async def _session_cm():
+        yield session
+
+    client._using_relational_web_storage = lambda: True  # type: ignore[assignment]  # pylint: disable=protected-access
+    client._relational_session = _session_cm  # type: ignore[assignment]  # pylint: disable=protected-access
 
 
 def _build_config(*, basedir: str, replay_max_events: int = 5) -> SimpleNamespace:
@@ -111,9 +285,9 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.messaging.handle_text_message.assert_awaited_once()
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            queue = self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+            queue = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
             self.assertEqual(queue["jobs"][0]["status"], "done")
-            events = self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
+            events = await self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
                 conversation_id="conv-1",
                 last_event_id=None,
             )
@@ -198,7 +372,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            events = self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
+            events = await self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
                 conversation_id="conv-noresp",
                 last_event_id=None,
             )
@@ -238,7 +412,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            events = self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
+            events = await self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
                 conversation_id="conv-blank",
                 last_event_id=None,
             )
@@ -395,11 +569,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
         async with small_client._storage_lock:  # pylint: disable=protected-access
-            events = small_client._read_replay_events_unlocked(  # pylint: disable=protected-access
+            events = await small_client._read_replay_events_unlocked(  # pylint: disable=protected-access
                 conversation_id="conv-r",
                 last_event_id=None,
             )
-            replay_after_first = small_client._read_replay_events_unlocked(  # pylint: disable=protected-access
+            replay_after_first = await small_client._read_replay_events_unlocked(  # pylint: disable=protected-access
                 conversation_id="conv-r",
                 last_event_id="2",
             )
@@ -423,12 +597,12 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(claimed["status"], "processing")
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            queue = self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+            queue = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
             queue["jobs"][0]["status"] = "processing"
             queue["jobs"][0]["lease_expires_at"] = 0
-            self.client._write_queue_state_unlocked(queue)  # pylint: disable=protected-access
-            self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
-            queue = self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+            await self.client._write_queue_state_unlocked(queue)  # pylint: disable=protected-access
+            await self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
+            queue = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
 
         self.assertEqual(queue["jobs"][0]["status"], "pending")
 
@@ -524,7 +698,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            events = self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
+            events = await self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
                 conversation_id="conv-err",
                 last_event_id=None,
             )
@@ -639,7 +813,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
 
         # Replay skip branch for event_id <= highest_event_id.
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
                 "conv-stream",
                 {
                     "version": self.client._event_log_version,  # pylint: disable=protected-access
@@ -663,7 +837,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
 
         # Cover event_id None branches in replay/live paths.
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
                 "conv-stream",
                 {
                     "version": self.client._event_log_version,  # pylint: disable=protected-access
@@ -706,7 +880,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
                 "conv-reset",
                 {
                     "version": self.client._event_log_version,  # pylint: disable=protected-access
@@ -769,7 +943,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            events = self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
+            events = await self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
                 conversation_id="conv-corr",
                 last_event_id=None,
             )
@@ -843,7 +1017,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
                 "conv-next-zero",
                 {
                     "version": self.client._event_log_version,  # pylint: disable=protected-access
@@ -872,7 +1046,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
                 "conv-gen-change",
                 {
                     "version": self.client._event_log_version,  # pylint: disable=protected-access
@@ -961,7 +1135,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 }
             ),
         )
-        malformed_events = self.client._read_event_log_unlocked("conv-helper")  # pylint: disable=protected-access
+        malformed_events = await self.client._read_event_log_unlocked("conv-helper")  # pylint: disable=protected-access
         self.assertEqual(malformed_events["events"], [])
         self.assertEqual(malformed_events["next_event_id"], 1)
 
@@ -976,7 +1150,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 }
             ),
         )
-        non_positive_next = self.client._read_event_log_unlocked("conv-helper")  # pylint: disable=protected-access
+        non_positive_next = await self.client._read_event_log_unlocked("conv-helper")  # pylint: disable=protected-access
         self.assertEqual(non_positive_next["next_event_id"], 1)
 
         fallback_client_message_id = self.client._normalize_client_message_id(  # pylint: disable=protected-access
@@ -1338,7 +1512,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         await failing._process_claimed_job(claimed)  # pylint: disable=protected-access
 
         async with failing._storage_lock:  # pylint: disable=protected-access
-            failure_events = failing._read_replay_events_unlocked(  # pylint: disable=protected-access
+            failure_events = await failing._read_replay_events_unlocked(  # pylint: disable=protected-access
                 conversation_id="conv-f",
                 last_event_id=None,
             )
@@ -1664,7 +1838,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_claim_and_subscriber_edge_branches(self) -> None:
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
+            await self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
                 {
                     "version": 1,
                     "jobs": [
@@ -1786,7 +1960,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
 
         # _mark_job_status continue branch and done branch.
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
+            await self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
                 {
                     "version": 1,
                     "jobs": [
@@ -1799,35 +1973,35 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         await self.client._mark_job_failed("missing", "boom")  # pylint: disable=protected-access
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            queue_state = self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+            queue_state = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
             self.assertEqual(queue_state["jobs"][1]["status"], "done")
             self.assertIn("completed_at", queue_state["jobs"][1])
 
         # recover stale keeps non-processing jobs untouched.
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
-            queue_state = self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+            await self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
+            queue_state = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
             queue_state["jobs"][0]["status"] = "processing"
             queue_state["jobs"][0]["lease_expires_at"] = 9999999999
-            self.client._write_queue_state_unlocked(queue_state)  # pylint: disable=protected-access
-            self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
+            await self.client._write_queue_state_unlocked(queue_state)  # pylint: disable=protected-access
+            await self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
 
     async def test_state_and_config_helper_branches(self) -> None:
         # conversation owner branches.
         with self.assertRaises(KeyError):
-            self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
+            await self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
                 conversation_id="conv-x",
                 auth_user="user-1",
                 create_if_missing=False,
             )
 
-        self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
+        await self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
             conversation_id="conv-x",
             auth_user="user-1",
             create_if_missing=True,
         )
         with self.assertRaises(PermissionError):
-            self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
+            await self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
                 conversation_id="conv-x",
                 auth_user="user-2",
                 create_if_missing=False,
@@ -1835,7 +2009,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
 
         # read_queue_state jobs non-list.
         self.keyval.put(self.client._queue_state_key, json.dumps({"jobs": {}}))  # pylint: disable=protected-access
-        queue = self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+        queue = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
         self.assertEqual(queue["jobs"], [])
 
         # read_event_log malformed fields.
@@ -1843,7 +2017,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             self.client._event_log_key("conv-e"),  # pylint: disable=protected-access
             json.dumps({"events": {}, "next_event_id": "bad"}),
         )
-        log = self.client._read_event_log_unlocked("conv-e")  # pylint: disable=protected-access
+        log = await self.client._read_event_log_unlocked("conv-e")  # pylint: disable=protected-access
         self.assertEqual(log["events"], [])
         self.assertEqual(log["next_event_id"], 1)
 
@@ -1851,16 +2025,22 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             self.client._event_log_key("conv-e2"),  # pylint: disable=protected-access
             json.dumps({"events": [], "next_event_id": -5}),
         )
-        log = self.client._read_event_log_unlocked("conv-e2")  # pylint: disable=protected-access
+        log = await self.client._read_event_log_unlocked("conv-e2")  # pylint: disable=protected-access
         self.assertEqual(log["next_event_id"], 1)
 
         # read_json branches.
         self.keyval.put("bytes_bad", b"\xff")
-        self.assertIsNone(self.client._read_json_unlocked("bytes_bad"))  # pylint: disable=protected-access
+        self.assertIsNone(
+            await self.client._read_json_unlocked("bytes_bad")  # pylint: disable=protected-access
+        )
         self.keyval.put("invalid_json", "{bad")
-        self.assertIsNone(self.client._read_json_unlocked("invalid_json"))  # pylint: disable=protected-access
+        self.assertIsNone(
+            await self.client._read_json_unlocked("invalid_json")  # pylint: disable=protected-access
+        )
         self.keyval.put("scalar_json", "123")
-        self.assertIsNone(self.client._read_json_unlocked("scalar_json"))  # pylint: disable=protected-access
+        self.assertIsNone(
+            await self.client._read_json_unlocked("scalar_json")  # pylint: disable=protected-access
+        )
 
         # resolve_allowed_mimetypes branches.
         cfg = _build_config(basedir=self.tmpdir.name)
@@ -2048,4 +2228,726 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self.client._infer_media_extension("name.12345678901234567"),  # pylint: disable=protected-access
             "",
+        )
+
+    async def test_cleanup_media_tokens_cursor_cycle_and_non_prefix_keys(self) -> None:
+        future = self.client._epoch_now() + 30  # pylint: disable=protected-access
+        self.keyval.list_keys = AsyncMock(
+            side_effect=[
+                KeyValListPage(keys=["web:media_token:a"], next_cursor="cursor"),
+                KeyValListPage(keys=["bad:key"], next_cursor="cursor"),
+            ]
+        )
+        self.client._read_json_unlocked = AsyncMock(  # pylint: disable=protected-access
+            return_value={
+                "expires_at": future,
+                "file_path": "",
+            }
+        )
+
+        await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
+
+        self.assertEqual(self.keyval.list_keys.await_count, 2)
+
+
+class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
+    """Covers relational web persistence branches with a stub SQL session."""
+
+    async def asyncSetUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.keyval = _InMemoryKeyVal()
+        self.logger = Mock()
+        self.messaging = SimpleNamespace(
+            handle_text_message=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
+            handle_audio_message=AsyncMock(return_value=[]),
+            handle_video_message=AsyncMock(return_value=[]),
+            handle_file_message=AsyncMock(return_value=[]),
+            handle_image_message=AsyncMock(return_value=[]),
+            handle_composed_message=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
+            mh_extensions=[],
+        )
+        self.client = DefaultWebClient(
+            config=_build_config(basedir=self.tmpdir.name),
+            ipc_service=Mock(),
+            keyval_storage_gateway=self.keyval,
+            relational_storage_gateway=SimpleNamespace(
+                raw_session=lambda: None,  # replaced per test
+            ),
+            logging_gateway=self.logger,
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+
+    async def asyncTearDown(self) -> None:
+        await self.client.close()
+        self.tmpdir.cleanup()
+
+    async def test_relational_provider_helpers_and_datetime_coercion(self) -> None:
+        @asynccontextmanager
+        async def _raw_session():
+            yield object()
+
+        rel_client = DefaultWebClient(
+            config=_build_config(basedir=self.tmpdir.name),
+            ipc_service=Mock(),
+            keyval_storage_gateway=self.keyval,
+            relational_storage_gateway=SimpleNamespace(raw_session=lambda: _raw_session()),
+            logging_gateway=Mock(),
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        provider = rel_client._raw_relational_session_provider()  # pylint: disable=protected-access
+        self.assertTrue(callable(provider))
+        async with rel_client._relational_session():  # pylint: disable=protected-access
+            pass
+
+        non_rel_client = DefaultWebClient(
+            config=_build_config(basedir=self.tmpdir.name),
+            ipc_service=Mock(),
+            keyval_storage_gateway=self.keyval,
+            relational_storage_gateway=object(),
+            logging_gateway=self.logger,
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+
+        self.assertIsNone(non_rel_client._raw_relational_session_provider())  # pylint: disable=protected-access
+        self.assertIsNone(non_rel_client._raw_relational_session_provider())  # pylint: disable=protected-access
+        self.logger.warning.assert_called_once()
+
+        with self.assertRaises(RuntimeError):
+            async with non_rel_client._relational_session():  # pylint: disable=protected-access
+                pass
+
+        dt = non_rel_client._to_utc_datetime(non_rel_client._epoch_now())  # pylint: disable=protected-access
+        self.assertIsNotNone(non_rel_client._datetime_to_epoch(dt))  # pylint: disable=protected-access
+        self.assertIsNotNone(non_rel_client._datetime_to_iso(dt))  # pylint: disable=protected-access
+        naive_dt = non_rel_client._iso_to_utc_datetime("2025-01-01T00:00:00")  # pylint: disable=protected-access
+        self.assertIsNotNone(naive_dt)
+        self.assertIsNotNone(non_rel_client._datetime_to_epoch(naive_dt.replace(tzinfo=None)))  # pylint: disable=protected-access
+        self.assertIsNotNone(non_rel_client._datetime_to_iso(naive_dt.replace(tzinfo=None)))  # pylint: disable=protected-access
+        self.assertIsNone(non_rel_client._datetime_to_epoch(None))  # pylint: disable=protected-access
+        self.assertIsNone(non_rel_client._datetime_to_iso(None))  # pylint: disable=protected-access
+        self.assertIsNone(non_rel_client._iso_to_utc_datetime(None))  # pylint: disable=protected-access
+        self.assertIsNone(non_rel_client._iso_to_utc_datetime(""))  # pylint: disable=protected-access
+        self.assertIsNone(non_rel_client._iso_to_utc_datetime("not-a-date"))  # pylint: disable=protected-access
+        self.assertIsNotNone(
+            non_rel_client._iso_to_utc_datetime("2025-01-01T00:00:00Z")  # pylint: disable=protected-access
+        )
+
+        as_dict = non_rel_client._queue_job_record_to_payload(  # pylint: disable=protected-access
+            {
+                "job_id": "j1",
+                "conversation_id": "c1",
+                "sender": "u1",
+                "message_type": "text",
+                "payload": {"text": "hi"},
+                "status": "pending",
+                "attempts": 0,
+                "created_at": dt,
+                "updated_at": dt,
+                "lease_expires_at": dt,
+                "error_message": None,
+                "completed_at": None,
+                "client_message_id": "cid",
+            }
+        )
+        self.assertEqual(as_dict["id"], "j1")
+        self.assertEqual(as_dict["text"], "hi")
+
+        class _AttrRow:
+            def __init__(self):
+                self.job_id = "j2"
+                self.conversation_id = "c2"
+                self.sender = "u2"
+                self.message_type = "text"
+                self.payload = None
+                self.status = "pending"
+                self.attempts = 1
+                self.created_at = None
+                self.updated_at = None
+                self.lease_expires_at = None
+                self.error_message = None
+                self.completed_at = None
+                self.client_message_id = None
+
+        as_attr = non_rel_client._queue_job_record_to_payload(_AttrRow())  # pylint: disable=protected-access
+        self.assertEqual(as_attr["id"], "j2")
+        self.assertIsNone(as_attr["text"])
+
+    async def test_enqueue_message_relational_overflow_and_success(self) -> None:
+        self.client._queue_max_pending_jobs = 1  # pylint: disable=protected-access
+        overflow_session = _SequenceSession(
+            [
+                _SequenceResult(rows=[{"owner_user_id": "user-1"}]),
+                _SequenceResult(scalar_value=1),
+            ]
+        )
+        _force_relational_session(self.client, overflow_session)
+        self.client._append_event = AsyncMock(return_value={})  # pylint: disable=protected-access
+
+        with self.assertRaises(OverflowError):
+            await self.client.enqueue_message(
+                auth_user="user-1",
+                conversation_id="conv-r-1",
+                message_type="text",
+                text="hello",
+            )
+
+        success_session = _SequenceSession(
+            [
+                _SequenceResult(rows=[{"owner_user_id": "user-1"}]),
+                _SequenceResult(scalar_value=0),
+                _SequenceResult(),
+            ]
+        )
+        _force_relational_session(self.client, success_session)
+        payload = await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-r-1",
+            message_type="text",
+            text="hello",
+        )
+        self.assertEqual(payload["conversation_id"], "conv-r-1")
+        self.assertEqual(len(success_session.calls), 3)
+
+    async def test_resolve_media_download_relational_branches(self) -> None:
+        now = self.client._epoch_now()  # pylint: disable=protected-access
+        missing_session = _SequenceSession([_SequenceResult(rows=[])])
+        _force_relational_session(self.client, missing_session)
+        self.assertIsNone(
+            await self.client.resolve_media_download(auth_user="u1", token="missing")
+        )
+
+        expired_session = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "token": "t1",
+                            "owner_user_id": "u1",
+                            "file_path": "/tmp/f.bin",
+                            "mime_type": "text/plain",
+                            "filename": "f.bin",
+                            "expires_at": self.client._to_utc_datetime(now - 10),  # pylint: disable=protected-access
+                        }
+                    ]
+                ),
+                _SequenceResult(),
+            ]
+        )
+        _force_relational_session(self.client, expired_session)
+        self.assertIsNone(await self.client.resolve_media_download(auth_user="u1", token="t1"))
+
+        owner_mismatch = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "token": "t2",
+                            "owner_user_id": "u2",
+                            "file_path": "/tmp/f.bin",
+                            "mime_type": "text/plain",
+                            "filename": "f.bin",
+                            "expires_at": self.client._to_utc_datetime(now + 10),  # pylint: disable=protected-access
+                        }
+                    ]
+                )
+            ]
+        )
+        _force_relational_session(self.client, owner_mismatch)
+        self.assertIsNone(await self.client.resolve_media_download(auth_user="u1", token="t2"))
+
+        invalid_path_session = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "token": "t2b",
+                            "owner_user_id": "u1",
+                            "file_path": "",
+                            "mime_type": "text/plain",
+                            "filename": "f.bin",
+                            "expires_at": self.client._to_utc_datetime(now + 10),  # pylint: disable=protected-access
+                        }
+                    ]
+                )
+            ]
+        )
+        _force_relational_session(self.client, invalid_path_session)
+        self.assertIsNone(await self.client.resolve_media_download(auth_user="u1", token="t2b"))
+
+        missing_path = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "token": "t3",
+                            "owner_user_id": "u1",
+                            "file_path": "/tmp/does-not-exist.bin",
+                            "mime_type": "text/plain",
+                            "filename": "f.bin",
+                            "expires_at": self.client._to_utc_datetime(now + 10),  # pylint: disable=protected-access
+                        }
+                    ]
+                ),
+                _SequenceResult(),
+            ]
+        )
+        _force_relational_session(self.client, missing_path)
+        with patch("os.path.exists", return_value=False):
+            self.assertIsNone(
+                await self.client.resolve_media_download(auth_user="u1", token="t3")
+            )
+
+        valid_file = Path(self.tmpdir.name) / "ok.bin"
+        valid_file.write_bytes(b"x")
+        success_session = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "token": "t4",
+                            "owner_user_id": "u1",
+                            "file_path": str(valid_file),
+                            "mime_type": "application/octet-stream",
+                            "filename": "ok.bin",
+                            "expires_at": self.client._to_utc_datetime(now + 10),  # pylint: disable=protected-access
+                        }
+                    ]
+                )
+            ]
+        )
+        _force_relational_session(self.client, success_session)
+        with patch("os.path.exists", return_value=True):
+            resolved = await self.client.resolve_media_download(auth_user="u1", token="t4")
+        self.assertEqual(resolved["file_path"], str(valid_file))
+
+    async def test_claim_next_job_relational_branches(self) -> None:
+        none_session = _SequenceSession(
+            [
+                _SequenceResult(),
+                _SequenceResult(rows=[]),
+            ]
+        )
+        _force_relational_session(self.client, none_session)
+        self.assertIsNone(await self.client._claim_next_job())  # pylint: disable=protected-access
+
+        update_none_session = _SequenceSession(
+            [
+                _SequenceResult(),
+                _SequenceResult(rows=[{"id": 5}]),
+                _SequenceResult(rows=[]),
+            ]
+        )
+        _force_relational_session(self.client, update_none_session)
+        self.assertIsNone(await self.client._claim_next_job())  # pylint: disable=protected-access
+
+        success_session = _SequenceSession(
+            [
+                _SequenceResult(),
+                _SequenceResult(rows=[{"id": 8}]),
+                _SequenceResult(
+                    rows=[
+                        {
+                            "job_id": "job-8",
+                            "conversation_id": "conv-8",
+                            "sender": "u1",
+                            "message_type": "text",
+                            "payload": {"text": "hello"},
+                            "status": "processing",
+                            "attempts": 1,
+                            "created_at": None,
+                            "updated_at": None,
+                            "lease_expires_at": None,
+                            "error_message": None,
+                            "completed_at": None,
+                            "client_message_id": "cid-8",
+                        }
+                    ]
+                ),
+            ]
+        )
+        _force_relational_session(self.client, success_session)
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertEqual(claimed["id"], "job-8")
+        self.assertEqual(claimed["text"], "hello")
+
+    async def test_create_media_token_payload_and_append_event_relational(self) -> None:
+        source_file = Path(self.tmpdir.name) / "source.bin"
+        source_file.write_bytes(b"abc")
+
+        token_session = _SequenceSession([_SequenceResult()])
+        _force_relational_session(self.client, token_session)
+        token_payload = await self.client._create_media_token_payload(  # pylint: disable=protected-access
+            file_path=str(source_file),
+            owner_user_id="u1",
+            conversation_id="conv-token",
+            mime_type="application/octet-stream",
+            filename="source.bin",
+        )
+        self.assertTrue(token_payload["url"].startswith("/api/core/web/v1/media/"))
+
+        append_session = _SequenceSession(
+            [
+                _SequenceResult(rows=[]),
+                _SequenceResult(),
+                _SequenceResult(
+                    rows=[
+                        {
+                            "owner_user_id": "system",
+                            "stream_generation": "",
+                            "next_event_id": 0,
+                        }
+                    ]
+                ),
+                _SequenceResult(),
+                _SequenceResult(),
+                _SequenceResult(),
+            ]
+        )
+        _force_relational_session(self.client, append_session)
+        self.client._publish_event = AsyncMock()  # pylint: disable=protected-access
+        event = await self.client._append_event(  # pylint: disable=protected-access
+            conversation_id="conv-evt",
+            event_type="message",
+            data={"message": {"type": "text", "content": "hello"}},
+        )
+        self.assertEqual(event["id"], "1")
+
+        append_existing_state = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "owner_user_id": "system",
+                            "stream_generation": "gen-existing",
+                            "next_event_id": "bad",
+                        }
+                    ]
+                ),
+                _SequenceResult(),
+                _SequenceResult(),
+                _SequenceResult(),
+            ]
+        )
+        _force_relational_session(self.client, append_existing_state)
+        event_from_existing = await self.client._append_event(  # pylint: disable=protected-access
+            conversation_id="conv-evt-existing",
+            event_type="system",
+            data={"message": "ok"},
+        )
+        self.assertEqual(event_from_existing["id"], "1")
+
+        append_existing_positive = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "owner_user_id": "system",
+                            "stream_generation": "gen-existing",
+                            "next_event_id": 2,
+                        }
+                    ]
+                ),
+                _SequenceResult(),
+                _SequenceResult(),
+                _SequenceResult(),
+            ]
+        )
+        _force_relational_session(self.client, append_existing_positive)
+        event_from_positive = await self.client._append_event(  # pylint: disable=protected-access
+            conversation_id="conv-evt-positive",
+            event_type="system",
+            data={"message": "ok"},
+        )
+        self.assertEqual(event_from_positive["id"], "2")
+
+        append_failure = _SequenceSession(
+            [
+                _SequenceResult(rows=[]),
+                _SequenceResult(),
+                _SequenceResult(rows=[]),
+            ]
+        )
+        _force_relational_session(self.client, append_failure)
+        with self.assertRaises(RuntimeError):
+            await self.client._append_event(  # pylint: disable=protected-access
+                conversation_id="conv-fail",
+                event_type="message",
+                data={"message": {"type": "text", "content": "x"}},
+            )
+
+    async def test_relational_queue_owner_cleanup_and_event_log_helpers(self) -> None:
+        media_dir = Path(self.client._media_storage_path)  # pylint: disable=protected-access
+        media_dir.mkdir(parents=True, exist_ok=True)
+        active_file = media_dir / "active.bin"
+        stale_file = media_dir / "stale.bin"
+        active_file.write_bytes(b"a")
+        stale_file.write_bytes(b"s")
+        old = self.client._epoch_now() - 3600  # pylint: disable=protected-access
+        os.utime(stale_file, (old, old))
+
+        cleanup_session = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "token": "expired",
+                            "file_path": str(stale_file),
+                            "expires_at": self.client._to_utc_datetime(old),  # pylint: disable=protected-access
+                        },
+                        {
+                            "token": "active",
+                            "file_path": str(active_file),
+                            "expires_at": self.client._to_utc_datetime(old + 7200),  # pylint: disable=protected-access
+                        },
+                        {
+                            "token": "active-nopath",
+                            "file_path": None,
+                            "expires_at": self.client._to_utc_datetime(old + 7200),  # pylint: disable=protected-access
+                        },
+                    ]
+                ),
+                _SequenceResult(),
+            ]
+        )
+        _force_relational_session(self.client, cleanup_session)
+        await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
+        self.assertTrue(active_file.exists())
+        self.assertFalse(stale_file.exists())
+
+        mark_session = _SequenceSession([_SequenceResult(), _SequenceResult()])
+        _force_relational_session(self.client, mark_session)
+        await self.client._mark_job_done("job-1")  # pylint: disable=protected-access
+        await self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
+
+        ensure_missing = _SequenceSession([_SequenceResult(rows=[])])
+        _force_relational_session(self.client, ensure_missing)
+        with self.assertRaises(KeyError):
+            await self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-missing",
+                auth_user="u1",
+                create_if_missing=False,
+            )
+
+        ensure_fail = _SequenceSession(
+            [
+                _SequenceResult(rows=[]),
+                _SequenceResult(),
+                _SequenceResult(rows=[]),
+            ]
+        )
+        _force_relational_session(self.client, ensure_fail)
+        with self.assertRaises(RuntimeError):
+            await self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-fail",
+                auth_user="u1",
+                create_if_missing=True,
+            )
+
+        ensure_mismatch = _SequenceSession(
+            [_SequenceResult(rows=[{"owner_user_id": "other"}])]
+        )
+        _force_relational_session(self.client, ensure_mismatch)
+        with self.assertRaises(PermissionError):
+            await self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-own",
+                auth_user="u1",
+                create_if_missing=True,
+            )
+
+        read_queue = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "job_id": "jq-1",
+                            "conversation_id": "cq-1",
+                            "sender": "u1",
+                            "message_type": "text",
+                            "payload": {"text": "hi"},
+                            "status": "pending",
+                            "attempts": 0,
+                            "created_at": None,
+                            "updated_at": None,
+                            "lease_expires_at": None,
+                            "error_message": None,
+                            "completed_at": None,
+                            "client_message_id": "cid-1",
+                        }
+                    ]
+                )
+            ]
+        )
+        _force_relational_session(self.client, read_queue)
+        queue_state = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+        self.assertEqual(queue_state["jobs"][0]["id"], "jq-1")
+
+        write_queue = _SequenceSession([_SequenceResult(), _SequenceResult()])
+        _force_relational_session(self.client, write_queue)
+        await self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
+            {
+                "jobs": [
+                    {
+                        "id": "jq-2",
+                        "conversation_id": "cq-2",
+                        "sender": "u1",
+                        "message_type": "text",
+                        "text": "hello",
+                        "metadata": {},
+                        "status": "done",
+                        "attempts": 1,
+                        "lease_expires_at": None,
+                        "error": "",
+                        "completed_at": None,
+                        "client_message_id": "",
+                        "created_at": None,
+                        "updated_at": None,
+                    },
+                    "bad-row",
+                ]
+            }
+        )
+
+        write_queue_non_list = _SequenceSession([_SequenceResult()])
+        _force_relational_session(self.client, write_queue_non_list)
+        await self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
+            {"jobs": "bad-jobs"}
+        )
+
+        state_none = _SequenceSession([_SequenceResult(rows=[])])
+        _force_relational_session(self.client, state_none)
+        log_state = await self.client._read_event_log_unlocked("conv-log-none")  # pylint: disable=protected-access
+        self.assertEqual(log_state["events"], [])
+
+        state_mismatch = _SequenceSession(
+            [_SequenceResult(rows=[{"stream_generation": "g", "stream_version": 999, "next_event_id": 1}])]
+        )
+        _force_relational_session(self.client, state_mismatch)
+        reset_state = await self.client._read_event_log_unlocked("conv-log-mismatch")  # pylint: disable=protected-access
+        self.assertEqual(reset_state["events"], [])
+
+        state_bad_version = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "stream_generation": "g",
+                            "stream_version": "bad",
+                            "next_event_id": "bad",
+                        }
+                    ]
+                )
+            ]
+        )
+        _force_relational_session(self.client, state_bad_version)
+        bad_version_state = await self.client._read_event_log_unlocked("conv-log-bad")  # pylint: disable=protected-access
+        self.assertEqual(bad_version_state["events"], [])
+
+        state_valid = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "stream_generation": "gen-a",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                            "next_event_id": 0,
+                        }
+                    ]
+                ),
+                _SequenceResult(
+                    rows=[
+                        {
+                            "event_id": 2,
+                            "event_type": "message",
+                            "payload": {"message": {"type": "text", "content": "x"}},
+                            "created_at": None,
+                            "stream_generation": "gen-a",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        },
+                        {
+                            "event_id": 3,
+                            "event_type": "system",
+                            "payload": "bad-payload",
+                            "created_at": None,
+                            "stream_generation": "gen-a",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        },
+                    ]
+                ),
+            ]
+        )
+        _force_relational_session(self.client, state_valid)
+        valid_log = await self.client._read_event_log_unlocked("conv-log-valid")  # pylint: disable=protected-access
+        self.assertEqual(valid_log["next_event_id"], 1)
+        self.assertEqual(len(valid_log["events"]), 2)
+
+        state_next_bad = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "stream_generation": "gen-b",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                            "next_event_id": "bad",
+                        }
+                    ]
+                ),
+                _SequenceResult(rows=[]),
+            ]
+        )
+        _force_relational_session(self.client, state_next_bad)
+        parsed_next_bad = await self.client._read_event_log_unlocked("conv-log-next-bad")  # pylint: disable=protected-access
+        self.assertEqual(parsed_next_bad["next_event_id"], 1)
+
+        write_log = _SequenceSession(
+            [
+                _SequenceResult(rows=[]),
+                _SequenceResult(),
+                _SequenceResult(),
+                _SequenceResult(),
+                _SequenceResult(),
+            ]
+        )
+        _force_relational_session(self.client, write_log)
+        await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+            "conv-write",
+            {
+                "generation": "",
+                "next_event_id": 0,
+                "events": [
+                    "bad-event",
+                    {"id": "x"},
+                    {
+                        "id": "1",
+                        "event": "message",
+                        "data": "not-dict",
+                        "stream_generation": "",
+                        "stream_version": None,
+                        "created_at": None,
+                    },
+                    {
+                        "id": "2",
+                        "event": "system",
+                        "data": {"ok": True},
+                        "stream_generation": "gen",
+                        "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        "created_at": None,
+                    },
+                ],
+            },
+        )
+
+        write_log_non_list = _SequenceSession(
+            [_SequenceResult(), _SequenceResult(), _SequenceResult()]
+        )
+        _force_relational_session(self.client, write_log_non_list)
+        await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+            "conv-write-bad",
+            {
+                "generation": "gen",
+                "next_event_id": "bad",
+                "events": "bad-events",
+            },
         )
