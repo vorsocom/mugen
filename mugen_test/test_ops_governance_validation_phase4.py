@@ -46,11 +46,12 @@ class TestOpsGovernanceValidationPhase4(unittest.TestCase):
             tenant_id=tenant_id,
             code=" default-audit ",
             name=" Default Audit ",
-            resource_type=" audit_event ",
+            resource_type=" audit ",
             description=" keep records ",
         )
         self.assertEqual(payload.tenant_id, tenant_id)
         self.assertEqual(payload.code, " default-audit ")
+        self.assertEqual(payload.resource_type, "audit_event")
 
         with self.assertRaises(ValidationError):
             RetentionClassCreateValidation(
@@ -81,6 +82,13 @@ class TestOpsGovernanceValidationPhase4(unittest.TestCase):
                 resource_type="audit_event",
                 description=" ",
             )
+        with self.assertRaises(ValidationError):
+            RetentionClassCreateValidation(
+                tenant_id=tenant_id,
+                code="code",
+                name="name",
+                resource_type="not_supported",
+            )
 
     def test_legal_hold_validation(self) -> None:
         tenant_id = uuid.uuid4()
@@ -88,11 +96,12 @@ class TestOpsGovernanceValidationPhase4(unittest.TestCase):
 
         create_payload = LegalHoldCreateValidation(
             tenant_id=tenant_id,
-            resource_type="audit_event",
+            resource_type="AuditEvent",
             resource_id=resource_id,
             reason="litigation",
         )
         self.assertEqual(create_payload.resource_id, resource_id)
+        self.assertEqual(create_payload.resource_type, "audit_event")
 
         with self.assertRaises(ValidationError):
             LegalHoldCreateValidation(
@@ -108,9 +117,16 @@ class TestOpsGovernanceValidationPhase4(unittest.TestCase):
                 resource_id=resource_id,
                 reason=" ",
             )
+        with self.assertRaises(ValidationError):
+            LegalHoldCreateValidation(
+                tenant_id=tenant_id,
+                resource_type="other",
+                resource_id=resource_id,
+                reason="ok",
+            )
 
         place_payload = LegalHoldPlaceHoldActionValidation(
-            resource_type="evidence_blob",
+            resource_type="evidence",
             resource_id=resource_id,
             reason="legal request",
         )
@@ -127,6 +143,12 @@ class TestOpsGovernanceValidationPhase4(unittest.TestCase):
                 resource_type="audit_event",
                 resource_id=resource_id,
                 reason=" ",
+            )
+        with self.assertRaises(ValidationError):
+            LegalHoldPlaceHoldActionValidation(
+                resource_type="unknown",
+                resource_id=resource_id,
+                reason="x",
             )
 
         release_payload = LegalHoldReleaseHoldActionValidation(

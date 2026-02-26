@@ -69,3 +69,30 @@ class TestPhase4MigrationGuards(unittest.TestCase):
             text,
         )
         self.assertIn("Cannot enforce unique active retention classes", text)
+
+    def test_resource_type_canonicalization_migration(self) -> None:
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "migrations"
+            / "versions"
+            / "f6d9c2b4a1e7_ops_gov_resource_type_canonicalization.py"
+        )
+        text = migration.read_text(encoding="utf8")
+
+        self.assertIn(
+            'down_revision: Union[str, Sequence[str], None] = "f1a9b7c3d5e2"',
+            text,
+        )
+        self.assertIn("_canonicalize_resource_type_aliases(_RETENTION_CLASS_TABLE)", text)
+        self.assertIn("_canonicalize_resource_type_aliases(_LEGAL_HOLD_TABLE)", text)
+        self.assertIn("SET resource_type = 'audit_event'", text)
+        self.assertIn("SET resource_type = 'evidence_blob'", text)
+        self.assertIn(
+            "ck_ops_gov_retention_class__resource_type_canonical",
+            text,
+        )
+        self.assertIn(
+            "ck_ops_gov_legal_hold__resource_type_canonical",
+            text,
+        )
+        self.assertIn("Cannot enforce canonical resource_type values", text)

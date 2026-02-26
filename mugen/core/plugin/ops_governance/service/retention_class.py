@@ -3,6 +3,7 @@
 __all__ = ["RetentionClassResolutionError", "RetentionClassService"]
 
 import uuid
+from typing import Any, Mapping
 
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
@@ -11,6 +12,9 @@ from mugen.core.plugin.ops_governance.contract.service.retention_class import (
     IRetentionClassService,
 )
 from mugen.core.plugin.ops_governance.domain import RetentionClassDE
+from mugen.core.plugin.ops_governance.domain.resource_type import (
+    canonicalize_resource_type,
+)
 
 
 class RetentionClassResolutionError(RuntimeError):
@@ -34,12 +38,26 @@ class RetentionClassService(  # pylint: disable=too-few-public-methods
     @staticmethod
     def normalize_resource_type(value: str | None) -> str:
         """Normalize user/resource values into canonical retention type tokens."""
-        text = str(value or "").strip().lower().replace("-", "_")
-        if text in {"audit_event", "auditevent", "audit"}:
-            return "audit_event"
-        if text in {"evidence_blob", "evidenceblob", "evidence"}:
-            return "evidence_blob"
-        raise ValueError(f"Unsupported resource type: {value!r}.")
+        return canonicalize_resource_type(value)
+
+    async def create(self, values: Mapping[str, Any]) -> RetentionClassDE:
+        payload = dict(values)
+        payload["resource_type"] = self.normalize_resource_type(
+            payload.get("resource_type")
+        )
+        return await super().create(payload)
+
+    async def update(
+        self,
+        where: Mapping[str, Any],
+        changes: Mapping[str, Any],
+    ) -> RetentionClassDE | None:
+        payload = dict(changes)
+        if "resource_type" in payload:
+            payload["resource_type"] = self.normalize_resource_type(
+                payload.get("resource_type")
+            )
+        return await super().update(where, payload)
 
     async def _list_active_for_resource_type(
         self,
@@ -48,18 +66,27 @@ class RetentionClassService(  # pylint: disable=too-few-public-methods
         resource_type: str,
     ) -> list[RetentionClassDE]:
         normalized = self.normalize_resource_type(resource_type)
-        rows = await self.list(
+        active_rows = await self.list(
             filter_groups=[
                 FilterGroup(
                     where={
                         "tenant_id": tenant_id,
-                        "resource_type": normalized,
                         "is_active": True,
                     }
                 )
             ]
         )
-        return list(rows)
+        rows: list[RetentionClassDE] = []
+        for row in active_rows:
+            try:
+                row_resource_type = self.normalize_resource_type(row.resource_type)
+            except ValueError as exc:
+                raise RetentionClassResolutionError(
+                    "Encountered unsupported active retention class ResourceType."
+                ) from exc
+            if row_resource_type == normalized:
+                rows.append(row)
+        return rows
 
     async def resolve_active_for_resource_type(
         self,
