@@ -4,6 +4,8 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 import uuid
 
+from werkzeug.exceptions import BadRequest
+
 from mugen.core.plugin.acp.contract.service.key_provider import ResolvedKeyMaterial
 from mugen.core.plugin.ops_connector.api.validation import (
     ConnectorInstanceInvokeValidation,
@@ -100,6 +102,183 @@ class TestConnectorInstanceService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 200)
         self.assertEqual(payload["Status"], "ok")
         self.assertTrue(payload["Idempotent"])
+        self.assertEqual(
+            svc._emit_connector_biz_trace.await_count, 2
+        )  # type: ignore[attr-defined]
+
+        replay_finish_call = svc._emit_connector_biz_trace.await_args_list[
+            1
+        ]  # type: ignore[attr-defined]
+        self.assertEqual(replay_finish_call.kwargs["stage"], "finish")
+        self.assertEqual(replay_finish_call.kwargs["status_code"], 200)
+        self.assertEqual(
+            replay_finish_call.kwargs["details"]["CapabilityName"],
+            "get_jwks",
+        )
+        self.assertTrue(replay_finish_call.kwargs["details"]["Replay"])
+        self.assertTrue(replay_finish_call.kwargs["details"]["Idempotent"])
+        self.assertEqual(replay_finish_call.kwargs["details"]["StatusCode"], 200)
+        self.assertIsInstance(replay_finish_call.kwargs["duration_ms"], int)
+        self.assertIsInstance(
+            replay_finish_call.kwargs["details"]["duration_ms"],
+            int,
+        )
+
+    async def test_action_invoke_pre_execution_abort_commits_dedup_failure_once(
+        self,
+    ) -> None:
+        svc = self._service()
+        tenant_id = uuid.uuid4()
+        entity_id = uuid.uuid4()
+        auth_user_id = uuid.uuid4()
+        dedup_state = {
+            "enabled": True,
+            "record_id": uuid.uuid4(),
+            "replay": None,
+        }
+
+        instance = self._instance()
+        connector_type = self._connector_type()
+
+        svc._emit_connector_biz_trace = AsyncMock()  # type: ignore[attr-defined]
+        svc._get_for_action = AsyncMock(  # type: ignore[attr-defined]
+            return_value=instance
+        )
+        svc._resolve_connector_type = AsyncMock(  # type: ignore[attr-defined]
+            return_value=connector_type
+        )
+        svc._resolve_capability = Mock(  # type: ignore[attr-defined]
+            return_value=("get_jwks", {"Method": "GET", "PathTemplate": "/ping"})
+        )
+        svc._acquire_dedup = AsyncMock(  # type: ignore[attr-defined]
+            return_value=dedup_state
+        )
+        svc._validate_input_schema = AsyncMock(  # type: ignore[attr-defined]
+            side_effect=BadRequest("Input schema invalid.")
+        )
+        svc._commit_dedup_failure = AsyncMock()  # type: ignore[attr-defined]
+
+        with self.assertRaises(BadRequest):
+            await svc.action_invoke(
+                tenant_id=tenant_id,
+                entity_id=entity_id,
+                where={"tenant_id": tenant_id, "id": entity_id},
+                auth_user_id=auth_user_id,
+                data=ConnectorInstanceInvokeValidation(
+                    row_version=5,
+                    capability_name="get_jwks",
+                    input_json={},
+                    client_action_key="dedup-key",
+                ),
+            )
+
+        svc._commit_dedup_failure.assert_awaited_once()  # type: ignore[attr-defined]
+        commit_call = svc._commit_dedup_failure.await_args  # type: ignore[attr-defined]
+        self.assertEqual(commit_call.kwargs["state"], dedup_state)
+        self.assertEqual(commit_call.kwargs["response_code"], 400)
+        self.assertEqual(commit_call.kwargs["error_code"], "invoke_http_exception")
+
+    async def test_action_invoke_persistence_exception_commits_failure_and_reraises(
+        self,
+    ) -> None:
+        svc = self._service()
+        tenant_id = uuid.uuid4()
+        entity_id = uuid.uuid4()
+        auth_user_id = uuid.uuid4()
+        dedup_state = {
+            "enabled": True,
+            "record_id": uuid.uuid4(),
+            "replay": None,
+        }
+
+        instance = self._instance()
+        connector_type = self._connector_type()
+
+        svc._emit_connector_biz_trace = AsyncMock()  # type: ignore[attr-defined]
+        svc._get_for_action = AsyncMock(  # type: ignore[attr-defined]
+            return_value=instance
+        )
+        svc._resolve_connector_type = AsyncMock(  # type: ignore[attr-defined]
+            return_value=connector_type
+        )
+        svc._resolve_capability = Mock(  # type: ignore[attr-defined]
+            return_value=(
+                "get_jwks",
+                {
+                    "Method": "GET",
+                    "PathTemplate": "/api/core/acp/v1/auth/.well-known/jwks.json",
+                    "InputPlacement": "query",
+                },
+            )
+        )
+        svc._acquire_dedup = AsyncMock(  # type: ignore[attr-defined]
+            return_value=dedup_state
+        )
+        svc._validate_input_schema = AsyncMock()  # type: ignore[attr-defined]
+        svc._resolve_secret_material = AsyncMock(  # type: ignore[attr-defined]
+            return_value=ResolvedKeyMaterial(
+                key_id="ops_connector_default",
+                secret=b"dev-ops-connector-secret",
+                provider="local",
+            )
+        )
+        svc._resolve_base_url = Mock(  # type: ignore[attr-defined]
+            return_value="http://127.0.0.1:8081"
+        )
+        svc._resolve_retry_policy = Mock(  # type: ignore[attr-defined]
+            return_value=(10.0, 0, 0.0, (429, 500))
+        )
+        svc._invoke_request_spec = Mock(  # type: ignore[attr-defined]
+            return_value=(
+                "GET",
+                "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+                {},
+                {},
+                None,
+                None,
+            )
+        )
+        svc._resolve_headers = Mock(return_value={})  # type: ignore[attr-defined]
+        svc._execute_http_request = AsyncMock(  # type: ignore[attr-defined]
+            return_value={
+                "ok": True,
+                "status_code": 200,
+                "payload": {"keys": []},
+                "attempt_count": 1,
+                "timeout": False,
+                "transport_error": None,
+            }
+        )
+        svc._validate_output_schema = AsyncMock(  # type: ignore[attr-defined]
+            return_value=[]
+        )
+        svc._persist_call_log = AsyncMock(  # type: ignore[attr-defined]
+            side_effect=RuntimeError("persist failed")
+        )
+        svc._commit_dedup_failure = AsyncMock()  # type: ignore[attr-defined]
+
+        with self.assertRaises(RuntimeError):
+            await svc.action_invoke(
+                tenant_id=tenant_id,
+                entity_id=entity_id,
+                where={"tenant_id": tenant_id, "id": entity_id},
+                auth_user_id=auth_user_id,
+                data=ConnectorInstanceInvokeValidation(
+                    row_version=5,
+                    capability_name="get_jwks",
+                    input_json={},
+                    client_action_key="dedup-key",
+                ),
+            )
+
+        svc._commit_dedup_failure.assert_awaited_once()  # type: ignore[attr-defined]
+        commit_call = svc._commit_dedup_failure.await_args  # type: ignore[attr-defined]
+        self.assertEqual(commit_call.kwargs["state"], dedup_state)
+        self.assertEqual(commit_call.kwargs["response_code"], 500)
+        self.assertEqual(
+            commit_call.kwargs["error_code"],
+            "invoke_unexpected_exception",
+        )
 
     async def test_action_invoke_success_returns_envelope_and_commits_dedup(
         self,

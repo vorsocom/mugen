@@ -9,6 +9,9 @@ from mugen.core.plugin.acp.contract.sdk.permission import (
 from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 from mugen.core.plugin.acp.sdk.runtime_binder import AdminRuntimeBinder
 from mugen.core.plugin.acp.utility.ns import AdminNs
+from mugen.core.plugin.ops_connector.api.validation import (
+    ConnectorTypeUpdateValidation,
+)
 from mugen.core.plugin.ops_connector.contrib import contribute
 from mugen.core.plugin.ops_connector.service.connector_call_log import (
     ConnectorCallLogService,
@@ -16,7 +19,9 @@ from mugen.core.plugin.ops_connector.service.connector_call_log import (
 from mugen.core.plugin.ops_connector.service.connector_instance import (
     ConnectorInstanceService,
 )
-from mugen.core.plugin.ops_connector.service.connector_type import ConnectorTypeService
+from mugen.core.plugin.ops_connector.service.connector_type import (
+    ConnectorTypeService,
+)
 
 
 class _FakeRsg:  # pylint: disable=too-few-public-methods
@@ -58,6 +63,10 @@ class TestOpsConnectorContribBinding(unittest.TestCase):
         connector_types = registry.get_resource("OpsConnectorTypes")
         connector_instances = registry.get_resource("OpsConnectorInstances")
         connector_call_logs = registry.get_resource("OpsConnectorCallLogs")
+        self.assertEqual(
+            connector_types.crud.update_schema,
+            ConnectorTypeUpdateValidation,
+        )
 
         self.assertIn("ops_connector_type", fake_rsg.tables)
         self.assertIn("ops_connector_instance", fake_rsg.tables)

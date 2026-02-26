@@ -564,14 +564,19 @@ def upgrade() -> None:
             purpose,
             key_id,
             provider,
-            status
+            status,
+            attributes
         )
         SELECT
             '00000000-0000-0000-0000-000000000000'::uuid,
             'ops_connector_secret',
             'ops_connector_default',
             'local',
-            'active'
+            'active',
+            jsonb_build_object(
+                'seed_source',
+                'phase6_ops_connector'
+            )
         WHERE NOT EXISTS (
             SELECT 1
             FROM mugen.admin_key_ref
@@ -616,6 +621,14 @@ def downgrade() -> None:
         DELETE FROM mugen.admin_plugin_capability_grant
         WHERE tenant_id = '00000000-0000-0000-0000-000000000000'::uuid
           AND plugin_key = 'com.vorsocomputing.mugen.ops_connector'
+          AND attributes ->> 'seed_source' = 'phase6_ops_connector';
+        """)
+
+    op.execute("""
+        DELETE FROM mugen.admin_key_ref
+        WHERE tenant_id = '00000000-0000-0000-0000-000000000000'::uuid
+          AND purpose = 'ops_connector_secret'
+          AND key_id = 'ops_connector_default'
           AND attributes ->> 'seed_source' = 'phase6_ops_connector';
         """)
 

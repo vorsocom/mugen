@@ -48,6 +48,69 @@ def _validate_schema_ref(value: Any, *, field_name: str) -> None:
         raise ValueError(f"{field_name}.Version must be a positive integer.")
 
 
+def _validate_capabilities_json(
+    value: Any,
+    *,
+    field_name: str = "CapabilitiesJson",
+) -> Any:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object.")
+
+    for cap_name, definition in value.items():
+        if not str(cap_name or "").strip():
+            raise ValueError(f"{field_name} keys must be non-empty.")
+        if not isinstance(definition, dict):
+            raise ValueError(
+                f"Each capability definition in {field_name} must be an object."
+            )
+
+        method = _normalize_optional_text(definition.get("Method"))
+        if method is not None:
+            definition["Method"] = method.upper()
+
+        path_template = _normalize_optional_text(definition.get("PathTemplate"))
+        if path_template is not None and not path_template.startswith("/"):
+            raise ValueError(
+                f"{field_name}[{cap_name}].PathTemplate must start with '/'."
+            )
+
+        headers = definition.get("Headers")
+        if headers is not None and not isinstance(headers, dict):
+            raise ValueError(f"{field_name}[{cap_name}].Headers must be an object.")
+
+        retry_status_codes = definition.get("RetryStatusCodes")
+        if retry_status_codes is not None:
+            if not isinstance(retry_status_codes, list) or not retry_status_codes:
+                raise ValueError(
+                    f"{field_name}[{cap_name}].RetryStatusCodes must be a non-empty array."
+                )
+            for code in retry_status_codes:
+                try:
+                    parsed = int(code)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"{field_name}[{cap_name}].RetryStatusCodes must contain integers."
+                    ) from exc
+                if parsed < 100 or parsed > 599:
+                    raise ValueError(
+                        (
+                            f"{field_name}[{cap_name}].RetryStatusCodes must be "
+                            "HTTP status codes."
+                        )
+                    )
+
+        _validate_schema_ref(
+            definition.get("InputSchema"),
+            field_name=f"{field_name}[{cap_name}].InputSchema",
+        )
+        _validate_schema_ref(
+            definition.get("OutputSchema"),
+            field_name=f"{field_name}[{cap_name}].OutputSchema",
+        )
+
+    return value
+
+
 class ConnectorTypeCreateValidation(IValidationBase):
     """Validate generic create inputs for ConnectorType."""
 
@@ -72,68 +135,56 @@ class ConnectorTypeCreateValidation(IValidationBase):
         if self.adapter_kind != "http_json":
             raise ValueError("AdapterKind must be http_json.")
 
-        if not isinstance(self.capabilities_json, dict):
-            raise ValueError("CapabilitiesJson must be an object.")
+        self.capabilities_json = _validate_capabilities_json(self.capabilities_json)
 
-        for cap_name, definition in self.capabilities_json.items():
-            if not str(cap_name or "").strip():
-                raise ValueError("CapabilitiesJson keys must be non-empty.")
-            if not isinstance(definition, dict):
-                raise ValueError(
-                    "Each capability definition in CapabilitiesJson must be an object."
-                )
+        return self
 
-            method = _normalize_optional_text(definition.get("Method"))
-            if method is not None:
-                definition["Method"] = method.upper()
 
-            path_template = _normalize_optional_text(definition.get("PathTemplate"))
-            if path_template is not None and not path_template.startswith("/"):
-                raise ValueError(
-                    f"CapabilitiesJson[{cap_name}].PathTemplate must start with '/'."
-                )
+class ConnectorTypeUpdateValidation(IValidationBase):
+    """Validate PATCH payloads for ConnectorType."""
 
-            headers = definition.get("Headers")
-            if headers is not None and not isinstance(headers, dict):
-                raise ValueError(
-                    f"CapabilitiesJson[{cap_name}].Headers must be an object."
-                )
+    key: str | None = None
+    display_name: str | None = None
+    adapter_kind: str | None = None
+    capabilities_json: Any | None = None
+    is_active: bool | None = None
+    attributes: dict[str, Any] | None = None
 
-            retry_status_codes = definition.get("RetryStatusCodes")
-            if retry_status_codes is not None:
-                if not isinstance(retry_status_codes, list) or not retry_status_codes:
-                    raise ValueError(
-                        (
-                            "CapabilitiesJson"
-                            f"[{cap_name}].RetryStatusCodes must be a non-empty array."
-                        )
-                    )
-                for code in retry_status_codes:
-                    try:
-                        parsed = int(code)
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError(
-                            (
-                                "CapabilitiesJson"
-                                f"[{cap_name}].RetryStatusCodes must contain integers."
-                            )
-                        ) from exc
-                    if parsed < 100 or parsed > 599:
-                        raise ValueError(
-                            (
-                                "CapabilitiesJson"
-                                f"[{cap_name}].RetryStatusCodes must be "
-                                "HTTP status codes."
-                            )
-                        )
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "ConnectorTypeUpdateValidation":
+        fields_set = set(self.model_fields_set)
 
-            _validate_schema_ref(
-                definition.get("InputSchema"),
-                field_name=f"CapabilitiesJson[{cap_name}].InputSchema",
-            )
-            _validate_schema_ref(
-                definition.get("OutputSchema"),
-                field_name=f"CapabilitiesJson[{cap_name}].OutputSchema",
+        if "key" in fields_set:
+            self.key = _normalize_optional_text(self.key)
+            if self.key is None:
+                raise ValueError("Key must be non-empty when provided.")
+
+        if "display_name" in fields_set:
+            self.display_name = _normalize_optional_text(self.display_name)
+            if self.display_name is None:
+                raise ValueError("DisplayName must be non-empty when provided.")
+
+        if "adapter_kind" in fields_set:
+            normalized_adapter_kind = _normalize_optional_text(self.adapter_kind)
+            if normalized_adapter_kind is None:
+                raise ValueError("AdapterKind must be non-empty when provided.")
+            self.adapter_kind = normalized_adapter_kind.casefold()
+            if self.adapter_kind != "http_json":
+                raise ValueError("AdapterKind must be http_json.")
+
+        if "capabilities_json" in fields_set:
+            self.capabilities_json = _validate_capabilities_json(self.capabilities_json)
+
+        if (
+            self.key is None
+            and self.display_name is None
+            and self.adapter_kind is None
+            and self.capabilities_json is None
+            and self.is_active is None
+            and self.attributes is None
+        ):
+            raise ValueError(
+                "At least one mutable ConnectorType field must be provided."
             )
 
         return self
