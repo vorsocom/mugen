@@ -402,13 +402,20 @@ if [[ "$neg_count" -gt 0 ]]; then
       name="negative_${i}"
     fi
     set_name="$(echo "$step" | jq -r '.entity_set')"
+    scope="$(echo "$step" | jq -r '.scope // "tenant"')"
     expect_code="$(echo "$step" | jq -r '.expect_code')"
     payload_template="$(echo "$step" | jq -c '.payload // {}')"
     payload="$(replace_placeholders "$payload_template" "$row_version" "$entity_id" "$tenant_id" "$user_id")"
 
+    if [[ "$scope" == "global" ]]; then
+      create_url="$base_url/$set_name"
+    else
+      create_url="$base_url/tenants/$tenant_id/$set_name"
+    fi
+
     code="$(curl -sk -o "/tmp/acp_http_e2e_negative_${i}.out" -w "%{http_code}" \
       -H "$auth_header" -H "Content-Type: application/json" \
-      -X POST "$base_url/tenants/$tenant_id/$set_name" -d "$payload")"
+      -X POST "$create_url" -d "$payload")"
     echo "NEGATIVE CREATE $name: $code"
     if [[ "$code" != "$expect_code" ]]; then
       echo "ERROR: negative create $name expected $expect_code got $code" >&2
@@ -427,13 +434,20 @@ if [[ "$pos_count" -gt 0 ]]; then
       name="positive_${i}"
     fi
     set_name="$(echo "$step" | jq -r '.entity_set')"
+    scope="$(echo "$step" | jq -r '.scope // "tenant"')"
     expect_code="$(echo "$step" | jq -r '.expect_code // 201')"
     payload_template="$(echo "$step" | jq -c '.payload // {}')"
     payload="$(replace_placeholders "$payload_template" "$row_version" "$entity_id" "$tenant_id" "$user_id")"
 
+    if [[ "$scope" == "global" ]]; then
+      create_url="$base_url/$set_name"
+    else
+      create_url="$base_url/tenants/$tenant_id/$set_name"
+    fi
+
     code="$(curl -sk -o "/tmp/acp_http_e2e_positive_${i}.out" -w "%{http_code}" \
       -H "$auth_header" -H "Content-Type: application/json" \
-      -X POST "$base_url/tenants/$tenant_id/$set_name" -d "$payload")"
+      -X POST "$create_url" -d "$payload")"
     echo "POSITIVE CREATE $name: $code"
     if [[ "$code" != "$expect_code" ]]; then
       echo "ERROR: positive create $name expected $expect_code got $code" >&2
