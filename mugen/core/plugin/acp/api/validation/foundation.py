@@ -6,7 +6,7 @@ from datetime import datetime
 import uuid
 from typing import Any
 
-from pydantic import Field, PositiveInt, model_validator
+from pydantic import Field, NonNegativeInt, PositiveInt, model_validator
 
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 
@@ -246,4 +246,126 @@ class SchemaActivateVersionValidation(IValidationBase):
         self.key = self.key.strip()
         if self.key == "":
             raise ValueError("Key must be non-empty.")
+        return self
+
+
+class KeyRefCreateValidation(IValidationBase):
+    """Validate create payloads for key references."""
+
+    tenant_id: uuid.UUID | None = None
+    purpose: str
+    key_id: str
+    provider: str = "local"
+    status: str | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "KeyRefCreateValidation":
+        self.purpose = self.purpose.strip()
+        if self.purpose == "":
+            raise ValueError("Purpose must be non-empty.")
+
+        self.key_id = self.key_id.strip()
+        if self.key_id == "":
+            raise ValueError("KeyId must be non-empty.")
+
+        self.provider = (self.provider or "local").strip()
+        if self.provider == "":
+            self.provider = "local"
+
+        if self.status is not None:
+            self.status = self.status.strip().lower()
+            if self.status not in {"active", "retired", "destroyed"}:
+                raise ValueError("Status must be one of active, retired, or destroyed.")
+
+        return self
+
+
+class KeyRefRotateValidation(IValidationBase):
+    """Validate payload for key rotation."""
+
+    tenant_id: uuid.UUID | None = None
+    purpose: str
+    key_id: str
+    provider: str = "local"
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "KeyRefRotateValidation":
+        self.purpose = self.purpose.strip()
+        if self.purpose == "":
+            raise ValueError("Purpose must be non-empty.")
+
+        self.key_id = self.key_id.strip()
+        if self.key_id == "":
+            raise ValueError("KeyId must be non-empty.")
+
+        self.provider = (self.provider or "local").strip()
+        if self.provider == "":
+            self.provider = "local"
+        return self
+
+
+class KeyRefLifecycleValidation(IValidationBase):
+    """Validate payload for retire/destroy key lifecycle actions."""
+
+    row_version: NonNegativeInt
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "KeyRefLifecycleValidation":
+        if self.reason is not None:
+            self.reason = self.reason.strip()
+            if self.reason == "":
+                raise ValueError("Reason cannot be empty if provided.")
+        return self
+
+
+class PluginCapabilityGrantCreateValidation(IValidationBase):
+    """Validate create payloads for plugin capability grants."""
+
+    tenant_id: uuid.UUID | None = None
+    plugin_key: str
+    capabilities: list[str]
+    expires_at: datetime | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "PluginCapabilityGrantCreateValidation":
+        self.plugin_key = self.plugin_key.strip()
+        if self.plugin_key == "":
+            raise ValueError("PluginKey must be non-empty.")
+
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in self.capabilities:
+            capability = str(item).strip().lower()
+            if capability == "" or capability in seen:
+                continue
+            seen.add(capability)
+            cleaned.append(capability)
+
+        if not cleaned:
+            raise ValueError("Capabilities must include at least one value.")
+
+        self.capabilities = cleaned
+        return self
+
+
+class PluginCapabilityGrantGrantValidation(PluginCapabilityGrantCreateValidation):
+    """Validate payload for capability grant actions."""
+
+
+class PluginCapabilityGrantRevokeValidation(IValidationBase):
+    """Validate payload for capability grant revoke action."""
+
+    row_version: NonNegativeInt
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "PluginCapabilityGrantRevokeValidation":
+        if self.reason is not None:
+            self.reason = self.reason.strip()
+            if self.reason == "":
+                raise ValueError("Reason cannot be empty if provided.")
         return self

@@ -32,6 +32,13 @@ from mugen.core.plugin.audit.api.validation import (
     AuditEventSealBacklogValidation,
     AuditEventTombstoneValidation,
     AuditEventVerifyChainValidation,
+    EvidenceBlobPlaceLegalHoldValidation,
+    EvidenceBlobPurgeValidation,
+    EvidenceBlobRedactValidation,
+    EvidenceBlobRegisterValidation,
+    EvidenceBlobReleaseLegalHoldValidation,
+    EvidenceBlobTombstoneValidation,
+    EvidenceBlobVerifyHashValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -192,6 +199,63 @@ def contribute(
         table_provider="mugen.core.plugin.audit.model.audit_event:AuditEvent",
         edm_provider="mugen.core.plugin.audit.edm:audit_event_type",
         service_cls="mugen.core.plugin.audit.service.audit_event:AuditEventService",
+    )
+
+    _register_audit_resource(
+        entity_set="EvidenceBlobs",
+        entity="EvidenceBlob",
+        description=(
+            "Metadata-first evidence records with hash verification and"
+            " lifecycle/hold controls."
+        ),
+        actions={
+            "register": {
+                "perm": admin_ns.verb("manage"),
+                "schema": EvidenceBlobRegisterValidation,
+                "confirm": "Register this evidence metadata record?",
+                "required_capabilities": ["evidence.register"],
+            },
+            "verify_hash": {
+                "perm": admin_ns.verb("manage"),
+                "schema": EvidenceBlobVerifyHashValidation,
+                "confirm": "Verify evidence hash integrity?",
+                "required_capabilities": ["evidence.verify"],
+            },
+            "place_legal_hold": {
+                "perm": admin_ns.verb("manage"),
+                "schema": EvidenceBlobPlaceLegalHoldValidation,
+                "confirm": "Place legal hold on this evidence record?",
+                "required_capabilities": ["evidence.hold.place"],
+            },
+            "release_legal_hold": {
+                "perm": admin_ns.verb("manage"),
+                "schema": EvidenceBlobReleaseLegalHoldValidation,
+                "confirm": "Release legal hold on this evidence record?",
+                "required_capabilities": ["evidence.hold.release"],
+            },
+            "redact": {
+                "perm": admin_ns.verb("manage"),
+                "schema": EvidenceBlobRedactValidation,
+                "confirm": "Redact this evidence metadata payload?",
+                "required_capabilities": ["evidence.redact"],
+            },
+            "tombstone": {
+                "perm": admin_ns.verb("manage"),
+                "schema": EvidenceBlobTombstoneValidation,
+                "confirm": "Tombstone this evidence record?",
+                "required_capabilities": ["evidence.tombstone"],
+            },
+            "purge": {
+                "perm": admin_ns.verb("manage"),
+                "schema": EvidenceBlobPurgeValidation,
+                "confirm": "Mark this evidence record as purged?",
+                "required_capabilities": ["evidence.purge"],
+            },
+        },
+        table_name="audit_evidence_blob",
+        table_provider="mugen.core.plugin.audit.model.evidence_blob:EvidenceBlob",
+        edm_provider="mugen.core.plugin.audit.edm:evidence_blob_type",
+        service_cls="mugen.core.plugin.audit.service.evidence_blob:EvidenceBlobService",
     )
 
     registry.register_table_spec(

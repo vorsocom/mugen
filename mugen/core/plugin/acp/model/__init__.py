@@ -5,10 +5,12 @@ __all__ = [
     "GlobalPermissionEntry",
     "GlobalRole",
     "GlobalRoleMembership",
+    "KeyRef",
     "PermissionEntry",
     "PermissionObject",
     "PermissionType",
     "Person",
+    "PluginCapabilityGrant",
     "RefreshToken",
     "Role",
     "RoleMembership",
@@ -26,10 +28,12 @@ from mugen.core.plugin.acp.model.dedup_record import DedupRecord
 from mugen.core.plugin.acp.model.global_permission_entry import GlobalPermissionEntry
 from mugen.core.plugin.acp.model.global_role import GlobalRole
 from mugen.core.plugin.acp.model.global_role_membership import GlobalRoleMembership
+from mugen.core.plugin.acp.model.key_ref import KeyRef
 from mugen.core.plugin.acp.model.permission_entry import PermissionEntry
 from mugen.core.plugin.acp.model.permission_object import PermissionObject
 from mugen.core.plugin.acp.model.permission_type import PermissionType
 from mugen.core.plugin.acp.model.person import Person
+from mugen.core.plugin.acp.model.plugin_capability_grant import PluginCapabilityGrant
 from mugen.core.plugin.acp.model.refresh_token import RefreshToken
 from mugen.core.plugin.acp.model.role import Role
 from mugen.core.plugin.acp.model.role_membership import RoleMembership

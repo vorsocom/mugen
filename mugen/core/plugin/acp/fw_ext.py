@@ -17,6 +17,7 @@ from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.migration.loader import contribute_all
 from mugen.core.plugin.acp.service.authorization import AuthorizationService
 from mugen.core.plugin.acp.service.jwt_eddsa import EdDsaJwtService
+from mugen.core.plugin.acp.service.sandbox_enforcer import SandboxEnforcer
 from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 from mugen.core.plugin.acp.sdk.runtime_binder import AdminRuntimeBinder
 
@@ -61,6 +62,7 @@ class AdminFWExtension(IFWExtension):  # pylint: disable=too-few-public-methods
             {
                 di.EXT_SERVICE_ADMIN_SVC_JWT: EdDsaJwtService(),
                 di.EXT_SERVICE_ADMIN_SVC_AUTH: AuthorizationService(),
+                di.EXT_SERVICE_ADMIN_SANDBOX_ENFORCER: SandboxEnforcer(),
             }
         )
 

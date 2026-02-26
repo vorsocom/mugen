@@ -34,9 +34,14 @@ from mugen.core.plugin.ops_governance.api.validation import (
     DelegationGrantCreateValidation,
     EvaluatePolicyActionValidation,
     GrantDelegationActionValidation,
+    LegalHoldCreateValidation,
+    LegalHoldPlaceHoldActionValidation,
+    LegalHoldReleaseHoldActionValidation,
     PolicyDefinitionCreateValidation,
     RecordConsentActionValidation,
+    RetentionClassCreateValidation,
     RetentionPolicyCreateValidation,
+    RetentionPolicyRunLifecycleValidation,
     RevokeDelegationActionValidation,
     WithdrawConsentActionValidation,
 )
@@ -207,8 +212,78 @@ def contribute(
                     "perm": admin_ns.verb("manage"),
                     "schema": ApplyRetentionActionValidation,
                     "confirm": "Apply a retention action metadata signal?",
-                }
+                },
+                "run_lifecycle": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RetentionPolicyRunLifecycleValidation,
+                    "confirm": "Run lifecycle orchestration for this policy now?",
+                },
             },
+        },
+        {
+            "set": "OpsRetentionClasses",
+            "entity": "RetentionClass",
+            "description": (
+                "Retention class profiles used by lifecycle orchestration for"
+                " AuditEvent and EvidenceBlob resources."
+            ),
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "crud": CrudPolicy(
+                create_schema=RetentionClassCreateValidation,
+                update_schema=(
+                    "Code",
+                    "Name",
+                    "ResourceType",
+                    "RetentionDays",
+                    "RedactionAfterDays",
+                    "PurgeGraceDays",
+                    "LegalHoldAllowed",
+                    "IsActive",
+                    "Description",
+                    "Attributes",
+                ),
+            ),
+        },
+        {
+            "set": "OpsLegalHolds",
+            "entity": "LegalHold",
+            "description": (
+                "Legal hold declarations synchronized to governed AuditEvent and"
+                " EvidenceBlob targets."
+            ),
+            "allow_create": True,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": True,
+            "crud": CrudPolicy(create_schema=LegalHoldCreateValidation),
+            "actions": {
+                "place_hold": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": LegalHoldPlaceHoldActionValidation,
+                    "confirm": "Place legal hold on the target resource?",
+                },
+                "release_hold": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": LegalHoldReleaseHoldActionValidation,
+                    "confirm": "Release legal hold on this target resource?",
+                },
+            },
+        },
+        {
+            "set": "OpsLifecycleActionLogs",
+            "entity": "LifecycleActionLog",
+            "description": (
+                "Append-only lifecycle operation logs emitted by retention and"
+                " legal-hold orchestration."
+            ),
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": False,
+            "crud": CrudPolicy(),
         },
         {
             "set": "OpsDataHandlingRecords",
@@ -235,6 +310,7 @@ def contribute(
                     "ResolutionNote",
                     "HandledByUserId",
                     "EvidenceRef",
+                    "EvidenceBlobId",
                     "Meta",
                 ),
             ),
@@ -250,8 +326,7 @@ def contribute(
 
     governance_obj_keys = [obj.key for obj in governance_objects]
     admin_verb_keys = [
-        admin_ns.verb(verb)
-        for verb in ("read", "create", "update", "delete", "manage")
+        admin_ns.verb(verb) for verb in ("read", "create", "update", "delete", "manage")
     ]
 
     registry.register_default_global_grants(

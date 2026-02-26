@@ -55,6 +55,8 @@ class AdminCapabilities:
     Actions:
     - `actions` is an optional mapping declaring actions supported by a resource.
           - the mapping keys are the actions.
+          - action metadata may include `required_capabilities`, a list of
+            capability strings enforced by ACP sandbox dispatch.
     """
 
     allow_read: bool = True

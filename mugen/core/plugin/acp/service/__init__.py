@@ -5,9 +5,11 @@ __all__ = [
     "GlobalPermissionEntryService",
     "GlobalRoleMembershipService",
     "GlobalRoleService",
+    "KeyRefService",
     "PermissionEntryService",
     "PermissionObjectService",
     "PermissionTypeService",
+    "PluginCapabilityGrantService",
     "PersonService",
     "RefreshTokenService",
     "RoleService",
@@ -32,9 +34,13 @@ from mugen.core.plugin.acp.service.global_role import GlobalRoleService
 from mugen.core.plugin.acp.service.global_role_membership import (
     GlobalRoleMembershipService,
 )
+from mugen.core.plugin.acp.service.key_ref import KeyRefService
 from mugen.core.plugin.acp.service.permission_entry import PermissionEntryService
 from mugen.core.plugin.acp.service.permission_object import PermissionObjectService
 from mugen.core.plugin.acp.service.permission_type import PermissionTypeService
+from mugen.core.plugin.acp.service.plugin_capability_grant import (
+    PluginCapabilityGrantService,
+)
 from mugen.core.plugin.acp.service.person import PersonService
 from mugen.core.plugin.acp.service.refresh_token import RefreshTokenService
 from mugen.core.plugin.acp.service.role import RoleService
@@ -53,9 +59,11 @@ REGISTRATIONS = [
     (GlobalPermissionEntryService, admin_model.GlobalPermissionEntry),
     (GlobalRoleService, admin_model.GlobalRole),
     (GlobalRoleMembershipService, admin_model.GlobalRoleMembership),
+    (KeyRefService, admin_model.KeyRef),
     (PermissionEntryService, admin_model.PermissionEntry),
     (PermissionObjectService, admin_model.PermissionObject),
     (PermissionTypeService, admin_model.PermissionType),
+    (PluginCapabilityGrantService, admin_model.PluginCapabilityGrant),
     (PersonService, admin_model.Person),
     (RefreshTokenService, admin_model.RefreshToken),
     (RoleService, admin_model.Role),

@@ -77,6 +77,12 @@ from mugen.core.plugin.acp.api.validation.foundation import (
     DedupCommitFailureValidation,
     DedupCommitSuccessValidation,
     DedupSweepExpiredValidation,
+    KeyRefCreateValidation,
+    KeyRefLifecycleValidation,
+    KeyRefRotateValidation,
+    PluginCapabilityGrantCreateValidation,
+    PluginCapabilityGrantGrantValidation,
+    PluginCapabilityGrantRevokeValidation,
     SchemaActivateVersionValidation,
     SchemaBindingCreateValidation,
     SchemaBindingUpdateValidation,
@@ -600,6 +606,65 @@ def contribute(
             },
             "crud": CrudPolicy(
                 create_schema=DedupRecordCreateValidation,
+            ),
+        },
+        {
+            "set": "KeyRefs",
+            "entity": "KeyRef",
+            "description": (
+                "Tenant/global key registry metadata for signed hash-chain and"
+                " runtime secret resolution."
+            ),
+            "allow_create": True,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": True,
+            "soft_delete": SoftDeletePolicy(),
+            "actions": {
+                "rotate": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": KeyRefRotateValidation,
+                    "required_capabilities": ["kms.key.rotate"],
+                },
+                "retire": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": KeyRefLifecycleValidation,
+                    "required_capabilities": ["kms.key.retire"],
+                },
+                "destroy": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": KeyRefLifecycleValidation,
+                    "required_capabilities": ["kms.key.destroy"],
+                },
+            },
+            "crud": CrudPolicy(
+                create_schema=KeyRefCreateValidation,
+            ),
+        },
+        {
+            "set": "PluginCapabilityGrants",
+            "entity": "PluginCapabilityGrant",
+            "description": (
+                "Tenant/global runtime capability grants evaluated by ACP sandbox"
+                " enforcement."
+            ),
+            "allow_create": True,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": True,
+            "soft_delete": SoftDeletePolicy(),
+            "actions": {
+                "grant": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": PluginCapabilityGrantGrantValidation,
+                },
+                "revoke": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": PluginCapabilityGrantRevokeValidation,
+                },
+            },
+            "crud": CrudPolicy(
+                create_schema=PluginCapabilityGrantCreateValidation,
             ),
         },
         {

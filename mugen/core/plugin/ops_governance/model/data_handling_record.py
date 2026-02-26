@@ -126,6 +126,12 @@ class DataHandlingRecord(ModelBase, TenantScopedMixin):
         nullable=True,
     )
 
+    evidence_blob_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
+    )
+
     meta: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
@@ -141,6 +147,15 @@ class DataHandlingRecord(ModelBase, TenantScopedMixin):
             name="fkx_ops_gov_data_handling_record__tenant_retention_policy",
             ondelete="SET NULL",
         ),
+        ForeignKeyConstraint(
+            ("tenant_id", "evidence_blob_id"),
+            (
+                "mugen.audit_evidence_blob.tenant_id",
+                "mugen.audit_evidence_blob.id",
+            ),
+            name="fkx_ops_gov_data_handling_record__tenant_evidence_blob",
+            ondelete="SET NULL",
+        ),
         CheckConstraint(
             "length(btrim(subject_namespace)) > 0",
             name="ck_ops_gov_data_handling_record__subject_namespace_nonempty",
@@ -150,10 +165,7 @@ class DataHandlingRecord(ModelBase, TenantScopedMixin):
             name="ck_ops_gov_data_handling_record__subject_ref_nonempty_if_set",
         ),
         CheckConstraint(
-            (
-                "resolution_note IS NULL OR"
-                " length(btrim(resolution_note)) > 0"
-            ),
+            ("resolution_note IS NULL OR" " length(btrim(resolution_note)) > 0"),
             name="ck_ops_gov_data_handling_record__resolution_note_nonempty",
         ),
         CheckConstraint(

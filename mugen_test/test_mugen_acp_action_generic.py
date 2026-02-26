@@ -12,6 +12,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from quart import Quart
 
 from mugen.core.plugin.acp.api import action as action_api
+from mugen.core.plugin.acp.contract.service.sandbox_enforcer import (
+    CapabilityDeniedError,
+)
 
 
 class _AbortCalled(Exception):
@@ -217,17 +220,109 @@ class TestMugenAcpActionGeneric(unittest.IsolatedAsyncioTestCase):
             "container",
             new=SimpleNamespace(
                 logging_gateway="logger",
-                get_required_ext_service=lambda _key: "registry",
+                get_required_ext_service=lambda key: (
+                    "sandbox" if str(key).endswith("sandbox_enforcer") else "registry"
+                ),
             ),
         ):
             self.assertEqual(action_api._logger_provider(), "logger")
             self.assertEqual(action_api._registry_provider(), "registry")
+            self.assertEqual(action_api._sandbox_enforcer_provider(), "sandbox")
         self.assertEqual(
             action_api._action_response_parts(({"ok": True}, 201)), (201, {"ok": True})
         )
         self.assertEqual(
             action_api._action_response_parts({"ok": True}), (200, {"ok": True})
         )
+        self.assertIsNone(action_api._optional_uuid(None))
+        uid = uuid.uuid4()
+        self.assertEqual(action_api._optional_uuid(uid), uid)
+        self.assertEqual(action_api._optional_uuid(str(uid)), uid)
+        self.assertIsNone(action_api._optional_uuid("not-a-uuid"))
+
+        self.assertEqual(action_api._required_capabilities(None), ())
+        self.assertEqual(action_api._required_capabilities({}), ())
+        self.assertEqual(
+            action_api._required_capabilities({"required_capabilities": " cap.read "}),
+            ("cap.read",),
+        )
+        self.assertEqual(
+            action_api._required_capabilities(
+                {"required_capabilities": ["cap.read", " cap.read ", "", "cap.write"]}
+            ),
+            ("cap.read", "cap.write"),
+        )
+        self.assertEqual(
+            action_api._required_capabilities({"required_capabilities": 123}),
+            (),
+        )
+
+    async def test_enforce_required_capabilities_allow_and_deny(self) -> None:
+        registry = _FakeRegistry(service=_FakeService())
+        auth_user_uuid = uuid.uuid4()
+
+        enforcer = AsyncMock()
+        enforcer.require = AsyncMock(return_value=None)
+        await action_api._enforce_required_capabilities(
+            action_cap={"required_capabilities": ["cap.read", "cap.write"]},
+            tenant_id=uuid.uuid4(),
+            plugin_key="com.test.plugin",
+            action="do",
+            auth_user_uuid=auth_user_uuid,
+            entity_set="Things",
+            entity="Thing",
+            entity_id=uuid.uuid4(),
+            request_id="req-1",
+            correlation_id="corr-1",
+            registry=registry,
+            sandbox_enforcer_provider=lambda: enforcer,
+        )
+        self.assertEqual(enforcer.require.await_count, 2)
+
+        await action_api._enforce_required_capabilities(
+            action_cap={},
+            tenant_id=None,
+            plugin_key="com.test.plugin",
+            action="do",
+            auth_user_uuid=auth_user_uuid,
+            entity_set="Things",
+            entity="Thing",
+            entity_id=None,
+            request_id=None,
+            correlation_id=None,
+            registry=registry,
+            sandbox_enforcer_provider=lambda: enforcer,
+        )
+
+        deny_exc = CapabilityDeniedError(
+            tenant_id=None,
+            plugin_key="com.test.plugin",
+            capability="cap.read",
+            context={"mode": "enforce"},
+        )
+        denied_enforcer = AsyncMock()
+        denied_enforcer.require = AsyncMock(side_effect=deny_exc)
+        with (
+            patch.object(action_api, "abort", side_effect=_abort_raiser),
+            patch.object(action_api, "emit_audit_event", new=AsyncMock()) as emit_audit,
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await action_api._enforce_required_capabilities(
+                    action_cap={"required_capabilities": ["cap.read"]},
+                    tenant_id=None,
+                    plugin_key="com.test.plugin",
+                    action="do",
+                    auth_user_uuid=auth_user_uuid,
+                    entity_set="Things",
+                    entity="Thing",
+                    entity_id=None,
+                    request_id="req-2",
+                    correlation_id="corr-2",
+                    registry=registry,
+                    sandbox_enforcer_provider=lambda: denied_enforcer,
+                )
+            self.assertEqual(ex.exception.code, 403)
+            emit_audit.assert_awaited_once()
 
     async def test_dispatch_replay_short_circuit_paths(self) -> None:
         app = Quart("action_replay_dispatch_test")

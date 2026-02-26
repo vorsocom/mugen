@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 import uuid
 
-from pydantic import Field, NonNegativeInt, model_validator
+from pydantic import Field, NonNegativeInt, PositiveInt, model_validator
 
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 
@@ -135,9 +135,10 @@ class RetentionPolicyCreateValidation(IValidationBase):
             raise ValueError("TargetEntity cannot be empty if provided.")
         if self.description is not None and not (self.description or "").strip():
             raise ValueError("Description cannot be empty if provided.")
-        if self.downstream_job_ref is not None and not (
-            self.downstream_job_ref or ""
-        ).strip():
+        if (
+            self.downstream_job_ref is not None
+            and not (self.downstream_job_ref or "").strip()
+        ):
             raise ValueError("DownstreamJobRef cannot be empty if provided.")
         if not (self.action_mode or "").strip():
             raise ValueError("ActionMode must be non-empty.")
@@ -162,6 +163,7 @@ class DataHandlingRecordCreateValidation(IValidationBase):
 
     resolution_note: str | None = None
     evidence_ref: str | None = None
+    evidence_blob_id: uuid.UUID | None = None
 
     meta: dict[str, Any] | None = None
 
@@ -177,9 +179,10 @@ class DataHandlingRecordCreateValidation(IValidationBase):
             raise ValueError("RequestType must be non-empty.")
         if not (self.request_status or "").strip():
             raise ValueError("RequestStatus must be non-empty.")
-        if self.resolution_note is not None and not (
-            self.resolution_note or ""
-        ).strip():
+        if (
+            self.resolution_note is not None
+            and not (self.resolution_note or "").strip()
+        ):
             raise ValueError("ResolutionNote cannot be empty if provided.")
         if self.evidence_ref is not None and not (self.evidence_ref or "").strip():
             raise ValueError("EvidenceRef cannot be empty if provided.")
@@ -310,6 +313,7 @@ class ApplyRetentionActionValidation(IValidationBase):
     due_at: datetime | None = None
 
     note: str | None = None
+    evidence_blob_id: uuid.UUID | None = None
     meta: dict[str, Any] | None = None
 
     @model_validator(mode="after")
@@ -327,3 +331,93 @@ class ApplyRetentionActionValidation(IValidationBase):
         if self.note is not None and not (self.note or "").strip():
             raise ValueError("Note cannot be empty if provided.")
         return self
+
+
+class RetentionClassCreateValidation(IValidationBase):
+    """Validate generic create inputs for RetentionClass."""
+
+    tenant_id: uuid.UUID
+    code: str
+    name: str
+    resource_type: str
+    retention_days: NonNegativeInt = 0
+    redaction_after_days: NonNegativeInt | None = None
+    purge_grace_days: NonNegativeInt = 30
+    legal_hold_allowed: bool = True
+    is_active: bool = True
+    description: str | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_fields(self) -> "RetentionClassCreateValidation":
+        if not (self.code or "").strip():
+            raise ValueError("Code must be non-empty.")
+        if not (self.name or "").strip():
+            raise ValueError("Name must be non-empty.")
+        if not (self.resource_type or "").strip():
+            raise ValueError("ResourceType must be non-empty.")
+        if self.description is not None and not (self.description or "").strip():
+            raise ValueError("Description cannot be empty if provided.")
+        return self
+
+
+class LegalHoldCreateValidation(IValidationBase):
+    """Validate generic create inputs for LegalHold."""
+
+    tenant_id: uuid.UUID
+    retention_class_id: uuid.UUID | None = None
+    resource_type: str
+    resource_id: uuid.UUID
+    reason: str
+    hold_until: datetime | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_fields(self) -> "LegalHoldCreateValidation":
+        if not (self.resource_type or "").strip():
+            raise ValueError("ResourceType must be non-empty.")
+        if not (self.reason or "").strip():
+            raise ValueError("Reason must be non-empty.")
+        return self
+
+
+class LegalHoldPlaceHoldActionValidation(IValidationBase):
+    """Validate payload for place_hold actions."""
+
+    retention_class_id: uuid.UUID | None = None
+    resource_type: str
+    resource_id: uuid.UUID
+    reason: str
+    hold_until: datetime | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_fields(self) -> "LegalHoldPlaceHoldActionValidation":
+        if not (self.resource_type or "").strip():
+            raise ValueError("ResourceType must be non-empty.")
+        if not (self.reason or "").strip():
+            raise ValueError("Reason must be non-empty.")
+        return self
+
+
+class LegalHoldReleaseHoldActionValidation(IValidationBase):
+    """Validate payload for release_hold actions."""
+
+    row_version: NonNegativeInt
+    reason: str
+
+    @model_validator(mode="after")
+    def _validate_fields(self) -> "LegalHoldReleaseHoldActionValidation":
+        if not (self.reason or "").strip():
+            raise ValueError("Reason must be non-empty.")
+        return self
+
+
+class RetentionPolicyRunLifecycleValidation(IValidationBase):
+    """Validate payload for retention run_lifecycle actions."""
+
+    row_version: NonNegativeInt
+    dry_run: bool = False
+    batch_size: PositiveInt | None = None
+    max_batches: PositiveInt | None = None
+    now_override: datetime | None = None

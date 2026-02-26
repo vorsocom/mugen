@@ -49,6 +49,7 @@ data_handling_record_type = EdmType(
         "ResolutionNote": EdmProperty("ResolutionNote", TypeRef("Edm.String")),
         "HandledByUserId": EdmProperty("HandledByUserId", TypeRef("Edm.Guid")),
         "EvidenceRef": EdmProperty("EvidenceRef", TypeRef("Edm.String")),
+        "EvidenceBlobId": EdmProperty("EvidenceBlobId", TypeRef("Edm.Guid")),
         "Meta": EdmProperty(
             "Meta",
             TypeRef("Edm.String"),

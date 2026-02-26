@@ -25,3 +25,15 @@ class IRetentionPolicyService(ICrudService[RetentionPolicyDE], ABC):
         data: IValidationBase,
     ) -> tuple[dict[str, Any], int]:
         """Apply a metadata-only retention action."""
+
+    @abstractmethod
+    async def action_run_lifecycle(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        where: Mapping[str, Any],
+        auth_user_id: uuid.UUID,
+        data: IValidationBase,
+    ) -> tuple[dict[str, Any], int]:
+        """Run retention/legal-hold lifecycle orchestration for scoped resources."""
