@@ -118,14 +118,17 @@ def whatsapp_server_ip_allow_list_required(
             config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
 
-            verification_required: bool
             try:
                 verification_required = config.whatsapp.servers.verify_ip
             except (AttributeError, KeyError):
-                logger.error("WhatsApp ip verification requirement unknown.")
-                verification_required = None
+                logger.error("WhatsApp IP verification configuration missing.")
+                abort(500)
 
-            if verification_required is not True:
+            if not isinstance(verification_required, bool):
+                logger.error("WhatsApp IP verification configuration invalid.")
+                abort(500)
+
+            if verification_required is False:
                 return await func(*args, **kwargs)
 
             try:
@@ -140,13 +143,14 @@ def whatsapp_server_ip_allow_list_required(
                 logger.error("WhatsApp servers allow list not found.")
                 abort(500)
 
-            remote_addr = None
-            if hasattr(request, "access_route") and len(request.access_route) > 0:
-                remote_addr = request.access_route[0]
-            if remote_addr in [None, ""]:
-                remote_addr = request.remote_addr
-            if remote_addr in [None, ""]:
-                remote_addr = request.headers.get("Remote-Addr")
+            trust_forwarded_for = bool(
+                getattr(config.whatsapp.servers, "trust_forwarded_for", False)
+            )
+            remote_addr = request.remote_addr
+            if trust_forwarded_for:
+                forwarded_for = request.headers.get("X-Forwarded-For")
+                if isinstance(forwarded_for, str) and forwarded_for.strip() != "":
+                    remote_addr = forwarded_for.split(",")[0].strip()
             if remote_addr in [None, ""]:
                 logger.error("Remote address could not be determined.")
                 abort(400)

@@ -6,13 +6,17 @@ import asyncio
 import hashlib
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.storage.rdbms import IRelationalStorageGateway
+from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core import di
@@ -35,8 +39,8 @@ def _logging_gateway_provider():
     return di.container.logging_gateway
 
 
-def _keyval_storage_gateway_provider():
-    return di.container.keyval_storage_gateway
+def _relational_storage_gateway_provider():
+    return di.container.relational_storage_gateway
 
 
 def _messaging_service_provider():
@@ -50,8 +54,9 @@ def _user_service_provider():
 class WhatsAppWACAPIIPCExtension(IIPCExtension):
     """An implementation of IIPCExtension for WhatsApp Cloud API support."""
 
-    _seen_event_keys_key = "whatsapp_wacapi_seen_events"
-    _seen_event_keys_max = 1024
+    _event_dedup_table = "whatsapp_wacapi_event_dedup"
+    _event_dead_letter_table = "whatsapp_wacapi_event_dead_letter"
+    _default_event_dedup_ttl_seconds = 86400
 
     # pylint: disable=too-many-arguments
     # # pylint: disable=too-many-positional-arguments
@@ -59,7 +64,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         self,
         config: SimpleNamespace | None = None,
         logging_gateway: ILoggingGateway | None = None,
-        keyval_storage_gateway: IKeyValStorageGateway | None = None,
+        relational_storage_gateway: IRelationalStorageGateway | None = None,
         messaging_service: IMessagingService | None = None,
         user_service: IUserService | None = None,
         whatsapp_client: IWhatsAppClient | None = None,
@@ -75,10 +80,10 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             if logging_gateway is not None
             else _logging_gateway_provider()
         )
-        self._keyval_storage_gateway = (
-            keyval_storage_gateway
-            if keyval_storage_gateway is not None
-            else _keyval_storage_gateway_provider()
+        self._relational_storage_gateway = (
+            relational_storage_gateway
+            if relational_storage_gateway is not None
+            else _relational_storage_gateway_provider()
         )
         self._messaging_service = (
             messaging_service
@@ -88,6 +93,8 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         self._user_service = (
             user_service if user_service is not None else _user_service_provider()
         )
+        self._event_dedup_ttl_seconds = self._resolve_event_dedup_ttl_seconds()
+        self._metrics: dict[str, int] = {}
 
     @property
     def ipc_commands(self) -> list[str]:
@@ -176,15 +183,26 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
 
         return None
 
-    def _load_seen_event_keys(self) -> list[str]:
-        payload = self._keyval_storage_gateway.get(self._seen_event_keys_key)
-        if not isinstance(payload, str):
-            return []
+    def _resolve_event_dedup_ttl_seconds(self) -> int:
+        raw_value = getattr(
+            getattr(getattr(self._config, "whatsapp", SimpleNamespace()), "webhook", None),
+            "dedupe_ttl_seconds",
+            self._default_event_dedup_ttl_seconds,
+        )
         try:
-            loaded = json.loads(payload)
-        except json.JSONDecodeError:
-            return []
-        return loaded if isinstance(loaded, list) else []
+            ttl_seconds = int(raw_value)
+        except (TypeError, ValueError):
+            ttl_seconds = self._default_event_dedup_ttl_seconds
+        if ttl_seconds <= 0:
+            return self._default_event_dedup_ttl_seconds
+        return ttl_seconds
+
+    @staticmethod
+    def _now_utc() -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _increment_metric(self, metric_name: str) -> None:
+        self._metrics[metric_name] = self._metrics.get(metric_name, 0) + 1
 
     @staticmethod
     def _build_event_dedupe_key(event_type: str, event_payload: dict) -> str:
@@ -192,19 +210,81 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         payload_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return f"{event_type}:{payload_hash}"
 
-    def _is_duplicate_event(self, event_type: str, event_payload: dict) -> bool:
+    async def _record_dead_letter(
+        self,
+        *,
+        event_type: str,
+        event_payload: dict,
+        reason_code: str,
+        error_message: str | None = None,
+    ) -> None:
         dedupe_key = self._build_event_dedupe_key(event_type, event_payload)
-        seen_event_keys = self._load_seen_event_keys()
-        if dedupe_key in seen_event_keys:
+        now = self._now_utc()
+        try:
+            await self._relational_storage_gateway.insert_one(
+                self._event_dead_letter_table,
+                {
+                    "event_type": event_type,
+                    "dedupe_key": dedupe_key,
+                    "payload": event_payload,
+                    "reason_code": reason_code,
+                    "error_message": error_message,
+                    "status": "queued",
+                    "attempts": 1,
+                    "first_failed_at": now,
+                    "last_failed_at": now,
+                },
+            )
+            self._increment_metric("whatsapp.ipc.dead_letter.write_success")
+        except SQLAlchemyError as exc:
+            self._increment_metric("whatsapp.ipc.dead_letter.write_failure")
+            self._logging_gateway.error(
+                "Failed to write WhatsApp dead-letter event."
+                f" reason_code={reason_code}"
+                f" error={type(exc).__name__}: {exc}"
+            )
+
+    async def _is_duplicate_event(self, event_type: str, event_payload: dict) -> bool:
+        dedupe_key = self._build_event_dedupe_key(event_type, event_payload)
+        event_id = event_payload.get("id") if isinstance(event_payload.get("id"), str) else None
+        now = self._now_utc()
+        try:
+            await self._relational_storage_gateway.insert_one(
+                self._event_dedup_table,
+                {
+                    "event_type": event_type,
+                    "dedupe_key": dedupe_key,
+                    "event_id": event_id,
+                    "last_seen_at": now,
+                    "expires_at": now
+                    + timedelta(seconds=self._event_dedup_ttl_seconds),
+                },
+            )
+            self._increment_metric("whatsapp.ipc.dedupe.miss")
+            return False
+        except IntegrityError:
+            self._increment_metric("whatsapp.ipc.dedupe.hit")
+            try:
+                await self._relational_storage_gateway.update_one(
+                    self._event_dedup_table,
+                    {
+                        "event_type": event_type,
+                        "dedupe_key": dedupe_key,
+                    },
+                    {
+                        "last_seen_at": now,
+                    },
+                )
+            except SQLAlchemyError:
+                ...
             return True
-        seen_event_keys.append(dedupe_key)
-        if len(seen_event_keys) > self._seen_event_keys_max:
-            seen_event_keys = seen_event_keys[-self._seen_event_keys_max :]
-        self._keyval_storage_gateway.put(
-            self._seen_event_keys_key,
-            json.dumps(seen_event_keys),
-        )
-        return False
+        except SQLAlchemyError as exc:
+            self._increment_metric("whatsapp.ipc.dedupe.error")
+            self._logging_gateway.error(
+                "WhatsApp dedupe lookup failed."
+                f" error={type(exc).__name__}: {exc}"
+            )
+            return False
 
     @staticmethod
     def _get_contact_for_sender(contacts: list, sender: str | None) -> dict | None:
@@ -274,7 +354,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             self._logging_gateway.error("Malformed WhatsApp message payload.")
             return
 
-        if self._is_duplicate_event("message", message):
+        if await self._is_duplicate_event("message", message):
             self._logging_gateway.debug("Skip duplicate WhatsApp message event.")
             return
 
@@ -463,7 +543,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             f"[cid={correlation_id}] Process WhatsApp status event "
             f"status={status.get('status')}."
         )
-        if self._is_duplicate_event("status", status):
+        if await self._is_duplicate_event("status", status):
             self._logging_gateway.debug("Skip duplicate WhatsApp status event.")
             return
 
@@ -653,23 +733,38 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
 
         self._logging_gateway.error(f"Unsupported response type: {response_type}.")
 
-    async def process_ipc_command(self, payload: dict) -> None:
+    async def process_ipc_command(
+        self,
+        request: IPCCommandRequest,
+    ) -> IPCHandlerResult:
+        handler_name = type(self).__name__
         self._logging_gateway.debug(
-            f"WhatsAppWACAPIIPCExtension: Executing command: {payload['command']}"
+            "WhatsAppWACAPIIPCExtension: Executing command:"
+            f" {request.command}"
         )
-        match payload["command"]:
+        match request.command:
             case "whatsapp_wacapi_event":
-                await self._wacapi_event(payload)
-                return
+                await self._wacapi_event(request)
+                return IPCHandlerResult(
+                    handler=handler_name,
+                    response={"response": "OK"},
+                )
             case _:
-                ...
+                return IPCHandlerResult(
+                    handler=handler_name,
+                    ok=False,
+                    code="not_found",
+                    error="Unsupported IPC command.",
+                )
 
-    async def _wacapi_event(self, payload: dict) -> None:
+    async def _wacapi_event(self, request: IPCCommandRequest) -> None:
         """Process WhatsApp Cloud API event."""
         started = time.perf_counter()
-        response_queue = payload.get("response_queue")
+        event_payload = request.data if isinstance(request.data, dict) else {}
         try:
-            event = payload["data"]
+            event = request.data
+            if not isinstance(event, dict):
+                raise TypeError
             entries = event["entry"]
             if not isinstance(entries, list):
                 raise TypeError
@@ -715,14 +810,33 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             if not found_event_payload:
                 raise TypeError
         except (KeyError, TypeError):
+            self._increment_metric("whatsapp.ipc.event.malformed")
             self._logging_gateway.error("Malformed WhatsApp event payload.")
+            await self._record_dead_letter(
+                event_type="webhook",
+                event_payload=event_payload,
+                reason_code="malformed_payload",
+                error_message="Malformed WhatsApp event payload.",
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._increment_metric("whatsapp.ipc.event.processed_failed")
+            self._logging_gateway.error(
+                "Unhandled WhatsApp event processing failure."
+                f" error={type(exc).__name__}: {exc}"
+            )
+            await self._record_dead_letter(
+                event_type="webhook",
+                event_payload=event_payload,
+                reason_code="processing_exception",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+        else:
+            self._increment_metric("whatsapp.ipc.event.processed_ok")
         finally:
             latency_ms = (time.perf_counter() - started) * 1000
             self._logging_gateway.debug(
                 f"WhatsApp webhook event processing latency_ms={latency_ms:.2f}."
             )
-            if response_queue is not None:
-                await response_queue.put({"response": "OK"})
 
     async def _call_message_handlers(
         self,

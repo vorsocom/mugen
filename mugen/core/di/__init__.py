@@ -286,7 +286,10 @@ _PROVIDER_SPECS = {
         injector_attr="ipc_service",
         interface=IIPCService,
         module_path=("mugen", "modules", "core", "service", "ipc"),
-        constructor_bindings=(("logging_gateway", "logging_gateway"),),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
     ),
     "keyval_storage_gateway": _ProviderSpec(
         provider_name="keyval_storage_gateway",

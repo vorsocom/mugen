@@ -48,8 +48,15 @@ muGen core keeps Matrix support intentionally lean:
 
 ### Extension Hooks
 
-- Non-core Matrix callbacks are forwarded to IPC extensions via the
-  `matrix_event` command.
+- Non-core Matrix callbacks are enqueued to a bounded in-memory IPC dispatch
+  queue and forwarded asynchronously to IPC extensions via the `matrix_event`
+  command.
+- The callback hot path is non-blocking: callback handlers enqueue and return
+  without awaiting IPC extension execution.
+- Queue overflow policy is `drop-new` with warning log emission and an
+  incremented `matrix.ipc.dispatch.queue_full_drop_new` counter.
+- `matrix_event` payloads include `version=1` plus `callback`, `event_type`,
+  `reason`, optional `room_id`, and available `content`/`source` fields.
 - Core skip logging remains reason-coded even when extensions are not present.
 
 ### Observability
@@ -71,16 +78,6 @@ downstream via extensions where needed:
 - Business-policy-specific moderation/escalation logic for Matrix events.
 - Automated handling flows for non-core to-device/state events beyond the
   extension-forwarding contract.
-
-## Next Planned Scope
-
-To preserve lean-core intent, next scope is expected to focus on contracts and
-operability, not broad protocol expansion:
-
-1. Document and stabilize `matrix_event` extension payload fields/versioning.
-2. Define a downstream metrics export contract for Matrix decision counters.
-3. Add optional, policy-driven room-scope handling through extensions (without
-   changing DM-safe core defaults).
 
 ## Change Policy
 

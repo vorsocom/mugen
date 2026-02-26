@@ -1,6 +1,8 @@
 """Unit tests for matrix DefaultMatrixClient utility and branch behavior."""
 
 from io import BytesIO
+import asyncio
+import contextlib
 import json
 import os
 import tempfile
@@ -12,6 +14,7 @@ from nio import LocalProtocolError
 
 from mugen.core.client import matrix as matrix_mod
 from mugen.core.client.matrix import DefaultMatrixClient
+from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 from mugen.core.service.ipc import DefaultIPCService
 
 
@@ -126,8 +129,14 @@ class _RecordingMatrixEventIPCExtension:  # pylint: disable=too-few-public-metho
     def ipc_commands(self) -> list[str]:
         return ["matrix_event"]
 
-    async def process_ipc_command(self, payload: dict) -> None:
-        data = payload.get("data", {})
+    def platform_supported(self, platform: str) -> bool:
+        return platform in self.platforms
+
+    async def process_ipc_command(
+        self,
+        request: IPCCommandRequest,
+    ) -> IPCHandlerResult:
+        data = request.data if isinstance(request.data, dict) else {}
         self.events.append(
             {
                 "callback": data.get("callback"),
@@ -136,11 +145,9 @@ class _RecordingMatrixEventIPCExtension:  # pylint: disable=too-few-public-metho
                 "room_id": data.get("room_id"),
             }
         )
-        await payload["response_queue"].put(
-            {
-                "handler": type(self).__name__,
-                "response": {"ok": True},
-            }
+        return IPCHandlerResult(
+            handler=type(self).__name__,
+            response={"ok": True},
         )
 
 
@@ -270,6 +277,10 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._user_service = Mock()
         client._ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock())
         client._direct_room_ids = set()
+        client._matrix_ipc_queue_size = 256
+        client._matrix_ipc_queue = None
+        client._matrix_ipc_worker_task = None
+        client._matrix_ipc_worker_stop = asyncio.Event()
         client.access_token = "access-token"
         client.user_id = "@assistant:example.com"
         client.login = AsyncMock()
@@ -290,6 +301,122 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.device_store = _DeviceStore()
         client.client_session = SimpleNamespace(close=AsyncMock())
         return client
+
+    async def test_matrix_ipc_queue_size_resolution_paths(self) -> None:
+        client = self._client()
+        client._config.matrix.ipc = SimpleNamespace(queue_size="invalid")
+        self.assertEqual(
+            client._resolve_matrix_ipc_queue_size(),  # pylint: disable=protected-access
+            256,
+        )
+        client._config.matrix.ipc = SimpleNamespace(queue_size=0)
+        self.assertEqual(
+            client._resolve_matrix_ipc_queue_size(),  # pylint: disable=protected-access
+            256,
+        )
+
+    async def test_start_matrix_ipc_worker_guards(self) -> None:
+        client = self._client()
+        client._ipc_service = None
+        client._start_matrix_ipc_worker()  # pylint: disable=protected-access
+        self.assertIsNone(client._matrix_ipc_worker_task)
+
+        client = self._client()
+
+        async def _never() -> None:
+            await asyncio.sleep(60)
+
+        existing_task = asyncio.create_task(_never())
+        client._matrix_ipc_worker_task = existing_task
+        try:
+            client._start_matrix_ipc_worker()  # pylint: disable=protected-access
+            self.assertIs(client._matrix_ipc_worker_task, existing_task)
+        finally:
+            existing_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await existing_task
+
+    async def test_stop_matrix_ipc_worker_cancels_running_task(self) -> None:
+        client = self._client()
+        client._matrix_ipc_queue = asyncio.Queue()
+
+        async def _never() -> None:
+            await asyncio.sleep(60)
+
+        task = asyncio.create_task(_never())
+        client._matrix_ipc_worker_task = task
+        await client._stop_matrix_ipc_worker()  # pylint: disable=protected-access
+        self.assertTrue(task.cancelled())
+        self.assertIsNone(client._matrix_ipc_queue)
+        self.assertIsNone(client._matrix_ipc_worker_task)
+
+    async def test_dispatch_matrix_ipc_request_guard_paths(self) -> None:
+        client = self._client()
+        payload = IPCCommandRequest(platform="matrix", command="matrix_event", data={})
+
+        client._ipc_service = None
+        await client._dispatch_matrix_ipc_request(payload)  # pylint: disable=protected-access
+
+        client._ipc_service = SimpleNamespace(handle_ipc_request=None)
+        await client._dispatch_matrix_ipc_request(payload)  # pylint: disable=protected-access
+
+    async def test_matrix_ipc_worker_loop_handles_empty_queue_and_errors(self) -> None:
+        client = self._client()
+
+        async def _sleep_and_stop(_delay: float) -> None:
+            client._matrix_ipc_worker_stop.set()  # pylint: disable=protected-access
+
+        client._matrix_ipc_queue = None
+        with patch("mugen.core.client.matrix.asyncio.sleep", new=_sleep_and_stop):
+            await client._matrix_ipc_worker_loop()  # pylint: disable=protected-access
+
+        client = self._client()
+        client._matrix_ipc_queue = asyncio.Queue()
+
+        async def _wait_for_timeout(_awaitable, timeout):
+            _ = timeout
+            _awaitable.close()
+            client._matrix_ipc_worker_stop.set()  # pylint: disable=protected-access
+            raise asyncio.TimeoutError()
+
+        with patch("mugen.core.client.matrix.asyncio.wait_for", new=_wait_for_timeout):
+            await client._matrix_ipc_worker_loop()  # pylint: disable=protected-access
+
+        client = self._client()
+        client._matrix_ipc_queue = asyncio.Queue()
+        await client._matrix_ipc_queue.put(
+            IPCCommandRequest(platform="matrix", command="matrix_event", data={})
+        )
+
+        async def _raise_dispatch(_payload):
+            client._matrix_ipc_worker_stop.set()  # pylint: disable=protected-access
+            raise RuntimeError("boom")
+
+        with patch.object(
+            client,
+            "_dispatch_matrix_ipc_request",
+            new=_raise_dispatch,
+        ):
+            await client._matrix_ipc_worker_loop()  # pylint: disable=protected-access
+        self.assertTrue(client._logging_gateway.warning.called)
+
+    async def test_dispatch_matrix_event_hook_queue_overflow_policy(self) -> None:
+        client = self._client()
+        client._start_matrix_ipc_worker = Mock()
+        client._matrix_ipc_queue = asyncio.Queue(maxsize=1)
+        client._matrix_ipc_queue.put_nowait(
+            IPCCommandRequest(platform="matrix", command="matrix_event", data={})
+        )
+
+        await client._dispatch_matrix_event_hook(  # pylint: disable=protected-access
+            callback_name="_cb_tag_event",
+            event=SimpleNamespace(),
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.ipc.dispatch.queue_full_drop_new"],  # pylint: disable=protected-access
+            1,
+        )
+        self.assertTrue(client._logging_gateway.warning.called)
 
     async def test_aenter_uses_saved_credentials_when_access_token_exists(self) -> None:
         client = self._client()
@@ -1027,6 +1154,8 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_core_callbacks_dispatch_to_matrix_event_hook(self) -> None:
         client = self._client()
+        client._matrix_ipc_queue = asyncio.Queue(maxsize=32)
+        client._start_matrix_ipc_worker = Mock()
         room = SimpleNamespace(room_id="!room:test")
         callback_invocations = [
             ("_cb_megolm_event", (room, SimpleNamespace(sender="@u:example.com"))),
@@ -1044,19 +1173,18 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         ]
 
         for callback_name, args in callback_invocations:
-            client._ipc_service.handle_ipc_request.reset_mock()
             callback = getattr(client, callback_name)
             await callback(*args)
-            client._ipc_service.handle_ipc_request.assert_awaited_once()
-            platform, payload = client._ipc_service.handle_ipc_request.await_args.args
-            self.assertEqual(platform, "matrix")
-            self.assertEqual(payload["command"], client._matrix_event_hook_command)
-            self.assertEqual(payload["data"]["callback"], callback_name)
+            self.assertEqual(client._matrix_ipc_queue.qsize(), 1)
+            payload = client._matrix_ipc_queue.get_nowait()
+            self.assertEqual(payload.platform, "matrix")
+            self.assertEqual(payload.command, client._matrix_event_hook_command)
+            self.assertEqual(payload.data["callback"], callback_name)
             self.assertEqual(
-                payload["data"]["reason"],
+                payload.data["reason"],
                 client._callback_skip_reason_dm_scope,
             )
-            self.assertIn("event_type", payload["data"])
+            self.assertIn("event_type", payload.data)
 
     async def test_dispatch_matrix_event_hook_handles_missing_ipc_service_paths(
         self,
@@ -1077,10 +1205,13 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         non_awaitable_handler = Mock(return_value=None)
         client._ipc_service = SimpleNamespace(handle_ipc_request=non_awaitable_handler)
+        client._start_matrix_ipc_worker = Mock()
+        client._matrix_ipc_queue = None
         await client._dispatch_matrix_event_hook(  # pylint: disable=protected-access
             callback_name="_cb_tag_event",
             event=SimpleNamespace(),
         )
+        await asyncio.sleep(0)
         non_awaitable_handler.assert_called_once()
 
     async def test_non_core_callback_logs_warning_on_dispatch_failure(self) -> None:
@@ -1088,8 +1219,11 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._ipc_service = SimpleNamespace(
             handle_ipc_request=AsyncMock(side_effect=RuntimeError("boom")),
         )
+        client._start_matrix_ipc_worker = Mock()
+        client._matrix_ipc_queue = None
 
         await client._cb_tag_event(SimpleNamespace())
+        await asyncio.sleep(0)
 
         warning_messages = [
             call.args[0] for call in client._logging_gateway.warning.call_args_list
@@ -1105,8 +1239,10 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         client = self._client()
-        ipc_service = DefaultIPCService(logging_gateway=Mock())
-        ipc_service._ipc_extensions = []
+        ipc_service = DefaultIPCService(
+            config=SimpleNamespace(),
+            logging_gateway=Mock(),
+        )
         extension = _RecordingMatrixEventIPCExtension()
         ipc_service.register_ipc_extension(extension)
         client._ipc_service = ipc_service
@@ -1114,6 +1250,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         room = SimpleNamespace(room_id="!room:test")
         event = SimpleNamespace(content={"membership": "join"})
         await client._cb_room_member_event(room, event)
+        await asyncio.sleep(0.05)
 
         self.assertEqual(len(extension.events), 1)
         self.assertEqual(extension.events[0]["callback"], "_cb_room_member_event")

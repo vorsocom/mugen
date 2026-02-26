@@ -25,6 +25,11 @@ extension_timeout_seconds = 10.0
 # If true, CT extensions with non-empty triggers only run on trigger matches.
 ct_trigger_prefilter_enabled = true
 
+# === IPC (core dispatcher policy) ===
+[ipc.dispatch]
+timeout_seconds = 10.0
+max_timeout_seconds = 30.0
+
 [mugen.modules.core]
 client.telnet = "mugen.core.client.telnet"
 client.matrix = "mugen.core.client.matrix"
@@ -245,6 +250,12 @@ rgql_max_top = 500
 secret_key = "<set-acp-secret-key>"
 seed_acp = true
 
+[acp.ipc]
+timeout_seconds = 10.0
+max_timeout_seconds = 30.0
+# Explicit allow-list entries in "<platform>:<command>" format.
+allowed_commands = ["whatsapp:whatsapp_wacapi_event", "matrix:matrix_event"]
+
 [acp.argon2]
 time_cost = 2
 memory_cost = 65536   # 64 * 1024
@@ -365,6 +376,7 @@ media.allowed_mimetypes = [
   "text/*",
 ]
 media.max_download_bytes = 20_971_520   # 20 MiB
+ipc.queue_size = 256
 security.device_trust.mode = "strict_known"
 # Optional allowlist entries used when security.device_trust.mode = "allowlist".
 # [[matrix.security.device_trust.allowlist]]
@@ -477,7 +489,11 @@ graphapi.max_download_bytes = 20971520
 graphapi.typing_indicator_enabled = true
 servers.allowed = ""
 servers.verify_ip = false
+# Trust `X-Forwarded-For` only when running behind trusted reverse proxies.
+servers.trust_forwarded_for = false
 webhook.verification_token = "<whatsapp-webhook-verification-token>"
+# Dedupe retention window for webhook event keys.
+webhook.dedupe_ttl_seconds = 86400
 
 # === Web ===
 [web]

@@ -5,7 +5,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from sqlalchemy.exc import IntegrityError
+
 from mugen.core.client.whatsapp import DefaultWhatsAppClient
+from mugen.core.service.ipc import DefaultIPCService
 from mugen.core.plugin.whatsapp.wacapi.api import webhook
 from mugen.core.plugin.whatsapp.wacapi.ipc_ext import WhatsAppWACAPIIPCExtension
 
@@ -19,27 +22,32 @@ class _Response:
         return self._text
 
 
-class _MemoryKeyVal:
+class _MemoryRelational:
     def __init__(self) -> None:
-        self.store = {}
+        self.event_dedup: dict[tuple[str, str], dict] = {}
+        self.dead_letters: list[dict] = []
 
-    def close(self) -> None:
-        return None
+    async def insert_one(self, table: str, record: dict):
+        if table == "whatsapp_wacapi_event_dedup":
+            key = (record["event_type"], record["dedupe_key"])
+            if key in self.event_dedup:
+                raise IntegrityError("insert", {}, Exception("duplicate"))
+            self.event_dedup[key] = dict(record)
+            return dict(record)
+        if table == "whatsapp_wacapi_event_dead_letter":
+            self.dead_letters.append(dict(record))
+            return dict(record)
+        raise ValueError(f"Unsupported table: {table}")
 
-    def get(self, key: str, _decode: bool = True):
-        return self.store.get(key)
-
-    def has_key(self, key: str) -> bool:
-        return key in self.store
-
-    def keys(self) -> list[str]:
-        return list(self.store.keys())
-
-    def put(self, key: str, value):
-        self.store[key] = value
-
-    def remove(self, key: str):
-        return self.store.pop(key, None)
+    async def update_one(self, table: str, where: dict, changes: dict):
+        if table != "whatsapp_wacapi_event_dedup":
+            raise ValueError(f"Unsupported table: {table}")
+        key = (where.get("event_type"), where.get("dedupe_key"))
+        existing = self.event_dedup.get(key)
+        if existing is None:
+            return None
+        existing.update(changes)
+        return dict(existing)
 
 
 def _make_config() -> SimpleNamespace:
@@ -101,7 +109,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
     async def test_duplicate_webhook_deliveries_are_processed_once(self) -> None:
         config = _make_config()
         logger = Mock()
-        keyval = _MemoryKeyVal()
+        relational_gateway = _MemoryRelational()
         messaging_service = SimpleNamespace(
             handle_audio_message=AsyncMock(return_value=[]),
             handle_file_message=AsyncMock(return_value=[]),
@@ -120,19 +128,16 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
         ipc_ext = WhatsAppWACAPIIPCExtension(
             config=config,
             logging_gateway=logger,
-            keyval_storage_gateway=keyval,
+            relational_storage_gateway=relational_gateway,
             messaging_service=messaging_service,
             user_service=user_service,
             whatsapp_client=client,
         )
-
-        async def _handle_ipc_request(platform: str, payload: dict) -> None:
-            self.assertEqual(platform, "whatsapp")
-            await ipc_ext.process_ipc_command(payload)
-
-        ipc_service = SimpleNamespace(
-            handle_ipc_request=AsyncMock(side_effect=_handle_ipc_request),
+        ipc_service = DefaultIPCService(
+            config=SimpleNamespace(),
+            logging_gateway=logger,
         )
+        ipc_service.register_ipc_extension(ipc_ext)
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
         payload = _make_message_event("wamid-dup-1", "hello")
 
@@ -169,7 +174,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
     async def test_transient_graph_failure_recovers_via_retry(self) -> None:
         config = _make_config()
         config.whatsapp.graphapi.typing_indicator_enabled = False
-        keyval = _MemoryKeyVal()
+        relational_gateway = _MemoryRelational()
         ext_logger = Mock()
         client_logger = Mock()
         messaging_service = SimpleNamespace(
@@ -211,19 +216,16 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
         ipc_ext = WhatsAppWACAPIIPCExtension(
             config=config,
             logging_gateway=ext_logger,
-            keyval_storage_gateway=keyval,
+            relational_storage_gateway=relational_gateway,
             messaging_service=messaging_service,
             user_service=user_service,
             whatsapp_client=whatsapp_client,
         )
-
-        async def _handle_ipc_request(platform: str, payload: dict) -> None:
-            self.assertEqual(platform, "whatsapp")
-            await ipc_ext.process_ipc_command(payload)
-
-        ipc_service = SimpleNamespace(
-            handle_ipc_request=AsyncMock(side_effect=_handle_ipc_request),
+        ipc_service = DefaultIPCService(
+            config=SimpleNamespace(),
+            logging_gateway=ext_logger,
         )
+        ipc_service.register_ipc_extension(ipc_ext)
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
         payload = _make_message_event("wamid-retry-1", "hello")
 
