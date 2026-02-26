@@ -2720,6 +2720,15 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         mark_session = _SequenceSession([_SequenceResult(), _SequenceResult()])
         _force_relational_session(self.client, mark_session)
         await self.client._mark_job_done("job-1")  # pylint: disable=protected-access
+        mark_sql, mark_params = mark_session.calls[0]
+        self.assertIn(
+            "SET status = CAST(:status AS mugen.citext)",
+            mark_sql,
+        )
+        self.assertEqual(mark_params["status"], "done")
+        self.assertTrue(mark_params["is_done"])
+        self.assertEqual(mark_params["job_id"], "job-1")
+        self.assertIsNone(mark_params["error_message"])
         await self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
 
         ensure_missing = _SequenceSession([_SequenceResult(rows=[])])
