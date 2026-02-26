@@ -9,6 +9,9 @@ __all__ = [
     "ReportDefinition",
     "ReportSnapshot",
     "ReportSnapshotStatus",
+    "ExportJob",
+    "ExportJobStatus",
+    "ExportItem",
     "KpiThreshold",
 ]
 
@@ -26,4 +29,9 @@ from mugen.core.plugin.ops_reporting.model.report_snapshot import (
     ReportSnapshot,
     ReportSnapshotStatus,
 )
+from mugen.core.plugin.ops_reporting.model.export_job import (
+    ExportJob,
+    ExportJobStatus,
+)
+from mugen.core.plugin.ops_reporting.model.export_item import ExportItem
 from mugen.core.plugin.ops_reporting.model.kpi_threshold import KpiThreshold

@@ -229,6 +229,10 @@ class ReportSnapshotGenerateValidation(IValidationBase):
     window_end: datetime | None = None
 
     scope_key: str | None = None
+    trace_id: str | None = None
+    sign: bool = False
+    signature_key_id: str | None = None
+    provenance_refs_json: dict[str, Any] | list[Any] | None = None
     note: str | None = None
 
     @model_validator(mode="after")
@@ -246,6 +250,15 @@ class ReportSnapshotGenerateValidation(IValidationBase):
         if self.scope_key is not None and not (self.scope_key or "").strip():
             raise ValueError("ScopeKey cannot be empty if provided.")
 
+        if self.trace_id is not None and not (self.trace_id or "").strip():
+            raise ValueError("TraceId cannot be empty if provided.")
+
+        if (
+            self.signature_key_id is not None
+            and not (self.signature_key_id or "").strip()
+        ):
+            raise ValueError("SignatureKeyId cannot be empty if provided.")
+
         return self
 
 
@@ -261,6 +274,88 @@ class ReportSnapshotArchiveValidation(IValidationBase):
 
     row_version: NonNegativeInt
     note: str | None = None
+
+
+class ReportSnapshotVerifyValidation(IValidationBase):
+    """Validate payload for verify_snapshot actions."""
+
+    require_clean: bool = False
+
+
+class ExportJobCreateValidation(IValidationBase):
+    """Validate payload for create_export actions."""
+
+    trace_id: str | None = None
+    export_type: Literal["report_snapshot_pack", "compliance_pack"]
+    spec_json: dict[str, Any]
+    sign: bool = True
+    signature_key_id: str | None = None
+    policy_definition_id: uuid.UUID | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "ExportJobCreateValidation":
+        if self.trace_id is not None and not (self.trace_id or "").strip():
+            raise ValueError("TraceId cannot be empty if provided.")
+
+        if (
+            self.signature_key_id is not None
+            and not (self.signature_key_id or "").strip()
+        ):
+            raise ValueError("SignatureKeyId cannot be empty if provided.")
+
+        resource_refs = self.spec_json.get("ResourceRefs")
+        if not isinstance(resource_refs, dict) or len(resource_refs) == 0:
+            raise ValueError("SpecJson.ResourceRefs must be a non-empty object.")
+
+        for entity_set, entity_ids in resource_refs.items():
+            if not str(entity_set or "").strip():
+                raise ValueError("SpecJson.ResourceRefs keys must be non-empty.")
+            if not isinstance(entity_ids, list):
+                raise ValueError(
+                    "SpecJson.ResourceRefs values must be arrays of UUIDs."
+                )
+            for entity_id in entity_ids:
+                try:
+                    uuid.UUID(str(entity_id))
+                except (TypeError, ValueError) as error:
+                    raise ValueError(
+                        "SpecJson.ResourceRefs values must be UUIDs."
+                    ) from error
+
+        proofs = self.spec_json.get("Proofs")
+        if proofs is not None and not isinstance(proofs, dict):
+            raise ValueError("SpecJson.Proofs must be an object if provided.")
+
+        export_ref = self.spec_json.get("ExportRef")
+        if export_ref is not None and not str(export_ref or "").strip():
+            raise ValueError("SpecJson.ExportRef cannot be empty if provided.")
+
+        return self
+
+
+class ExportJobBuildValidation(IValidationBase):
+    """Validate payload for build_export actions."""
+
+    row_version: NonNegativeInt
+    force: bool = False
+    sign: bool = True
+    signature_key_id: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "ExportJobBuildValidation":
+        if (
+            self.signature_key_id is not None
+            and not (self.signature_key_id or "").strip()
+        ):
+            raise ValueError("SignatureKeyId cannot be empty if provided.")
+        return self
+
+
+class ExportJobVerifyValidation(IValidationBase):
+    """Validate payload for verify_export actions."""
+
+    require_clean: bool = False
 
 
 class KpiThresholdCreateValidation(IValidationBase):

@@ -1,0 +1,69 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsReportingExportJobs",
+  "skip_create": true,
+  "actions": [
+    {
+      "name": "create_export",
+      "target": "entity_set",
+      "expect_code": 201,
+      "capture_entity_id_field": "ExportJobId",
+      "capture_row_version_field": "RowVersion",
+      "payload": {
+        "TraceId": "__SNAP_NOTE__",
+        "ExportType": "report_snapshot_pack",
+        "SpecJson": {
+          "ResourceRefs": {
+            "OpsReportingReportSnapshots": []
+          },
+          "Proofs": {
+            "AuditChain": {
+              "MaxRows": 200
+            }
+          },
+          "ExportRef": "e2e://ops-reporting/export"
+        },
+        "Sign": false
+      }
+    },
+    {
+      "name": "build_export",
+      "target": "entity",
+      "expect_code": 200,
+      "capture_row_version_field": "RowVersion",
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Sign": false
+      }
+    },
+    {
+      "name": "verify_export",
+      "target": "entity",
+      "expect_code": 200,
+      "payload": {
+        "RequireClean": true
+      }
+    }
+  ],
+  "status_field": "Status",
+  "assertions": {
+    "final_status": "completed",
+    "event_entity_set": "OpsReportingExportJobs",
+    "event_entity_id_field": "Id",
+    "event_type_field": "Status",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [],
+  "positive_creates": []
+}

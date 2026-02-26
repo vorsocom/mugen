@@ -52,3 +52,15 @@ class IReportSnapshotService(
         data: IValidationBase,
     ) -> tuple[dict[str, Any], int]:
         """Archive a snapshot for retention lifecycle management."""
+
+    @abstractmethod
+    async def action_verify_snapshot(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        where: Mapping[str, Any],
+        auth_user_id: uuid.UUID,
+        data: IValidationBase,
+    ) -> tuple[dict[str, Any], int]:
+        """Verify deterministic manifest/signature integrity for a snapshot."""

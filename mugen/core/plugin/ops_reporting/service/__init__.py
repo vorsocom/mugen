@@ -6,6 +6,8 @@ __all__ = [
     "AggregationJobService",
     "ReportDefinitionService",
     "ReportSnapshotService",
+    "ExportJobService",
+    "ExportItemService",
     "KpiThresholdService",
 ]
 
@@ -22,4 +24,6 @@ from mugen.core.plugin.ops_reporting.service.report_definition import (
 from mugen.core.plugin.ops_reporting.service.report_snapshot import (
     ReportSnapshotService,
 )
+from mugen.core.plugin.ops_reporting.service.export_job import ExportJobService
+from mugen.core.plugin.ops_reporting.service.export_item import ExportItemService
 from mugen.core.plugin.ops_reporting.service.kpi_threshold import KpiThresholdService
