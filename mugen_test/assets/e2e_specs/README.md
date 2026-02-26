@@ -30,6 +30,7 @@ To run the whole template suite with automatic unique placeholder injection:
   - `ops_reporting/ops-reporting-e2e-snapshot.template.json`
   - `ops_reporting/ops-reporting-e2e-snapshot-verify.template.json`
   - `ops_reporting/ops-reporting-e2e-export.template.json`
+- `ops_connector`: `ops_connector/ops-connector-e2e-http-json.template.json`
 - `channel_orchestration`:
   - `channel_orchestration/channel-orchestration-e2e-conversation.template.json`
   - `channel_orchestration/channel-orchestration-e2e-blocklist.template.json`

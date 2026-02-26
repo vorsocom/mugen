@@ -69,6 +69,14 @@ class KeyRefService(
             provider = "local"
         return provider
 
+    @staticmethod
+    def _status_text(value: Any) -> str:
+        return str(getattr(value, "value", value) or "").strip()
+
+    @classmethod
+    def _status_lower(cls, value: Any) -> str:
+        return cls._status_text(value).lower()
+
     async def create(self, values: Mapping[str, Any]) -> KeyRefDE:
         payload = dict(values)
         payload["tenant_id"] = self._normalize_tenant_id(payload.get("tenant_id"))
@@ -247,7 +255,7 @@ class KeyRefService(
             "TenantId": str(row.tenant_id),
             "Purpose": row.purpose,
             "KeyId": row.key_id,
-            "Status": row.status,
+            "Status": self._status_text(row.status),
         }, 200
 
     async def _retire(
@@ -265,13 +273,13 @@ class KeyRefService(
             not_found=not_found,
         )
 
-        if row.status == "destroyed":
+        if self._status_lower(row.status) == "destroyed":
             abort(409, "Destroyed key references cannot be retired.")
 
-        if row.status == "retired":
+        if self._status_lower(row.status) == "retired":
             return {
                 "Id": str(row.id),
-                "Status": row.status,
+                "Status": self._status_text(row.status),
             }, 200
 
         reason = self._normalize_optional_text(getattr(data, "reason", None))
@@ -295,7 +303,7 @@ class KeyRefService(
 
         return {
             "Id": str(updated.id),
-            "Status": updated.status,
+            "Status": self._status_text(updated.status),
         }, 200
 
     async def _destroy(
@@ -313,10 +321,10 @@ class KeyRefService(
             not_found=not_found,
         )
 
-        if row.status == "destroyed":
+        if self._status_lower(row.status) == "destroyed":
             return {
                 "Id": str(row.id),
-                "Status": row.status,
+                "Status": self._status_text(row.status),
             }, 200
 
         reason = self._normalize_optional_text(getattr(data, "reason", None))
@@ -345,7 +353,7 @@ class KeyRefService(
 
         return {
             "Id": str(updated.id),
-            "Status": updated.status,
+            "Status": self._status_text(updated.status),
         }, 200
 
     async def entity_set_action_rotate(
@@ -503,7 +511,7 @@ class KeyRefService(
                 abort(500)
 
             for row in rows:
-                if str(row.status or "").strip().lower() not in {"active", "retired"}:
+                if self._status_lower(row.status) not in {"active", "retired"}:
                     continue
                 if str(row.key_id or "").strip().casefold() == key_id_folded:
                     return row
