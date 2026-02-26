@@ -96,3 +96,13 @@ class IKeyRefService(ICrudService[KeyRefDE], ABC):
         purpose: str,
     ) -> ResolvedKeyMaterial | None:
         """Resolve active key material for purpose with fallback semantics."""
+
+    @abstractmethod
+    async def resolve_secret_for_key_id(
+        self,
+        *,
+        tenant_id: uuid.UUID | None,
+        purpose: str,
+        key_id: str,
+    ) -> ResolvedKeyMaterial | None:
+        """Resolve key material for an explicit key id with fallback semantics."""

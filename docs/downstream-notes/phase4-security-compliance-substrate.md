@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owner: platform-core
-- Last Updated: 2026-02-25
+- Last Updated: 2026-02-26
 
 ## Context
 
@@ -84,12 +84,28 @@ ACP reseed migration:
 
 - re-applies manifests and seeds new resource/action permissions.
 
+Follow-up guard migration:
+`f1a9b7c3d5e2_ops_gov_retention_class_active_unique`
+
+- validates no duplicate active retention classes already exist for a given
+  `(tenant_id, resource_type)`.
+- adds a partial unique index enforcing one active class per
+  `(tenant_id, resource_type)`.
+
 ## Backward Compatibility
 
 - Existing Phase 1-3 behavior remains valid.
 - Existing config-backed audit hash key path still works as fallback when
   `KeyRef` resolution is unavailable.
 - Existing `EvidenceRef` consumers continue to function unchanged.
+- Audit hash-chain verification now resolves secrets by explicit `hash_key_id`
+  via `KeyRefs` first (tenant, then global; statuses `active`/`retired`), then
+  config fallback.
+- Releasing an already-released legal hold now still re-syncs downstream target
+  hold fields to repair partial-failure retries.
+- Legal hold placement now enforces effective retention-class policy:
+  `legal_hold_allowed=false` is a `409`, explicit class/resource mismatches are
+  `409`, and ambiguous active-class state is `409`.
 
 ## Operational Rollout
 

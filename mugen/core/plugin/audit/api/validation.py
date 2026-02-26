@@ -51,6 +51,7 @@ class AuditEventRunLifecycleValidation(IValidationBase):
     max_batches: PositiveInt | None = None
     dry_run: bool = False
     now_override: datetime | None = None
+    purge_grace_days_override: NonNegativeInt | None = None
     phases: (
         list[
             Literal[

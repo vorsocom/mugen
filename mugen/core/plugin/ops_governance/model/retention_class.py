@@ -128,6 +128,13 @@ class RetentionClass(ModelBase, TenantScopedMixin):
             "resource_type",
             "is_active",
         ),
+        Index(
+            "ux_ops_gov_retention_class__tenant_resource_active",
+            "tenant_id",
+            "resource_type",
+            unique=True,
+            postgresql_where=sa_text("is_active = true"),
+        ),
         {"schema": "mugen"},
     )
 

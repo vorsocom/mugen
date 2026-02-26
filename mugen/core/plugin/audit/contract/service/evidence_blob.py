@@ -176,5 +176,6 @@ class IEvidenceBlobService(ICrudService[EvidenceBlobDE], ABC):
         batch_size: int,
         max_batches: int,
         now_override: datetime | None = None,
+        purge_grace_days_override: int | None = None,
     ) -> dict[str, Any]:
         """Execute deterministic lifecycle phases for evidence blobs."""

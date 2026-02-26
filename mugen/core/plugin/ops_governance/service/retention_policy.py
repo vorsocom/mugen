@@ -35,6 +35,7 @@ from mugen.core.plugin.ops_governance.service.lifecycle_action_log import (
     LifecycleActionLogService,
 )
 from mugen.core.plugin.ops_governance.service.retention_class import (
+    RetentionClassResolutionError,
     RetentionClassService,
 )
 
@@ -187,23 +188,21 @@ class RetentionPolicyService(
         *,
         tenant_id: uuid.UUID,
     ) -> dict[str, RetentionClassDE]:
-        try:
-            rows = await self._retention_class_service.list(
-                filter_groups=[
-                    FilterGroup(
-                        where={
-                            "tenant_id": tenant_id,
-                            "is_active": True,
-                        }
-                    )
-                ]
-            )
-        except SQLAlchemyError:
-            abort(500)
-
         classes: dict[str, RetentionClassDE] = {}
-        for row in rows:
-            classes[self._normalize_resource_type(row.resource_type)] = row
+        for resource_type in ("audit_event", "evidence_blob"):
+            try:
+                resolved = await (
+                    self._retention_class_service.resolve_active_for_resource_type(
+                        tenant_id=tenant_id,
+                        resource_type=resource_type,
+                    )
+                )
+            except RetentionClassResolutionError as exc:
+                abort(409, str(exc))
+            except SQLAlchemyError:
+                abort(500)
+            if resolved is not None:
+                classes[resource_type] = resolved
         return classes
 
     async def _apply_class_defaults(
@@ -307,6 +306,7 @@ class RetentionPolicyService(
         batch_size: int,
         max_batches: int,
         now_override: datetime | None,
+        purge_grace_days_override: int | None,
         auth_user_id: uuid.UUID,
     ) -> dict[str, Any]:
         service = await self._resource_service("AuditEvents")
@@ -319,6 +319,7 @@ class RetentionPolicyService(
                 max_batches=max_batches,
                 dry_run=dry_run,
                 now_override=now_override,
+                purge_grace_days_override=purge_grace_days_override,
                 phases=["redact_due", "tombstone_expired", "purge_due"],
             ),
         )
@@ -332,6 +333,7 @@ class RetentionPolicyService(
         batch_size: int,
         max_batches: int,
         now_override: datetime | None,
+        purge_grace_days_override: int | None,
     ) -> dict[str, Any]:
         service = await self._resource_service("EvidenceBlobs")
         summary = await service.run_lifecycle(
@@ -340,6 +342,7 @@ class RetentionPolicyService(
             batch_size=batch_size,
             max_batches=max_batches,
             now_override=now_override,
+            purge_grace_days_override=purge_grace_days_override,
         )
         return dict(summary)
 
@@ -422,6 +425,8 @@ class RetentionPolicyService(
         now_override = getattr(data, "now_override", None)
 
         classes = await self._active_retention_classes(tenant_id=tenant_id)
+        audit_class = classes.get("audit_event")
+        evidence_class = classes.get("evidence_blob")
 
         class_marking: dict[str, dict[str, int]] = {}
         for resource_type in ("audit_event", "evidence_blob"):
@@ -442,6 +447,11 @@ class RetentionPolicyService(
             batch_size=batch_size,
             max_batches=max_batches,
             now_override=now_override,
+            purge_grace_days_override=(
+                None
+                if audit_class is None or audit_class.purge_grace_days is None
+                else max(0, int(audit_class.purge_grace_days))
+            ),
             auth_user_id=auth_user_id,
         )
         evidence_summary = await self._run_evidence_lifecycle(
@@ -450,6 +460,11 @@ class RetentionPolicyService(
             batch_size=batch_size,
             max_batches=max_batches,
             now_override=now_override,
+            purge_grace_days_override=(
+                None
+                if evidence_class is None or evidence_class.purge_grace_days is None
+                else max(0, int(evidence_class.purge_grace_days))
+            ),
         )
 
         now = self._now_utc()

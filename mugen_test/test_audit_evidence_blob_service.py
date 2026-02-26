@@ -1145,6 +1145,37 @@ class TestEvidenceBlobService(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(ctx.exception.code, 500)
 
+    async def test_tombstone_phase_uses_purge_grace_override(self) -> None:
+        now = datetime.now(timezone.utc)
+        created, status = await self.service.entity_set_action_register(
+            auth_user_id=self.actor_id,
+            data=SimpleNamespace(
+                tenant_id=self.tenant_id,
+                storage_uri="file://override",
+                content_hash="override",
+                hash_alg="sha256",
+                immutability="immutable",
+                retention_until=now - timedelta(days=1),
+                redaction_due_at=now + timedelta(days=1),
+                meta=None,
+            ),
+        )
+        self.assertEqual(status, 201)
+        evidence_id = uuid.UUID(created["EvidenceBlobId"])
+
+        phase_summary = await self.service._phase_tombstone_expired(
+            tenant_id=self.tenant_id,
+            dry_run=False,
+            batch_size=10,
+            max_batches=1,
+            now=now,
+            purge_grace_days_override=4,
+        )
+        self.assertEqual(phase_summary["RowsProcessed"], 1)
+
+        row = self._find_row(evidence_id)
+        self.assertEqual(row["purge_due_at"], now + timedelta(days=4))
+
     async def test_register_rejects_invalid_immutability(self) -> None:
         with self.assertRaises(HTTPException) as ctx:
             await self.service.entity_set_action_register(

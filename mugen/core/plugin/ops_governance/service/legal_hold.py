@@ -16,9 +16,13 @@ from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.ops_governance.contract.service.legal_hold import (
     ILegalHoldService,
 )
-from mugen.core.plugin.ops_governance.domain import LegalHoldDE
+from mugen.core.plugin.ops_governance.domain import LegalHoldDE, RetentionClassDE
 from mugen.core.plugin.ops_governance.service.lifecycle_action_log import (
     LifecycleActionLogService,
+)
+from mugen.core.plugin.ops_governance.service.retention_class import (
+    RetentionClassResolutionError,
+    RetentionClassService,
 )
 
 
@@ -33,6 +37,7 @@ class LegalHoldService(
     """CRUD + action workflow for synchronized legal hold lifecycle."""
 
     _LIFECYCLE_LOG_TABLE = "ops_governance_lifecycle_action_log"
+    _RETENTION_CLASS_TABLE = "ops_governance_retention_class"
 
     def __init__(
         self,
@@ -50,6 +55,10 @@ class LegalHoldService(
         self._registry_provider = registry_provider
         self._lifecycle_log_service = LifecycleActionLogService(
             table=self._LIFECYCLE_LOG_TABLE,
+            rsg=rsg,
+        )
+        self._retention_class_service = RetentionClassService(
+            table=self._RETENTION_CLASS_TABLE,
             rsg=rsg,
         )
 
@@ -73,12 +82,10 @@ class LegalHoldService(
 
     @staticmethod
     def _normalize_resource_type(value: str | None) -> str:
-        text = str(value or "").strip().lower().replace("-", "_")
-        if text in {"audit_event", "auditevent", "audit"}:
-            return "audit_event"
-        if text in {"evidence_blob", "evidenceblob", "evidence"}:
-            return "evidence_blob"
-        abort(400, "ResourceType must be audit_event or evidence_blob.")
+        try:
+            return RetentionClassService.normalize_resource_type(value)
+        except ValueError:
+            abort(400, "ResourceType must be audit_event or evidence_blob.")
 
     async def _get_for_action(
         self,
@@ -135,6 +142,42 @@ class LegalHoldService(
         registry: IAdminRegistry = self._registry_provider()
         resource = registry.get_resource(resource_name)
         return registry.get_edm_service(resource.service_key)
+
+    async def _resolve_effective_retention_class(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        resource_type: str,
+        retention_class_id: uuid.UUID | None,
+    ) -> RetentionClassDE | None:
+        if retention_class_id is not None:
+            try:
+                explicit = await self._retention_class_service.get(
+                    {
+                        "tenant_id": tenant_id,
+                        "id": retention_class_id,
+                    }
+                )
+            except SQLAlchemyError:
+                abort(500)
+
+            if explicit is None:
+                abort(404, "Retention class not found.")
+
+            class_resource_type = self._normalize_resource_type(explicit.resource_type)
+            if class_resource_type != resource_type:
+                abort(409, "Retention class does not match ResourceType.")
+            return explicit
+
+        try:
+            return await self._retention_class_service.resolve_active_for_resource_type(
+                tenant_id=tenant_id,
+                resource_type=resource_type,
+            )
+        except RetentionClassResolutionError as exc:
+            abort(409, str(exc))
+        except SQLAlchemyError:
+            abort(500)
 
     async def _sync_hold_state(
         self,
@@ -231,6 +274,19 @@ class LegalHoldService(
         hold_until = getattr(data, "hold_until", None)
         retention_class_id = getattr(data, "retention_class_id", None)
         attributes = getattr(data, "attributes", None)
+        effective_class = await self._resolve_effective_retention_class(
+            tenant_id=tenant_id,
+            resource_type=resource_type,
+            retention_class_id=retention_class_id,
+        )
+        if effective_class is not None and not bool(effective_class.legal_hold_allowed):
+            abort(409, "Legal hold is disallowed by retention class policy.")
+
+        effective_retention_class_id = (
+            retention_class_id
+            if retention_class_id is not None
+            else (effective_class.id if effective_class is not None else None)
+        )
 
         try:
             current = await self.get(
@@ -250,7 +306,7 @@ class LegalHoldService(
                 {
                     "reason": reason,
                     "hold_until": hold_until,
-                    "retention_class_id": retention_class_id,
+                    "retention_class_id": effective_retention_class_id,
                     "attributes": attributes,
                 },
             )
@@ -260,7 +316,7 @@ class LegalHoldService(
             hold = await self.create(
                 {
                     "tenant_id": tenant_id,
-                    "retention_class_id": retention_class_id,
+                    "retention_class_id": effective_retention_class_id,
                     "resource_type": resource_type,
                     "resource_id": resource_id,
                     "reason": reason,
@@ -324,28 +380,25 @@ class LegalHoldService(
             field_name="Reason",
         )
 
-        if hold.status == "released":
-            return {
-                "LegalHoldId": str(hold.id),
-                "Status": hold.status,
-            }, 200
+        updated = hold
+        repair_sync = bool(hold.status == "released")
+        if not repair_sync:
+            try:
+                updated = await self.update_with_row_version(
+                    where={"id": hold.id},
+                    expected_row_version=expected_row_version,
+                    changes={
+                        "status": "released",
+                        "released_at": self._now_utc(),
+                        "released_by_user_id": auth_user_id,
+                        "release_reason": release_reason,
+                    },
+                )
+            except SQLAlchemyError:
+                abort(500)
 
-        try:
-            updated = await self.update_with_row_version(
-                where={"id": hold.id},
-                expected_row_version=expected_row_version,
-                changes={
-                    "status": "released",
-                    "released_at": self._now_utc(),
-                    "released_by_user_id": auth_user_id,
-                    "release_reason": release_reason,
-                },
-            )
-        except SQLAlchemyError:
-            abort(500)
-
-        if updated is None:
-            abort(409, "RowVersion conflict. Refresh and retry.")
+            if updated is None:
+                abort(409, "RowVersion conflict. Refresh and retry.")
 
         await self._sync_hold_state(
             tenant_id=tenant_id,
@@ -367,8 +420,15 @@ class LegalHoldService(
             details={
                 "legal_hold_id": str(updated.id),
                 "release_reason": release_reason,
+                "repair_sync": repair_sync,
             },
         )
+
+        if repair_sync:
+            return {
+                "LegalHoldId": str(updated.id),
+                "Status": updated.status,
+            }, 200
 
         return {
             "LegalHoldId": str(updated.id),
