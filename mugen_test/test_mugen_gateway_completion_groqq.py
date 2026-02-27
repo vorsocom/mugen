@@ -781,3 +781,32 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             GroqCompletionGateway._normalize_list_of_dicts([{"a": 1}, 1]),
             [{"a": 1}],
         )
+
+    def test_constructor_applies_timeout_when_configured(self) -> None:
+        config = _make_config()
+        config.groq.api.timeout_seconds = 9
+
+        with patch("mugen.core.gateway.completion.groqq.AsyncGroq") as async_groq:
+            GroqCompletionGateway(config, Mock())
+
+        async_groq.assert_called_once_with(api_key="gsk_test", timeout=9.0)
+
+    def test_timeout_resolution_logs_invalid_values(self) -> None:
+        gateway = GroqCompletionGateway.__new__(GroqCompletionGateway)
+        gateway._config = _make_config()  # pylint: disable=protected-access
+        gateway._logging_gateway = Mock()  # pylint: disable=protected-access
+
+        self.assertIsNone(gateway._resolve_timeout_seconds())
+        gateway._config.groq.api.timeout_seconds = "bad"  # pylint: disable=protected-access
+        self.assertIsNone(gateway._resolve_timeout_seconds())
+        gateway._config.groq.api.timeout_seconds = 0  # pylint: disable=protected-access
+        self.assertIsNone(gateway._resolve_timeout_seconds())
+        self.assertGreaterEqual(gateway._logging_gateway.warning.call_count, 2)  # pylint: disable=protected-access
+
+    def test_production_warning_when_timeout_missing(self) -> None:
+        config = _make_config()
+        config.mugen = SimpleNamespace(environment="production")
+        logging_gateway = Mock()
+        with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=Mock()):
+            GroqCompletionGateway(config, logging_gateway)
+        logging_gateway.warning.assert_called_once()

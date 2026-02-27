@@ -1,6 +1,7 @@
 """Unit tests for mugen.core.service.messaging.DefaultMessagingService."""
 
 import asyncio
+from types import SimpleNamespace
 import unittest
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -694,3 +695,31 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(svc.mh_extensions, [mh])
         self.assertEqual(svc.rag_extensions, [rag])
         self.assertEqual(svc.rpp_extensions, [rpp])
+
+    def test_extension_platform_key_returns_empty_tuple_for_non_list(self) -> None:
+        svc = self._new_service()
+        ext = SimpleNamespace(platforms="matrix")
+        self.assertEqual(
+            svc._extension_platform_key(ext),  # pylint: disable=protected-access
+            tuple(),
+        )
+
+    def test_register_extension_rejects_instance_duplicate(self) -> None:
+        svc = self._new_service()
+        ext = SimpleNamespace(platforms=["matrix"])
+        svc.register_cp_extension(ext)
+        with self.assertRaises(ValueError):
+            svc.register_cp_extension(ext)
+
+    def test_register_extension_rejects_logical_duplicate(self) -> None:
+        svc = self._new_service()
+
+        class _LocalExtension:  # pylint: disable=too-few-public-methods
+            def __init__(self) -> None:
+                self.platforms = ["matrix"]
+
+        first = _LocalExtension()
+        second = _LocalExtension()
+        svc.register_cp_extension(first)
+        with self.assertRaises(ValueError):
+            svc.register_cp_extension(second)

@@ -1836,3 +1836,14 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
                 return {}
 
         self.assertIsNone(gateway._usage_from_payload(_EmptyPayload()))
+
+    def test_constructor_warns_when_timeout_missing_in_production(self) -> None:
+        config = _make_config()
+        config.openai.api.timeout_seconds = None
+        config.mugen = SimpleNamespace(environment="production")
+        logging_gateway = Mock()
+
+        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=Mock()):
+            OpenAICompletionGateway(config, logging_gateway)
+
+        logging_gateway.warning.assert_called_once()

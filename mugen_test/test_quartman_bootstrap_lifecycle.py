@@ -91,7 +91,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(phase_b_runner.await_count, 0)
         await quartman.app.shutdown()
 
-    async def test_shutdown_cancels_task_and_closes_whatsapp_client(self) -> None:
+    async def test_shutdown_cancels_whatsapp_phase_b_task(self) -> None:
         app = Quart("quartman_test")
         quartman = _import_quartman_with_app(app)
 
@@ -99,8 +99,6 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
 
         config = unittest.mock.Mock()
         config.mugen = unittest.mock.Mock(platforms=["whatsapp"])
-        whatsapp_client = unittest.mock.Mock()
-        whatsapp_client.close = unittest.mock.AsyncMock()
         whatsapp_started = asyncio.Event()
 
         async def _blocking_whatsapp() -> None:
@@ -112,7 +110,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 _app,
                 config_provider=lambda: config,
                 logger_provider=lambda: _app.logger,
-                whatsapp_provider=lambda: whatsapp_client,
+                whatsapp_provider=lambda: None,
             )
 
         with (
@@ -143,7 +141,6 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             await quartman.app.shutdown()
 
             self.assertTrue(task.done())
-            whatsapp_client.close.assert_awaited_once()
             self.assertIsNone(state.get(quartman._PLATFORM_CLIENTS_TASK_KEY))
 
     async def test_done_callback_logs_cancelled_task(self) -> None:
@@ -218,3 +215,83 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             quartman._bootstrap_state().get(quartman._PLATFORM_CLIENTS_TASK_KEY)
         )
+
+    async def test_runtime_controls_default_when_container_config_missing(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        with unittest.mock.patch.object(quartman.di, "container", object()):
+            grace, critical = quartman._resolve_phase_b_runtime_controls()
+
+        self.assertEqual(grace, 0.0)
+        self.assertEqual(critical, [])
+
+    async def test_runtime_controls_normalize_invalid_values(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        container = unittest.mock.Mock()
+        container.config = unittest.mock.Mock(
+            mugen=unittest.mock.Mock(
+                runtime=unittest.mock.Mock(
+                    phase_b=unittest.mock.Mock(
+                        readiness_grace_seconds="invalid",
+                        critical_platforms=[" WEB ", "", "whatsapp"],
+                    )
+                ),
+                platforms=["matrix"],
+            )
+        )
+
+        with unittest.mock.patch.object(quartman.di, "container", container):
+            grace, critical = quartman._resolve_phase_b_runtime_controls()
+
+        self.assertEqual(grace, 0.0)
+        self.assertEqual(critical, ["web", "whatsapp"])
+
+        container.config.mugen.runtime.phase_b.readiness_grace_seconds = -10
+        container.config.mugen.runtime.phase_b.critical_platforms = None
+        with unittest.mock.patch.object(quartman.di, "container", container):
+            grace, critical = quartman._resolve_phase_b_runtime_controls()
+
+        self.assertEqual(grace, 0.0)
+        self.assertEqual(critical, ["matrix"])
+
+    async def test_shutdown_container_logs_warning_on_exception(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        with (
+            unittest.mock.patch.object(
+                quartman.di,
+                "shutdown_container",
+                side_effect=RuntimeError("boom"),
+            ),
+            self.assertLogs(logger=app.name, level="WARNING") as logs,
+        ):
+            quartman._shutdown_container()
+
+        self.assertTrue(any("Container shutdown failed" in msg for msg in logs.output))
+
+    async def test_runtime_controls_return_empty_critical_list_for_non_list_platforms(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        container = unittest.mock.Mock()
+        container.config = unittest.mock.Mock(
+            mugen=unittest.mock.Mock(
+                runtime=unittest.mock.Mock(
+                    phase_b=unittest.mock.Mock(
+                        readiness_grace_seconds=3,
+                        critical_platforms=None,
+                    )
+                ),
+                platforms="web",
+            )
+        )
+
+        with unittest.mock.patch.object(quartman.di, "container", container):
+            grace, critical = quartman._resolve_phase_b_runtime_controls()
+
+        self.assertEqual(grace, 3.0)
+        self.assertEqual(critical, [])

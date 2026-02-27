@@ -1059,6 +1059,62 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
+
+    def test_constructor_applies_timeout_and_retry_config(self) -> None:
+        config = _make_config()
+        config.aws.bedrock.api.connect_timeout_seconds = 1.5
+        config.aws.bedrock.api.read_timeout_seconds = 2.5
+        config.aws.bedrock.api.max_attempts = 3
+
+        with patch(
+            "mugen.core.gateway.completion.bedrock.boto3.client",
+            return_value=Mock(),
+        ) as boto_client:
+            BedrockCompletionGateway(config, Mock())
+
+        _, kwargs = boto_client.call_args
+        self.assertIn("config", kwargs)
+        self.assertEqual(kwargs["config"].connect_timeout, 1.5)
+        self.assertEqual(kwargs["config"].read_timeout, 2.5)
+
+    def test_timeout_parsers_handle_invalid_and_non_positive_values(self) -> None:
+        gateway = self._build_gateway()
+        gateway._logging_gateway = Mock()
+
+        self.assertIsNone(gateway._resolve_optional_positive_float("bad", "f"))
+        self.assertIsNone(gateway._resolve_optional_positive_float(0, "f"))
+        self.assertIsNone(gateway._resolve_optional_positive_int("bad", "i"))
+        self.assertIsNone(gateway._resolve_optional_positive_int(0, "i"))
+        self.assertGreaterEqual(gateway._logging_gateway.warning.call_count, 4)
+
+    def test_production_warns_when_timeout_controls_missing(self) -> None:
+        config = _make_config()
+        config.mugen = SimpleNamespace(environment="production")
+        logging_gateway = Mock()
+
+        with patch(
+            "mugen.core.gateway.completion.bedrock.boto3.client",
+            return_value=Mock(),
+        ):
+            BedrockCompletionGateway(config, logging_gateway)
+
+        self.assertGreaterEqual(logging_gateway.warning.call_count, 3)
+
+    def test_production_with_timeout_controls_does_not_emit_missing_warnings(self) -> None:
+        config = _make_config()
+        config.mugen = SimpleNamespace(environment="production")
+        config.aws.bedrock.api.connect_timeout_seconds = 1
+        config.aws.bedrock.api.read_timeout_seconds = 2
+        config.aws.bedrock.api.max_attempts = 3
+        logging_gateway = Mock()
+
+        with patch(
+            "mugen.core.gateway.completion.bedrock.boto3.client",
+            return_value=Mock(),
+        ):
+            BedrockCompletionGateway(config, logging_gateway)
+
+        logging_gateway.warning.assert_not_called()
         self.assertFalse(
             BedrockCompletionGateway._should_fallback_to_invoke_model(
                 ClientError(

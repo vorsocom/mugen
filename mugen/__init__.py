@@ -1,11 +1,22 @@
 """Quart application package."""
 
 __all__ = [
+    "BOOTSTRAP_STATE_KEY",
     "BootstrapConfigError",
     "BootstrapError",
     "ExtensionLoadError",
+    "MUGEN_EXTENSION_KEY",
+    "PHASE_A_STATUS_KEY",
+    "PHASE_B_ERROR_KEY",
+    "PHASE_B_STARTED_AT_KEY",
+    "PHASE_B_STATUS_KEY",
+    "PHASE_STATUS_DEGRADED",
+    "PHASE_STATUS_HEALTHY",
+    "PHASE_STATUS_STARTING",
+    "PHASE_STATUS_STOPPED",
     "bootstrap_app",
     "create_quart_app",
+    "get_bootstrap_state",
     "run_clients",
     "run_platform_clients",
     "run_web_client",
@@ -20,6 +31,19 @@ from types import SimpleNamespace
 
 from quart import Quart
 
+from mugen.bootstrap_state import (
+    BOOTSTRAP_STATE_KEY,
+    MUGEN_EXTENSION_KEY,
+    PHASE_A_STATUS_KEY,
+    PHASE_B_ERROR_KEY,
+    PHASE_B_STARTED_AT_KEY,
+    PHASE_B_STATUS_KEY,
+    PHASE_STATUS_DEGRADED,
+    PHASE_STATUS_HEALTHY,
+    PHASE_STATUS_STARTING,
+    PHASE_STATUS_STOPPED,
+    get_bootstrap_state,
+)
 from mugen.config import AppConfig
 from mugen.core import di
 from mugen.core.api import api
@@ -36,11 +60,9 @@ from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
-
 
 class BootstrapError(RuntimeError):
     """Base error type for application bootstrap failures."""
@@ -64,10 +86,6 @@ def _logger_provider():
 
 def _whatsapp_provider():
     return di.container.whatsapp_client
-
-
-def _keyval_storage_gateway_provider():
-    return di.container.keyval_storage_gateway
 
 
 def _ipc_provider():
@@ -104,6 +122,23 @@ def _extension_enabled(ext: SimpleNamespace) -> bool:
         if normalized in {"false", "0", "no", "off"}:
             return False
     return bool(raw_enabled)
+
+
+def _telnet_allowed_in_production(config: SimpleNamespace) -> bool:
+    raw_value = getattr(
+        getattr(config, "telnet", SimpleNamespace()),
+        "allow_in_production",
+        False,
+    )
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, str):
+        normalized = raw_value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return False
 
 
 def _split_extension_path(path: str) -> tuple[str, str | None]:
@@ -240,67 +275,56 @@ async def run_platform_clients(
     logger_provider=_logger_provider,
     whatsapp_provider=_whatsapp_provider,
     web_provider=_web_provider,
-    keyval_storage_gateway_provider=_keyval_storage_gateway_provider,
 ) -> None:
     """Phase B bootstrap for long-running platform clients."""
     config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
-    whatsapp_client: IWhatsAppClient | None = None
-    web_client: IWebClient | None = None
-    keyval_storage_gateway: IKeyValStorageGateway = keyval_storage_gateway_provider()
+    bootstrap_state = get_bootstrap_state(app)
+    bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+    bootstrap_state[PHASE_B_ERROR_KEY] = None
+
+    environment = str(
+        getattr(getattr(config, "mugen", SimpleNamespace()), "environment", "")
+    ).strip().lower()
+    active_platforms = getattr(getattr(config, "mugen", SimpleNamespace()), "platforms", [])
+    if "telnet" in active_platforms and environment == "production":
+        if _telnet_allowed_in_production(config) is not True:
+            raise BootstrapConfigError(
+                "Telnet platform is disabled in production. Set "
+                "telnet.allow_in_production=true to override."
+            )
+
+    # Do platform checks.
+    tasks = []
 
     try:
-        # Do platform checks.
-        tasks = []
+        if "matrix" in config.mugen.platforms:
+            logger.debug("Running matrix client.")
+            # Create task to run Matrix client.
+            tasks.append(asyncio.create_task(run_matrix_client()))
 
-        try:
-            if "matrix" in config.mugen.platforms:
-                logger.debug("Running matrix client.")
-                # Create task to run Matrix client.
-                tasks.append(asyncio.create_task(run_matrix_client()))
+        if "telnet" in config.mugen.platforms:
+            logger.debug("Running telnet client.")
+            # Create task to run Telnet client.
+            tasks.append(asyncio.create_task(run_telnet_client()))
 
-            if "telnet" in config.mugen.platforms:
-                logger.debug("Running telnet client.")
-                # Create task to run Telnet client.
-                tasks.append(asyncio.create_task(run_telnet_client()))
+        if "whatsapp" in config.mugen.platforms:
+            logger.debug("Running whatsapp client.")
+            # Create task to run WhatsApp client.
+            tasks.append(asyncio.create_task(run_whatsapp_client()))
 
-            if "whatsapp" in config.mugen.platforms:
-                logger.debug("Running whatsapp client.")
-                whatsapp_client = whatsapp_provider()
-                # Create task to run WhatsApp client.
-                tasks.append(asyncio.create_task(run_whatsapp_client()))
+        if "web" in config.mugen.platforms:
+            logger.debug("Running web client.")
+            # Create task to run Web client.
+            tasks.append(asyncio.create_task(run_web_client()))
+    except AttributeError as exc:
+        logger.error("Invalid platform configuration.")
+        raise BootstrapConfigError("Invalid platform configuration.") from exc
 
-            if "web" in config.mugen.platforms:
-                logger.debug("Running web client.")
-                web_client = web_provider()
-                # Create task to run Web client.
-                tasks.append(asyncio.create_task(run_web_client()))
-        except AttributeError as exc:
-            logger.error("Invalid platform configuration.")
-            raise BootstrapConfigError("Invalid platform configuration.") from exc
-
-        try:
-            await asyncio.gather(*tasks)
-        except asyncio.exceptions.CancelledError:
-            if whatsapp_client is not None:
-                logger.debug("Closing whatsapp client.")
-                try:
-                    await whatsapp_client.close()
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.warning(f"Failed to close whatsapp client ({exc}).")
-            if web_client is not None:
-                logger.debug("Closing web client.")
-                try:
-                    await web_client.close()
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.warning(f"Failed to close web client ({exc}).")
-    finally:
-        if keyval_storage_gateway is not None:
-            logger.debug("Closing keyval storage gateway.")
-            try:
-                keyval_storage_gateway.close()
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning(f"Failed to close keyval storage gateway ({exc}).")
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.exceptions.CancelledError:
+        return
 
 
 async def register_extensions(  # pylint: disable=too-many-positional-arguments
@@ -642,8 +666,18 @@ async def run_whatsapp_client(
     logger: ILoggingGateway = logger_provider()
     whatsapp_client: IWhatsAppClient = whatsapp_provider()
 
-    await asyncio.gather(asyncio.create_task(whatsapp_client.init()))
+    await whatsapp_client.init()
     logger.debug("WhatsApp client started.")
+    try:
+        await asyncio.Event().wait()
+    except asyncio.exceptions.CancelledError:
+        logger.debug("WhatsApp client shutting down.")
+        raise
+    finally:
+        try:
+            await whatsapp_client.close()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(f"Failed to close whatsapp client ({exc}).")
 
 
 async def run_web_client(
@@ -654,5 +688,15 @@ async def run_web_client(
     logger: ILoggingGateway = logger_provider()
     web_client: IWebClient = web_provider()
 
-    await asyncio.gather(asyncio.create_task(web_client.init()))
+    await web_client.init()
     logger.debug("Web client started.")
+    try:
+        await web_client.wait_until_stopped()
+    except asyncio.exceptions.CancelledError:
+        logger.debug("Web client shutting down.")
+        raise
+    finally:
+        try:
+            await web_client.close()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(f"Failed to close web client ({exc}).")

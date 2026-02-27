@@ -16,6 +16,7 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.domain.use_case import NormalizeComposedMessageUseCase
 
 
 # pylint: disable=too-many-instance-attributes
@@ -25,18 +26,6 @@ class DefaultMessagingService(IMessagingService):
     _thread_version: int = 1
 
     _thread_list_version: int = 1
-
-    _cp_extensions: list[ICPExtension] = []
-
-    _ct_extensions: list[ICTExtension] = []
-
-    _ctx_extensions: list[ICTXExtension] = []
-
-    _mh_extensions: list[IMHExtension] = []
-
-    _rag_extensions: list[IRAGExtension] = []
-
-    _rpp_extensions: list[IRPPExtension] = []
 
     # pylint: disable=too-many-arguments
     # pylint: disable=too-many-positional-arguments
@@ -53,6 +42,54 @@ class DefaultMessagingService(IMessagingService):
         self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway
         self._user_service = user_service
+        self._cp_extensions: list[ICPExtension] = []
+        self._ct_extensions: list[ICTExtension] = []
+        self._ctx_extensions: list[ICTXExtension] = []
+        self._mh_extensions: list[IMHExtension] = []
+        self._rag_extensions: list[IRAGExtension] = []
+        self._rpp_extensions: list[IRPPExtension] = []
+
+        self._cp_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+        self._ct_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+        self._ctx_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+        self._mh_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+        self._rag_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+        self._rpp_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+        self._normalize_composed_message_use_case = NormalizeComposedMessageUseCase()
+
+    @staticmethod
+    def _extension_platform_key(ext: Any) -> tuple[str, ...]:
+        platforms = getattr(ext, "platforms", [])
+        if not isinstance(platforms, list):
+            return tuple()
+        return tuple(sorted(str(item) for item in platforms))
+
+    def _extension_logical_key(
+        self,
+        ext: Any,
+        *,
+        kind: str,
+    ) -> tuple[str, str, tuple[str, ...]]:
+        return (
+            kind,
+            f"{type(ext).__module__}.{type(ext).__qualname__}",
+            self._extension_platform_key(ext),
+        )
+
+    @staticmethod
+    def _register_extension(
+        *,
+        ext: Any,
+        ext_list: list,
+        ext_keys: set[tuple[str, str, tuple[str, ...]]],
+        logical_key: tuple[str, str, tuple[str, ...]],
+    ) -> None:
+        if ext in ext_list:
+            raise ValueError("Extension already registered (instance duplicate).")
+        if logical_key in ext_keys:
+            raise ValueError("Extension already registered (logical duplicate).")
+        ext_list.append(ext)
+        ext_keys.add(logical_key)
 
     async def handle_audio_message(
         self,
@@ -405,176 +442,8 @@ class DefaultMessagingService(IMessagingService):
             return "image"
         return "file"
 
-    @staticmethod
-    def _require_non_empty(value: Any, field_name: str) -> str:
-        if not isinstance(value, str):
-            raise ValueError(f"{field_name} must be a non-empty string")
-
-        normalized = value.strip()
-        if normalized == "":
-            raise ValueError(f"{field_name} must be a non-empty string")
-
-        return normalized
-
-    # pylint: disable=too-many-branches
-    # pylint: disable=too-many-locals
     def _normalize_composed_message(self, message: Any) -> dict[str, Any]:
-        if not isinstance(message, dict):
-            raise ValueError("message must be an object for composed messages")
-
-        composition_mode = self._require_non_empty(
-            message.get("composition_mode"),
-            "message.composition_mode",
-        ).lower()
-        if composition_mode not in {
-            "message_with_attachments",
-            "attachment_with_caption",
-        }:
-            raise ValueError(
-                "message.composition_mode must be one of "
-                "message_with_attachments or attachment_with_caption"
-            )
-
-        raw_attachments = message.get("attachments")
-        if not isinstance(raw_attachments, list):
-            raise ValueError("message.attachments must be a list")
-
-        normalized_attachments: list[dict[str, Any]] = []
-        attachments_by_id: dict[str, dict[str, Any]] = {}
-        for raw_attachment in raw_attachments:
-            if not isinstance(raw_attachment, dict):
-                raise ValueError("message.attachments items must be objects")
-
-            attachment_id = self._require_non_empty(
-                raw_attachment.get("id"),
-                "message.attachments[].id",
-            )
-            if attachment_id in attachments_by_id:
-                raise ValueError("message.attachments contains duplicate ids")
-
-            file_path = self._require_non_empty(
-                raw_attachment.get("file_path"),
-                "message.attachments[].file_path",
-            )
-            mime_type = str(raw_attachment.get("mime_type") or "").strip().lower()
-            original_filename = raw_attachment.get("original_filename")
-            if original_filename is not None:
-                original_filename = str(original_filename)
-
-            attachment_metadata = raw_attachment.get("metadata")
-            if attachment_metadata is None:
-                attachment_metadata = {}
-            elif not isinstance(attachment_metadata, dict):
-                raise ValueError("message.attachments[].metadata must be an object")
-
-            caption = raw_attachment.get("caption")
-            normalized_caption = None
-            if caption is not None:
-                normalized_caption = str(caption).strip()
-
-            normalized_attachment = {
-                "id": attachment_id,
-                "file_path": file_path,
-                "mime_type": mime_type,
-                "original_filename": original_filename,
-                "metadata": dict(attachment_metadata),
-                "caption": normalized_caption,
-            }
-            attachments_by_id[attachment_id] = normalized_attachment
-            normalized_attachments.append(dict(normalized_attachment))
-
-        raw_parts = message.get("parts")
-        if not isinstance(raw_parts, list):
-            raise ValueError("message.parts must be a list")
-
-        normalized_parts: list[dict[str, Any]] = []
-        has_non_empty_text = False
-        for raw_part in raw_parts:
-            if not isinstance(raw_part, dict):
-                raise ValueError("message.parts items must be objects")
-
-            part_type = self._require_non_empty(
-                raw_part.get("type"),
-                "message.parts[].type",
-            ).lower()
-            if part_type == "text":
-                text_value = str(raw_part.get("text", ""))
-                if text_value.strip() != "":
-                    has_non_empty_text = True
-                normalized_parts.append({"type": "text", "text": text_value})
-                continue
-
-            if part_type != "attachment":
-                raise ValueError(f"Unsupported composed part type: {part_type}")
-
-            attachment_id = self._require_non_empty(
-                raw_part.get("id"),
-                "message.parts[].id",
-            )
-            attachment = attachments_by_id.get(attachment_id)
-            if attachment is None:
-                raise ValueError(
-                    "message.parts includes attachment id not found in message.attachments"
-                )
-
-            caption = raw_part.get("caption")
-            normalized_caption = attachment.get("caption")
-            if caption is not None:
-                normalized_caption = str(caption).strip()
-
-            part_metadata = raw_part.get("metadata")
-            normalized_part_metadata = dict(attachment.get("metadata") or {})
-            if part_metadata is not None:
-                if not isinstance(part_metadata, dict):
-                    raise ValueError("message.parts[].metadata must be an object")
-                normalized_part_metadata = dict(part_metadata)
-
-            normalized_parts.append(
-                {
-                    "type": "attachment",
-                    "id": attachment_id,
-                    "caption": normalized_caption,
-                    "metadata": normalized_part_metadata,
-                    "mime_type": attachment.get("mime_type"),
-                    "original_filename": attachment.get("original_filename"),
-                }
-            )
-
-        if composition_mode == "attachment_with_caption":
-            if any(part.get("type") == "text" for part in normalized_parts):
-                raise ValueError(
-                    "message.parts text entries are not allowed for attachment_with_caption"
-                )
-            if not normalized_attachments:
-                raise ValueError(
-                    "message.attachments requires at least one attachment for "
-                    "attachment_with_caption"
-                )
-            if any(
-                str(attachment.get("caption") or "").strip() == ""
-                for attachment in normalized_attachments
-            ):
-                raise ValueError(
-                    "message.attachments caption is required for attachment_with_caption"
-                )
-        elif not has_non_empty_text and not normalized_attachments:
-            raise ValueError("message.parts must include text content or attachments")
-
-        normalized: dict[str, Any] = {
-            "composition_mode": composition_mode,
-            "parts": normalized_parts,
-            "attachments": normalized_attachments,
-        }
-        request_metadata = message.get("metadata")
-        if request_metadata is not None and not isinstance(request_metadata, dict):
-            raise ValueError("message.metadata must be an object")
-        if isinstance(request_metadata, dict):
-            normalized["metadata"] = dict(request_metadata)
-
-        if message.get("client_message_id") is not None:
-            normalized["client_message_id"] = str(message.get("client_message_id"))
-
-        return normalized
+        return self._normalize_composed_message_use_case.handle(message)
 
     @property
     def cp_extensions(self) -> list[ICPExtension]:
@@ -601,19 +470,49 @@ class DefaultMessagingService(IMessagingService):
         return self._rpp_extensions
 
     def register_cp_extension(self, ext: ICPExtension) -> None:
-        self._cp_extensions.append(ext)
+        self._register_extension(
+            ext=ext,
+            ext_list=self._cp_extensions,
+            ext_keys=self._cp_extension_keys,
+            logical_key=self._extension_logical_key(ext, kind="cp"),
+        )
 
     def register_ct_extension(self, ext: ICTExtension) -> None:
-        self._ct_extensions.append(ext)
+        self._register_extension(
+            ext=ext,
+            ext_list=self._ct_extensions,
+            ext_keys=self._ct_extension_keys,
+            logical_key=self._extension_logical_key(ext, kind="ct"),
+        )
 
     def register_ctx_extension(self, ext: ICTXExtension) -> None:
-        self._ctx_extensions.append(ext)
+        self._register_extension(
+            ext=ext,
+            ext_list=self._ctx_extensions,
+            ext_keys=self._ctx_extension_keys,
+            logical_key=self._extension_logical_key(ext, kind="ctx"),
+        )
 
     def register_mh_extension(self, ext: IMHExtension) -> None:
-        self._mh_extensions.append(ext)
+        self._register_extension(
+            ext=ext,
+            ext_list=self._mh_extensions,
+            ext_keys=self._mh_extension_keys,
+            logical_key=self._extension_logical_key(ext, kind="mh"),
+        )
 
     def register_rag_extension(self, ext: IRAGExtension) -> None:
-        self._rag_extensions.append(ext)
+        self._register_extension(
+            ext=ext,
+            ext_list=self._rag_extensions,
+            ext_keys=self._rag_extension_keys,
+            logical_key=self._extension_logical_key(ext, kind="rag"),
+        )
 
     def register_rpp_extension(self, ext: IRPPExtension) -> None:
-        self._rpp_extensions.append(ext)
+        self._register_extension(
+            ext=ext,
+            ext_list=self._rpp_extensions,
+            ext_keys=self._rpp_extension_keys,
+            logical_key=self._extension_logical_key(ext, kind="rpp"),
+        )

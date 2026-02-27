@@ -1,5 +1,6 @@
 """Provides unit tests for mugen.run_whatspp_client."""
 
+import asyncio
 import unittest
 
 from quart import Quart
@@ -25,11 +26,45 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
                 """Perform shutdown routine."""
 
         with (self.assertLogs(logger="test_app", level="DEBUG") as logger,):
-            await run_whatsapp_client(
-                logger_provider=lambda: app.logger,
-                whatsapp_provider=DummyWhatsAppClient,
+            task = asyncio.create_task(
+                run_whatsapp_client(
+                    logger_provider=lambda: app.logger,
+                    whatsapp_provider=DummyWhatsAppClient,
+                )
             )
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
             self.assertEqual(
                 logger.output[0],
                 "DEBUG:test_app:WhatsApp client started.",
             )
+            self.assertEqual(
+                logger.output[1],
+                "DEBUG:test_app:WhatsApp client shutting down.",
+            )
+
+    async def test_close_error_is_logged(self) -> None:
+        app = Quart("test_app")
+
+        class DummyWhatsAppClient:
+            async def init(self) -> None:
+                ...
+
+            async def close(self) -> None:
+                raise RuntimeError("boom")
+
+        with self.assertLogs(logger="test_app", level="DEBUG") as logger:
+            task = asyncio.create_task(
+                run_whatsapp_client(
+                    logger_provider=lambda: app.logger,
+                    whatsapp_provider=DummyWhatsAppClient,
+                )
+            )
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        self.assertTrue(
+            any("Failed to close whatsapp client (boom)." in msg for msg in logger.output)
+        )

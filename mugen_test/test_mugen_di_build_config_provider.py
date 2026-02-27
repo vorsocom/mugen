@@ -11,9 +11,8 @@ class TestDIBuildConfigProvider(unittest.TestCase):
 
     def test_null_parameters(self) -> None:
         """Test effects when null parameters are passed."""
-        # Expect a SystemExit to be raised
-        # due to null injector.
-        with self.assertRaises(SystemExit):
+        # Expect runtime validation failure for invalid payload.
+        with self.assertRaises(RuntimeError):
             config = None
             injector = None
             di._build_config_provider(config, injector)
@@ -28,3 +27,11 @@ class TestDIBuildConfigProvider(unittest.TestCase):
             # We should not get here if the injector
             # is correctly typed.
             self.fail("Exception raised unexpectedly ")
+
+    def test_invalid_injector_raises_runtime_error(self) -> None:
+        with self.assertRaises(RuntimeError):
+            di._build_config_provider({}, injector=object())
+
+    def test_bootstrap_logger_falls_back_to_root_when_config_not_dict(self) -> None:
+        logger = di._get_bootstrap_provider_logger(config=[])
+        self.assertEqual(logger.name, "root")

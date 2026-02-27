@@ -233,6 +233,9 @@ class TestDIBuildWebClient(unittest.TestCase):
                     async def close(self):
                         pass
 
+                    async def wait_until_stopped(self):
+                        pass
+
                     async def enqueue_message(  # pylint: disable=too-many-arguments
                         self,
                         *,

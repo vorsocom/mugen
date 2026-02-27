@@ -746,3 +746,74 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             SambaNovaCompletionGateway._normalize_list_of_dicts([{"a": 1}, 1]),
             [{"a": 1}],
         )
+
+    def test_timeout_parser_and_production_warnings(self) -> None:
+        gateway = SambaNovaCompletionGateway.__new__(SambaNovaCompletionGateway)
+        gateway._config = _make_config()  # pylint: disable=protected-access
+        gateway._logging_gateway = Mock()  # pylint: disable=protected-access
+
+        self.assertIsNone(gateway._resolve_optional_positive_float("bad", "timeout"))
+        self.assertIsNone(gateway._resolve_optional_positive_float(0, "timeout"))
+        self.assertGreaterEqual(gateway._logging_gateway.warning.call_count, 2)  # pylint: disable=protected-access
+
+        config = _make_config()
+        config.mugen = SimpleNamespace(environment="production")
+        logging_gateway = Mock()
+        SambaNovaCompletionGateway(config, logging_gateway)
+        self.assertGreaterEqual(logging_gateway.warning.call_count, 2)
+
+    def test_perform_request_applies_timeout_options(self) -> None:
+        config = _make_config()
+        config.sambanova.api.connect_timeout_seconds = 4
+        config.sambanova.api.read_timeout_seconds = 7
+        gateway = SambaNovaCompletionGateway(config, Mock())
+
+        options: dict[object, object] = {}
+
+        class _FakeCurl:
+            URL = object()
+            POSTFIELDS = object()
+            HTTPHEADER = object()
+            WRITEFUNCTION = object()
+
+            def __init__(self) -> None:
+                self._write_function = None
+
+            def setopt(self, option, value) -> None:  # noqa: ANN001
+                options[option] = value
+                if option is self.WRITEFUNCTION:
+                    self._write_function = value
+
+            def perform(self) -> None:
+                assert self._write_function is not None
+                self._write_function(b'{"ok":true}')
+
+            @staticmethod
+            def getinfo(_code) -> int:  # noqa: ANN001
+                return 200
+
+            @staticmethod
+            def close() -> None:
+                return
+
+        with patch("mugen.core.gateway.completion.sambanova.pycurl.Curl", _FakeCurl):
+            gateway._perform_request(headers=["h: v"], body={"hello": "world"})  # pylint: disable=protected-access
+
+        self.assertIn(
+            gateway._connect_timeout_seconds,  # pylint: disable=protected-access
+            options.values(),
+        )
+        self.assertIn(
+            gateway._read_timeout_seconds,  # pylint: disable=protected-access
+            options.values(),
+        )
+
+    def test_production_with_timeouts_does_not_emit_missing_timeout_warnings(self) -> None:
+        config = _make_config()
+        config.mugen = SimpleNamespace(environment="production")
+        config.sambanova.api.connect_timeout_seconds = 3
+        config.sambanova.api.read_timeout_seconds = 5
+        logging_gateway = Mock()
+
+        SambaNovaCompletionGateway(config, logging_gateway)
+        logging_gateway.warning.assert_not_called()

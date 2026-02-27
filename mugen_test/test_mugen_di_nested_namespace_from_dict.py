@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from mugen.core import di
 
@@ -12,26 +13,13 @@ class TestDINestedNamespaceFromDict(unittest.TestCase):
 
     def test_null_parameters(self):
         """Test effects of passing null parameters to function."""
-
-        # Attempt to call the function with null parameters.
-        try:
+        with self.assertRaises(TypeError):
             di._nested_namespace_from_dict(items=None, ns=None)
-        except:  # pylint: disable=bare-except
-            # We should not get here because the function
-            # should handle the AttributeError that would
-            # result from calling items.keys().
-            self.fail("Exception raised unexpectedly (null parameters).")
 
     def test_empty_dict(self):
         """Test effects of passing an empty dict to function."""
-
-        # Attempt to call the function with an empty dict:
-        try:
+        with self.assertRaises(TypeError):
             di._nested_namespace_from_dict(items={}, ns=None)
-        except:  # pylint: disable=bare-except
-            # We should not get here because the function
-            # should exit gracefully if an empty dict is passed.
-            self.fail("Exception raised unexpectedly (empty dict).")
 
     def test_empty_list(self):
         """Test effects of passing a dict with an empty list to function."""
@@ -142,3 +130,9 @@ class TestDINestedNamespaceFromDict(unittest.TestCase):
             # We should not get here because the function
             # should exit gracefully if a valid dict is passed.
             self.fail("Exception raised unexpectedly (list of dicts).")
+
+    def test_non_namespace_conversion_result_is_ignored(self):
+        namespace = SimpleNamespace()
+        with patch("mugen.core.di.to_namespace", return_value=[]):
+            di._nested_namespace_from_dict(items={"a": 1}, ns=namespace)
+        self.assertFalse(hasattr(namespace, "a"))

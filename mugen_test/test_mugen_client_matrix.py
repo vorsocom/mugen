@@ -361,6 +361,80 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.client_session = SimpleNamespace(close=AsyncMock())
         return client
 
+    def test_init_requires_secret_encryption_key_in_production(self) -> None:
+        config = SimpleNamespace(
+            basedir="/tmp",
+            mugen=SimpleNamespace(environment="production", platforms=["matrix"]),
+            matrix=SimpleNamespace(
+                homeserver="https://matrix.example.com",
+                client=SimpleNamespace(user="@assistant:example.com"),
+                storage=SimpleNamespace(olm=SimpleNamespace(path="olm")),
+            ),
+        )
+
+        with (
+            patch.object(
+                matrix_mod.IMatrixClient, "__init__", autospec=True, return_value=None
+            ),
+            patch.object(DefaultMatrixClient, "add_event_callback", autospec=True),
+            patch.object(DefaultMatrixClient, "add_to_device_callback", autospec=True),
+            patch.object(DefaultMatrixClient, "add_response_callback", autospec=True),
+            self.assertRaises(RuntimeError),
+        ):
+            DefaultMatrixClient(
+                config=config,
+                ipc_service=Mock(),
+                keyval_storage_gateway=Mock(),
+                logging_gateway=Mock(),
+                messaging_service=Mock(),
+                user_service=Mock(),
+            )
+
+    def test_secret_encoding_and_decoding_paths(self) -> None:
+        client = self._client()
+        client._config.security = SimpleNamespace(
+            secrets=SimpleNamespace(encryption_key="test-secret")
+        )
+        client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
+
+        encoded = client._encode_secret_value(  # pylint: disable=protected-access
+            "access-token",
+            field_name="token",
+        )
+        self.assertTrue(encoded.startswith(client._encrypted_secret_prefix))  # pylint: disable=protected-access
+        self.assertEqual(
+            client._decode_secret_value(encoded, field_name="token"),  # pylint: disable=protected-access
+            "access-token",
+        )
+
+        with self.assertRaises(RuntimeError):
+            client._encode_secret_value(1, field_name="token")  # pylint: disable=protected-access
+
+        self.assertIsNone(
+            client._decode_secret_value(1, field_name="token")  # pylint: disable=protected-access
+        )
+
+    def test_secret_decoding_requires_valid_cipher_and_payload(self) -> None:
+        client = self._client()
+        encrypted_value = f"{client._encrypted_secret_prefix}payload"  # pylint: disable=protected-access
+
+        client._secret_cipher = None  # pylint: disable=protected-access
+        with self.assertRaises(RuntimeError):
+            client._decode_secret_value(  # pylint: disable=protected-access
+                encrypted_value,
+                field_name="token",
+            )
+
+        client._config.security = SimpleNamespace(
+            secrets=SimpleNamespace(encryption_key="test-secret")
+        )
+        client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
+        with self.assertRaises(RuntimeError):
+            client._decode_secret_value(  # pylint: disable=protected-access
+                encrypted_value,
+                field_name="token",
+            )
+
     async def test_matrix_ipc_queue_size_resolution_paths(self) -> None:
         client = self._client()
         client._config.matrix.ipc = SimpleNamespace(queue_size="invalid")
@@ -1556,15 +1630,13 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch.object(matrix_mod.traceback, "print_exc") as print_exc:
-            await client._send_text_message("!room:test", "hello")
+        await client._send_text_message("!room:test", "hello")
 
         self.assertEqual(client.room_send.await_count, 1)
         self.assertIn(
             "Error sending text message",
             client._logging_gateway.warning.call_args.args[0],
         )
-        print_exc.assert_called_once()
 
     async def test_send_media_helpers_return_early_when_upload_is_none(self) -> None:
         client = self._client()

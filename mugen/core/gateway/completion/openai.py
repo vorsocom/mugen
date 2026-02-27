@@ -120,10 +120,19 @@ class OpenAICompletionGateway(ICompletionGateway):
             api_kwargs["base_url"] = base_url.strip()
 
         timeout_seconds = getattr(self._config.openai.api, "timeout_seconds", None)
+        self._timeout_seconds: float | None = None
         if timeout_seconds is not None:
-            api_kwargs["timeout"] = float(timeout_seconds)
+            self._timeout_seconds = float(timeout_seconds)
+            api_kwargs["timeout"] = self._timeout_seconds
 
         self._api = AsyncOpenAI(**api_kwargs)
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+        ).strip().lower()
+        if environment == "production" and self._timeout_seconds is None:
+            self._logging_gateway.warning(
+                "OpenAICompletionGateway: timeout_seconds is not configured in production."
+            )
 
     async def get_completion(
         self,
@@ -185,6 +194,7 @@ class OpenAICompletionGateway(ICompletionGateway):
                 operation=completion_request.operation,
                 message=str(e),
                 cause=e,
+                timeout_applied=self._timeout_seconds,
             ) from e
         except CompletionGatewayError:
             raise
@@ -198,6 +208,7 @@ class OpenAICompletionGateway(ICompletionGateway):
                 operation=completion_request.operation,
                 message="Unexpected OpenAI completion failure.",
                 cause=e,
+                timeout_applied=self._timeout_seconds,
             ) from e
 
     def _serialize_chat_kwargs(

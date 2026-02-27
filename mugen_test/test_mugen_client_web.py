@@ -82,6 +82,43 @@ class _InMemoryKeyVal:
         assert entry is not None
         return entry
 
+    async def put_bytes(
+        self,
+        key: str,
+        value: bytes,
+        *,
+        namespace: str | None = None,
+        codec: str = "bytes",  # noqa: ARG002
+        expected_row_version: int | None = None,  # noqa: ARG002
+        ttl_seconds: float | None = None,  # noqa: ARG002
+    ) -> KeyValEntry:
+        self.put(key, value)
+        entry = await self.get_entry(key, namespace=namespace)
+        assert entry is not None
+        return entry
+
+    async def get_json(
+        self,
+        key: str,
+        *,
+        namespace: str | None = None,
+    ) -> dict | list | None:
+        entry = await self.get_entry(key, namespace=namespace)
+        if entry is None:
+            return None
+        try:
+            return json.loads(entry.as_text())
+        except (TypeError, json.JSONDecodeError):
+            return None
+
+    async def exists(
+        self,
+        key: str,
+        *,
+        namespace: str | None = None,  # noqa: ARG002
+    ) -> bool:
+        return self.has_key(key)
+
     async def delete(
         self,
         key: str,
@@ -226,7 +263,12 @@ def _build_config(*, basedir: str, replay_max_events: int = 5) -> SimpleNamespac
                 max_pending_jobs=100,
             ),
             media=SimpleNamespace(
+                backend="filesystem",
                 storage=SimpleNamespace(path="web_media"),
+                object=SimpleNamespace(
+                    cache_path="web_media_object_cache",
+                    key_prefix="web:media:object",
+                ),
                 max_upload_bytes=1024 * 1024,
                 max_attachments_per_message=10,
                 allowed_mimetypes=["image/*", "application/*", "text/*"],
@@ -300,8 +342,193 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[3]["event"], "thinking")
         self.assertEqual(events[3]["data"]["signal"], "thinking")
         self.assertEqual(events[3]["data"]["state"], "stop")
-
         self.assertGreater(self.client.media_max_upload_bytes, 0)
+
+    async def test_object_media_backend_roundtrip(self) -> None:
+        cfg = _build_config(basedir=self.tmpdir.name)
+        cfg.web.media.backend = "object"
+        client = DefaultWebClient(
+            config=cfg,
+            ipc_service=Mock(),
+            keyval_storage_gateway=_InMemoryKeyVal(),
+            logging_gateway=Mock(),
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        media_ref = await client._resolve_media_source_path(  # pylint: disable=protected-access
+            file_path=b"payload",
+            filename="payload.bin",
+        )
+        self.assertTrue(isinstance(media_ref, str) and media_ref.startswith("object:"))
+        materialized = await client._materialize_media_reference(media_ref)  # pylint: disable=protected-access
+        self.assertTrue(isinstance(materialized, str) and os.path.exists(materialized))
+        await client.close()
+
+    async def test_object_backend_persists_composed_attachment_refs(self) -> None:
+        cfg = _build_config(basedir=self.tmpdir.name)
+        cfg.web.media.backend = "object"
+        client = DefaultWebClient(
+            config=cfg,
+            ipc_service=Mock(),
+            keyval_storage_gateway=_InMemoryKeyVal(),
+            logging_gateway=Mock(),
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        media_file = Path(self.tmpdir.name) / "composed-upload.txt"
+        media_file.write_text("payload", encoding="utf-8")
+        await client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-obj",
+            message_type="composed",
+            metadata={
+                "composition_mode": "message_with_attachments",
+                "parts": [{"type": "attachment", "id": "a1"}],
+                "attachments": [
+                    {
+                        "id": "a1",
+                        "file_path": str(media_file),
+                        "mime_type": "text/plain",
+                        "original_filename": "composed-upload.txt",
+                    }
+                ],
+            },
+            client_message_id="cid-obj",
+        )
+        claimed = await client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        attachment_ref = claimed["metadata"]["attachments"][0]["file_path"]
+        self.assertTrue(isinstance(attachment_ref, str) and attachment_ref.startswith("object:"))
+        materialized = await client._materialize_media_reference(attachment_ref)  # pylint: disable=protected-access
+        self.assertTrue(isinstance(materialized, str) and os.path.exists(materialized))
+        await client.close()
+
+    async def test_invalid_media_backend_raises(self) -> None:
+        cfg = _build_config(basedir=self.tmpdir.name)
+        cfg.web.media.backend = "bad-backend"
+        with self.assertRaises(ValueError):
+            DefaultWebClient(
+                config=cfg,
+                ipc_service=Mock(),
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=Mock(),
+                messaging_service=self.messaging,
+                user_service=Mock(),
+            )
+
+    async def test_media_reference_helper_branches(self) -> None:
+        mocked_gateway = SimpleNamespace(
+            exists=AsyncMock(side_effect=[False, True]),
+            store_file=AsyncMock(return_value=None),
+            store_bytes=AsyncMock(return_value=None),
+            materialize=AsyncMock(return_value=""),
+            cleanup=AsyncMock(),
+            init=AsyncMock(),
+            close=AsyncMock(),
+        )
+        self.client._media_storage_gateway = mocked_gateway  # pylint: disable=protected-access
+        resolved = await self.client._resolve_media_source_path(  # pylint: disable=protected-access
+            file_path="relative/path",
+            filename="x.bin",
+        )
+        self.assertEqual(resolved, os.path.abspath("relative/path"))
+
+        with patch.object(
+            self.client,
+            "_resolve_media_source_path",
+            AsyncMock(return_value=None),
+        ):
+            self.assertIsNone(
+                await self.client._persist_media_reference(  # pylint: disable=protected-access
+                    file_path="x",
+                    filename_hint="x.bin",
+                )
+            )
+
+        temp_file = os.path.join(self.tmpdir.name, "remove-me.bin")
+        with open(temp_file, "wb") as handle:
+            handle.write(b"payload")
+        with (
+            patch.object(
+                self.client,
+                "_resolve_media_source_path",
+                AsyncMock(return_value="object:abc"),
+            ),
+            patch("os.remove", side_effect=OSError()),
+        ):
+            persisted = await self.client._persist_media_reference(  # pylint: disable=protected-access
+                file_path=temp_file,
+                filename_hint="x.bin",
+            )
+        self.assertEqual(persisted, "object:abc")
+
+        self.assertIsNone(
+            await self.client._materialize_media_reference(None)  # pylint: disable=protected-access
+        )
+
+        metadata = {"attachments": "bad"}
+        returned = await self.client._persist_composed_media_references(metadata)  # pylint: disable=protected-access
+        self.assertEqual(returned, metadata)
+
+        with self.assertRaises(ValueError):
+            await self.client._persist_composed_media_references(  # pylint: disable=protected-access
+                {"attachments": [123]}
+            )
+
+        with patch.object(
+            self.client,
+            "_persist_media_reference",
+            AsyncMock(return_value=None),
+        ):
+            with self.assertRaises(ValueError):
+                await self.client._persist_composed_media_references(  # pylint: disable=protected-access
+                    {"attachments": [{"file_path": "/tmp/nope"}]}
+                )
+
+        self.assertEqual(
+            self.client._infer_media_extension("IMAGE.PNG"),  # pylint: disable=protected-access
+            ".png",
+        )
+
+    async def test_mark_job_status_else_branch_and_close_error_swallow(self) -> None:
+        payload = await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-mark",
+            message_type="text",
+            text="hello",
+            client_message_id="cid-mark",
+        )
+        await self.client._mark_job_status(  # pylint: disable=protected-access
+            payload["job_id"],
+            status="processing",
+            error="still-running",
+        )
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            queue_state = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+        self.assertEqual(queue_state["jobs"][0]["status"], "processing")
+        self.assertEqual(queue_state["jobs"][0]["error"], "still-running")
+
+        self.client._media_storage_gateway.close = AsyncMock(  # pylint: disable=protected-access
+            side_effect=RuntimeError("boom")
+        )
+        await self.client.close()
+
+    async def test_ensure_media_directory_skips_for_object_backend(self) -> None:
+        cfg = _build_config(basedir=self.tmpdir.name)
+        cfg.web.media.backend = "object"
+        cfg.web.media.storage.path = "object-media-ignored"
+        client = DefaultWebClient(
+            config=cfg,
+            ipc_service=Mock(),
+            keyval_storage_gateway=_InMemoryKeyVal(),
+            logging_gateway=Mock(),
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        client._ensure_media_directory()  # pylint: disable=protected-access
+        expected_media_path = Path(self.tmpdir.name) / "object-media-ignored"
+        self.assertFalse(expected_media_path.exists())
+        await client.close()
 
     async def test_queue_enqueue_and_process_file_message(self) -> None:
         media_file = Path(self.tmpdir.name) / "upload.txt"
@@ -1310,12 +1537,15 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_dispatch_and_response_branches(self) -> None:
+        media_file_path = os.path.join(self.tmpdir.name, "dispatch-media.bin")
+        with open(media_file_path, "wb") as handle:
+            handle.write(b"payload")
         job = {
             "conversation_id": "conv-d",
             "sender": "user-1",
             "metadata": {},
             "client_message_id": "cid",
-            "file_path": "path",
+            "file_path": media_file_path,
             "mime_type": "image/png",
             "original_filename": "name.png",
         }
@@ -1326,6 +1556,10 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         await self.client._dispatch_job_to_messaging({**job, "message_type": "audio"})  # pylint: disable=protected-access
         await self.client._dispatch_job_to_messaging({**job, "message_type": "video"})  # pylint: disable=protected-access
         await self.client._dispatch_job_to_messaging({**job, "message_type": "image"})  # pylint: disable=protected-access
+        with self.assertRaises(ValueError):
+            await self.client._dispatch_job_to_messaging(  # pylint: disable=protected-access
+                {**job, "message_type": "audio", "file_path": "missing-file"}
+            )
 
         with self.assertRaises(ValueError):
             await self.client._dispatch_job_to_messaging(  # pylint: disable=protected-access
@@ -2209,12 +2443,21 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             b"tell-none",
         )
 
-        with patch("builtins.open", side_effect=OSError()):
-            self.assertIsNone(
-                self.client._resolve_media_source_path(  # pylint: disable=protected-access
-                    file_path=b"payload",
-                    filename="payload.bin",
-                )
+        self.client._media_storage_gateway.store_bytes = AsyncMock(return_value=None)  # pylint: disable=protected-access
+        self.assertIsNone(
+            await self.client._resolve_media_source_path(  # pylint: disable=protected-access
+                file_path=b"payload",
+                filename="payload.bin",
+            )
+        )
+
+        self.client._media_storage_gateway.store_bytes = AsyncMock(  # pylint: disable=protected-access
+            side_effect=OSError()
+        )
+        with self.assertRaises(OSError):
+            await self.client._resolve_media_source_path(  # pylint: disable=protected-access
+                file_path=b"payload",
+                filename="payload.bin",
             )
 
         self.assertEqual(
@@ -2960,3 +3203,30 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                 "events": "bad-events",
             },
         )
+
+    async def test_wait_until_stopped_guard_and_success_path(self) -> None:
+        self.client._worker_task = None  # pylint: disable=protected-access
+        with self.assertRaises(RuntimeError):
+            await self.client.wait_until_stopped()
+
+        task = asyncio.create_task(asyncio.sleep(0))
+        self.client._worker_task = task  # pylint: disable=protected-access
+        await self.client.wait_until_stopped()
+
+    async def test_worker_done_callback_records_failure(self) -> None:
+        async def _boom() -> None:
+            raise RuntimeError("boom")
+
+        task = asyncio.create_task(_boom())
+        await asyncio.gather(task, return_exceptions=True)
+
+        self.client._on_worker_task_done(task)  # pylint: disable=protected-access
+        self.assertIsNotNone(self.client._worker_failure)  # pylint: disable=protected-access
+        self.logger.error.assert_called_once()
+
+    async def test_worker_done_callback_ignores_successful_completion(self) -> None:
+        task = asyncio.create_task(asyncio.sleep(0))
+        await task
+
+        self.client._on_worker_task_done(task)  # pylint: disable=protected-access
+        self.assertIsNone(self.client._worker_failure)  # pylint: disable=protected-access
