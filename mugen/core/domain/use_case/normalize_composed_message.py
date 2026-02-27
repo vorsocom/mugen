@@ -10,6 +10,8 @@ from typing import Any
 class NormalizeComposedMessageUseCase:
     """Normalize and validate composed message payloads."""
 
+    max_attachments: int | None = None
+
     # pylint: disable=too-many-branches
     # pylint: disable=too-many-locals
     def handle(self, message: Any) -> dict[str, Any]:
@@ -76,6 +78,11 @@ class NormalizeComposedMessageUseCase:
             }
             attachments_by_id[attachment_id] = normalized_attachment
             normalized_attachments.append(dict(normalized_attachment))
+
+        max_attachments = self.max_attachments
+        if isinstance(max_attachments, int) and max_attachments > 0:
+            if len(normalized_attachments) > max_attachments:
+                raise ValueError("message.attachments exceeds max attachments per message")
 
         raw_parts = message.get("parts")
         if not isinstance(raw_parts, list):

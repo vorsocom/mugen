@@ -8,6 +8,8 @@ from quart import Quart
 from mugen import (
     PHASE_A_STATUS_KEY,
     PHASE_B_ERROR_KEY,
+    PHASE_B_PLATFORM_ERRORS_KEY,
+    PHASE_B_PLATFORM_STATUSES_KEY,
     PHASE_B_STARTED_AT_KEY,
     PHASE_B_STATUS_KEY,
     PHASE_STATUS_DEGRADED,
@@ -15,6 +17,7 @@ from mugen import (
     PHASE_STATUS_STARTING,
 )
 from mugen.core.api import api
+from mugen.core.api.endpoint import _resolve_failed_platforms  # pylint: disable=protected-access
 
 
 class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
@@ -46,6 +49,9 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
         state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
         state[PHASE_B_ERROR_KEY] = None
+        state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_HEALTHY}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
 
         async with self.app.test_app() as test_app:
             client = test_app.test_client()
@@ -54,12 +60,18 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(payload["ready"])
+        self.assertEqual(payload["critical_platforms"], ["web"])
+        self.assertEqual(payload["failed_platforms"], [])
+        self.assertEqual(payload["reasons"], {})
 
     async def test_ready_endpoint_returns_503_when_phase_b_degraded(self) -> None:
         state = self._bootstrap_state()
         state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
         state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
         state[PHASE_B_ERROR_KEY] = "RuntimeError: boom"
+        state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_DEGRADED}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": "RuntimeError: boom"}
 
         async with self.app.test_app() as test_app:
             client = test_app.test_client()
@@ -68,6 +80,8 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertFalse(payload["ready"])
+        self.assertEqual(payload["failed_platforms"], ["web"])
+        self.assertIn("web", payload["reasons"])
 
     async def test_ready_endpoint_returns_503_when_starting_past_grace(self) -> None:
         state = self._bootstrap_state()
@@ -76,6 +90,8 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         state[PHASE_B_STARTED_AT_KEY] = perf_counter() - 10.0
         state["phase_b_readiness_grace_seconds"] = 1.0
         state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_STARTING}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
 
         async with self.app.test_app() as test_app:
             client = test_app.test_client()
@@ -84,6 +100,7 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertFalse(payload["ready"])
+        self.assertEqual(payload["failed_platforms"], ["web"])
 
     async def test_ready_endpoint_handles_invalid_started_at_value(self) -> None:
         state = self._bootstrap_state()
@@ -92,6 +109,8 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         state[PHASE_B_STARTED_AT_KEY] = "not-a-float"
         state["phase_b_readiness_grace_seconds"] = 0.0
         state["phase_b_critical_platforms"] = []
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {}
 
         async with self.app.test_app() as test_app:
             client = test_app.test_client()
@@ -105,9 +124,11 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         state = self._bootstrap_state()
         state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
         state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
-        state[PHASE_B_STARTED_AT_KEY] = None
-        state["phase_b_readiness_grace_seconds"] = -1.0
+        state[PHASE_B_STARTED_AT_KEY] = perf_counter() - 10.0
+        state["phase_b_readiness_grace_seconds"] = 0.0
         state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_STARTING}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
 
         async with self.app.test_app() as test_app:
             client = test_app.test_client()
@@ -116,3 +137,95 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertFalse(payload["ready"])
+
+    async def test_ready_endpoint_with_grace_ignores_starting_critical_platforms(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
+        state[PHASE_B_STARTED_AT_KEY] = None
+        state["phase_b_readiness_grace_seconds"] = 30.0
+        state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_STARTING}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": ""}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["failed_platforms"], [])
+        self.assertEqual(payload["reasons"], {})
+
+    async def test_ready_endpoint_ignores_invalid_platform_maps(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state["phase_b_critical_platforms"] = "web"
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = "invalid"
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = "invalid"
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["critical_platforms"], [])
+
+    async def test_ready_endpoint_skips_blank_platform_keys_in_maps(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {
+            "": PHASE_STATUS_DEGRADED,
+            "   ": PHASE_STATUS_DEGRADED,
+            "web": PHASE_STATUS_HEALTHY,
+        }
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {
+            "": "bad",
+            "   ": "bad",
+            "web": None,
+        }
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ready"])
+
+    def test_resolve_failed_platforms_reason_defaults(self) -> None:
+        failed, reasons = _resolve_failed_platforms(
+            critical_platforms=["starting", "stopped", "degraded", "weird"],
+            platform_statuses={
+                "starting": PHASE_STATUS_STARTING,
+                "stopped": "stopped",
+                "degraded": PHASE_STATUS_DEGRADED,
+                "weird": "unknown",
+            },
+            platform_errors={},
+            ignore_starting=False,
+        )
+
+        self.assertEqual(
+            failed,
+            ["starting", "stopped", "degraded", "weird"],
+        )
+        self.assertEqual(reasons["starting"], "platform still starting")
+        self.assertEqual(reasons["stopped"], "platform stopped")
+        self.assertEqual(reasons["degraded"], "platform degraded")
+        self.assertEqual(reasons["weird"], "platform status=unknown")
+
+        failed_ignore, reasons_ignore = _resolve_failed_platforms(
+            critical_platforms=["starting"],
+            platform_statuses={"starting": PHASE_STATUS_STARTING},
+            platform_errors={"starting": ""},
+            ignore_starting=True,
+        )
+        self.assertEqual(failed_ignore, [])
+        self.assertEqual(reasons_ignore, {})

@@ -90,15 +90,18 @@ class FilesystemMediaStorageGateway(IMediaStorageGateway):
         return str(target.resolve())
 
     async def exists(self, media_ref: str) -> bool:
-        if not isinstance(media_ref, str) or media_ref.strip() == "":
+        path = self._resolve_managed_path(media_ref)
+        if path is None:
             return False
-        path = Path(media_ref).expanduser().resolve()
         return path.exists() and path.is_file()
 
     async def materialize(self, media_ref: str) -> str | None:
-        if await self.exists(media_ref) is not True:
+        path = self._resolve_managed_path(media_ref)
+        if path is None:
             return None
-        return str(Path(media_ref).expanduser().resolve())
+        if path.exists() is not True or path.is_file() is not True:
+            return None
+        return str(path)
 
     async def cleanup(
         self,
@@ -108,9 +111,10 @@ class FilesystemMediaStorageGateway(IMediaStorageGateway):
         now_epoch: float,
     ) -> None:
         active = {
-            str(Path(item).expanduser().resolve())
+            str(resolved)
             for item in active_refs
-            if isinstance(item, str) and item.strip() != ""
+            for resolved in [self._resolve_managed_path(item)]
+            if resolved is not None
         }
         try:
             candidates = await asyncio.to_thread(lambda: list(self._base_path.iterdir()))
@@ -147,3 +151,23 @@ class FilesystemMediaStorageGateway(IMediaStorageGateway):
         if suffix == "" or len(suffix) > 16:
             return ""
         return suffix
+
+    def _resolve_managed_path(self, media_ref: Any) -> Path | None:
+        if not isinstance(media_ref, str) or media_ref.strip() == "":
+            return None
+
+        candidate = Path(media_ref).expanduser()
+        if candidate.is_absolute() is not True:
+            candidate = self._base_path / candidate
+
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+
+        try:
+            resolved.relative_to(self._base_path)
+        except ValueError:
+            return None
+
+        return resolved

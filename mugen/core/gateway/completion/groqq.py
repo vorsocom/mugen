@@ -16,6 +16,10 @@ from mugen.core.contract.gateway.completion import (
     normalise_completion_request,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.timeout_config import (
+    resolve_optional_positive_float,
+    warn_missing_in_production,
+)
 
 
 # pylint: disable=too-few-public-methods
@@ -75,31 +79,20 @@ class GroqCompletionGateway(ICompletionGateway):
         self._warn_missing_timeout_in_production()
 
     def _resolve_timeout_seconds(self) -> float | None:
-        timeout_seconds = getattr(self._config.groq.api, "timeout_seconds", None)
-        if timeout_seconds is None:
-            return None
-        try:
-            resolved = float(timeout_seconds)
-        except (TypeError, ValueError):
-            self._logging_gateway.warning(
-                "GroqCompletionGateway: Invalid timeout_seconds configuration."
-            )
-            return None
-        if resolved <= 0:
-            self._logging_gateway.warning(
-                "GroqCompletionGateway: timeout_seconds must be positive when provided."
-            )
-            return None
-        return resolved
+        return resolve_optional_positive_float(
+            value=getattr(self._config.groq.api, "timeout_seconds", None),
+            field_name="timeout_seconds",
+            provider_label="GroqCompletionGateway",
+            logging_gateway=self._logging_gateway,
+        )
 
     def _warn_missing_timeout_in_production(self) -> None:
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-        ).strip().lower()
-        if environment == "production" and self._timeout_seconds is None:
-            self._logging_gateway.warning(
-                "GroqCompletionGateway: timeout_seconds is not configured in production."
-            )
+        warn_missing_in_production(
+            config=self._config,
+            provider_label="GroqCompletionGateway",
+            logging_gateway=self._logging_gateway,
+            field_values={"timeout_seconds": self._timeout_seconds},
+        )
 
     async def get_completion(
         self,

@@ -8,12 +8,15 @@ __all__ = [
     "MUGEN_EXTENSION_KEY",
     "PHASE_A_STATUS_KEY",
     "PHASE_B_ERROR_KEY",
+    "PHASE_B_PLATFORM_ERRORS_KEY",
+    "PHASE_B_PLATFORM_STATUSES_KEY",
     "PHASE_B_STARTED_AT_KEY",
     "PHASE_B_STATUS_KEY",
     "PHASE_STATUS_DEGRADED",
     "PHASE_STATUS_HEALTHY",
     "PHASE_STATUS_STARTING",
     "PHASE_STATUS_STOPPED",
+    "SHUTDOWN_REQUESTED_KEY",
     "bootstrap_app",
     "create_quart_app",
     "get_bootstrap_state",
@@ -36,12 +39,15 @@ from mugen.bootstrap_state import (
     MUGEN_EXTENSION_KEY,
     PHASE_A_STATUS_KEY,
     PHASE_B_ERROR_KEY,
+    PHASE_B_PLATFORM_ERRORS_KEY,
+    PHASE_B_PLATFORM_STATUSES_KEY,
     PHASE_B_STARTED_AT_KEY,
     PHASE_B_STATUS_KEY,
     PHASE_STATUS_DEGRADED,
     PHASE_STATUS_HEALTHY,
     PHASE_STATUS_STARTING,
     PHASE_STATUS_STOPPED,
+    SHUTDOWN_REQUESTED_KEY,
     get_bootstrap_state,
 )
 from mugen.config import AppConfig
@@ -63,6 +69,9 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
+
+_PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
+_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY = "phase_b_degrade_on_critical_exit"
 
 class BootstrapError(RuntimeError):
     """Base error type for application bootstrap failures."""
@@ -139,6 +148,175 @@ def _telnet_allowed_in_production(config: SimpleNamespace) -> bool:
         if normalized in {"0", "false", "no", "off"}:
             return False
     return False
+
+
+def _parse_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _normalize_platform_name(value: object) -> str:
+    return str(value).strip().lower()
+
+
+def _normalize_platform_list(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    normalized: list[str] = []
+    for item in values:
+        platform = _normalize_platform_name(item)
+        if platform == "":
+            continue
+        if platform in normalized:
+            continue
+        normalized.append(platform)
+    return normalized
+
+
+def _resolve_phase_b_critical_platforms(
+    config: SimpleNamespace,
+    bootstrap_state: dict,
+    active_platforms: list[str],
+) -> list[str]:
+    configured = bootstrap_state.get(_PHASE_B_CRITICAL_PLATFORMS_KEY)
+    resolved = _normalize_platform_list(configured)
+    if resolved:
+        return resolved
+
+    runtime_cfg = getattr(getattr(config, "mugen", SimpleNamespace()), "runtime", None)
+    phase_b_cfg = getattr(runtime_cfg, "phase_b", None)
+    resolved = _normalize_platform_list(getattr(phase_b_cfg, "critical_platforms", None))
+    if resolved:
+        return resolved
+
+    return list(active_platforms)
+
+
+def _resolve_degrade_on_critical_exit(config: SimpleNamespace, bootstrap_state: dict) -> bool:
+    state_value = bootstrap_state.get(_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY)
+    if state_value is not None:
+        return _parse_bool(state_value, default=True)
+
+    runtime_cfg = getattr(getattr(config, "mugen", SimpleNamespace()), "runtime", None)
+    phase_b_cfg = getattr(runtime_cfg, "phase_b", None)
+    raw_value = getattr(phase_b_cfg, "degrade_on_critical_exit", True)
+    return _parse_bool(raw_value, default=True)
+
+
+def _ensure_platform_state(
+    bootstrap_state: dict,
+    *,
+    active_platforms: list[str],
+) -> tuple[dict[str, str], dict[str, str | None]]:
+    statuses = bootstrap_state.get(PHASE_B_PLATFORM_STATUSES_KEY)
+    if not isinstance(statuses, dict):
+        statuses = {}
+
+    errors = bootstrap_state.get(PHASE_B_PLATFORM_ERRORS_KEY)
+    if not isinstance(errors, dict):
+        errors = {}
+
+    for platform in active_platforms:
+        statuses.setdefault(platform, PHASE_STATUS_STARTING)
+        errors.setdefault(platform, None)
+
+    bootstrap_state[PHASE_B_PLATFORM_STATUSES_KEY] = statuses
+    bootstrap_state[PHASE_B_PLATFORM_ERRORS_KEY] = errors
+    return statuses, errors
+
+
+def _set_platform_status(
+    bootstrap_state: dict,
+    *,
+    platform: str,
+    status: str,
+    error: str | None,
+) -> None:
+    statuses = bootstrap_state.get(PHASE_B_PLATFORM_STATUSES_KEY)
+    if not isinstance(statuses, dict):
+        statuses = {}
+    statuses[platform] = status
+    bootstrap_state[PHASE_B_PLATFORM_STATUSES_KEY] = statuses
+
+    errors = bootstrap_state.get(PHASE_B_PLATFORM_ERRORS_KEY)
+    if not isinstance(errors, dict):
+        errors = {}
+    errors[platform] = error
+    bootstrap_state[PHASE_B_PLATFORM_ERRORS_KEY] = errors
+
+
+def _refresh_phase_b_status(
+    bootstrap_state: dict,
+    *,
+    critical_platforms: list[str],
+) -> None:
+    statuses = bootstrap_state.get(PHASE_B_PLATFORM_STATUSES_KEY)
+    if not isinstance(statuses, dict):
+        statuses = {}
+    errors = bootstrap_state.get(PHASE_B_PLATFORM_ERRORS_KEY)
+    if not isinstance(errors, dict):
+        errors = {}
+
+    shutdown_requested = _parse_bool(
+        bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
+        default=False,
+    )
+    if shutdown_requested:
+        bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
+        bootstrap_state[PHASE_B_ERROR_KEY] = None
+        return
+
+    if not critical_platforms:
+        critical_platforms = list(statuses.keys())
+
+    degraded: list[str] = []
+    starting: list[str] = []
+    unexpected: list[str] = []
+    for platform in critical_platforms:
+        platform_status = str(statuses.get(platform, PHASE_STATUS_STARTING) or "")
+        if platform_status == PHASE_STATUS_DEGRADED:
+            degraded.append(platform)
+            continue
+        if platform_status == PHASE_STATUS_STARTING:
+            starting.append(platform)
+            continue
+        if platform_status not in {PHASE_STATUS_HEALTHY}:
+            unexpected.append(platform)
+
+    if degraded:
+        first_platform = degraded[0]
+        details = errors.get(first_platform)
+        bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        bootstrap_state[PHASE_B_ERROR_KEY] = (
+            f"{first_platform}: {details}" if details else f"{first_platform}: degraded"
+        )
+        return
+
+    if unexpected:
+        first_platform = unexpected[0]
+        details = errors.get(first_platform)
+        bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        bootstrap_state[PHASE_B_ERROR_KEY] = (
+            f"{first_platform}: {details}"
+            if details
+            else f"{first_platform}: stopped unexpectedly"
+        )
+        return
+
+    if starting:
+        bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
+        bootstrap_state[PHASE_B_ERROR_KEY] = None
+        return
+
+    bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+    bootstrap_state[PHASE_B_ERROR_KEY] = None
 
 
 def _split_extension_path(path: str) -> tuple[str, str | None]:
@@ -280,13 +458,31 @@ async def run_platform_clients(
     config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
     bootstrap_state = get_bootstrap_state(app)
-    bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+    bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
     bootstrap_state[PHASE_B_ERROR_KEY] = None
+    bootstrap_state[SHUTDOWN_REQUESTED_KEY] = False
 
     environment = str(
         getattr(getattr(config, "mugen", SimpleNamespace()), "environment", "")
     ).strip().lower()
-    active_platforms = getattr(getattr(config, "mugen", SimpleNamespace()), "platforms", [])
+    raw_platforms = getattr(getattr(config, "mugen", SimpleNamespace()), "platforms", None)
+    if not isinstance(raw_platforms, list):
+        logger.error("Invalid platform configuration.")
+        raise BootstrapConfigError("Invalid platform configuration.")
+    active_platforms = _normalize_platform_list(raw_platforms)
+    critical_platforms = _resolve_phase_b_critical_platforms(
+        config,
+        bootstrap_state,
+        active_platforms,
+    )
+    degrade_on_critical_exit = _resolve_degrade_on_critical_exit(config, bootstrap_state)
+    bootstrap_state[_PHASE_B_CRITICAL_PLATFORMS_KEY] = critical_platforms
+    bootstrap_state[_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = degrade_on_critical_exit
+    _ensure_platform_state(
+        bootstrap_state,
+        active_platforms=active_platforms,
+    )
+
     if "telnet" in active_platforms and environment == "production":
         if _telnet_allowed_in_production(config) is not True:
             raise BootstrapConfigError(
@@ -294,37 +490,187 @@ async def run_platform_clients(
                 "telnet.allow_in_production=true to override."
             )
 
-    # Do platform checks.
-    tasks = []
+    tasks: dict[str, asyncio.Task] = {}
+
+    def _on_platform_task_done(platform_name: str, task: asyncio.Task) -> None:
+        shutdown_requested = _parse_bool(
+            bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
+            default=False,
+        )
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            if shutdown_requested:
+                _set_platform_status(
+                    bootstrap_state,
+                    platform=platform_name,
+                    status=PHASE_STATUS_STOPPED,
+                    error=None,
+                )
+                logger.debug(f"{platform_name} client cancelled during shutdown.")
+            else:
+                _set_platform_status(
+                    bootstrap_state,
+                    platform=platform_name,
+                    status=PHASE_STATUS_DEGRADED,
+                    error="cancelled unexpectedly",
+                )
+                logger.error(f"{platform_name} client cancelled unexpectedly.")
+            _refresh_phase_b_status(
+                bootstrap_state,
+                critical_platforms=critical_platforms,
+            )
+            return
+
+        if error is None:
+            if shutdown_requested:
+                _set_platform_status(
+                    bootstrap_state,
+                    platform=platform_name,
+                    status=PHASE_STATUS_STOPPED,
+                    error=None,
+                )
+                logger.debug(f"{platform_name} client stopped during shutdown.")
+            elif (
+                platform_name in critical_platforms
+                and degrade_on_critical_exit is True
+            ):
+                _set_platform_status(
+                    bootstrap_state,
+                    platform=platform_name,
+                    status=PHASE_STATUS_DEGRADED,
+                    error="critical platform exited unexpectedly",
+                )
+                logger.error(
+                    f"{platform_name} client exited unexpectedly without exception."
+                )
+            else:
+                _set_platform_status(
+                    bootstrap_state,
+                    platform=platform_name,
+                    status=PHASE_STATUS_STOPPED,
+                    error=None,
+                )
+                logger.warning(f"{platform_name} client stopped.")
+            _refresh_phase_b_status(
+                bootstrap_state,
+                critical_platforms=critical_platforms,
+            )
+            return
+
+        error_message = f"{type(error).__name__}: {error}"
+        _set_platform_status(
+            bootstrap_state,
+            platform=platform_name,
+            status=PHASE_STATUS_DEGRADED,
+            error=error_message,
+        )
+        _refresh_phase_b_status(
+            bootstrap_state,
+            critical_platforms=critical_platforms,
+        )
+        logger.error(
+            f"{platform_name} client failed ({error_message})."
+        )
 
     try:
-        if "matrix" in config.mugen.platforms:
+        if "matrix" in active_platforms:
             logger.debug("Running matrix client.")
-            # Create task to run Matrix client.
-            tasks.append(asyncio.create_task(run_matrix_client()))
+            task = asyncio.create_task(run_matrix_client(), name="mugen.platform.matrix")
+            _set_platform_status(
+                bootstrap_state,
+                platform="matrix",
+                status=PHASE_STATUS_HEALTHY,
+                error=None,
+            )
+            task.add_done_callback(
+                lambda done_task, platform_name="matrix": _on_platform_task_done(
+                    platform_name, done_task
+                )
+            )
+            tasks["matrix"] = task
 
-        if "telnet" in config.mugen.platforms:
+        if "telnet" in active_platforms:
             logger.debug("Running telnet client.")
-            # Create task to run Telnet client.
-            tasks.append(asyncio.create_task(run_telnet_client()))
+            task = asyncio.create_task(run_telnet_client(), name="mugen.platform.telnet")
+            _set_platform_status(
+                bootstrap_state,
+                platform="telnet",
+                status=PHASE_STATUS_HEALTHY,
+                error=None,
+            )
+            task.add_done_callback(
+                lambda done_task, platform_name="telnet": _on_platform_task_done(
+                    platform_name, done_task
+                )
+            )
+            tasks["telnet"] = task
 
-        if "whatsapp" in config.mugen.platforms:
+        if "whatsapp" in active_platforms:
             logger.debug("Running whatsapp client.")
-            # Create task to run WhatsApp client.
-            tasks.append(asyncio.create_task(run_whatsapp_client()))
+            task = asyncio.create_task(
+                run_whatsapp_client(),
+                name="mugen.platform.whatsapp",
+            )
+            _set_platform_status(
+                bootstrap_state,
+                platform="whatsapp",
+                status=PHASE_STATUS_HEALTHY,
+                error=None,
+            )
+            task.add_done_callback(
+                lambda done_task, platform_name="whatsapp": _on_platform_task_done(
+                    platform_name, done_task
+                )
+            )
+            tasks["whatsapp"] = task
 
-        if "web" in config.mugen.platforms:
+        if "web" in active_platforms:
             logger.debug("Running web client.")
-            # Create task to run Web client.
-            tasks.append(asyncio.create_task(run_web_client()))
+            task = asyncio.create_task(run_web_client(), name="mugen.platform.web")
+            _set_platform_status(
+                bootstrap_state,
+                platform="web",
+                status=PHASE_STATUS_HEALTHY,
+                error=None,
+            )
+            task.add_done_callback(
+                lambda done_task, platform_name="web": _on_platform_task_done(
+                    platform_name, done_task
+                )
+            )
+            tasks["web"] = task
     except AttributeError as exc:
         logger.error("Invalid platform configuration.")
         raise BootstrapConfigError("Invalid platform configuration.") from exc
 
-    try:
-        await asyncio.gather(*tasks)
-    except asyncio.exceptions.CancelledError:
+    _refresh_phase_b_status(
+        bootstrap_state,
+        critical_platforms=critical_platforms,
+    )
+
+    if not tasks:
         return
+
+    try:
+        while tasks:
+            done, _pending = await asyncio.wait(
+                tuple(tasks.values()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for finished in done:
+                for platform_name, platform_task in list(tasks.items()):
+                    if platform_task is finished:
+                        tasks.pop(platform_name, None)
+                        break
+    except asyncio.exceptions.CancelledError:
+        bootstrap_state[SHUTDOWN_REQUESTED_KEY] = True
+        for task in tasks.values():
+            if task.done():
+                continue
+            task.cancel()
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
+        raise
 
 
 async def register_extensions(  # pylint: disable=too-many-positional-arguments
@@ -354,21 +700,38 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
     extensions = []
     sweep_started_at = perf_counter()
 
-    try:
-        # Load core plugins.
-        if hasattr(config.mugen.modules.core, "plugins"):
-            logger.debug("Adding plugins for loading.")
-            extensions += config.mugen.modules.core.plugins
-    except AttributeError:
-        logger.error("Plugin configuration attribute error.")
+    modules_config = getattr(
+        getattr(config, "mugen", SimpleNamespace()),
+        "modules",
+        SimpleNamespace(),
+    )
+    core_modules_config = getattr(modules_config, "core", SimpleNamespace())
 
-    try:
-        # Load third party extensions.
-        if hasattr(config.mugen.modules, "extensions"):
-            logger.debug("Adding extensions for loading.")
-            extensions += config.mugen.modules.extensions
-    except AttributeError:
+    plugins = getattr(core_modules_config, "plugins", [])
+    if plugins is None:
+        plugins = []
+    if not isinstance(plugins, list):
+        raise BootstrapConfigError(
+            "Invalid extension configuration: mugen.modules.core.plugins must be a list."
+        )
+    if hasattr(core_modules_config, "plugins"):
+        logger.debug("Adding plugins for loading.")
+    else:
+        logger.error("Plugin configuration attribute error.")
+    extensions += plugins
+
+    third_party_extensions = getattr(modules_config, "extensions", [])
+    if third_party_extensions is None:
+        third_party_extensions = []
+    if not isinstance(third_party_extensions, list):
+        raise BootstrapConfigError(
+            "Invalid extension configuration: mugen.modules.extensions must be a list."
+        )
+    if hasattr(modules_config, "extensions"):
+        logger.debug("Adding extensions for loading.")
+    else:
         logger.error("Extension configuration attribute error.")
+    extensions += third_party_extensions
 
     # Register core plugins and third party extensions.
     for ext in extensions:
@@ -626,7 +989,7 @@ async def run_matrix_client(
                 return
             except asyncio.exceptions.CancelledError:
                 logger.error("Matrix client shutting down.")
-                return
+                raise
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 is_auth_failure = (
                     re.search(
@@ -637,11 +1000,11 @@ async def run_matrix_client(
                 )
                 if is_auth_failure:
                     logger.error("Matrix client authentication failed; shutting down.")
-                    return
+                    raise RuntimeError("Matrix client authentication failed.") from exc
 
                 if retry_attempt >= max_sync_retries:
                     logger.error("Matrix client sync failed after max retries.")
-                    return
+                    raise RuntimeError("Matrix client sync failed after max retries.") from exc
 
                 delay_seconds = min(
                     backoff_max_seconds,

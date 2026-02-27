@@ -20,6 +20,11 @@ from mugen.core.contract.gateway.completion import (
     normalise_completion_request,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.timeout_config import (
+    resolve_optional_positive_float,
+    resolve_optional_positive_int,
+    warn_missing_in_production,
+)
 
 
 # pylint: disable=too-few-public-methods
@@ -77,62 +82,36 @@ class BedrockCompletionGateway(ICompletionGateway):
         value: Any,
         field_name: str,
     ) -> float | None:
-        if value is None:
-            return None
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError):
-            self._logging_gateway.warning(
-                f"BedrockCompletionGateway: Invalid {field_name} configuration."
-            )
-            return None
-        if parsed <= 0:
-            self._logging_gateway.warning(
-                f"BedrockCompletionGateway: {field_name} must be positive when provided."
-            )
-            return None
-        return parsed
+        return resolve_optional_positive_float(
+            value=value,
+            field_name=field_name,
+            provider_label="BedrockCompletionGateway",
+            logging_gateway=self._logging_gateway,
+        )
 
     def _resolve_optional_positive_int(
         self,
         value: Any,
         field_name: str,
     ) -> int | None:
-        if value is None:
-            return None
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            self._logging_gateway.warning(
-                f"BedrockCompletionGateway: Invalid {field_name} configuration."
-            )
-            return None
-        if parsed <= 0:
-            self._logging_gateway.warning(
-                f"BedrockCompletionGateway: {field_name} must be positive when provided."
-            )
-            return None
-        return parsed
+        return resolve_optional_positive_int(
+            value=value,
+            field_name=field_name,
+            provider_label="BedrockCompletionGateway",
+            logging_gateway=self._logging_gateway,
+        )
 
     def _warn_missing_timeout_controls_in_production(self) -> None:
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-        ).strip().lower()
-        if environment != "production":
-            return
-
-        if self._connect_timeout_seconds is None:
-            self._logging_gateway.warning(
-                "BedrockCompletionGateway: connect_timeout_seconds is not configured in production."
-            )
-        if self._read_timeout_seconds is None:
-            self._logging_gateway.warning(
-                "BedrockCompletionGateway: read_timeout_seconds is not configured in production."
-            )
-        if self._max_attempts is None:
-            self._logging_gateway.warning(
-                "BedrockCompletionGateway: max_attempts is not configured in production."
-            )
+        warn_missing_in_production(
+            config=self._config,
+            provider_label="BedrockCompletionGateway",
+            logging_gateway=self._logging_gateway,
+            field_values={
+                "connect_timeout_seconds": self._connect_timeout_seconds,
+                "read_timeout_seconds": self._read_timeout_seconds,
+                "max_attempts": self._max_attempts,
+            },
+        )
 
     async def get_completion(
         self,

@@ -32,6 +32,8 @@ class TestFilesystemMediaStorageGateway(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.gateway.exists(media_ref))
         self.assertEqual(await self.gateway.materialize(media_ref), media_ref)
         self.assertIsNone(await self.gateway.materialize(""))
+        self.assertFalse(await self.gateway.exists("/etc/passwd"))
+        self.assertIsNone(await self.gateway.materialize("/etc/passwd"))
 
     async def test_store_file_and_cleanup(self) -> None:
         outside_path = os.path.join(self.tmpdir.name, "outside.bin")
@@ -153,6 +155,25 @@ class TestFilesystemMediaStorageGateway(unittest.IsolatedAsyncioTestCase):
             now_epoch=100.0,
         )
         self.assertTrue(nested_dir.exists())
+
+    async def test_exists_blocks_symlink_escape_and_traversal_paths(self) -> None:
+        outside_path = os.path.join(self.tmpdir.name, "outside-secret.txt")
+        with open(outside_path, "w", encoding="utf-8") as handle:
+            handle.write("secret")
+
+        symlink_path = os.path.join(self.base_path, "escape-link.txt")
+        os.symlink(outside_path, symlink_path)
+        self.assertFalse(await self.gateway.exists(symlink_path))
+        self.assertIsNone(await self.gateway.materialize(symlink_path))
+
+        traversal_ref = os.path.join(self.base_path, "..", "outside-secret.txt")
+        self.assertFalse(await self.gateway.exists(traversal_ref))
+        self.assertIsNone(await self.gateway.materialize(traversal_ref))
+
+    async def test_exists_and_materialize_handle_path_resolution_oserror(self) -> None:
+        with patch("pathlib.Path.resolve", side_effect=OSError()):
+            self.assertFalse(await self.gateway.exists("local.bin"))
+            self.assertIsNone(await self.gateway.materialize("local.bin"))
 
 
 if __name__ == "__main__":

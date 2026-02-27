@@ -15,6 +15,10 @@ from mugen.core.contract.gateway.completion import (
     normalise_completion_request,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.timeout_config import (
+    resolve_optional_positive_float,
+    warn_missing_in_production,
+)
 
 
 # pylint: disable=too-few-public-methods
@@ -119,20 +123,28 @@ class OpenAICompletionGateway(ICompletionGateway):
         if isinstance(base_url, str) and base_url.strip():
             api_kwargs["base_url"] = base_url.strip()
 
-        timeout_seconds = getattr(self._config.openai.api, "timeout_seconds", None)
-        self._timeout_seconds: float | None = None
-        if timeout_seconds is not None:
-            self._timeout_seconds = float(timeout_seconds)
+        self._timeout_seconds = self._resolve_timeout_seconds()
+        if self._timeout_seconds is not None:
             api_kwargs["timeout"] = self._timeout_seconds
 
         self._api = AsyncOpenAI(**api_kwargs)
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-        ).strip().lower()
-        if environment == "production" and self._timeout_seconds is None:
-            self._logging_gateway.warning(
-                "OpenAICompletionGateway: timeout_seconds is not configured in production."
-            )
+        self._warn_missing_timeout_in_production()
+
+    def _resolve_timeout_seconds(self) -> float | None:
+        return resolve_optional_positive_float(
+            value=getattr(self._config.openai.api, "timeout_seconds", None),
+            field_name="timeout_seconds",
+            provider_label="OpenAICompletionGateway",
+            logging_gateway=self._logging_gateway,
+        )
+
+    def _warn_missing_timeout_in_production(self) -> None:
+        warn_missing_in_production(
+            config=self._config,
+            provider_label="OpenAICompletionGateway",
+            logging_gateway=self._logging_gateway,
+            field_values={"timeout_seconds": self._timeout_seconds},
+        )
 
     async def get_completion(
         self,

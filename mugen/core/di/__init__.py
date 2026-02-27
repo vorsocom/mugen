@@ -126,14 +126,51 @@ def _get_active_platforms(config: dict) -> list[str] | None:
     return platforms
 
 
+def _normalize_platforms(values: list[str] | None) -> list[str]:
+    if not isinstance(values, list):
+        return []
+
+    normalized: list[str] = []
+    for item in values:
+        platform = str(item).strip().lower()
+        if platform == "":
+            continue
+        if platform in normalized:
+            continue
+        normalized.append(platform)
+    return normalized
+
+
+def _resolve_runtime_profile_override(config: dict) -> str:
+    runtime_cfg = config.get("mugen", {}).get("runtime", {})
+    raw_profile = runtime_cfg.get("profile", "auto")
+    if raw_profile is None:
+        return "auto"
+    if not isinstance(raw_profile, str):
+        raise RuntimeError(
+            "Invalid runtime profile configuration: mugen.runtime.profile must be a string."
+        )
+
+    normalized = raw_profile.strip().lower()
+    if normalized == "":
+        normalized = "auto"
+
+    if normalized not in {"auto", "api_only", "web_only", "platform_full"}:
+        raise RuntimeError(
+            "Invalid runtime profile configuration: "
+            "mugen.runtime.profile must be one of auto|api_only|web_only|platform_full."
+        )
+    return normalized
+
+
 def _infer_runtime_profile(config: dict) -> str:
     """Infer DI validation profile from enabled platforms."""
-    platforms = _get_active_platforms(config) or []
-    normalized = {
-        str(item).strip().lower()
-        for item in platforms
-        if str(item).strip() != ""
-    }
+    override = _resolve_runtime_profile_override(config)
+    if override != "auto":
+        return override
+
+    platforms = _normalize_platforms(_get_active_platforms(config))
+    normalized = set(platforms)
     if not normalized:
         return "api_only"
     if normalized == {"web"}:
@@ -144,6 +181,35 @@ def _infer_runtime_profile(config: dict) -> str:
 def _validate_container(config: dict, injector: DependencyInjector) -> None:
     """Validate that required providers were built for active configuration."""
     profile = _infer_runtime_profile(config)
+    active_platforms = _normalize_platforms(_get_active_platforms(config))
+    active_platform_set = set(active_platforms)
+
+    logger = injector.logging_gateway
+    if logger is None:
+        logger = logging.getLogger()
+
+    if profile == "api_only" and active_platforms:
+        logger.error(
+            "Runtime profile api_only cannot be used when platforms are enabled."
+        )
+        raise RuntimeError("Runtime profile api_only requires mugen.platforms to be empty.")
+
+    if profile == "web_only" and active_platform_set != {"web"}:
+        logger.error(
+            "Runtime profile web_only requires mugen.platforms to contain only 'web'."
+        )
+        raise RuntimeError(
+            "Runtime profile web_only requires mugen.platforms=['web']."
+        )
+
+    if profile == "platform_full" and not active_platforms:
+        logger.error(
+            "Runtime profile platform_full requires one or more enabled platforms."
+        )
+        raise RuntimeError(
+            "Runtime profile platform_full requires at least one enabled platform."
+        )
+
     required = [
         "config",
         "logging_gateway",
@@ -155,8 +221,7 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         "user_service",
         "messaging_service",
     ]
-    active_platforms = config.get("mugen", {}).get("platforms", [])
-    if profile in {"web_only", "platform_full"} and "web" in active_platforms:
+    if profile in {"web_only", "platform_full"} and "web" in active_platform_set:
         if _config_path_exists(
             config,
             "mugen",
@@ -178,20 +243,21 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         if injector.email_gateway is None:
             missing.append("email_gateway")
 
-    if "matrix" in active_platforms and injector.matrix_client is None:
-        missing.append("matrix_client")
-    if "telnet" in active_platforms and injector.telnet_client is None:
-        missing.append("telnet_client")
-    if "whatsapp" in active_platforms and injector.whatsapp_client is None:
-        missing.append("whatsapp_client")
-    if "web" in active_platforms and injector.web_client is None:
-        missing.append("web_client")
+    if profile in {"web_only", "platform_full"} and "web" in active_platform_set:
+        if injector.web_client is None:
+            missing.append("web_client")
+
+    if profile == "platform_full":
+        if "matrix" in active_platform_set and injector.matrix_client is None:
+            missing.append("matrix_client")
+        if "telnet" in active_platform_set and injector.telnet_client is None:
+            missing.append("telnet_client")
+        if "whatsapp" in active_platform_set and injector.whatsapp_client is None:
+            missing.append("whatsapp_client")
+        if "web" in active_platform_set and injector.web_client is None:
+            missing.append("web_client")
 
     if missing:
-        logger = injector.logging_gateway
-        if logger is None:
-            logger = logging.getLogger()
-
         for provider_name in missing:
             logger.error(f"Missing provider ({provider_name}).")
 
@@ -651,6 +717,9 @@ def _shutdown_provider(
         return
 
     loop.create_task(maybe_awaitable)
+    logger.warning(
+        f"Provider close coroutine scheduled in running loop ({provider_name})."
+    )
 
 
 def _shutdown_injector(injector: DependencyInjector | None) -> None:

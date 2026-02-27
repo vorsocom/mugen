@@ -3,4 +3,5 @@ branch = true
 
 [report]
 show_missing = true
-omit = mugen_test/*
+omit = mugen_test/*,/tmp/*
+ignore_errors = true

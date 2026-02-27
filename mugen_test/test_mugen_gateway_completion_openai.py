@@ -56,6 +56,22 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             timeout=12.5,
         )
 
+    def test_constructor_ignores_invalid_timeout_configuration(self) -> None:
+        config = _make_config()
+        config.openai.api.timeout_seconds = "bad"
+        logging_gateway = Mock()
+
+        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI") as async_openai:
+            OpenAICompletionGateway(config, logging_gateway)
+
+        async_openai.assert_called_once_with(
+            api_key="sk_test",
+            base_url="https://api.openai.com/v1",
+        )
+        logging_gateway.warning.assert_called_once_with(
+            "OpenAICompletionGateway: Invalid timeout_seconds configuration."
+        )
+
     async def test_get_completion_builds_request_and_returns_response(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
