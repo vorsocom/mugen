@@ -37,6 +37,7 @@ from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.nlp import INLPService
 from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.utility.collection.namespace import NamespaceConfig, to_namespace
 
 from .injector import DependencyInjector
 
@@ -45,47 +46,22 @@ EXT_SERVICE_ADMIN_SANDBOX_ENFORCER = "admin_sandbox_enforcer"
 EXT_SERVICE_ADMIN_SVC_JWT = "admin_svc_jwt"
 EXT_SERVICE_ADMIN_SVC_AUTH = "admin_svc_auth"
 
+_CONFIG_NAMESPACE_CONVERSION = NamespaceConfig(
+    keep_raw=True,
+    raw_attr="dict",
+    add_aliases=False,
+)
+
 
 def _nested_namespace_from_dict(items: dict, ns: SimpleNamespace) -> None:
-    """Convert a nested dict to a nested SimpleNamespace"""
-    # If null values are passed, this try-except
-    # will catch the AttributeError that results
-    # from calling items.keys().
-    try:  # pylint: disable=too-many-nested-blocks
-        for key in items.keys():
-            # If it's a dict, recurse.
-            # Also place the original dict alongside
-            # the namespace as an attribute called "dict".
-            if isinstance(items[key], dict):
-                nested_space = SimpleNamespace()
-                _nested_namespace_from_dict(items[key], nested_space)
-                setattr(ns, key, nested_space)
-                setattr(ns, "dict", items)
-                continue
-
-            # Handle list of dicts.
-            if isinstance(items[key], list):
-                # try-except for empty list.
-                try:
-                    if isinstance(items[key][0], dict):
-                        space_list = []
-                        for list_item in items[key]:
-                            nested_space = SimpleNamespace()
-                            _nested_namespace_from_dict(list_item, nested_space)
-                            space_list.append(nested_space)
-                        setattr(ns, key, space_list)
-                        continue
-                except IndexError:
-                    # Empty barrel. No noise though.
-                    pass
-
-            # Flat item.
-            setattr(ns, key, items[key])
-    except AttributeError:
-        # If you don't stand for something,
-        # you'll fall for anything. And nothing,
-        # in this case.
-        pass
+    """Convert a nested dict to a nested SimpleNamespace."""
+    if not isinstance(items, dict):
+        raise TypeError("Configuration root must be a dict.")
+    if not isinstance(ns, SimpleNamespace):
+        raise TypeError("Target namespace must be SimpleNamespace.")
+    converted = to_namespace(items, cfg=_CONFIG_NAMESPACE_CONVERSION)
+    if isinstance(converted, SimpleNamespace):
+        ns.__dict__.update(converted.__dict__)
 
 
 def _build_config_provider(
@@ -93,15 +69,14 @@ def _build_config_provider(
     injector: DependencyInjector,
 ) -> None:
     """Build configuration provider object for DI container."""
+    if not isinstance(config, dict):
+        raise RuntimeError("Configuration payload must be a dict.")
+
     ns = SimpleNamespace()
     _nested_namespace_from_dict(config, ns)
-    try:
-        injector.config = ns
-    except AttributeError:
-        # System cannot run without configuration.
-        # We can get here due to a null or any other
-        # incorrectly typed injector.
-        sys.exit(1)
+    if not isinstance(injector, DependencyInjector):
+        raise RuntimeError("Invalid dependency injector instance.")
+    injector.config = ns
 
 
 def _get_provider_class(
@@ -151,20 +126,48 @@ def _get_active_platforms(config: dict) -> list[str] | None:
     return platforms
 
 
+def _infer_runtime_profile(config: dict) -> str:
+    """Infer DI validation profile from enabled platforms."""
+    platforms = _get_active_platforms(config) or []
+    normalized = {
+        str(item).strip().lower()
+        for item in platforms
+        if str(item).strip() != ""
+    }
+    if not normalized:
+        return "api_only"
+    if normalized == {"web"}:
+        return "web_only"
+    return "platform_full"
+
+
 def _validate_container(config: dict, injector: DependencyInjector) -> None:
     """Validate that required providers were built for active configuration."""
+    profile = _infer_runtime_profile(config)
     required = [
         "config",
         "logging_gateway",
         "completion_gateway",
         "ipc_service",
         "keyval_storage_gateway",
-        "relational_storage_gateway",
         "nlp_service",
         "platform_service",
         "user_service",
         "messaging_service",
     ]
+    active_platforms = config.get("mugen", {}).get("platforms", [])
+    if profile in {"web_only", "platform_full"} and "web" in active_platforms:
+        if _config_path_exists(
+            config,
+            "mugen",
+            "modules",
+            "core",
+            "gateway",
+            "storage",
+            "relational",
+        ):
+            required.append("relational_storage_gateway")
+
     missing = [name for name in required if getattr(injector, name) is None]
 
     if _config_path_exists(config, "mugen", "modules", "core", "gateway", "knowledge"):
@@ -175,7 +178,6 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         if injector.email_gateway is None:
             missing.append("email_gateway")
 
-    active_platforms = config.get("mugen", {}).get("platforms", [])
     if "matrix" in active_platforms and injector.matrix_client is None:
         missing.append("matrix_client")
     if "telnet" in active_platforms and injector.telnet_client is None:
@@ -456,10 +458,13 @@ _PROVIDER_BUILD_ORDER = (
 
 def _get_bootstrap_provider_logger(config: dict) -> logging.Logger:
     """Resolve a logger before a logging provider is available."""
-    try:
-        return logging.getLogger(config.mugen.logger.name)
-    except AttributeError:
-        return logging.getLogger()
+    if isinstance(config, dict):
+        mugen_cfg = config.get("mugen", {})
+        logger_cfg = mugen_cfg.get("logger", {})
+        logger_name = logger_cfg.get("name")
+        if isinstance(logger_name, str) and logger_name.strip() != "":
+            return logging.getLogger(logger_name.strip())
+    return logging.getLogger()
 
 
 def _build_provider_from_spec(

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import boto3
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
 from mugen.core.contract.gateway.completion import (
@@ -35,13 +36,103 @@ class BedrockCompletionGateway(ICompletionGateway):
         super().__init__()
         self._config = config
         self._logging_gateway = logging_gateway
-
-        self._client = boto3.client(
-            service_name="bedrock-runtime",
-            region_name=self._config.aws.bedrock.api.region,
-            aws_access_key_id=self._config.aws.bedrock.api.access_key_id,
-            aws_secret_access_key=self._config.aws.bedrock.api.secret_access_key,
+        self._connect_timeout_seconds = self._resolve_optional_positive_float(
+            getattr(self._config.aws.bedrock.api, "connect_timeout_seconds", None),
+            "connect_timeout_seconds",
         )
+        self._read_timeout_seconds = self._resolve_optional_positive_float(
+            getattr(self._config.aws.bedrock.api, "read_timeout_seconds", None),
+            "read_timeout_seconds",
+        )
+        self._max_attempts = self._resolve_optional_positive_int(
+            getattr(self._config.aws.bedrock.api, "max_attempts", None),
+            "max_attempts",
+        )
+
+        boto_config_kwargs: dict[str, Any] = {}
+        if self._connect_timeout_seconds is not None:
+            boto_config_kwargs["connect_timeout"] = self._connect_timeout_seconds
+        if self._read_timeout_seconds is not None:
+            boto_config_kwargs["read_timeout"] = self._read_timeout_seconds
+        if self._max_attempts is not None:
+            boto_config_kwargs["retries"] = {
+                "max_attempts": self._max_attempts,
+                "mode": "standard",
+            }
+        boto_config = BotoConfig(**boto_config_kwargs) if boto_config_kwargs else None
+
+        client_kwargs: dict[str, Any] = {
+            "service_name": "bedrock-runtime",
+            "region_name": self._config.aws.bedrock.api.region,
+            "aws_access_key_id": self._config.aws.bedrock.api.access_key_id,
+            "aws_secret_access_key": self._config.aws.bedrock.api.secret_access_key,
+        }
+        if boto_config is not None:
+            client_kwargs["config"] = boto_config
+        self._client = boto3.client(**client_kwargs)
+        self._warn_missing_timeout_controls_in_production()
+
+    def _resolve_optional_positive_float(
+        self,
+        value: Any,
+        field_name: str,
+    ) -> float | None:
+        if value is None:
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            self._logging_gateway.warning(
+                f"BedrockCompletionGateway: Invalid {field_name} configuration."
+            )
+            return None
+        if parsed <= 0:
+            self._logging_gateway.warning(
+                f"BedrockCompletionGateway: {field_name} must be positive when provided."
+            )
+            return None
+        return parsed
+
+    def _resolve_optional_positive_int(
+        self,
+        value: Any,
+        field_name: str,
+    ) -> int | None:
+        if value is None:
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            self._logging_gateway.warning(
+                f"BedrockCompletionGateway: Invalid {field_name} configuration."
+            )
+            return None
+        if parsed <= 0:
+            self._logging_gateway.warning(
+                f"BedrockCompletionGateway: {field_name} must be positive when provided."
+            )
+            return None
+        return parsed
+
+    def _warn_missing_timeout_controls_in_production(self) -> None:
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+        ).strip().lower()
+        if environment != "production":
+            return
+
+        if self._connect_timeout_seconds is None:
+            self._logging_gateway.warning(
+                "BedrockCompletionGateway: connect_timeout_seconds is not configured in production."
+            )
+        if self._read_timeout_seconds is None:
+            self._logging_gateway.warning(
+                "BedrockCompletionGateway: read_timeout_seconds is not configured in production."
+            )
+        if self._max_attempts is None:
+            self._logging_gateway.warning(
+                "BedrockCompletionGateway: max_attempts is not configured in production."
+            )
 
     async def get_completion(
         self,
@@ -117,6 +208,7 @@ class BedrockCompletionGateway(ICompletionGateway):
                 operation=completion_request.operation,
                 message=message,
                 cause=e,
+                timeout_applied=self._read_timeout_seconds,
             ) from e
         except CompletionGatewayError:
             raise
@@ -130,6 +222,7 @@ class BedrockCompletionGateway(ICompletionGateway):
                 operation=completion_request.operation,
                 message="Unexpected Bedrock completion failure.",
                 cause=e,
+                timeout_applied=self._read_timeout_seconds,
             ) from e
 
     def _resolve_operation_config(self, operation: str) -> dict[str, Any]:

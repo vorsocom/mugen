@@ -7,7 +7,15 @@ import unittest.mock
 
 from quart import Quart
 
-from mugen import BootstrapConfigError, run_clients, run_platform_clients
+import mugen as mugen_mod
+from mugen import (
+    PHASE_B_ERROR_KEY,
+    PHASE_B_STATUS_KEY,
+    PHASE_STATUS_HEALTHY,
+    BootstrapConfigError,
+    run_clients,
+    run_platform_clients,
+)
 
 
 class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
@@ -226,15 +234,10 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 logger.output[0],
                 "DEBUG:test_app:Running whatsapp client.",
             )
-            self.assertEqual(
-                logger.output[1],
-                "DEBUG:test_app:Closing whatsapp client.",
-            )
 
-    async def test_run_platform_clients_closes_keyval_on_completion(self) -> None:
+    async def test_run_platform_clients_marks_phase_b_healthy_on_completion(self) -> None:
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix"]))
-        keyval_storage_gateway = unittest.mock.Mock()
         _run_matrix_client = unittest.mock.AsyncMock()
 
         with unittest.mock.patch(
@@ -246,19 +249,17 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
                 whatsapp_provider=lambda: None,
-                keyval_storage_gateway_provider=lambda: keyval_storage_gateway,
             )
 
-        keyval_storage_gateway.close.assert_called_once_with()
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+        self.assertIsNone(state[PHASE_B_ERROR_KEY])
 
-    async def test_run_platform_clients_closes_keyval_gateway_on_cancellation(
+    async def test_run_platform_clients_handles_cancellation(
         self,
     ) -> None:
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["whatsapp"]))
-        keyval_storage_gateway = unittest.mock.Mock()
-        whatsapp_client = unittest.mock.Mock()
-        whatsapp_client.close = unittest.mock.AsyncMock()
         _run_whatsapp_client = unittest.mock.AsyncMock(
             side_effect=asyncio.exceptions.CancelledError
         )
@@ -271,147 +272,78 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
-                whatsapp_provider=lambda: whatsapp_client,
-                keyval_storage_gateway_provider=lambda: keyval_storage_gateway,
+                whatsapp_provider=lambda: None,
             )
 
-        whatsapp_client.close.assert_awaited_once()
-        keyval_storage_gateway.close.assert_called_once_with()
-
-    async def test_run_platform_clients_closes_web_client_on_cancellation(self) -> None:
+    async def test_run_platform_clients_blocks_telnet_in_production(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
-        keyval_storage_gateway = unittest.mock.Mock()
-        web_client = unittest.mock.Mock()
-        web_client.close = unittest.mock.AsyncMock()
-        _run_web_client = unittest.mock.AsyncMock(
-            side_effect=asyncio.exceptions.CancelledError
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                platforms=["telnet"],
+                environment="production",
+            ),
+            telnet=SimpleNamespace(allow_in_production=False),
         )
+
+        with self.assertRaises(BootstrapConfigError):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+    def test_telnet_allow_in_production_parsing(self) -> None:
+        self.assertTrue(
+            mugen_mod._telnet_allowed_in_production(  # pylint: disable=protected-access
+                SimpleNamespace(telnet=SimpleNamespace(allow_in_production="yes"))
+            )
+        )
+        self.assertFalse(
+            mugen_mod._telnet_allowed_in_production(  # pylint: disable=protected-access
+                SimpleNamespace(telnet=SimpleNamespace(allow_in_production="off"))
+            )
+        )
+        self.assertFalse(
+            mugen_mod._telnet_allowed_in_production(  # pylint: disable=protected-access
+                SimpleNamespace(telnet=SimpleNamespace(allow_in_production=object()))
+            )
+        )
+        self.assertFalse(
+            mugen_mod._telnet_allowed_in_production(  # pylint: disable=protected-access
+                SimpleNamespace(telnet=SimpleNamespace(allow_in_production="maybe"))
+            )
+        )
+
+    async def test_run_platform_clients_allows_telnet_with_explicit_override(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                platforms=["telnet"],
+                environment="production",
+            ),
+            telnet=SimpleNamespace(allow_in_production=True),
+        )
+        _run_telnet_client = unittest.mock.AsyncMock()
 
         with unittest.mock.patch(
-            target="mugen.run_web_client",
-            new=_run_web_client,
+            target="mugen.run_telnet_client",
+            new=_run_telnet_client,
         ):
             await run_platform_clients(
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
-                whatsapp_provider=lambda: None,
-                web_provider=lambda: web_client,
-                keyval_storage_gateway_provider=lambda: keyval_storage_gateway,
             )
+        _run_telnet_client.assert_awaited_once()
 
-        web_client.close.assert_awaited_once()
-        keyval_storage_gateway.close.assert_called_once_with()
-
-    async def test_run_platform_clients_warns_when_whatsapp_close_fails(self) -> None:
-        app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["whatsapp"]))
-        keyval_storage_gateway = unittest.mock.Mock()
-        whatsapp_client = unittest.mock.Mock()
-        whatsapp_client.close = unittest.mock.AsyncMock(
-            side_effect=RuntimeError("boom")
-        )
-        _run_whatsapp_client = unittest.mock.AsyncMock(
-            side_effect=asyncio.exceptions.CancelledError
-        )
-
-        with (
-            self.assertLogs(logger="test_app", level="WARNING") as logs,
-            unittest.mock.patch(
-                target="mugen.run_whatsapp_client",
-                new=_run_whatsapp_client,
-            ),
+    def test_whatsapp_provider_reads_di_container(self) -> None:
+        sentinel_client = object()
+        with unittest.mock.patch.object(
+            mugen_mod.di,
+            "container",
+            SimpleNamespace(whatsapp_client=sentinel_client),
         ):
-            await run_platform_clients(
-                app,
-                config_provider=lambda: config,
-                logger_provider=lambda: app.logger,
-                whatsapp_provider=lambda: whatsapp_client,
-                keyval_storage_gateway_provider=lambda: keyval_storage_gateway,
-            )
-
-        self.assertTrue(
-            any(
-                "Failed to close whatsapp client (boom)." in entry
-                for entry in logs.output
-            )
-        )
-
-    async def test_run_platform_clients_warns_when_keyval_close_fails(self) -> None:
-        app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix"]))
-        keyval_storage_gateway = unittest.mock.Mock()
-        keyval_storage_gateway.close = unittest.mock.Mock(
-            side_effect=RuntimeError("kv boom")
-        )
-        _run_matrix_client = unittest.mock.AsyncMock()
-
-        with (
-            self.assertLogs(logger="test_app", level="WARNING") as logs,
-            unittest.mock.patch(
-                target="mugen.run_matrix_client",
-                new=_run_matrix_client,
-            ),
-        ):
-            await run_platform_clients(
-                app,
-                config_provider=lambda: config,
-                logger_provider=lambda: app.logger,
-                whatsapp_provider=lambda: None,
-                keyval_storage_gateway_provider=lambda: keyval_storage_gateway,
-            )
-
-        self.assertTrue(
-            any(
-                "Failed to close keyval storage gateway (kv boom)." in entry
-                for entry in logs.output
-            )
-        )
-
-    async def test_run_platform_clients_warns_when_web_close_fails(self) -> None:
-        app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
-        keyval_storage_gateway = unittest.mock.Mock()
-        web_client = unittest.mock.Mock()
-        web_client.close = unittest.mock.AsyncMock(side_effect=RuntimeError("boom web"))
-        _run_web_client = unittest.mock.AsyncMock(
-            side_effect=asyncio.exceptions.CancelledError
-        )
-
-        with (
-            self.assertLogs(logger="test_app", level="WARNING") as logs,
-            unittest.mock.patch(
-                target="mugen.run_web_client",
-                new=_run_web_client,
-            ),
-        ):
-            await run_platform_clients(
-                app,
-                config_provider=lambda: config,
-                logger_provider=lambda: app.logger,
-                whatsapp_provider=lambda: None,
-                web_provider=lambda: web_client,
-                keyval_storage_gateway_provider=lambda: keyval_storage_gateway,
-            )
-
-        self.assertTrue(
-            any("Failed to close web client (boom web)." in entry for entry in logs.output)
-        )
-
-    async def test_run_platform_clients_handles_absent_keyval_gateway(self) -> None:
-        app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix"]))
-        _run_matrix_client = unittest.mock.AsyncMock()
-
-        with unittest.mock.patch(
-            target="mugen.run_matrix_client",
-            new=_run_matrix_client,
-        ):
-            await run_platform_clients(
-                app,
-                config_provider=lambda: config,
-                logger_provider=lambda: app.logger,
-                whatsapp_provider=lambda: None,
-                keyval_storage_gateway_provider=lambda: None,
+            self.assertIs(
+                mugen_mod._whatsapp_provider(),  # pylint: disable=protected-access
+                sentinel_client,
             )

@@ -18,6 +18,8 @@ storage.keyval.relational.namespace_default = "core"
 storage.keyval.relational.list_limit_default = 200
 storage.keyval.legacy_import.enabled = true
 storage.keyval.legacy_import.dbm_path = "/absolute/path/to/data/storage.db"
+runtime.phase_b.readiness_grace_seconds = 0.0
+runtime.phase_b.critical_platforms = ["web"]
 
 [mugen.commands]
 clear = "..."
@@ -310,6 +312,9 @@ api.completion.temp = 0.0
 api.completion.top_p = 0.9
 api.region = ""
 api.secret_access_key = "<aws-secret-access-key>"
+api.connect_timeout_seconds = 10.0
+api.read_timeout_seconds = 30.0
+api.max_attempts = 3
 
 # === AWS SES (optional outbound email gateway) ===
 [aws.ses]
@@ -334,6 +339,7 @@ api.classification.top_p = 1.0
 api.completion.model = ""
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.timeout_seconds = 30.0
 api.key = "<groq-api-key>"
 
 # === OpenAI ===
@@ -391,10 +397,16 @@ security.device_trust.mode = "strict_known"
 # device_ids = ["DEVICEID1", "DEVICEID2"]
 storage.olm.path = "/absolute/path/to/data/.olmstore"
 
+[security.secrets]
+# Required in production when Matrix platform is enabled.
+encryption_key = "<set-secret-encryption-key>"
+
 # === Qdrant ===
 [qdrant]
 api.key = "<qdrant-api-key>"
 api.url = ""
+encoder.preload = false
+encoder.max_concurrency = 4
 
 # === Quart ===
 [quart]
@@ -452,6 +464,8 @@ api.completion.max_tokens = 1024
 api.completion.temp = 0.0
 api.completion.stop = []
 api.endpoint = ""
+api.connect_timeout_seconds = 10.0
+api.read_timeout_seconds = 30.0
 api.key = "<sambanova-api-key>"
 
 # === SMTP (optional outbound email gateway) ===
@@ -470,6 +484,7 @@ starttls_required = true
 [telnet]
 socket.host = "localhost"
 socket.port = 8888
+allow_in_production = false
 # Maximum seconds to wait for input before disconnecting (<=0 disables timeout).
 read_timeout_seconds = 300.0
 # Maximum raw input bytes accepted for one prompt.
@@ -509,6 +524,7 @@ sse.replay_max_events = 200
 queue.poll_interval_seconds = 0.25
 queue.processing_lease_seconds = 30
 queue.max_pending_jobs = 2000
+media.backend = "filesystem"
 media.storage.path = "/absolute/path/to/data/web_media"
 media.max_upload_bytes = 20971520
 # Max attachments per structured message payload.
@@ -521,3 +537,5 @@ media.allowed_mimetypes = [
 ]
 media.download_token_ttl_seconds = 900
 media.retention_seconds = 86400
+media.object.cache_path = "/absolute/path/to/data/web_media_object_cache"
+media.object.key_prefix = "web:media:object"

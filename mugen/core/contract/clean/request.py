@@ -5,7 +5,9 @@ __all__ = ["IRequest"]
 from abc import ABC
 from typing import Generic, TypeVar
 
-_ResponseT = TypeVar("_ResponseT", bound="IRequest")
+from mugen.core.contract.clean.response import IResponse
+
+_ResponseT = TypeVar("_ResponseT", bound=IResponse)
 
 
 # pylint: disable=too-few-public-methods

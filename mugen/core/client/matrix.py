@@ -5,6 +5,8 @@ __all__ = ["DefaultMatrixClient"]
 from io import BytesIO
 
 import asyncio
+import base64
+import hashlib
 import inspect
 import json
 import mimetypes
@@ -15,6 +17,7 @@ from types import SimpleNamespace
 from typing import Coroutine
 
 import aiofiles
+from cryptography.fernet import Fernet, InvalidToken
 
 from nio import (
     Api,
@@ -103,6 +106,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     _default_matrix_ipc_queue_size: int = 256
 
     _sync_key: str = "matrix_client_sync_next_batch"
+    _encrypted_secret_prefix: str = "enc:v1:"
 
     # pylint: disable=too-many-arguments
     def __init__(
@@ -134,6 +138,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._matrix_ipc_worker_task: asyncio.Task | None = None
         self._matrix_ipc_worker_stop = asyncio.Event()
         self._sync_token: str | None = None
+        self._secret_cipher: Fernet | None = self._build_secret_cipher()
+
+        if self._matrix_secrets_encryption_required() and self._secret_cipher is None:
+            raise RuntimeError(
+                "Matrix secret encryption key is required in production. "
+                "Set security.secrets.encryption_key."
+            )
 
         ## Callbacks
         # Invite Room Events.
@@ -164,6 +175,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         stored_access_token = await self._keyval_storage_gateway.get_text(
             "client_access_token"
         )
+        stored_access_token = self._decode_secret_value(
+            stored_access_token,
+            field_name="client_access_token",
+        )
         if stored_access_token is None:
             # Load password and device name from storage.
             pw = self._config.matrix.client.password
@@ -179,13 +194,25 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
                 # Save credentials.
                 await self._keyval_storage_gateway.put_text(
-                    "client_access_token", resp.access_token
+                    "client_access_token",
+                    self._encode_secret_value(
+                        resp.access_token,
+                        field_name="client_access_token",
+                    ),
                 )
                 await self._keyval_storage_gateway.put_text(
-                    "client_device_id", resp.device_id
+                    "client_device_id",
+                    self._encode_secret_value(
+                        resp.device_id,
+                        field_name="client_device_id",
+                    ),
                 )
                 await self._keyval_storage_gateway.put_text(
-                    "client_user_id", resp.user_id
+                    "client_user_id",
+                    self._encode_secret_value(
+                        resp.user_id,
+                        field_name="client_user_id",
+                    ),
                 )
                 self.access_token = resp.access_token
                 self.device_id = resp.device_id
@@ -203,8 +230,14 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._logging_gateway.debug("Login using saved credentials.")
         # open the file in read-only mode.
         self.access_token = stored_access_token
-        self.device_id = await self._keyval_storage_gateway.get_text("client_device_id")
-        self.user_id = await self._keyval_storage_gateway.get_text("client_user_id")
+        self.device_id = self._decode_secret_value(
+            await self._keyval_storage_gateway.get_text("client_device_id"),
+            field_name="client_device_id",
+        )
+        self.user_id = self._decode_secret_value(
+            await self._keyval_storage_gateway.get_text("client_user_id"),
+            field_name="client_user_id",
+        )
         self._sync_token = await self._keyval_storage_gateway.get_text(self._sync_key)
         self.load_store()
         return self
@@ -217,6 +250,58 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             await self.client_session.close()
         except AttributeError:
             ...
+
+    def _matrix_secrets_encryption_required(self) -> bool:
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+        ).strip().lower()
+        platforms = getattr(getattr(self._config, "mugen", SimpleNamespace()), "platforms", [])
+        return environment == "production" and "matrix" in platforms
+
+    def _build_secret_cipher(self) -> Fernet | None:
+        security_cfg = getattr(getattr(self._config, "security", SimpleNamespace()), "secrets", None)
+        raw_key = getattr(security_cfg, "encryption_key", None)
+        if not isinstance(raw_key, str) or raw_key.strip() == "":
+            return None
+
+        # Derive stable Fernet key from operator-provided secret material.
+        digest = hashlib.sha256(raw_key.strip().encode("utf-8")).digest()
+        return Fernet(base64.urlsafe_b64encode(digest))
+
+    def _encode_secret_value(self, value: str, *, field_name: str) -> str:
+        cipher = getattr(self, "_secret_cipher", None)
+        if cipher is None:
+            return value
+        if not isinstance(value, str):
+            raise RuntimeError(f"Expected string value for {field_name}.")
+        encrypted = cipher.encrypt(value.encode("utf-8")).decode("utf-8")
+        return f"{self._encrypted_secret_prefix}{encrypted}"
+
+    def _decode_secret_value(self, value: str | None, *, field_name: str) -> str | None:
+        if value in [None, ""]:
+            return None
+        if not isinstance(value, str):
+            return None
+
+        if value.startswith(self._encrypted_secret_prefix) is not True:
+            return value
+        cipher = getattr(self, "_secret_cipher", None)
+        if cipher is None:
+            raise RuntimeError(
+                f"Encrypted value for {field_name} found but no encryption key is configured."
+            )
+
+        encrypted_payload = value[len(self._encrypted_secret_prefix) :]
+        try:
+            decoded = cipher.decrypt(encrypted_payload.encode("utf-8"))
+        except InvalidToken as exc:
+            raise RuntimeError(
+                f"Encrypted value for {field_name} could not be decrypted."
+            ) from exc
+        return decoded.decode("utf-8")
+
+    def _log_send_failure(self, message: str) -> None:
+        self._logging_gateway.warning(f"{message}\n{traceback.format_exc()}")
 
     def _resolve_matrix_ipc_queue_size(self) -> int:
         raw_value = getattr(
@@ -1334,10 +1419,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 )
 
         except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-            self._logging_gateway.warning(
-                "DefaultMatrixClient: Error sending audio message."
-            )
-            traceback.print_exc()
+            self._log_send_failure("DefaultMatrixClient: Error sending audio message.")
 
     async def _send_file_message(
         self,
@@ -1370,10 +1452,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 )
 
         except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-            self._logging_gateway.warning(
-                "DefaultMatrixClient: Error sending file message."
-            )
-            traceback.print_exc()
+            self._log_send_failure("DefaultMatrixClient: Error sending file message.")
 
     async def _send_image_message(
         self,
@@ -1409,10 +1488,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 )
 
         except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-            self._logging_gateway.warning(
-                "DefaultMatrixClient: Error sending image message."
-            )
-            traceback.print_exc()
+            self._log_send_failure("DefaultMatrixClient: Error sending image message.")
 
     async def _send_text_message(self, room_id: str, body: str) -> None:
         try:
@@ -1424,10 +1500,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 },
             )
         except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-            self._logging_gateway.warning(
-                "DefaultMatrixClient: Error sending text message."
-            )
-            traceback.print_exc()
+            self._log_send_failure("DefaultMatrixClient: Error sending text message.")
 
     async def _send_video_message(
         self,
@@ -1463,10 +1536,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                     },
                 )
         except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-            self._logging_gateway.warning(
-                "DefaultMatrixClient: Error sending video message."
-            )
-            traceback.print_exc()
+            self._log_send_failure("DefaultMatrixClient: Error sending video message.")
 
     async def _download_file(self, file: dict, info: dict) -> str | None:
         if not isinstance(info, dict):

@@ -52,6 +52,52 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         super().__init__()
         self._config = config
         self._logging_gateway = logging_gateway
+        self._connect_timeout_seconds = self._resolve_optional_positive_float(
+            getattr(self._config.sambanova.api, "connect_timeout_seconds", None),
+            "connect_timeout_seconds",
+        )
+        self._read_timeout_seconds = self._resolve_optional_positive_float(
+            getattr(self._config.sambanova.api, "read_timeout_seconds", None),
+            "read_timeout_seconds",
+        )
+        self._warn_missing_timeout_controls_in_production()
+
+    def _resolve_optional_positive_float(
+        self,
+        value: Any,
+        field_name: str,
+    ) -> float | None:
+        if value is None:
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            self._logging_gateway.warning(
+                f"SambaNovaCompletionGateway: Invalid {field_name} configuration."
+            )
+            return None
+        if parsed <= 0:
+            self._logging_gateway.warning(
+                f"SambaNovaCompletionGateway: {field_name} must be positive when provided."
+            )
+            return None
+        return parsed
+
+    def _warn_missing_timeout_controls_in_production(self) -> None:
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+        ).strip().lower()
+        if environment != "production":
+            return
+
+        if self._connect_timeout_seconds is None:
+            self._logging_gateway.warning(
+                "SambaNovaCompletionGateway: connect_timeout_seconds is not configured in production."
+            )
+        if self._read_timeout_seconds is None:
+            self._logging_gateway.warning(
+                "SambaNovaCompletionGateway: read_timeout_seconds is not configured in production."
+            )
 
     async def get_completion(
         self,
@@ -132,6 +178,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
                 operation=completion_request.operation,
                 message="Failed to execute SambaNova request.",
                 cause=e,
+                timeout_applied=self._read_timeout_seconds,
             ) from e
 
         if status_code >= 400:
@@ -144,6 +191,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
                 provider=self._provider,
                 operation=completion_request.operation,
                 message=detail,
+                timeout_applied=self._read_timeout_seconds,
             )
 
         try:
@@ -166,6 +214,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
                 operation=completion_request.operation,
                 message="Failed to parse SambaNova response payload.",
                 cause=e,
+                timeout_applied=self._read_timeout_seconds,
             ) from e
 
     def _resolve_operation_config(self, operation: str) -> dict[str, Any]:
@@ -300,6 +349,10 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             curl.setopt(curl.WRITEFUNCTION, buffer.write)
             curl.setopt(pycurl.SSL_VERIFYPEER, 1)
             curl.setopt(pycurl.SSL_VERIFYHOST, 2)
+            if self._connect_timeout_seconds is not None:
+                curl.setopt(pycurl.CONNECTTIMEOUT, int(self._connect_timeout_seconds))
+            if self._read_timeout_seconds is not None:
+                curl.setopt(pycurl.TIMEOUT, int(self._read_timeout_seconds))
             curl.perform()
             status_code = int(curl.getinfo(pycurl.RESPONSE_CODE))
         finally:

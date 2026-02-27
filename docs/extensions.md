@@ -43,6 +43,17 @@ from mugen.core.contract.extension.ctx import ICTXExtension
 
 Remember that your extensions must strictly conform to the specified contracts as the framework will never access your extensions directly, but rather through these interfaces.
 
+## Migration Notes (Core Contract Updates)
+
+Recent core hardening introduced the following contract-level updates that extension and adapter authors should apply:
+
+1. `IWebClient` now requires `wait_until_stopped()` so Phase-B can supervise long-running web runtime health.
+2. `IKnowledgeGateway.search(...)` now returns `KnowledgeSearchResult` instead of a provider-specific raw list/count payload.
+3. Clean interactor generics were tightened:
+   - request handlers are parameterized by `IRequest` and `IResponse`, not handler types.
+
+When updating downstream modules, prioritize typed contract conformance first, then provider-specific payload handling migration.
+
 ## Platform Targeting
 
 All extensions must declare their target platform(s) using the `platforms` property, which must return a list of strings. Platform targeting ensures that an extension is only applied when interacting with specified platforms. For example, if you have features that are specific to WhatsApp and Telnet, setting up platform targeting allows your extension to activate only when the corresponding platform is in use.

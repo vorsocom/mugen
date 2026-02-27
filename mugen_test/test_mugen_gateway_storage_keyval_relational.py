@@ -846,7 +846,11 @@ class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
     def test_close_sync_path(self) -> None:
         gateway = _new_gateway()
         gateway._stop_sync_loop = Mock()  # pylint: disable=protected-access
-        gateway._run_sync = lambda awaitable: asyncio.run(awaitable)  # pylint: disable=protected-access
+        gateway._run_sync = Mock(  # pylint: disable=protected-access
+            side_effect=lambda awaitable: asyncio.run(awaitable)
+        )
+        gateway.close()
         gateway.close()
         self.assertTrue(gateway._closed)  # pylint: disable=protected-access
+        gateway._run_sync.assert_called_once()  # pylint: disable=protected-access
         gateway._stop_sync_loop.assert_called_once()  # pylint: disable=protected-access

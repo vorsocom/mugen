@@ -63,8 +63,43 @@ class GroqCompletionGateway(ICompletionGateway):
     ) -> None:
         super().__init__()
         self._config = config
-        self._api = AsyncGroq(api_key=self._config.groq.api.key)
         self._logging_gateway = logging_gateway
+        timeout_seconds = self._resolve_timeout_seconds()
+        self._timeout_seconds = timeout_seconds
+        client_kwargs: dict[str, Any] = {
+            "api_key": self._config.groq.api.key,
+        }
+        if timeout_seconds is not None:
+            client_kwargs["timeout"] = timeout_seconds
+        self._api = AsyncGroq(**client_kwargs)
+        self._warn_missing_timeout_in_production()
+
+    def _resolve_timeout_seconds(self) -> float | None:
+        timeout_seconds = getattr(self._config.groq.api, "timeout_seconds", None)
+        if timeout_seconds is None:
+            return None
+        try:
+            resolved = float(timeout_seconds)
+        except (TypeError, ValueError):
+            self._logging_gateway.warning(
+                "GroqCompletionGateway: Invalid timeout_seconds configuration."
+            )
+            return None
+        if resolved <= 0:
+            self._logging_gateway.warning(
+                "GroqCompletionGateway: timeout_seconds must be positive when provided."
+            )
+            return None
+        return resolved
+
+    def _warn_missing_timeout_in_production(self) -> None:
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+        ).strip().lower()
+        if environment == "production" and self._timeout_seconds is None:
+            self._logging_gateway.warning(
+                "GroqCompletionGateway: timeout_seconds is not configured in production."
+            )
 
     async def get_completion(
         self,
@@ -100,6 +135,7 @@ class GroqCompletionGateway(ICompletionGateway):
                 operation=completion_request.operation,
                 message=str(e),
                 cause=e,
+                timeout_applied=self._timeout_seconds,
             ) from e
         except CompletionGatewayError:
             raise
@@ -113,6 +149,7 @@ class GroqCompletionGateway(ICompletionGateway):
                 operation=completion_request.operation,
                 message="Unexpected Groq completion failure.",
                 cause=e,
+                timeout_applied=self._timeout_seconds,
             ) from e
 
     def _serialize_create_kwargs(

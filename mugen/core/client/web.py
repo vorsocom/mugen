@@ -21,10 +21,17 @@ from sqlalchemy import text as sa_text
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.domain.use_case.enqueue_web_message import BuildQueuedMessageJobUseCase
+from mugen.core.domain.use_case.queue_job_lifecycle import QueueJobLifecycleUseCase
+from mugen.core.gateway.storage.media import (
+    FilesystemMediaStorageGateway,
+    ObjectMediaStorageGateway,
+)
 from mugen.core.utility.processing_signal import (
     PROCESSING_SIGNAL_THINKING,
     PROCESSING_STATE_START,
@@ -77,7 +84,9 @@ class DefaultWebClient(IWebClient):
     _default_queue_poll_interval_seconds: float = 0.25
     _default_queue_processing_lease_seconds: float = 30.0
     _default_queue_max_pending_jobs: int = 2000
+    _default_media_backend: str = "filesystem"
     _default_media_storage_path: str = "data/web_media"
+    _default_media_object_cache_path: str = "data/web_media_object_cache"
     _default_media_max_upload_bytes: int = 20 * 1024 * 1024
     _default_media_max_attachments_per_message: int = 10
     _default_media_allowed_mimetypes: list[str] = [
@@ -118,6 +127,9 @@ class DefaultWebClient(IWebClient):
 
         self._worker_task: asyncio.Task | None = None
         self._worker_stop = asyncio.Event()
+        self._worker_failure: BaseException | None = None
+        self._enqueue_job_use_case = BuildQueuedMessageJobUseCase.with_defaults()
+        self._queue_job_lifecycle_use_case = QueueJobLifecycleUseCase()
 
         self._sse_keepalive_seconds = self._resolve_float_config(
             ("web", "sse", "keepalive_seconds"),
@@ -150,6 +162,11 @@ class DefaultWebClient(IWebClient):
             self._default_media_storage_path,
         )
         self._media_storage_path = self._resolve_storage_path(storage_path)
+        self._media_backend = self._resolve_str_config(
+            ("web", "media", "backend"),
+            self._default_media_backend,
+        ).strip().lower()
+        self._media_storage_gateway = self._build_media_storage_gateway()
 
         self._media_max_upload_bytes = self._resolve_int_config(
             ("web", "media", "max_upload_bytes"),
@@ -177,6 +194,7 @@ class DefaultWebClient(IWebClient):
         """Start the background worker loop."""
         self._logging_gateway.debug("DefaultWebClient.init")
         self._ensure_media_directory()
+        await self._media_storage_gateway.init()
 
         async with self._storage_lock:
             await self._recover_stale_processing_jobs_unlocked()
@@ -185,10 +203,34 @@ class DefaultWebClient(IWebClient):
             return
 
         self._worker_stop.clear()
+        self._worker_failure = None
         self._worker_task = asyncio.create_task(
             self._worker_loop(),
             name="mugen.web.worker",
         )
+        self._worker_task.add_done_callback(self._on_worker_task_done)
+
+    def _on_worker_task_done(self, task: asyncio.Task) -> None:
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+
+        if exc is None:
+            return
+
+        self._worker_failure = exc
+        self._logging_gateway.error(
+            "DefaultWebClient worker crashed "
+            f"error_type={type(exc).__name__} error={exc}"
+        )
+
+    async def wait_until_stopped(self) -> None:
+        """Wait for worker completion and surface worker failures."""
+        task = self._worker_task
+        if task is None:
+            raise RuntimeError("Web client worker is not running.")
+        await task
 
     async def close(self) -> None:
         """Stop the worker loop and release in-memory subscribers."""
@@ -206,6 +248,11 @@ class DefaultWebClient(IWebClient):
 
         async with self._subscriber_lock:
             self._subscribers.clear()
+
+        try:
+            await self._media_storage_gateway.close()
+        except Exception:  # pylint: disable=broad-exception-caught
+            ...
 
     def _raw_relational_session_provider(self):
         if self._relational_storage_gateway is None:
@@ -314,51 +361,45 @@ class DefaultWebClient(IWebClient):
         client_message_id: str | None = None,
     ) -> dict[str, Any]:
         """Persist and enqueue a user message for async processing."""
-        auth_user_id = self._require_non_empty(auth_user, "auth_user")
-        conversation = self._require_non_empty(conversation_id, "conversation_id")
         normalized_type = self._normalize_message_type(message_type)
+        payload_metadata = metadata
+        if normalized_type == "composed":
+            payload_metadata = self._normalize_composed_metadata(metadata)
+            payload_metadata = await self._persist_composed_media_references(
+                payload_metadata
+            )
 
-        payload_metadata: dict[str, Any] = {}
-        if metadata is not None:
-            if not isinstance(metadata, dict):
-                raise ValueError("metadata must be an object")
-            payload_metadata = dict(metadata)
-
-        if normalized_type == "text":
-            if text is None or str(text).strip() == "":
-                raise ValueError("text is required for message_type=text")
-        elif normalized_type == "composed":
-            payload_metadata = self._normalize_composed_metadata(payload_metadata)
-        elif file_path in [None, ""]:
-            raise ValueError(f"file is required for message_type={normalized_type}")
+        persisted_file_path = file_path
+        if normalized_type not in {"text", "composed"}:
+            persisted_file_path = await self._persist_media_reference(
+                file_path=file_path,
+                filename_hint=original_filename,
+            )
 
         now_iso = self._utc_now_iso()
         job_id = uuid.uuid4().hex
         normalized_client_message_id = self._normalize_client_message_id(
             client_message_id=client_message_id,
             job_id=job_id,
-            conversation_id=conversation,
+            conversation_id=conversation_id,
             source="enqueue_message",
             event_type="ack",
         )
-        job = {
-            "id": job_id,
-            "conversation_id": conversation,
-            "sender": auth_user_id,
-            "message_type": normalized_type,
-            "text": text,
-            "metadata": payload_metadata,
-            "file_path": file_path,
-            "mime_type": mime_type,
-            "original_filename": original_filename,
-            "client_message_id": normalized_client_message_id,
-            "status": "pending",
-            "attempts": 0,
-            "created_at": now_iso,
-            "updated_at": now_iso,
-            "lease_expires_at": None,
-            "error": None,
-        }
+        job_entity = self._enqueue_job_use_case.handle(
+            job_id=job_id,
+            auth_user=auth_user,
+            conversation_id=conversation_id,
+            message_type=normalized_type,
+            text=text,
+            metadata=payload_metadata,
+            file_path=persisted_file_path,
+            mime_type=mime_type,
+            original_filename=original_filename,
+            client_message_id=normalized_client_message_id,
+        )
+        job = job_entity.as_pending_record(now_iso=now_iso)
+        conversation = job_entity.conversation_id
+        auth_user_id = job_entity.sender
 
         async with self._storage_lock:
             await self._ensure_conversation_owner_unlocked(
@@ -381,11 +422,11 @@ class DefaultWebClient(IWebClient):
                         raise OverflowError("queue is full")
 
                     payload = {
-                        "text": text,
-                        "metadata": payload_metadata,
-                        "file_path": file_path,
-                        "mime_type": mime_type,
-                        "original_filename": original_filename,
+                        "text": job["text"],
+                        "metadata": job["metadata"],
+                        "file_path": job["file_path"],
+                        "mime_type": job["mime_type"],
+                        "original_filename": job["original_filename"],
                     }
                     await session.execute(
                         sa_text(
@@ -405,7 +446,7 @@ class DefaultWebClient(IWebClient):
                             "job_id": job_id,
                             "conversation_id": conversation,
                             "sender": auth_user_id,
-                            "message_type": normalized_type,
+                            "message_type": job["message_type"],
                             "payload": json.dumps(
                                 payload, ensure_ascii=True, separators=(",", ":")
                             ),
@@ -633,11 +674,14 @@ class DefaultWebClient(IWebClient):
                     if owner_user_id != auth_user_id:
                         return None
 
-                    file_path = row.get("file_path")
-                    if not isinstance(file_path, str) or file_path == "":
+                    media_ref = row.get("file_path")
+                    if not isinstance(media_ref, str) or media_ref == "":
                         return None
 
-                    if not os.path.exists(file_path):
+                    resolved_path = await self._media_storage_gateway.materialize(
+                        media_ref
+                    )
+                    if resolved_path is None:
                         await session.execute(
                             sa_text(
                                 "DELETE FROM mugen.web_media_token "
@@ -648,7 +692,7 @@ class DefaultWebClient(IWebClient):
                         return None
 
                     return {
-                        "file_path": file_path,
+                        "file_path": resolved_path,
                         "mime_type": row.get("mime_type"),
                         "filename": row.get("filename"),
                     }
@@ -666,16 +710,17 @@ class DefaultWebClient(IWebClient):
             if owner_user_id != auth_user_id:
                 return None
 
-            file_path = token_data.get("file_path")
-            if not isinstance(file_path, str) or file_path == "":
+            media_ref = token_data.get("media_ref") or token_data.get("file_path")
+            if not isinstance(media_ref, str) or media_ref == "":
                 return None
 
-            if not os.path.exists(file_path):
+            resolved_path = await self._media_storage_gateway.materialize(media_ref)
+            if resolved_path is None:
                 await self._keyval_storage_gateway.delete(token_key)
                 return None
 
             return {
-                "file_path": file_path,
+                "file_path": resolved_path,
                 "mime_type": token_data.get("mime_type"),
                 "filename": token_data.get("filename"),
             }
@@ -804,12 +849,14 @@ class DefaultWebClient(IWebClient):
                 if queue_job.get("status") != "pending":
                     continue
 
-                queue_job["status"] = "processing"
-                queue_job["attempts"] = int(queue_job.get("attempts") or 0) + 1
-                queue_job["updated_at"] = now_iso
-                queue_job["lease_expires_at"] = (
-                    now_epoch + self._queue_processing_lease_seconds
+                claimed_view = self._queue_job_lifecycle_use_case.claim(
+                    job=queue_job,
+                    now_iso=now_iso,
+                    lease_expires_at=(
+                        now_epoch + self._queue_processing_lease_seconds
+                    ),
                 )
+                queue_job.update(claimed_view)
                 claimed_job = copy.deepcopy(queue_job)
                 changed = True
                 break
@@ -980,8 +1027,14 @@ class DefaultWebClient(IWebClient):
                 message=composed_message_payload,
             )
 
+        materialized_file_path = await self._materialize_media_reference(
+            job.get("file_path")
+        )
+        if materialized_file_path is None:
+            raise ValueError("Media file no longer exists.")
+
         message_payload = {
-            "file_path": job.get("file_path"),
+            "file_path": materialized_file_path,
             "mime_type": job.get("mime_type"),
             "filename": job.get("original_filename"),
             "metadata": job.get("metadata") or {},
@@ -1145,7 +1198,7 @@ class DefaultWebClient(IWebClient):
                 filename=filename,
             )
 
-        if isinstance(content, str) and content != "" and os.path.exists(content):
+        if isinstance(content, str) and content != "":
             return await self._create_media_token_payload(
                 file_path=content,
                 owner_user_id=owner_user_id,
@@ -1176,11 +1229,11 @@ class DefaultWebClient(IWebClient):
         mime_type: Any,
         filename: Any,
     ) -> dict[str, Any] | None:
-        normalized_path = self._resolve_media_source_path(
+        media_ref = await self._resolve_media_source_path(
             file_path=file_path,
             filename=filename,
         )
-        if normalized_path is None:
+        if media_ref is None:
             return None
 
         token = uuid.uuid4().hex
@@ -1191,13 +1244,14 @@ class DefaultWebClient(IWebClient):
         normalized_filename = (
             str(filename).strip()
             if filename not in [None, ""]
-            else os.path.basename(normalized_path)
+            else os.path.basename(media_ref)
         )
 
         token_payload = {
             "owner_user_id": owner_user_id,
             "conversation_id": conversation_id,
-            "file_path": normalized_path,
+            "file_path": media_ref,
+            "media_ref": media_ref,
             "mime_type": normalized_mime_type,
             "filename": normalized_filename,
             "expires_at": expires_at,
@@ -1222,7 +1276,7 @@ class DefaultWebClient(IWebClient):
                             "token": token,
                             "owner_user_id": owner_user_id,
                             "conversation_id": conversation_id,
-                            "file_path": normalized_path,
+                            "file_path": media_ref,
                             "mime_type": normalized_mime_type,
                             "filename": normalized_filename,
                             "expires_at": self._to_utc_datetime(expires_at),
@@ -1239,36 +1293,100 @@ class DefaultWebClient(IWebClient):
             "expires_at": expires_at,
         }
 
-    def _resolve_media_source_path(
+    async def _resolve_media_source_path(
         self,
         *,
         file_path: Any,
         filename: Any,
     ) -> str | None:
         if isinstance(file_path, str) and file_path != "":
+            if await self._media_storage_gateway.exists(file_path):
+                return file_path
             normalized_path = os.path.abspath(file_path)
-            if os.path.exists(normalized_path):
+            if await self._media_storage_gateway.exists(normalized_path):
                 return normalized_path
-            return None
+            return await self._media_storage_gateway.store_file(
+                normalized_path,
+                filename_hint=(
+                    str(filename)
+                    if filename not in [None, ""]
+                    else None
+                ),
+            )
 
         payload_bytes = self._read_media_bytes(file_path)
         if payload_bytes is None:
             return None
 
-        extension = self._infer_media_extension(filename)
-        generated_name = f"{uuid.uuid4().hex}{extension}"
-        Path(self._media_storage_path).mkdir(parents=True, exist_ok=True)
-        normalized_path = os.path.abspath(
-            os.path.join(self._media_storage_path, generated_name)
+        return await self._media_storage_gateway.store_bytes(
+            payload_bytes,
+            filename_hint=(
+                str(filename)
+                if filename not in [None, ""]
+                else None
+            ),
         )
 
-        try:
-            with open(normalized_path, "wb") as handle:
-                handle.write(payload_bytes)
-        except OSError:
+    async def _persist_media_reference(
+        self,
+        *,
+        file_path: Any,
+        filename_hint: Any = None,
+    ) -> str | None:
+        if not isinstance(file_path, str) or file_path.strip() == "":
             return None
 
-        return normalized_path
+        persisted_ref = await self._resolve_media_source_path(
+            file_path=file_path,
+            filename=filename_hint,
+        )
+        if persisted_ref is None:
+            return None
+
+        normalized_input_path = os.path.abspath(file_path)
+        if (
+            persisted_ref != normalized_input_path
+            and os.path.exists(normalized_input_path)
+        ):
+            try:
+                os.remove(normalized_input_path)
+            except OSError:
+                ...
+
+        return persisted_ref
+
+    async def _materialize_media_reference(self, value: Any) -> str | None:
+        if not isinstance(value, str) or value.strip() == "":
+            return None
+        return await self._media_storage_gateway.materialize(value.strip())
+
+    async def _persist_composed_media_references(
+        self,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        raw_attachments = metadata.get("attachments")
+        if not isinstance(raw_attachments, list):
+            return metadata
+
+        normalized = dict(metadata)
+        normalized_attachments: list[dict[str, Any]] = []
+        for attachment in raw_attachments:
+            if not isinstance(attachment, dict):
+                raise ValueError("metadata.attachments items must be objects")
+
+            persisted_file_path = await self._persist_media_reference(
+                file_path=attachment.get("file_path"),
+                filename_hint=attachment.get("original_filename"),
+            )
+            if persisted_file_path is None:
+                raise ValueError("metadata.attachments[].file_path is invalid")
+
+            normalized_attachment = dict(attachment)
+            normalized_attachment["file_path"] = persisted_file_path
+            normalized_attachments.append(normalized_attachment)
+
+        normalized["attachments"] = normalized_attachments
+        return normalized
 
     @staticmethod
     def _read_media_bytes(value: Any) -> bytes | None:
@@ -1573,7 +1691,7 @@ class DefaultWebClient(IWebClient):
                 del self._subscribers[conversation_id]
 
     async def _cleanup_media_tokens_and_files(self) -> None:
-        active_paths: set[str] = set()
+        active_refs: set[str] = set()
         now_epoch = self._epoch_now()
 
         async with self._storage_lock:
@@ -1600,7 +1718,7 @@ class DefaultWebClient(IWebClient):
 
                         file_path = row.get("file_path")
                         if isinstance(file_path, str) and file_path != "":
-                            active_paths.add(os.path.abspath(file_path))
+                            active_refs.add(file_path)
             else:
                 cursor: str | None = None
                 media_keys: list[str] = []
@@ -1631,37 +1749,15 @@ class DefaultWebClient(IWebClient):
                         await self._keyval_storage_gateway.delete(key)
                         continue
 
-                    file_path = token_payload.get("file_path")
-                    if isinstance(file_path, str) and file_path != "":
-                        active_paths.add(os.path.abspath(file_path))
+                    media_ref = token_payload.get("media_ref") or token_payload.get("file_path")
+                    if isinstance(media_ref, str) and media_ref != "":
+                        active_refs.add(media_ref)
 
-        try:
-            file_names = os.listdir(self._media_storage_path)
-        except (FileNotFoundError, NotADirectoryError):
-            return
-
-        for file_name in file_names:
-            candidate = os.path.abspath(
-                os.path.join(self._media_storage_path, file_name)
-            )
-            if not os.path.isfile(candidate):
-                continue
-
-            if candidate in active_paths:
-                continue
-
-            try:
-                age_seconds = now_epoch - os.path.getmtime(candidate)
-            except OSError:
-                continue
-
-            if age_seconds < self._media_retention_seconds:
-                continue
-
-            try:
-                os.remove(candidate)
-            except OSError:
-                ...
+        await self._media_storage_gateway.cleanup(
+            active_refs=active_refs,
+            retention_seconds=self._media_retention_seconds,
+            now_epoch=now_epoch,
+        )
 
     async def _mark_job_done(self, job_id: str) -> None:
         await self._mark_job_status(job_id, status="done", error=None)
@@ -1708,12 +1804,27 @@ class DefaultWebClient(IWebClient):
                 if str(queue_job.get("id")) != job_id:
                     continue
 
-                queue_job["status"] = normalized_status
-                queue_job["lease_expires_at"] = None
-                queue_job["updated_at"] = self._utc_now_iso()
-                queue_job["error"] = error
+                now_iso = self._utc_now_iso()
                 if normalized_status == "done":
-                    queue_job["completed_at"] = self._utc_now_iso()
+                    queue_job.update(
+                        self._queue_job_lifecycle_use_case.complete(
+                            job=queue_job,
+                            now_iso=now_iso,
+                        )
+                    )
+                elif normalized_status == "failed":
+                    queue_job.update(
+                        self._queue_job_lifecycle_use_case.fail(
+                            job=queue_job,
+                            now_iso=now_iso,
+                            error=str(error or ""),
+                        )
+                    )
+                else:
+                    queue_job["status"] = normalized_status
+                    queue_job["lease_expires_at"] = None
+                    queue_job["updated_at"] = now_iso
+                    queue_job["error"] = error
                 await self._write_queue_state_unlocked(queue_state)
                 return
 
@@ -2273,8 +2384,32 @@ class DefaultWebClient(IWebClient):
 
         return os.path.abspath(configured_path)
 
+    def _build_media_storage_gateway(self) -> IMediaStorageGateway:
+        if self._media_backend in {"filesystem", "fs", "local"}:
+            return FilesystemMediaStorageGateway(base_path=self._media_storage_path)
+
+        if self._media_backend in {"object", "object_storage", "keyval"}:
+            raw_cache_path = self._resolve_str_config(
+                ("web", "media", "object", "cache_path"),
+                self._default_media_object_cache_path,
+            )
+            raw_key_prefix = self._resolve_str_config(
+                ("web", "media", "object", "key_prefix"),
+                "web:media:object",
+            )
+            return ObjectMediaStorageGateway(
+                keyval_storage_gateway=self._keyval_storage_gateway,
+                cache_path=self._resolve_storage_path(raw_cache_path),
+                key_prefix=raw_key_prefix,
+            )
+
+        raise ValueError(
+            "web.media.backend must be one of: filesystem, object."
+        )
+
     def _ensure_media_directory(self) -> None:
-        Path(self._media_storage_path).mkdir(parents=True, exist_ok=True)
+        if self._media_backend in {"filesystem", "fs", "local"}:
+            Path(self._media_storage_path).mkdir(parents=True, exist_ok=True)
 
     def _resolve_float_config(
         self,

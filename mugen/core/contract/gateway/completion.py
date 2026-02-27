@@ -124,11 +124,13 @@ class CompletionGatewayError(RuntimeError):
         operation: str,
         message: str,
         cause: Exception | None = None,
+        timeout_applied: float | None = None,
     ) -> None:
         super().__init__(message)
         self.provider = provider
         self.operation = operation
         self.cause = cause
+        self.timeout_applied = timeout_applied
 
 
 def normalise_completion_request(

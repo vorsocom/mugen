@@ -50,6 +50,32 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         self.assertIsNone(di._get_active_platforms({"mugen": {"platforms": "matrix"}}))
         self.assertEqual(di._get_active_platforms({"mugen": {"platforms": ["matrix"]}}), ["matrix"])
 
+    def test_infer_runtime_profile(self) -> None:
+        self.assertEqual(di._infer_runtime_profile({"mugen": {"platforms": []}}), "api_only")
+        self.assertEqual(di._infer_runtime_profile({"mugen": {"platforms": ["web"]}}), "web_only")
+        self.assertEqual(
+            di._infer_runtime_profile({"mugen": {"platforms": ["matrix", "web"]}}),
+            "platform_full",
+        )
+
+    def test_validate_container_does_not_require_relational_without_config_path(self) -> None:
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=Mock(),
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            relational_storage_gateway=None,
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+            web_client=object(),
+        )
+        config = {"mugen": {"platforms": ["web"]}}
+
+        di._validate_container(config, injector)
+
     def test_validate_container_logs_all_missing_optional_providers(self) -> None:
         injector = di.injector.DependencyInjector(
             config=object(),

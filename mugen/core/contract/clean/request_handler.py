@@ -5,8 +5,11 @@ __all__ = ["IRequestHandler"]
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar
 
-_RequestT = TypeVar("_RequestT", bound="IRequestHandler")
-_ResponseT = TypeVar("_ResponseT", bound="IRequestHandler")
+from mugen.core.contract.clean.request import IRequest
+from mugen.core.contract.clean.response import IResponse
+
+_RequestT = TypeVar("_RequestT", bound=IRequest)
+_ResponseT = TypeVar("_ResponseT", bound=IResponse)
 
 
 # pylint: disable=too-few-public-methods

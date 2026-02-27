@@ -19,6 +19,10 @@ class IWebClient(ABC):
         """Perform shutdown routine."""
 
     @abstractmethod
+    async def wait_until_stopped(self) -> None:
+        """Block until the runtime loop exits or fails."""
+
+    @abstractmethod
     async def enqueue_message(  # pylint: disable=too-many-arguments
         self,
         *,
