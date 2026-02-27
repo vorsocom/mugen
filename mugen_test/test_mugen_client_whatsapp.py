@@ -29,10 +29,18 @@ def _make_config() -> SimpleNamespace:
 
 
 class _Response:
-    def __init__(self, *, text: str = "", status: int = 200, body: bytes = b""):
+    def __init__(
+        self,
+        *,
+        text: str = "",
+        status: int = 200,
+        body: bytes = b"",
+        headers: dict | None = None,
+    ):
         self._text = text
         self.status = status
         self._body = body
+        self.headers = {} if headers is None else dict(headers)
         self.release_called = False
         self.close_called = False
 
@@ -792,6 +800,60 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertIsNone(not_found)
+
+    async def test_download_file_http_resolves_mimetype_from_response_headers(
+        self,
+    ) -> None:
+        client = self._new_client()
+        session = Mock()
+        session.get = AsyncMock(
+            return_value=_Response(
+                status=200,
+                body=b"png-bytes",
+                headers={"Content-Type": "image/png; charset=utf-8"},
+            )
+        )
+        client._client_session = session  # pylint: disable=protected-access
+
+        saved_path = await client._download_file_http(  # pylint: disable=protected-access
+            "https://example.com/file",
+            None,
+        )
+        self.assertTrue(os.path.exists(saved_path))
+        os.remove(saved_path)
+
+    async def test_download_file_http_rejects_missing_mimetype_and_header(self) -> None:
+        client = self._new_client()
+        session = Mock()
+        session.get = AsyncMock(
+            return_value=_Response(
+                status=200,
+                body=b"png-bytes",
+            )
+        )
+        client._client_session = session  # pylint: disable=protected-access
+
+        result = await client._download_file_http(  # pylint: disable=protected-access
+            "https://example.com/file",
+            None,
+        )
+        self.assertIsNone(result)
+        client._logging_gateway.error.assert_any_call(
+            "Media download failed due to missing or unsupported mimetype."
+        )
+
+    def test_resolve_media_extension_handles_empty_and_non_mapping_headers(self) -> None:
+        client = self._new_client()
+
+        self.assertIsNone(client._normalize_mimetype(" ; charset=utf-8"))  # pylint: disable=protected-access
+
+        response_without_mapping_headers = SimpleNamespace(headers=object())
+        self.assertIsNone(
+            client._resolve_media_extension(  # pylint: disable=protected-access
+                declared_mimetype=None,
+                response=response_without_mapping_headers,
+            )
+        )
 
     async def test_download_file_http_requires_open_session(self) -> None:
         client = self._new_client()

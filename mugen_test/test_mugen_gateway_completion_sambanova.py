@@ -668,6 +668,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(SambaNovaCompletionGateway._usage_from_payload(payload=None))
 
     def test_resolve_helpers(self) -> None:
+        gateway = SambaNovaCompletionGateway(_make_config(), Mock())
         self.assertEqual(
             SambaNovaCompletionGateway._resolve_auth_scheme(
                 CompletionRequest(
@@ -706,13 +707,20 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             "max_completion_tokens",
         )
         self.assertEqual(
-            SambaNovaCompletionGateway._resolve_stream_options(
+            gateway._resolve_stream_options(  # pylint: disable=protected-access
                 CompletionRequest(messages=[CompletionMessage(role="user", content="x")])
             ),
             {"include_usage": False},
         )
+        self.assertFalse(
+            gateway._resolve_vendor_bool(  # pylint: disable=protected-access
+                CompletionRequest(messages=[CompletionMessage(role="user", content="x")]),
+                key="include_usage",
+                default=False,
+            )
+        )
         self.assertEqual(
-            SambaNovaCompletionGateway._resolve_stream_options(
+            gateway._resolve_stream_options(  # pylint: disable=protected-access
                 CompletionRequest(
                     messages=[CompletionMessage(role="user", content="x")],
                     vendor_params={
@@ -746,6 +754,50 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             SambaNovaCompletionGateway._normalize_list_of_dicts([{"a": 1}, 1]),
             [{"a": 1}],
         )
+
+    async def test_get_completion_vendor_stream_parses_string_false(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            vendor_params={"stream": "false"},
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion(request)
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertFalse(body["stream"])
+
+    async def test_get_completion_rejects_invalid_include_usage_boolean(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            vendor_params={"include_usage": "definitely"},
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ):
+            with self.assertRaisesRegex(
+                CompletionGatewayError,
+                "Invalid boolean value for vendor_params.include_usage",
+            ):
+                await gateway.get_completion(request)
 
     def test_timeout_parser_and_production_warnings(self) -> None:
         gateway = SambaNovaCompletionGateway.__new__(SambaNovaCompletionGateway)

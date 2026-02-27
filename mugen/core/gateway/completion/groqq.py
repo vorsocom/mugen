@@ -17,6 +17,7 @@ from mugen.core.contract.gateway.completion import (
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import (
+    parse_bool_like,
     resolve_optional_positive_float,
     warn_missing_in_production,
 )
@@ -159,16 +160,24 @@ class GroqCompletionGateway(ICompletionGateway):
         if top_p is None:
             top_p = float(operation_config.get("top_p", 1.0))
 
-        stream = request.inference.stream
+        stream = self._parse_bool_like(
+            request=request,
+            value=request.inference.stream,
+            field_name="inference.stream",
+        )
         if "stream" in request.vendor_params:
-            stream = bool(request.vendor_params["stream"])
+            stream = self._parse_bool_like(
+                request=request,
+                value=request.vendor_params["stream"],
+                field_name="vendor_params.stream",
+            )
 
         kwargs: dict[str, Any] = {
             "messages": [message.to_dict() for message in request.messages],
             "model": model,
             "temperature": temperature,
             "top_p": top_p,
-            "stream": bool(stream),
+            "stream": stream,
         }
 
         stream_options = request.inference.stream_options
@@ -181,7 +190,11 @@ class GroqCompletionGateway(ICompletionGateway):
             kwargs["stop"] = request.inference.stop
         max_tokens = request.inference.effective_max_tokens
         if max_tokens is not None:
-            if bool(request.vendor_params.get(self._legacy_max_tokens_vendor_flag)):
+            if self._resolve_vendor_bool(
+                request,
+                key=self._legacy_max_tokens_vendor_flag,
+                default=False,
+            ):
                 kwargs["max_tokens"] = int(max_tokens)
             else:
                 kwargs["max_completion_tokens"] = int(max_tokens)
@@ -191,6 +204,43 @@ class GroqCompletionGateway(ICompletionGateway):
                 kwargs[key] = request.vendor_params[key]
 
         return model, kwargs
+
+    def _resolve_vendor_bool(
+        self,
+        request: CompletionRequest,
+        *,
+        key: str,
+        default: bool,
+    ) -> bool:
+        if key not in request.vendor_params:
+            return default
+        return self._parse_bool_like(
+            request=request,
+            value=request.vendor_params[key],
+            field_name=f"vendor_params.{key}",
+        )
+
+    def _parse_bool_like(
+        self,
+        *,
+        request: CompletionRequest,
+        value: Any,
+        field_name: str,
+    ) -> bool:
+        try:
+            return parse_bool_like(
+                value=value,
+                field_name=field_name,
+                provider_label="GroqCompletionGateway",
+            )
+        except ValueError as exc:
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=request.operation,
+                message=str(exc),
+                cause=exc,
+                timeout_applied=self._timeout_seconds,
+            ) from exc
 
     async def _parse_stream_response(
         self,

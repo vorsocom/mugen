@@ -801,8 +801,14 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                     )
                     return None
 
-                extension = mimetypes.guess_extension(mimetype.split(";")[0].strip())
+                extension = self._resolve_media_extension(
+                    declared_mimetype=mimetype,
+                    response=response,
+                )
                 if not extension:
+                    self._logging_gateway.error(
+                        "Media download failed due to missing or unsupported mimetype."
+                    )
                     return None
 
                 fd, file_path = tempfile.mkstemp(suffix=extension)
@@ -847,6 +853,36 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         finally:
             if not download_complete and file_path and os.path.exists(file_path):
                 os.remove(file_path)
+
+    @staticmethod
+    def _normalize_mimetype(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.split(";", 1)[0].strip().lower()
+        if normalized == "":
+            return None
+        return normalized
+
+    def _resolve_media_extension(
+        self,
+        *,
+        declared_mimetype: object,
+        response: object,
+    ) -> str | None:
+        normalized_mimetype = self._normalize_mimetype(declared_mimetype)
+        if normalized_mimetype is None:
+            headers = getattr(response, "headers", None)
+            header_value = None
+            if hasattr(headers, "get") and callable(headers.get):
+                header_value = headers.get("Content-Type")
+                if header_value in [None, ""]:
+                    header_value = headers.get("content-type")
+            normalized_mimetype = self._normalize_mimetype(header_value)
+
+        if normalized_mimetype is None:
+            return None
+
+        return mimetypes.guess_extension(normalized_mimetype)
 
     @asynccontextmanager
     async def _managed_http_get(self, url: str, **kwargs):
