@@ -10,11 +10,14 @@ from quart import current_app, jsonify
 from mugen.bootstrap_state import (
     PHASE_A_STATUS_KEY,
     PHASE_B_ERROR_KEY,
+    PHASE_B_PLATFORM_ERRORS_KEY,
+    PHASE_B_PLATFORM_STATUSES_KEY,
     PHASE_B_STARTED_AT_KEY,
     PHASE_B_STATUS_KEY,
     PHASE_STATUS_DEGRADED,
     PHASE_STATUS_HEALTHY,
     PHASE_STATUS_STARTING,
+    PHASE_STATUS_STOPPED,
     get_bootstrap_state,
 )
 from mugen.core.api import api
@@ -32,7 +35,40 @@ def _resolve_bootstrap_status() -> dict[str, Any]:
         "phase_b_started_at": state.get(PHASE_B_STARTED_AT_KEY),
         "phase_b_readiness_grace_seconds": state.get(_PHASE_B_READINESS_GRACE_KEY, 0.0),
         "phase_b_critical_platforms": state.get(_PHASE_B_CRITICAL_PLATFORMS_KEY, []),
+        "phase_b_platform_statuses": state.get(PHASE_B_PLATFORM_STATUSES_KEY, {}),
+        "phase_b_platform_errors": state.get(PHASE_B_PLATFORM_ERRORS_KEY, {}),
     }
+
+
+def _resolve_failed_platforms(
+    *,
+    critical_platforms: list[str],
+    platform_statuses: dict[str, str],
+    platform_errors: dict[str, Any],
+    ignore_starting: bool,
+) -> tuple[list[str], dict[str, str]]:
+    failed: list[str] = []
+    reasons: dict[str, str] = {}
+    for platform in critical_platforms:
+        status = str(platform_statuses.get(platform, PHASE_STATUS_STARTING) or "")
+        if status == PHASE_STATUS_HEALTHY:
+            continue
+        if ignore_starting and status == PHASE_STATUS_STARTING:
+            continue
+
+        failed.append(platform)
+        reason = platform_errors.get(platform)
+        if reason in [None, ""]:
+            if status == PHASE_STATUS_STARTING:
+                reason = "platform still starting"
+            elif status == PHASE_STATUS_STOPPED:
+                reason = "platform stopped"
+            elif status == PHASE_STATUS_DEGRADED:
+                reason = "platform degraded"
+            else:
+                reason = f"platform status={status}"
+        reasons[platform] = str(reason)
+    return failed, reasons
 
 
 @api.get("/core/health/live")
@@ -59,20 +95,65 @@ async def core_health_ready():
     phase_b_status = status["phase_b_status"]
     phase_b_error = status["phase_b_error"]
     phase_b_started_at = status["phase_b_started_at"]
+    critical_platforms = status["phase_b_critical_platforms"]
+    if not isinstance(critical_platforms, list):
+        critical_platforms = []
+    critical_platforms = [
+        str(platform).strip().lower()
+        for platform in critical_platforms
+        if str(platform).strip() != ""
+    ]
 
-    ready = phase_a_status == PHASE_STATUS_HEALTHY and phase_b_status != PHASE_STATUS_DEGRADED
+    platform_statuses_raw = status["phase_b_platform_statuses"]
+    platform_statuses: dict[str, str] = {}
+    if isinstance(platform_statuses_raw, dict):
+        for platform, platform_status in platform_statuses_raw.items():
+            normalized_platform = str(platform).strip().lower()
+            if normalized_platform == "":
+                continue
+            platform_statuses[normalized_platform] = str(platform_status or "")
+
+    platform_errors_raw = status["phase_b_platform_errors"]
+    platform_errors: dict[str, Any] = {}
+    if isinstance(platform_errors_raw, dict):
+        for platform, error in platform_errors_raw.items():
+            normalized_platform = str(platform).strip().lower()
+            if normalized_platform == "":
+                continue
+            platform_errors[normalized_platform] = error
+
+    failed_platforms, reasons = _resolve_failed_platforms(
+        critical_platforms=critical_platforms,
+        platform_statuses=platform_statuses,
+        platform_errors=platform_errors,
+        ignore_starting=False,
+    )
+    ready = (
+        phase_a_status == PHASE_STATUS_HEALTHY
+        and phase_b_status != PHASE_STATUS_DEGRADED
+        and not failed_platforms
+    )
 
     if phase_b_status == PHASE_STATUS_STARTING:
         grace_seconds = float(status["phase_b_readiness_grace_seconds"] or 0.0)
-        critical_platforms = status["phase_b_critical_platforms"] or []
         elapsed = 0.0
         if phase_b_started_at is not None:
             try:
                 elapsed = max(0.0, perf_counter() - float(phase_b_started_at))
             except (TypeError, ValueError):
                 elapsed = 0.0
-        if critical_platforms and elapsed > grace_seconds:
-            ready = False
+        if critical_platforms and elapsed <= grace_seconds:
+            failed_platforms, reasons = _resolve_failed_platforms(
+                critical_platforms=critical_platforms,
+                platform_statuses=platform_statuses,
+                platform_errors=platform_errors,
+                ignore_starting=True,
+            )
+        ready = (
+            phase_a_status == PHASE_STATUS_HEALTHY
+            and phase_b_status != PHASE_STATUS_DEGRADED
+            and not failed_platforms
+        )
 
     return (
         jsonify(
@@ -82,6 +163,9 @@ async def core_health_ready():
                 "phase_a_status": phase_a_status,
                 "phase_b_status": phase_b_status,
                 "phase_b_error": phase_b_error,
+                "critical_platforms": critical_platforms,
+                "failed_platforms": failed_platforms,
+                "reasons": reasons,
             }
         ),
         200 if ready else 503,

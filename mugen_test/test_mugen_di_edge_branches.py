@@ -57,6 +57,41 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._infer_runtime_profile({"mugen": {"platforms": ["matrix", "web"]}}),
             "platform_full",
         )
+        self.assertEqual(
+            di._infer_runtime_profile(
+                {"mugen": {"runtime": {"profile": "api_only"}, "platforms": ["web"]}}
+            ),
+            "api_only",
+        )
+
+    def test_infer_runtime_profile_rejects_invalid_override(self) -> None:
+        with self.assertRaises(RuntimeError):
+            di._infer_runtime_profile({"mugen": {"runtime": {"profile": "invalid"}}})
+
+    def test_normalize_platforms_filters_empty_and_duplicates(self) -> None:
+        self.assertEqual(di._normalize_platforms(None), [])
+        self.assertEqual(
+            di._normalize_platforms([" web ", "", "web", "matrix"]),
+            ["web", "matrix"],
+        )
+
+    def test_runtime_profile_override_edge_cases(self) -> None:
+        self.assertEqual(
+            di._resolve_runtime_profile_override(  # pylint: disable=protected-access
+                {"mugen": {"runtime": {"profile": None}}}
+            ),
+            "auto",
+        )
+        self.assertEqual(
+            di._resolve_runtime_profile_override(  # pylint: disable=protected-access
+                {"mugen": {"runtime": {"profile": "   "}}}
+            ),
+            "auto",
+        )
+        with self.assertRaises(RuntimeError):
+            di._resolve_runtime_profile_override(  # pylint: disable=protected-access
+                {"mugen": {"runtime": {"profile": 1}}}
+            )
 
     def test_validate_container_does_not_require_relational_without_config_path(self) -> None:
         injector = di.injector.DependencyInjector(
@@ -183,6 +218,74 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         }
 
         di._validate_container(config, injector)
+
+    def test_validate_container_rejects_api_only_with_enabled_platforms(self) -> None:
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=Mock(),
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            relational_storage_gateway=object(),
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+            web_client=object(),
+        )
+        config = {
+            "mugen": {
+                "runtime": {"profile": "api_only"},
+                "platforms": ["web"],
+            }
+        }
+        with self.assertRaises(RuntimeError):
+            di._validate_container(config, injector)
+
+    def test_validate_container_rejects_web_only_profile_without_web_platform(self) -> None:
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=Mock(),
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            relational_storage_gateway=object(),
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+            web_client=object(),
+        )
+        config = {
+            "mugen": {
+                "runtime": {"profile": "web_only"},
+                "platforms": ["matrix"],
+            }
+        }
+        with self.assertRaises(RuntimeError):
+            di._validate_container(config, injector)
+
+    def test_validate_container_rejects_platform_full_without_platforms(self) -> None:
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=Mock(),
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            relational_storage_gateway=object(),
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+        )
+        config = {
+            "mugen": {
+                "runtime": {"profile": "platform_full"},
+                "platforms": [],
+            }
+        }
+        with self.assertRaises(RuntimeError):
+            di._validate_container(config, injector)
 
     def test_build_provider_from_spec_handles_attribute_error_when_injector_invalid(
         self,

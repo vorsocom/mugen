@@ -1,0 +1,494 @@
+"""Unit tests for mugen.core.gateway.knowledge.qdrant.QdrantKnowledgeGateway."""
+
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+import unittest
+from unittest.mock import AsyncMock, Mock, patch
+
+from mugen.core.contract.dto.qdrant.search import QdrantSearchVendorParams
+from mugen.core.gateway.knowledge.qdrant import QdrantKnowledgeGateway
+
+
+def _make_config(
+    *,
+    environment: str = "development",
+    timeout_seconds: object = 2.5,
+    max_retries: object = 1,
+    retry_backoff_seconds: object = 0.0,
+    encoder_preload: object = False,
+    encoder_max_concurrency: object = 2,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        mugen=SimpleNamespace(environment=environment),
+        qdrant=SimpleNamespace(
+            api=SimpleNamespace(
+                key="qdrant-key",
+                url="https://qdrant.local",
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+                retry_backoff_seconds=retry_backoff_seconds,
+            ),
+            encoder=SimpleNamespace(
+                preload=encoder_preload,
+                max_concurrency=encoder_max_concurrency,
+            ),
+        ),
+        transformers=SimpleNamespace(hf=SimpleNamespace(home="/tmp/hf")),
+    )
+
+
+def _build_gateway(
+    *,
+    config: SimpleNamespace,
+    logging_gateway: Mock | None = None,
+    fake_client: SimpleNamespace | None = None,
+):
+    logger = logging_gateway or Mock()
+    client = fake_client or SimpleNamespace(
+        count=AsyncMock(),
+        search=AsyncMock(),
+    )
+    with (
+        patch(
+            "mugen.core.gateway.knowledge.qdrant.AsyncQdrantClient",
+            return_value=client,
+        ),
+        patch("mugen.core.gateway.knowledge.qdrant.SentenceTransformer") as sentence_transformer,
+    ):
+        gateway = QdrantKnowledgeGateway(config, logger)
+    return gateway, client, logger, sentence_transformer
+
+
+class _VectorLike:
+    def tolist(self) -> list[float]:
+        return [1.0, 2.0]
+
+
+class _WithModelDump:
+    def model_dump(self):
+        return {"id": 1}
+
+
+class _WithDictMethod:
+    def dict(self):
+        return {"id": 2}
+
+
+class _WithNonDictDumpAndDict:
+    def __init__(self) -> None:
+        self.value = 11
+
+    def model_dump(self):
+        return ["not", "dict"]
+
+    def dict(self):
+        return ["still-not-dict"]
+
+
+class _CountObject:
+    def __init__(self, count: int) -> None:
+        self.count = count
+
+
+class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
+    """Covers timeout parsing, retry behavior, and search flow branches."""
+
+    def test_constructor_preloads_encoder_when_enabled(self) -> None:
+        config = _make_config(encoder_preload="yes")
+        logging_gateway = Mock()
+        fake_client = SimpleNamespace(count=AsyncMock(), search=AsyncMock())
+
+        with (
+            patch(
+                "mugen.core.gateway.knowledge.qdrant.AsyncQdrantClient",
+                return_value=fake_client,
+            ),
+            patch("mugen.core.gateway.knowledge.qdrant.SentenceTransformer") as transformer,
+        ):
+            gateway = QdrantKnowledgeGateway(config, logging_gateway)
+
+        self.assertIsNotNone(gateway._encoder)  # pylint: disable=protected-access
+        transformer.assert_called_once()
+
+    def test_parse_helpers_cover_invalid_and_edge_values(self) -> None:
+        config = _make_config()
+        gateway, _, logging_gateway, _ = _build_gateway(config=config)
+
+        gateway._config.qdrant.encoder.preload = "off"  # pylint: disable=protected-access
+        self.assertFalse(gateway._resolve_encoder_preload())  # pylint: disable=protected-access
+        gateway._config.qdrant.encoder.preload = "unexpected"  # pylint: disable=protected-access
+        self.assertFalse(gateway._resolve_encoder_preload())  # pylint: disable=protected-access
+        gateway._config.qdrant.encoder.preload = True  # pylint: disable=protected-access
+        self.assertTrue(gateway._resolve_encoder_preload())  # pylint: disable=protected-access
+        gateway._config.qdrant.encoder.preload = object()  # pylint: disable=protected-access
+        self.assertFalse(gateway._resolve_encoder_preload())  # pylint: disable=protected-access
+
+        gateway._config.qdrant.encoder.max_concurrency = "bad"  # pylint: disable=protected-access
+        self.assertEqual(
+            gateway._resolve_encoder_max_concurrency(),  # pylint: disable=protected-access
+            gateway._default_encoder_max_concurrency,  # pylint: disable=protected-access
+        )
+        gateway._config.qdrant.encoder.max_concurrency = 0  # pylint: disable=protected-access
+        self.assertEqual(
+            gateway._resolve_encoder_max_concurrency(),  # pylint: disable=protected-access
+            gateway._default_encoder_max_concurrency,  # pylint: disable=protected-access
+        )
+
+        gateway._config.qdrant.api.timeout_seconds = "bad"  # pylint: disable=protected-access
+        self.assertIsNone(gateway._resolve_api_timeout_seconds())  # pylint: disable=protected-access
+        gateway._config.qdrant.api.timeout_seconds = 0  # pylint: disable=protected-access
+        self.assertIsNone(gateway._resolve_api_timeout_seconds())  # pylint: disable=protected-access
+        gateway._config.qdrant.api.timeout_seconds = 3  # pylint: disable=protected-access
+        self.assertEqual(gateway._resolve_api_timeout_seconds(), 3.0)  # pylint: disable=protected-access
+
+        gateway._config.qdrant.api.max_retries = "bad"  # pylint: disable=protected-access
+        self.assertEqual(
+            gateway._resolve_api_max_retries(),  # pylint: disable=protected-access
+            gateway._default_api_max_retries,  # pylint: disable=protected-access
+        )
+        gateway._config.qdrant.api.max_retries = -1  # pylint: disable=protected-access
+        self.assertEqual(
+            gateway._resolve_api_max_retries(),  # pylint: disable=protected-access
+            gateway._default_api_max_retries,  # pylint: disable=protected-access
+        )
+        gateway._config.qdrant.api.max_retries = 4  # pylint: disable=protected-access
+        self.assertEqual(gateway._resolve_api_max_retries(), 4)  # pylint: disable=protected-access
+
+        gateway._config.qdrant.api.retry_backoff_seconds = "bad"  # pylint: disable=protected-access
+        self.assertEqual(
+            gateway._resolve_api_retry_backoff_seconds(),  # pylint: disable=protected-access
+            gateway._default_api_retry_backoff_seconds,  # pylint: disable=protected-access
+        )
+        gateway._config.qdrant.api.retry_backoff_seconds = -1  # pylint: disable=protected-access
+        self.assertEqual(
+            gateway._resolve_api_retry_backoff_seconds(),  # pylint: disable=protected-access
+            gateway._default_api_retry_backoff_seconds,  # pylint: disable=protected-access
+        )
+        gateway._config.qdrant.api.retry_backoff_seconds = 0.25  # pylint: disable=protected-access
+        self.assertEqual(
+            gateway._resolve_api_retry_backoff_seconds(), 0.25  # pylint: disable=protected-access
+        )
+
+        warnings = [str(call.args[0]) for call in logging_gateway.warning.call_args_list]
+        self.assertIn(
+            "QdrantKnowledgeGateway: Invalid timeout_seconds configuration.",
+            warnings,
+        )
+        self.assertIn(
+            "QdrantKnowledgeGateway: timeout_seconds must be positive when provided.",
+            warnings,
+        )
+        self.assertIn(
+            "QdrantKnowledgeGateway: Invalid max_retries configuration.",
+            warnings,
+        )
+        self.assertIn(
+            "QdrantKnowledgeGateway: max_retries must be non-negative.",
+            warnings,
+        )
+        self.assertIn(
+            "QdrantKnowledgeGateway: Invalid retry_backoff_seconds configuration.",
+            warnings,
+        )
+        self.assertIn(
+            "QdrantKnowledgeGateway: retry_backoff_seconds must be non-negative.",
+            warnings,
+        )
+
+    def test_warn_missing_timeout_in_production_only(self) -> None:
+        dev_config = _make_config(environment="development", timeout_seconds=None)
+        _, _, dev_logger, _ = _build_gateway(config=dev_config)
+        self.assertFalse(dev_logger.warning.called)
+
+        prod_config = _make_config(environment="production", timeout_seconds=None)
+        _, _, prod_logger, _ = _build_gateway(config=prod_config)
+        prod_logger.warning.assert_called_with(
+            "QdrantKnowledgeGateway: timeout_seconds is not configured in production."
+        )
+
+        prod_with_timeout = _make_config(environment="production", timeout_seconds=2.0)
+        _, _, prod_timeout_logger, _ = _build_gateway(config=prod_with_timeout)
+        prod_timeout_logger.warning.assert_not_called()
+
+    async def test_get_encoder_builds_once_and_reuses_encoder(self) -> None:
+        config = _make_config(encoder_preload=False)
+        gateway, _, _, _ = _build_gateway(config=config)
+        built_encoder = object()
+        with patch.object(gateway, "_build_encoder", return_value=built_encoder) as build_encoder:
+            first = await gateway._get_encoder()  # pylint: disable=protected-access
+            second = await gateway._get_encoder()  # pylint: disable=protected-access
+
+        self.assertIs(first, built_encoder)
+        self.assertIs(second, built_encoder)
+        build_encoder.assert_called_once()
+
+    async def test_get_encoder_handles_encoder_set_while_waiting_for_lock(self) -> None:
+        config = _make_config(encoder_preload=False)
+        gateway, _, _, _ = _build_gateway(config=config)
+        sentinel_encoder = object()
+        gateway._encoder = None  # pylint: disable=protected-access
+
+        class _InjectingLock:
+            async def __aenter__(self_inner):  # noqa: ANN001
+                gateway._encoder = sentinel_encoder  # pylint: disable=protected-access
+                return self_inner
+
+            async def __aexit__(self_inner, exc_type, exc, tb):  # noqa: ANN001
+                return False
+
+        gateway._encoder_lock = _InjectingLock()  # pylint: disable=protected-access
+        resolved = await gateway._get_encoder()  # pylint: disable=protected-access
+        self.assertIs(resolved, sentinel_encoder)
+
+    async def test_encode_search_term_supports_vector_shapes(self) -> None:
+        config = _make_config(encoder_preload=False)
+        gateway, _, _, _ = _build_gateway(config=config)
+
+        gateway._encoder = SimpleNamespace(encode=lambda _term: _VectorLike())  # pylint: disable=protected-access
+        self.assertEqual(
+            await gateway._encode_search_term("hello"),  # pylint: disable=protected-access
+            [1.0, 2.0],
+        )
+
+        gateway._encoder = SimpleNamespace(encode=lambda _term: [3, 4])  # pylint: disable=protected-access
+        self.assertEqual(
+            await gateway._encode_search_term("hello"),  # pylint: disable=protected-access
+            [3.0, 4.0],
+        )
+
+        gateway._encoder = SimpleNamespace(encode=lambda _term: (5, 6))  # pylint: disable=protected-access
+        self.assertEqual(
+            await gateway._encode_search_term("hello"),  # pylint: disable=protected-access
+            [5.0, 6.0],
+        )
+
+    def test_vendor_and_count_normalizers_cover_all_shapes(self) -> None:
+        self.assertEqual(
+            QdrantKnowledgeGateway._normalise_vendor_item({"x": 1}),  # pylint: disable=protected-access
+            {"x": 1},
+        )
+        self.assertEqual(
+            QdrantKnowledgeGateway._normalise_vendor_item(_WithModelDump()),  # pylint: disable=protected-access
+            {"id": 1},
+        )
+        self.assertEqual(
+            QdrantKnowledgeGateway._normalise_vendor_item(_WithDictMethod()),  # pylint: disable=protected-access
+            {"id": 2},
+        )
+        self.assertEqual(
+            QdrantKnowledgeGateway._normalise_vendor_item(_WithNonDictDumpAndDict()),  # pylint: disable=protected-access
+            {"value": 11},
+        )
+        self.assertEqual(
+            QdrantKnowledgeGateway._normalise_vendor_item(SimpleNamespace(value=3)),  # pylint: disable=protected-access
+            {"value": 3},
+        )
+        self.assertEqual(
+            QdrantKnowledgeGateway._normalise_vendor_item(7),  # pylint: disable=protected-access
+            {"value": "7"},
+        )
+
+        self.assertEqual(QdrantKnowledgeGateway._count_result(8), 8)  # pylint: disable=protected-access
+        self.assertEqual(
+            QdrantKnowledgeGateway._count_result({"count": 9}),  # pylint: disable=protected-access
+            9,
+        )
+        self.assertEqual(
+            QdrantKnowledgeGateway._count_result(_CountObject(10)),  # pylint: disable=protected-access
+            10,
+        )
+        self.assertIsNone(
+            QdrantKnowledgeGateway._count_result({"count": "x"})  # pylint: disable=protected-access
+        )
+        self.assertIsNone(QdrantKnowledgeGateway._count_result("nope"))  # pylint: disable=protected-access
+
+    async def test_request_timeout_kwargs_covers_none_and_value(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config(timeout_seconds=None))
+        self.assertEqual(gateway._request_timeout_kwargs(), {})  # pylint: disable=protected-access
+        gateway._api_timeout_seconds = 1.25  # pylint: disable=protected-access
+        self.assertEqual(
+            gateway._request_timeout_kwargs(),  # pylint: disable=protected-access
+            {"timeout": 1.25},
+        )
+
+    async def test_execute_with_retry_success_and_exhaustion_paths(self) -> None:
+        gateway, _, logging_gateway, _ = _build_gateway(config=_make_config())
+
+        gateway._api_max_retries = 2  # pylint: disable=protected-access
+        gateway._api_retry_backoff_seconds = 0.1  # pylint: disable=protected-access
+        request_factory = AsyncMock(side_effect=[asyncio.TimeoutError(), "ok"])
+        with patch("mugen.core.gateway.knowledge.qdrant.asyncio.sleep", new=AsyncMock()) as sleep:
+            result = await gateway._execute_with_retry(  # pylint: disable=protected-access
+                operation="search",
+                request_factory=request_factory,
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(request_factory.await_count, 2)
+        sleep.assert_awaited_once_with(0.1)
+        self.assertTrue(logging_gateway.warning.called)
+
+        gateway._api_max_retries = 1  # pylint: disable=protected-access
+        gateway._api_retry_backoff_seconds = 0.0  # pylint: disable=protected-access
+        failing_factory = AsyncMock(side_effect=asyncio.TimeoutError())
+        with patch("mugen.core.gateway.knowledge.qdrant.asyncio.sleep", new=AsyncMock()) as sleep:
+            with self.assertRaises(asyncio.TimeoutError):
+                await gateway._execute_with_retry(  # pylint: disable=protected-access
+                    operation="count",
+                    request_factory=failing_factory,
+                )
+            sleep.assert_not_awaited()
+
+    async def test_execute_with_retry_propagates_non_transient_errors(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config())
+        gateway._api_max_retries = 2  # pylint: disable=protected-access
+        request_factory = AsyncMock(side_effect=ValueError("bad request"))
+        with self.assertRaises(ValueError):
+            await gateway._execute_with_retry(  # pylint: disable=protected-access
+                operation="search",
+                request_factory=request_factory,
+            )
+
+    async def test_execute_with_retry_handles_zero_attempt_window_defensively(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config())
+        request_factory = AsyncMock()
+        with patch("builtins.max", return_value=-1):
+            result = await gateway._execute_with_retry(  # pylint: disable=protected-access
+                operation="search",
+                request_factory=request_factory,
+            )
+        self.assertIsNone(result)
+        request_factory.assert_not_awaited()
+
+    async def test_search_count_applies_timeout_and_retries(self) -> None:
+        config = _make_config(timeout_seconds=2.5, max_retries=1, retry_backoff_seconds=0.0)
+        fake_client = SimpleNamespace(
+            count=AsyncMock(
+                side_effect=[
+                    asyncio.TimeoutError(),
+                    {"count": 3},
+                ]
+            ),
+            search=AsyncMock(),
+        )
+        gateway, _, _, _ = _build_gateway(config=config, fake_client=fake_client)
+
+        result = await gateway.search(
+            QdrantSearchVendorParams(
+                collection_name="test_collection",
+                search_term="hello",
+                count=True,
+                strategy="must",
+                dataset="docs",
+                date_to="2025-01-31T00:00:00Z",
+                keywords=["policy"],
+            )
+        )
+
+        self.assertEqual(result.total_count, 3)
+        self.assertEqual(fake_client.count.await_count, 2)
+        self.assertEqual(fake_client.count.await_args_list[0].kwargs["timeout"], 2.5)
+
+    async def test_search_should_count_with_date_window(self) -> None:
+        fake_client = SimpleNamespace(
+            count=AsyncMock(return_value=SimpleNamespace(count=7)),
+            search=AsyncMock(),
+        )
+        gateway, _, _, _ = _build_gateway(config=_make_config(), fake_client=fake_client)
+
+        result = await gateway.search(
+            QdrantSearchVendorParams(
+                collection_name="collection_a",
+                search_term="hello",
+                strategy="should",
+                count=True,
+                dataset="kb",
+                date_from="2025-01-01T00:00:00Z",
+                date_to="2025-01-31T00:00:00Z",
+                keywords=["alpha"],
+            )
+        )
+
+        self.assertEqual(result.items, [])
+        self.assertEqual(result.total_count, 7)
+        self.assertIsInstance(result.raw_vendor, dict)
+        self.assertEqual(fake_client.search.await_count, 0)
+
+    async def test_search_should_non_count_uses_encoder_and_returns_normalized_items(
+        self,
+    ) -> None:
+        fake_client = SimpleNamespace(
+            count=AsyncMock(),
+            search=AsyncMock(return_value=[_WithModelDump(), _WithDictMethod()]),
+        )
+        gateway, _, _, _ = _build_gateway(config=_make_config(), fake_client=fake_client)
+        gateway._encoder = SimpleNamespace(encode=lambda _term: [0.1, 0.2])  # pylint: disable=protected-access
+
+        result = await gateway.search(
+            QdrantSearchVendorParams(
+                collection_name="collection_b",
+                search_term="hello",
+                strategy="should",
+                count=False,
+                dataset="kb",
+                date_from="2025-01-01T00:00:00Z",
+                keywords=["beta"],
+                limit=3,
+            )
+        )
+
+        self.assertEqual(result.total_count, None)
+        self.assertEqual(result.items, [{"id": 1}, {"id": 2}])
+        self.assertEqual(result.raw_vendor, {"strategy": "should", "count": False})
+        self.assertEqual(fake_client.search.await_count, 1)
+
+    async def test_search_must_non_count_with_dataset_filter(self) -> None:
+        fake_client = SimpleNamespace(
+            count=AsyncMock(),
+            search=AsyncMock(return_value=[{"id": "a"}]),
+        )
+        gateway, _, _, _ = _build_gateway(config=_make_config(), fake_client=fake_client)
+        gateway._encoder = SimpleNamespace(encode=lambda _term: [0.5])  # pylint: disable=protected-access
+
+        result = await gateway.search(
+            QdrantSearchVendorParams(
+                collection_name="collection_c",
+                search_term="hello",
+                strategy="must",
+                count=False,
+                dataset="kb",
+                keywords=["gamma"],
+                limit=2,
+            )
+        )
+
+        self.assertEqual(result.total_count, None)
+        self.assertEqual(result.items, [{"id": "a"}])
+        self.assertEqual(result.raw_vendor, {"strategy": "must", "count": False})
+
+    async def test_search_returns_empty_payload_when_retry_budget_exhausted(self) -> None:
+        config = _make_config(max_retries=2)
+        fake_client = SimpleNamespace(
+            count=AsyncMock(side_effect=asyncio.TimeoutError()),
+            search=AsyncMock(),
+        )
+        gateway, _, _, _ = _build_gateway(config=config, fake_client=fake_client)
+
+        result = await gateway.search(
+            QdrantSearchVendorParams(
+                collection_name="test_collection",
+                search_term="hello",
+                count=True,
+            )
+        )
+
+        self.assertEqual(result.total_count, 0)
+        self.assertEqual(result.items, [])
+        self.assertIsNone(result.raw_vendor)
+        self.assertEqual(fake_client.count.await_count, 3)
+
+
+if __name__ == "__main__":
+    unittest.main()

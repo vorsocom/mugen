@@ -9,7 +9,11 @@ import unittest.mock
 from quart import Quart
 
 import mugen as mugen_mod
-from mugen import ExtensionLoadError, register_extensions as _register_extensions
+from mugen import (
+    BootstrapConfigError,
+    ExtensionLoadError,
+    register_extensions as _register_extensions,
+)
 from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.fw import IFWExtension
@@ -144,6 +148,43 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 "DEBUG:test_app:Adding plugins for loading.",
             )
 
+    async def test_plugin_config_none_normalizes_to_empty_list(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    core=SimpleNamespace(
+                        plugins=None,
+                    ),
+                )
+            )
+        )
+
+        await register_extensions(
+            app=app,
+            config_provider=lambda: config,
+            logger_provider=lambda: app.logger,
+        )
+
+    async def test_plugin_config_invalid_type_raises(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    core=SimpleNamespace(
+                        plugins="not-a-list",
+                    ),
+                )
+            )
+        )
+
+        with self.assertRaises(BootstrapConfigError):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
     async def test_extension_config_unavailable(self) -> None:
         """Test effects of missing extensions configuration."""
         # Create dummy app to get context.
@@ -186,6 +227,39 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 logger.output[1],
                 "DEBUG:test_app:Adding extensions for loading.",
+            )
+
+    async def test_extension_config_none_normalizes_to_empty_list(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions=None,
+                )
+            )
+        )
+
+        await register_extensions(
+            app=app,
+            config_provider=lambda: config,
+            logger_provider=lambda: app.logger,
+        )
+
+    async def test_extension_config_invalid_type_raises(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions="bad",
+                )
+            )
+        )
+
+        with self.assertRaises(BootstrapConfigError):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
             )
 
     async def test_disabled_core_plugin_is_skipped(self) -> None:

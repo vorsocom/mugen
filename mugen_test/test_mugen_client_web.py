@@ -421,7 +421,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             exists=AsyncMock(side_effect=[False, True]),
             store_file=AsyncMock(return_value=None),
             store_bytes=AsyncMock(return_value=None),
-            materialize=AsyncMock(return_value=""),
+            materialize=AsyncMock(return_value=os.path.abspath("relative/path")),
             cleanup=AsyncMock(),
             init=AsyncMock(),
             close=AsyncMock(),
@@ -489,6 +489,24 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             self.client._infer_media_extension("IMAGE.PNG"),  # pylint: disable=protected-access
             ".png",
         )
+
+    async def test_resolve_media_source_path_imports_external_file_into_managed_storage(
+        self,
+    ) -> None:
+        external_path = os.path.join(self.tmpdir.name, "external-upload.bin")
+        with open(external_path, "wb") as handle:
+            handle.write(b"payload")
+
+        self.assertIsNone(
+            await self.client._media_storage_gateway.materialize(external_path)  # pylint: disable=protected-access
+        )
+        managed_ref = await self.client._resolve_media_source_path(  # pylint: disable=protected-access
+            file_path=external_path,
+            filename="external-upload.bin",
+        )
+        self.assertIsInstance(managed_ref, str)
+        self.assertNotEqual(os.path.abspath(external_path), managed_ref)
+        self.assertTrue(await self.client._media_storage_gateway.exists(managed_ref))  # pylint: disable=protected-access
 
     async def test_mark_job_status_else_branch_and_close_error_swallow(self) -> None:
         payload = await self.client.enqueue_message(
@@ -1540,12 +1558,17 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         media_file_path = os.path.join(self.tmpdir.name, "dispatch-media.bin")
         with open(media_file_path, "wb") as handle:
             handle.write(b"payload")
+        media_ref = await self.client._persist_media_reference(  # pylint: disable=protected-access
+            file_path=media_file_path,
+            filename_hint="dispatch-media.bin",
+        )
+        self.assertIsNotNone(media_ref)
         job = {
             "conversation_id": "conv-d",
             "sender": "user-1",
             "metadata": {},
             "client_message_id": "cid",
-            "file_path": media_file_path,
+            "file_path": media_ref,
             "mime_type": "image/png",
             "original_filename": "name.png",
         }
@@ -1625,10 +1648,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             token=audio_token,
         )
         self.assertIsNotNone(resolved_audio)
-        self.assertEqual(
+        self.assertNotEqual(
             resolved_audio["file_path"],
             os.path.abspath(str(audio_file)),
         )
+        self.assertTrue(os.path.exists(resolved_audio["file_path"]))
 
         nested_audio_event = await self.client._response_to_event(  # pylint: disable=protected-access
             response={
@@ -2743,7 +2767,8 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                 await self.client.resolve_media_download(auth_user="u1", token="t3")
             )
 
-        valid_file = Path(self.tmpdir.name) / "ok.bin"
+        valid_file = Path(self.client._media_storage_path) / "ok.bin"  # pylint: disable=protected-access
+        valid_file.parent.mkdir(parents=True, exist_ok=True)
         valid_file.write_bytes(b"x")
         success_session = _SequenceSession(
             [
@@ -2762,9 +2787,8 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             ]
         )
         _force_relational_session(self.client, success_session)
-        with patch("os.path.exists", return_value=True):
-            resolved = await self.client.resolve_media_download(auth_user="u1", token="t4")
-        self.assertEqual(resolved["file_path"], str(valid_file))
+        resolved = await self.client.resolve_media_download(auth_user="u1", token="t4")
+        self.assertEqual(resolved["file_path"], str(valid_file.resolve()))
 
     async def test_claim_next_job_relational_branches(self) -> None:
         none_session = _SequenceSession(
@@ -2815,6 +2839,42 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
         self.assertEqual(claimed["id"], "job-8")
         self.assertEqual(claimed["text"], "hello")
+
+    async def test_claim_next_job_relational_logs_recovery_count(self) -> None:
+        self.logger.reset_mock()
+        recovery_session = _SequenceSession(
+            [
+                SimpleNamespace(rowcount=2),
+                _SequenceResult(rows=[]),
+            ]
+        )
+        _force_relational_session(self.client, recovery_session)
+        self.assertIsNone(await self.client._claim_next_job())  # pylint: disable=protected-access
+        self.logger.warning.assert_called_once()
+        self.assertIn(
+            "lease recovery reset stale jobs",
+            str(self.logger.warning.call_args.args[0]),
+        )
+
+    async def test_persist_media_reference_does_not_delete_when_ref_unchanged(self) -> None:
+        source_path = Path(self.tmpdir.name) / "keep.bin"
+        source_path.write_bytes(b"x")
+
+        with (
+            patch.object(
+                self.client,
+                "_resolve_media_source_path",
+                new=AsyncMock(return_value=str(source_path.resolve())),
+            ),
+            patch("os.remove") as remove_file,
+        ):
+            persisted = await self.client._persist_media_reference(  # pylint: disable=protected-access
+                file_path=str(source_path),
+                filename_hint="keep.bin",
+            )
+
+        self.assertEqual(persisted, str(source_path.resolve()))
+        remove_file.assert_not_called()
 
     async def test_create_media_token_payload_and_append_event_relational(self) -> None:
         source_file = Path(self.tmpdir.name) / "source.bin"
@@ -2973,6 +3033,16 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mark_params["job_id"], "job-1")
         self.assertIsNone(mark_params["error_message"])
         await self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
+
+        recovery_warning = _SequenceSession([SimpleNamespace(rowcount=3)])
+        _force_relational_session(self.client, recovery_warning)
+        self.logger.reset_mock()
+        await self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
+        self.logger.warning.assert_called_once()
+        self.assertIn(
+            "recovered stale processing jobs on startup",
+            str(self.logger.warning.call_args.args[0]),
+        )
 
         ensure_missing = _SequenceSession([_SequenceResult(rows=[])])
         _force_relational_session(self.client, ensure_missing)

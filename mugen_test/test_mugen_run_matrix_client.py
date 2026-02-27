@@ -147,15 +147,18 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
             ) -> bool:
                 """Finalisation routine."""
 
-        with self.assertLogs(logger="test_app", level="DEBUG") as logger:
+        with (
+            self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            self.assertRaises(asyncio.exceptions.CancelledError),
+        ):
             await run_matrix_client(
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
                 matrix_provider=DummyMatrixClient,
             )
-            self.assertEqual(
-                logger.output[0], "ERROR:test_app:Matrix client shutting down."
-            )
+        self.assertEqual(
+            logger.output[0], "ERROR:test_app:Matrix client shutting down."
+        )
 
     async def test_sync_transient_error_retries_and_recovers(self) -> None:
         """Retry after transient sync failure and recover."""
@@ -250,6 +253,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
                 new=unittest.mock.AsyncMock(),
             ) as sleep_mock,
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            self.assertRaises(RuntimeError),
         ):
             await run_matrix_client(
                 config_provider=lambda: config,
@@ -305,6 +309,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
                 new=unittest.mock.AsyncMock(),
             ) as sleep_mock,
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            self.assertRaises(RuntimeError),
         ):
             await run_matrix_client(
                 config_provider=lambda: config,

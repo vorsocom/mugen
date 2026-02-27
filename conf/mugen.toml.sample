@@ -20,6 +20,8 @@ storage.keyval.legacy_import.enabled = true
 storage.keyval.legacy_import.dbm_path = "/absolute/path/to/data/storage.db"
 runtime.phase_b.readiness_grace_seconds = 0.0
 runtime.phase_b.critical_platforms = ["web"]
+runtime.phase_b.degrade_on_critical_exit = true
+runtime.profile = "auto"   # auto|api_only|web_only|platform_full
 
 [mugen.commands]
 clear = "..."
@@ -405,6 +407,9 @@ encryption_key = "<set-secret-encryption-key>"
 [qdrant]
 api.key = "<qdrant-api-key>"
 api.url = ""
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
 encoder.preload = false
 encoder.max_concurrency = 4
 

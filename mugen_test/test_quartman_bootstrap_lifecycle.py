@@ -8,7 +8,17 @@ import unittest.mock
 
 from quart import Quart
 
-from mugen import BootstrapConfigError, ExtensionLoadError
+from mugen import (
+    PHASE_B_ERROR_KEY,
+    PHASE_B_PLATFORM_ERRORS_KEY,
+    PHASE_B_PLATFORM_STATUSES_KEY,
+    PHASE_B_STATUS_KEY,
+    PHASE_STATUS_HEALTHY,
+    PHASE_STATUS_STOPPED,
+    SHUTDOWN_REQUESTED_KEY,
+    BootstrapConfigError,
+    ExtensionLoadError,
+)
 
 
 def _import_quartman_with_app(app: Quart):
@@ -221,10 +231,13 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         quartman = _import_quartman_with_app(app)
 
         with unittest.mock.patch.object(quartman.di, "container", object()):
-            grace, critical = quartman._resolve_phase_b_runtime_controls()
+            grace, critical, degrade_on_critical_exit = (
+                quartman._resolve_phase_b_runtime_controls()
+            )
 
         self.assertEqual(grace, 0.0)
         self.assertEqual(critical, [])
+        self.assertTrue(degrade_on_critical_exit)
 
     async def test_runtime_controls_normalize_invalid_values(self) -> None:
         app = Quart("quartman_test")
@@ -236,6 +249,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                     phase_b=unittest.mock.Mock(
                         readiness_grace_seconds="invalid",
                         critical_platforms=[" WEB ", "", "whatsapp"],
+                        degrade_on_critical_exit="off",
                     )
                 ),
                 platforms=["matrix"],
@@ -243,18 +257,25 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         )
 
         with unittest.mock.patch.object(quartman.di, "container", container):
-            grace, critical = quartman._resolve_phase_b_runtime_controls()
+            grace, critical, degrade_on_critical_exit = (
+                quartman._resolve_phase_b_runtime_controls()
+            )
 
         self.assertEqual(grace, 0.0)
         self.assertEqual(critical, ["web", "whatsapp"])
+        self.assertFalse(degrade_on_critical_exit)
 
         container.config.mugen.runtime.phase_b.readiness_grace_seconds = -10
         container.config.mugen.runtime.phase_b.critical_platforms = None
+        container.config.mugen.runtime.phase_b.degrade_on_critical_exit = "invalid"
         with unittest.mock.patch.object(quartman.di, "container", container):
-            grace, critical = quartman._resolve_phase_b_runtime_controls()
+            grace, critical, degrade_on_critical_exit = (
+                quartman._resolve_phase_b_runtime_controls()
+            )
 
         self.assertEqual(grace, 0.0)
         self.assertEqual(critical, ["matrix"])
+        self.assertTrue(degrade_on_critical_exit)
 
     async def test_shutdown_container_logs_warning_on_exception(self) -> None:
         app = Quart("quartman_test")
@@ -284,6 +305,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                     phase_b=unittest.mock.Mock(
                         readiness_grace_seconds=3,
                         critical_platforms=None,
+                        degrade_on_critical_exit=True,
                     )
                 ),
                 platforms="web",
@@ -291,7 +313,65 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         )
 
         with unittest.mock.patch.object(quartman.di, "container", container):
-            grace, critical = quartman._resolve_phase_b_runtime_controls()
+            grace, critical, degrade_on_critical_exit = (
+                quartman._resolve_phase_b_runtime_controls()
+            )
 
         self.assertEqual(grace, 3.0)
         self.assertEqual(critical, [])
+        self.assertTrue(degrade_on_critical_exit)
+
+    async def test_runtime_controls_parse_true_and_fallback_values(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        container = unittest.mock.Mock()
+        container.config = unittest.mock.Mock(
+            mugen=unittest.mock.Mock(
+                runtime=unittest.mock.Mock(
+                    phase_b=unittest.mock.Mock(
+                        readiness_grace_seconds=1,
+                        critical_platforms=["web"],
+                        degrade_on_critical_exit="on",
+                    )
+                ),
+                platforms=["web"],
+            )
+        )
+
+        with unittest.mock.patch.object(quartman.di, "container", container):
+            _, _, degrade_on_critical_exit = quartman._resolve_phase_b_runtime_controls()
+        self.assertTrue(degrade_on_critical_exit)
+
+        container.config.mugen.runtime.phase_b.degrade_on_critical_exit = object()
+        with unittest.mock.patch.object(quartman.di, "container", container):
+            _, _, degrade_on_critical_exit = quartman._resolve_phase_b_runtime_controls()
+        self.assertTrue(degrade_on_critical_exit)
+
+    async def test_done_callback_marks_stopped_on_clean_shutdown_completion(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        state = quartman._bootstrap_state()
+        state[SHUTDOWN_REQUESTED_KEY] = True
+
+        task = asyncio.create_task(asyncio.sleep(0))
+        await task
+        quartman._on_platform_clients_done(task, started_at=0.0)
+
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_STOPPED)
+        self.assertIsNone(state[PHASE_B_ERROR_KEY])
+
+    async def test_done_callback_handles_non_dict_platform_state_maps(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        state = quartman._bootstrap_state()
+        state[SHUTDOWN_REQUESTED_KEY] = False
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = "invalid"
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = "invalid"
+        state[quartman._PHASE_B_CRITICAL_PLATFORMS_KEY] = "invalid"
+
+        task = asyncio.create_task(asyncio.sleep(0))
+        await task
+        quartman._on_platform_clients_done(task, started_at=0.0)
+
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)

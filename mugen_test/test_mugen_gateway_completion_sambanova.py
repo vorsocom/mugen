@@ -800,13 +800,53 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             gateway._perform_request(headers=["h: v"], body={"hello": "world"})  # pylint: disable=protected-access
 
         self.assertIn(
-            gateway._connect_timeout_seconds,  # pylint: disable=protected-access
+            4000,
             options.values(),
         )
         self.assertIn(
-            gateway._read_timeout_seconds,  # pylint: disable=protected-access
+            7000,
             options.values(),
         )
+
+    def test_perform_request_preserves_sub_second_timeouts(self) -> None:
+        config = _make_config()
+        config.sambanova.api.connect_timeout_seconds = 0.25
+        config.sambanova.api.read_timeout_seconds = 0.5
+        gateway = SambaNovaCompletionGateway(config, Mock())
+
+        options: dict[object, object] = {}
+
+        class _FakeCurl:
+            URL = object()
+            POSTFIELDS = object()
+            HTTPHEADER = object()
+            WRITEFUNCTION = object()
+
+            def __init__(self) -> None:
+                self._write_function = None
+
+            def setopt(self, option, value) -> None:  # noqa: ANN001
+                options[option] = value
+                if option is self.WRITEFUNCTION:
+                    self._write_function = value
+
+            def perform(self) -> None:
+                assert self._write_function is not None
+                self._write_function(b'{"ok":true}')
+
+            @staticmethod
+            def getinfo(_code) -> int:  # noqa: ANN001
+                return 200
+
+            @staticmethod
+            def close() -> None:
+                return
+
+        with patch("mugen.core.gateway.completion.sambanova.pycurl.Curl", _FakeCurl):
+            gateway._perform_request(headers=["h: v"], body={"hello": "world"})  # pylint: disable=protected-access
+
+        self.assertIn(250, options.values())
+        self.assertIn(500, options.values())
 
     def test_production_with_timeouts_does_not_emit_missing_timeout_warnings(self) -> None:
         config = _make_config()
@@ -817,3 +857,57 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
 
         SambaNovaCompletionGateway(config, logging_gateway)
         logging_gateway.warning.assert_not_called()
+
+    def test_perform_request_skips_timeout_setopt_when_conversion_returns_none(self) -> None:
+        import mugen.core.gateway.completion.sambanova as sambanova_mod  # pylint: disable=import-outside-toplevel
+
+        config = _make_config()
+        config.sambanova.api.connect_timeout_seconds = 3
+        config.sambanova.api.read_timeout_seconds = 5
+        gateway = SambaNovaCompletionGateway(config, Mock())
+
+        options: dict[object, object] = {}
+
+        class _FakeCurl:
+            URL = object()
+            POSTFIELDS = object()
+            HTTPHEADER = object()
+            WRITEFUNCTION = object()
+
+            def __init__(self) -> None:
+                self._write_function = None
+
+            def setopt(self, option, value) -> None:  # noqa: ANN001
+                options[option] = value
+                if option is self.WRITEFUNCTION:
+                    self._write_function = value
+
+            def perform(self) -> None:
+                assert self._write_function is not None
+                self._write_function(b'{"ok":true}')
+
+            @staticmethod
+            def getinfo(_code) -> int:  # noqa: ANN001
+                return 200
+
+            @staticmethod
+            def close() -> None:
+                return
+
+        with (
+            patch("mugen.core.gateway.completion.sambanova.pycurl.Curl", _FakeCurl),
+            patch(
+                "mugen.core.gateway.completion.sambanova.to_timeout_milliseconds",
+                return_value=None,
+            ),
+        ):
+            gateway._perform_request(headers=["h: v"], body={"hello": "world"})  # pylint: disable=protected-access
+
+        self.assertNotIn(
+            sambanova_mod.pycurl.CONNECTTIMEOUT_MS,
+            options,
+        )
+        self.assertNotIn(
+            sambanova_mod.pycurl.TIMEOUT_MS,
+            options,
+        )

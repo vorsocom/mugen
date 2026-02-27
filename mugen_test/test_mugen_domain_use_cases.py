@@ -183,6 +183,22 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
         with self.assertRaises(ValueError):
             use_case.handle({"composition_mode": "attachment_with_caption"})
 
+        limited_use_case = NormalizeComposedMessageUseCase(max_attachments=1)
+        with self.assertRaises(ValueError):
+            limited_use_case.handle(
+                {
+                    "composition_mode": "message_with_attachments",
+                    "parts": [
+                        {"type": "attachment", "id": "a1"},
+                        {"type": "attachment", "id": "a2"},
+                    ],
+                    "attachments": [
+                        {"id": "a1", "file_path": "/tmp/a1"},
+                        {"id": "a2", "file_path": "/tmp/a2"},
+                    ],
+                }
+            )
+
     def test_queue_job_lifecycle_use_case(self) -> None:
         use_case = QueueJobLifecycleUseCase()
         pending = {"id": "job-1", "status": "pending", "attempts": 0}

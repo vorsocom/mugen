@@ -27,6 +27,9 @@ from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core.domain.use_case.enqueue_web_message import BuildQueuedMessageJobUseCase
+from mugen.core.domain.use_case.normalize_composed_message import (
+    NormalizeComposedMessageUseCase,
+)
 from mugen.core.domain.use_case.queue_job_lifecycle import QueueJobLifecycleUseCase
 from mugen.core.gateway.storage.media import (
     FilesystemMediaStorageGateway,
@@ -781,7 +784,7 @@ class DefaultWebClient(IWebClient):
         async with self._storage_lock:
             if self._using_relational_web_storage():
                 async with self._relational_session() as session:
-                    await session.execute(
+                    recovered_result = await session.execute(
                         sa_text(
                             "UPDATE mugen.web_queue_job "
                             "SET status = 'pending', lease_expires_at = NULL, updated_at = now() "
@@ -789,6 +792,12 @@ class DefaultWebClient(IWebClient):
                             "AND (lease_expires_at IS NULL OR lease_expires_at <= now())"
                         )
                     )
+                    recovered_count = int(getattr(recovered_result, "rowcount", 0) or 0)
+                    if recovered_count > 0:
+                        self._logging_gateway.warning(
+                            "Web worker lease recovery reset stale jobs "
+                            f"(count={recovered_count})."
+                        )
 
                     selected = await session.execute(
                         sa_text(
@@ -1301,10 +1310,12 @@ class DefaultWebClient(IWebClient):
     ) -> str | None:
         if isinstance(file_path, str) and file_path != "":
             if await self._media_storage_gateway.exists(file_path):
-                return file_path
+                return await self._media_storage_gateway.materialize(file_path)
             normalized_path = os.path.abspath(file_path)
             if await self._media_storage_gateway.exists(normalized_path):
-                return normalized_path
+                return await self._media_storage_gateway.materialize(normalized_path)
+            if os.path.exists(normalized_path) is not True:
+                return None
             return await self._media_storage_gateway.store_file(
                 normalized_path,
                 filename_hint=(
@@ -1833,7 +1844,7 @@ class DefaultWebClient(IWebClient):
         now_iso = self._utc_now_iso()
         if self._using_relational_web_storage():
             async with self._relational_session() as session:
-                await session.execute(
+                recovered_result = await session.execute(
                     sa_text(
                         "UPDATE mugen.web_queue_job "
                         "SET status = 'pending', lease_expires_at = NULL, updated_at = now() "
@@ -1842,10 +1853,17 @@ class DefaultWebClient(IWebClient):
                     ),
                     {"now_ts": self._to_utc_datetime(now_epoch)},
                 )
+            recovered_count = int(getattr(recovered_result, "rowcount", 0) or 0)
+            if recovered_count > 0:
+                self._logging_gateway.warning(
+                    "Web client recovered stale processing jobs on startup "
+                    f"(count={recovered_count})."
+                )
             return
 
         queue_state = await self._read_queue_state_unlocked()
         changed = False
+        recovered_count = 0
         for queue_job in queue_state["jobs"]:
             if queue_job.get("status") != "processing":
                 continue
@@ -1856,9 +1874,14 @@ class DefaultWebClient(IWebClient):
                 queue_job["lease_expires_at"] = None
                 queue_job["updated_at"] = now_iso
                 changed = True
+                recovered_count += 1
 
         if changed:
             await self._write_queue_state_unlocked(queue_state)
+            self._logging_gateway.warning(
+                "Web client recovered stale processing jobs on startup "
+                f"(count={recovered_count})."
+            )
 
     async def _ensure_conversation_owner_unlocked(
         self,
@@ -2483,162 +2506,17 @@ class DefaultWebClient(IWebClient):
         return normalized
 
     def _normalize_composed_metadata(self, metadata: Any) -> dict[str, Any]:
-        if not isinstance(metadata, dict):
-            raise ValueError("metadata is required for message_type=composed")
-
-        composition_mode = self._require_non_empty(
-            metadata.get("composition_mode"),
-            "metadata.composition_mode",
-        ).lower()
-        if composition_mode not in {
-            "message_with_attachments",
-            "attachment_with_caption",
-        }:
-            raise ValueError(
-                "metadata.composition_mode must be one of "
-                "message_with_attachments or attachment_with_caption"
-            )
-
-        raw_attachments = metadata.get("attachments")
-        if not isinstance(raw_attachments, list):
-            raise ValueError("metadata.attachments must be a list")
-
-        normalized_attachments: list[dict[str, Any]] = []
-        attachments_by_id: dict[str, dict[str, Any]] = {}
-        for raw_attachment in raw_attachments:
-            if not isinstance(raw_attachment, dict):
-                raise ValueError("metadata.attachments items must be objects")
-
-            attachment_id = self._require_non_empty(
-                raw_attachment.get("id"),
-                "metadata.attachments[].id",
-            )
-            if attachment_id in attachments_by_id:
-                raise ValueError("metadata.attachments contains duplicate ids")
-
-            file_path = self._require_non_empty(
-                raw_attachment.get("file_path"),
-                "metadata.attachments[].file_path",
-            )
-            mime_type = str(raw_attachment.get("mime_type") or "").strip().lower()
-            original_filename = raw_attachment.get("original_filename")
-            if original_filename is not None:
-                original_filename = str(original_filename)
-
-            attachment_metadata = raw_attachment.get("metadata")
-            if attachment_metadata is None:
-                attachment_metadata = {}
-            elif not isinstance(attachment_metadata, dict):
-                raise ValueError("metadata.attachments[].metadata must be an object")
-
-            caption = raw_attachment.get("caption")
-            normalized_caption = None
-            if caption is not None:
-                normalized_caption = str(caption).strip()
-
-            normalized_attachment = {
-                "id": attachment_id,
-                "file_path": file_path,
-                "mime_type": mime_type,
-                "original_filename": original_filename,
-                "metadata": dict(attachment_metadata),
-                "caption": normalized_caption,
-            }
-            attachments_by_id[attachment_id] = normalized_attachment
-            normalized_attachments.append(dict(normalized_attachment))
-
-        if len(normalized_attachments) > self._media_max_attachments_per_message:
-            raise ValueError("metadata.attachments exceeds max attachments per message")
-
-        raw_parts = metadata.get("parts")
-        if not isinstance(raw_parts, list):
-            raise ValueError("metadata.parts must be a list")
-
-        normalized_parts: list[dict[str, Any]] = []
-        has_non_empty_text = False
-        for raw_part in raw_parts:
-            if not isinstance(raw_part, dict):
-                raise ValueError("metadata.parts items must be objects")
-
-            part_type = self._require_non_empty(
-                raw_part.get("type"),
-                "metadata.parts[].type",
-            ).lower()
-            if part_type == "text":
-                text_value = str(raw_part.get("text", ""))
-                if text_value.strip() != "":
-                    has_non_empty_text = True
-                normalized_parts.append({"type": "text", "text": text_value})
-                continue
-
-            if part_type != "attachment":
-                raise ValueError(f"Unsupported composed part type: {part_type}")
-
-            attachment_id = self._require_non_empty(
-                raw_part.get("id"),
-                "metadata.parts[].id",
-            )
-            attachment = attachments_by_id.get(attachment_id)
-            if attachment is None:
-                raise ValueError(
-                    "metadata.parts includes attachment id not found in"
-                    " metadata.attachments"
-                )
-
-            caption = raw_part.get("caption")
-            normalized_caption = attachment.get("caption")
-            if caption is not None:
-                normalized_caption = str(caption).strip()
-
-            part_metadata = raw_part.get("metadata")
-            normalized_part_metadata = dict(attachment.get("metadata") or {})
-            if part_metadata is not None:
-                if not isinstance(part_metadata, dict):
-                    raise ValueError("metadata.parts[].metadata must be an object")
-                normalized_part_metadata = dict(part_metadata)
-
-            normalized_parts.append(
-                {
-                    "type": "attachment",
-                    "id": attachment_id,
-                    "caption": normalized_caption,
-                    "metadata": normalized_part_metadata,
-                    "mime_type": attachment.get("mime_type"),
-                    "original_filename": attachment.get("original_filename"),
-                }
-            )
-
-        if composition_mode == "attachment_with_caption":
-            if any(part.get("type") == "text" for part in normalized_parts):
-                raise ValueError(
-                    "metadata.parts text entries are not allowed for"
-                    " attachment_with_caption"
-                )
-            if not normalized_attachments:
-                raise ValueError(
-                    "metadata.attachments requires at least one attachment for "
-                    "attachment_with_caption"
-                )
-            if any(
-                str(attachment.get("caption") or "").strip() == ""
-                for attachment in normalized_attachments
-            ):
-                raise ValueError(
-                    "metadata.attachments caption is required for"
-                    " attachment_with_caption"
-                )
-        elif not has_non_empty_text and not normalized_attachments:
-            raise ValueError("metadata.parts must include text content or attachments")
-
-        normalized: dict[str, Any] = {
-            "composition_mode": composition_mode,
-            "parts": normalized_parts,
-            "attachments": normalized_attachments,
-        }
-        request_metadata = metadata.get("metadata")
-        if isinstance(request_metadata, dict):
-            normalized["metadata"] = dict(request_metadata)
-
+        try:
+            normalized = NormalizeComposedMessageUseCase(
+                max_attachments=self._media_max_attachments_per_message,
+            ).handle(metadata)
+        except ValueError as exc:
+            message = str(exc)
+            if message.startswith("message."):
+                message = f"metadata.{message[len('message.'):]}"
+            elif message.startswith("message "):
+                message = f"metadata {message[len('message '):]}"
+            raise ValueError(message) from exc
         return normalized
 
     def _normalize_client_message_id(

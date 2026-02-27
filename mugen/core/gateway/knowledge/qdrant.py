@@ -21,6 +21,8 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
 
     _default_encoder_model = "all-mpnet-base-v2"
     _default_encoder_max_concurrency = 4
+    _default_api_max_retries = 0
+    _default_api_retry_backoff_seconds = 0.5
 
     def __init__(
         self,
@@ -38,6 +40,10 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         self._encoder_lock = asyncio.Lock()
         self._encoder_max_concurrency = self._resolve_encoder_max_concurrency()
         self._encode_semaphore = asyncio.Semaphore(self._encoder_max_concurrency)
+        self._api_timeout_seconds = self._resolve_api_timeout_seconds()
+        self._api_max_retries = self._resolve_api_max_retries()
+        self._api_retry_backoff_seconds = self._resolve_api_retry_backoff_seconds()
+        self._warn_missing_timeout_in_production()
 
         if self._resolve_encoder_preload() is True:
             self._encoder = self._build_encoder()
@@ -80,6 +86,79 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         if parsed <= 0:
             return self._default_encoder_max_concurrency
         return parsed
+
+    def _resolve_api_timeout_seconds(self) -> float | None:
+        raw_value = getattr(
+            getattr(getattr(self._config, "qdrant", SimpleNamespace()), "api", None),
+            "timeout_seconds",
+            None,
+        )
+        if raw_value is None:
+            return None
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            self._logging_gateway.warning(
+                "QdrantKnowledgeGateway: Invalid timeout_seconds configuration."
+            )
+            return None
+        if parsed <= 0:
+            self._logging_gateway.warning(
+                "QdrantKnowledgeGateway: timeout_seconds must be positive when provided."
+            )
+            return None
+        return parsed
+
+    def _resolve_api_max_retries(self) -> int:
+        raw_value = getattr(
+            getattr(getattr(self._config, "qdrant", SimpleNamespace()), "api", None),
+            "max_retries",
+            self._default_api_max_retries,
+        )
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            self._logging_gateway.warning(
+                "QdrantKnowledgeGateway: Invalid max_retries configuration."
+            )
+            return self._default_api_max_retries
+        if parsed < 0:
+            self._logging_gateway.warning(
+                "QdrantKnowledgeGateway: max_retries must be non-negative."
+            )
+            return self._default_api_max_retries
+        return parsed
+
+    def _resolve_api_retry_backoff_seconds(self) -> float:
+        raw_value = getattr(
+            getattr(getattr(self._config, "qdrant", SimpleNamespace()), "api", None),
+            "retry_backoff_seconds",
+            self._default_api_retry_backoff_seconds,
+        )
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            self._logging_gateway.warning(
+                "QdrantKnowledgeGateway: Invalid retry_backoff_seconds configuration."
+            )
+            return self._default_api_retry_backoff_seconds
+        if parsed < 0:
+            self._logging_gateway.warning(
+                "QdrantKnowledgeGateway: retry_backoff_seconds must be non-negative."
+            )
+            return self._default_api_retry_backoff_seconds
+        return parsed
+
+    def _warn_missing_timeout_in_production(self) -> None:
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+        ).strip().lower()
+        if environment != "production":
+            return
+        if self._api_timeout_seconds is None:
+            self._logging_gateway.warning(
+                "QdrantKnowledgeGateway: timeout_seconds is not configured in production."
+            )
 
     async def _get_encoder(self) -> SentenceTransformer:
         if self._encoder is not None:
@@ -198,10 +277,14 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         try:
             if params.strategy == "should":
                 if params.count:
-                    count_result = await self._client.count(
-                        collection_name=params.collection_name,
-                        count_filter=models.Filter(should=conditions),
-                        exact=True,
+                    count_result = await self._execute_with_retry(
+                        operation="count",
+                        request_factory=lambda: self._client.count(
+                            collection_name=params.collection_name,
+                            count_filter=models.Filter(should=conditions),
+                            exact=True,
+                            **self._request_timeout_kwargs(),
+                        ),
                     )
                     return KnowledgeSearchResult(
                         items=[],
@@ -210,14 +293,18 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                     )
 
                 query_vector = await self._encode_search_term(params.search_term)
-                search_results = await self._client.search(
-                    collection_name=params.collection_name,
-                    query_vector=query_vector,
-                    query_filter=models.Filter(
-                        must=dataset_filter,
-                        should=conditions,
+                search_results = await self._execute_with_retry(
+                    operation="search",
+                    request_factory=lambda: self._client.search(
+                        collection_name=params.collection_name,
+                        query_vector=query_vector,
+                        query_filter=models.Filter(
+                            must=dataset_filter,
+                            should=conditions,
+                        ),
+                        limit=params.limit,
+                        **self._request_timeout_kwargs(),
                     ),
-                    limit=params.limit,
                 )
                 return KnowledgeSearchResult(
                     items=[self._normalise_vendor_item(item) for item in search_results],
@@ -229,10 +316,14 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                 )
 
             if params.count:
-                count_result = await self._client.count(
-                    collection_name=params.collection_name,
-                    count_filter=models.Filter(must=conditions),
-                    exact=True,
+                count_result = await self._execute_with_retry(
+                    operation="count",
+                    request_factory=lambda: self._client.count(
+                        collection_name=params.collection_name,
+                        count_filter=models.Filter(must=conditions),
+                        exact=True,
+                        **self._request_timeout_kwargs(),
+                    ),
                 )
                 return KnowledgeSearchResult(
                     items=[],
@@ -241,11 +332,15 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                 )
 
             query_vector = await self._encode_search_term(params.search_term)
-            search_results = await self._client.search(
-                collection_name=params.collection_name,
-                query_vector=query_vector,
-                query_filter=models.Filter(must=conditions),
-                limit=params.limit,
+            search_results = await self._execute_with_retry(
+                operation="search",
+                request_factory=lambda: self._client.search(
+                    collection_name=params.collection_name,
+                    query_vector=query_vector,
+                    query_filter=models.Filter(must=conditions),
+                    limit=params.limit,
+                    **self._request_timeout_kwargs(),
+                ),
             )
             return KnowledgeSearchResult(
                 items=[self._normalise_vendor_item(item) for item in search_results],
@@ -255,8 +350,42 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                     "count": False,
                 },
             )
-        except (ResponseHandlingException, UnexpectedResponse):
+        except (ResponseHandlingException, UnexpectedResponse, asyncio.TimeoutError):
             self._logging_gateway.warning(
                 "QdrantKnowledgeGateway - ResponseHandlingException"
             )
             return KnowledgeSearchResult(items=[], total_count=0, raw_vendor=None)
+
+    def _request_timeout_kwargs(self) -> dict[str, float]:
+        if self._api_timeout_seconds is None:
+            return {}
+        return {"timeout": self._api_timeout_seconds}
+
+    async def _execute_with_retry(
+        self,
+        *,
+        operation: str,
+        request_factory,
+    ) -> Any:
+        attempts = max(0, int(self._api_max_retries)) + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                return await request_factory()
+            except (ResponseHandlingException, UnexpectedResponse, asyncio.TimeoutError) as exc:
+                if attempt >= attempts:
+                    raise
+                delay_seconds = float(self._api_retry_backoff_seconds) * (2 ** (attempt - 1))
+                self._logging_gateway.warning(
+                    "QdrantKnowledgeGateway: transient %s failure; retrying "
+                    "attempt=%d/%d delay_seconds=%.3f error=%s: %s"
+                    % (
+                        operation,
+                        attempt,
+                        attempts - 1,
+                        delay_seconds,
+                        type(exc).__name__,
+                        exc,
+                    )
+                )
+                if delay_seconds > 0:
+                    await asyncio.sleep(delay_seconds)
