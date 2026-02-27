@@ -33,12 +33,20 @@ class _Response:
         self._text = text
         self.status = status
         self._body = body
+        self.release_called = False
+        self.close_called = False
 
     async def text(self) -> str:
         return self._text
 
     async def read(self) -> bytes:
         return self._body
+
+    def release(self) -> None:
+        self.release_called = True
+
+    def close(self) -> None:
+        self.close_called = True
 
 
 class _ChunkStream:
@@ -750,7 +758,8 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
     async def test_download_file_http_success_and_fallback_paths(self) -> None:
         client = self._new_client()
         session = Mock()
-        session.get = AsyncMock(return_value=_Response(status=200, body=b"png-bytes"))
+        successful_response = _Response(status=200, body=b"png-bytes")
+        session.get = AsyncMock(return_value=successful_response)
         client._client_session = session  # pylint: disable=protected-access
 
         saved_path = (
@@ -763,6 +772,8 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         with open(saved_path, "rb") as fh:
             self.assertEqual(fh.read(), b"png-bytes")
         os.remove(saved_path)
+        self.assertTrue(successful_response.release_called)
+        self.assertTrue(successful_response.close_called)
 
         session.get = AsyncMock(return_value=_Response(status=200, body=b"abc"))
         unknown_extension = (
@@ -879,6 +890,22 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         self.assertFalse(os.path.exists(temp_path))
+
+    async def test_managed_http_get_handles_responses_without_release_or_close(self) -> None:
+        client = self._new_client()
+
+        class _BareResponse:
+            status = 200
+
+            async def read(self) -> bytes:
+                return b"ok"
+
+        session = Mock()
+        session.get = AsyncMock(return_value=_BareResponse())
+        client._client_session = session  # pylint: disable=protected-access
+
+        async with client._managed_http_get("https://example.com/x"):  # pylint: disable=protected-access
+            pass
 
     async def test_send_message_delegates_to_call_api(self) -> None:
         client = self._new_client()

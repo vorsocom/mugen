@@ -146,12 +146,30 @@ def _on_platform_clients_done(task: asyncio.Task, started_at: float) -> None:
             critical_platforms = state.get(_PHASE_B_CRITICAL_PLATFORMS_KEY, [])
             if not isinstance(critical_platforms, list):
                 critical_platforms = []
-            failed_critical = [
-                platform
-                for platform in critical_platforms
-                if str(platform_statuses.get(platform, "")).strip().lower()
-                not in {PHASE_STATUS_HEALTHY}
-            ]
+            degrade_on_critical_exit = state.get(_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY, True)
+            if isinstance(degrade_on_critical_exit, str):
+                normalized = degrade_on_critical_exit.strip().lower()
+                if normalized in {"1", "true", "yes", "on"}:
+                    degrade_on_critical_exit = True
+                elif normalized in {"0", "false", "no", "off"}:
+                    degrade_on_critical_exit = False
+                else:
+                    degrade_on_critical_exit = True
+            elif not isinstance(degrade_on_critical_exit, bool):
+                degrade_on_critical_exit = True
+            failed_critical: list[str] = []
+            for platform in critical_platforms:
+                platform_status = str(
+                    platform_statuses.get(platform, "")
+                ).strip().lower()
+                if platform_status == PHASE_STATUS_HEALTHY:
+                    continue
+                if (
+                    platform_status == PHASE_STATUS_STOPPED
+                    and degrade_on_critical_exit is not True
+                ):
+                    continue
+                failed_critical.append(platform)
             if failed_critical:
                 failed = str(failed_critical[0])
                 state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED

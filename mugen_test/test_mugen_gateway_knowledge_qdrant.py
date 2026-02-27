@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from mugen.core.contract.dto.qdrant.search import QdrantSearchVendorParams
+from mugen.core.contract.gateway.knowledge import KnowledgeGatewayRuntimeError
 from mugen.core.gateway.knowledge.qdrant import QdrantKnowledgeGateway
 
 
@@ -468,7 +469,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.items, [{"id": "a"}])
         self.assertEqual(result.raw_vendor, {"strategy": "must", "count": False})
 
-    async def test_search_returns_empty_payload_when_retry_budget_exhausted(self) -> None:
+    async def test_search_raises_runtime_error_when_retry_budget_exhausted(self) -> None:
         config = _make_config(max_retries=2)
         fake_client = SimpleNamespace(
             count=AsyncMock(side_effect=asyncio.TimeoutError()),
@@ -476,17 +477,18 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         )
         gateway, _, _, _ = _build_gateway(config=config, fake_client=fake_client)
 
-        result = await gateway.search(
-            QdrantSearchVendorParams(
-                collection_name="test_collection",
-                search_term="hello",
-                count=True,
+        with self.assertRaises(KnowledgeGatewayRuntimeError) as exc:
+            await gateway.search(
+                QdrantSearchVendorParams(
+                    collection_name="test_collection",
+                    search_term="hello",
+                    count=True,
+                )
             )
-        )
 
-        self.assertEqual(result.total_count, 0)
-        self.assertEqual(result.items, [])
-        self.assertIsNone(result.raw_vendor)
+        self.assertEqual(exc.exception.provider, "qdrant")
+        self.assertEqual(exc.exception.operation, "count")
+        self.assertIsInstance(exc.exception.cause, asyncio.TimeoutError)
         self.assertEqual(fake_client.count.await_count, 3)
 
 

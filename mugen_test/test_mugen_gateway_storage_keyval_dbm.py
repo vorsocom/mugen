@@ -139,6 +139,42 @@ class TestMugenGatewayStorageKeyvalDbm(unittest.TestCase):
 
         open_db.assert_called_once()
 
+    def test_init_rejects_invalid_allow_non_dev_value(self) -> None:
+        config = _make_config(environment="production", allow_non_dev="maybe")
+        logging_gateway = Mock()
+
+        with self.assertRaises(RuntimeError):
+            DBMKeyValStorageGateway(config, logging_gateway)
+
+    def test_parse_guard_flag_supports_none_and_string_values(self) -> None:
+        self.assertFalse(
+            DBMKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
+                key="k",
+                raw_value=None,
+                default=False,
+            )
+        )
+        self.assertTrue(
+            DBMKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
+                key="k",
+                raw_value="yes",
+                default=False,
+            )
+        )
+        self.assertFalse(
+            DBMKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
+                key="k",
+                raw_value="off",
+                default=True,
+            )
+        )
+        with self.assertRaises(RuntimeError):
+            DBMKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
+                key="k",
+                raw_value=object(),
+                default=False,
+            )
+
     def test_init_uses_absolute_path(self) -> None:
         storage = _FakeStorage()
         config = _make_config(path="/tmp/storage.db", basedir="/ignored")

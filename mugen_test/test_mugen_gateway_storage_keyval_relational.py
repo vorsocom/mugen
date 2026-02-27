@@ -700,6 +700,15 @@ class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
         with self.assertRaises(ValueError):
             gateway._coerce_payload(1)  # type: ignore[arg-type]  # pylint: disable=protected-access
 
+    def test_legacy_import_enabled_rejects_invalid_flag_values(self) -> None:
+        gateway = _new_gateway(
+            config=_make_config(legacy_import_enabled="maybe"),
+            logger=Mock(),
+        )
+        with self.assertRaises(RuntimeError):
+            gateway._legacy_import_enabled()  # pylint: disable=protected-access
+
+        logger = Mock()
         missing_path_gateway = _new_gateway(
             config=_make_config(
                 legacy_import_enabled=True,
@@ -755,6 +764,35 @@ class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
             logger=logger,
         )
         self.assertEqual(namespace_non_string._resolve_namespace_default(), "core")  # pylint: disable=protected-access
+
+    def test_parse_guard_flag_supports_none_and_string_values(self) -> None:
+        self.assertFalse(
+            RelationalKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
+                key="k",
+                raw_value=None,
+                default=False,
+            )
+        )
+        self.assertTrue(
+            RelationalKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
+                key="k",
+                raw_value="on",
+                default=False,
+            )
+        )
+        self.assertFalse(
+            RelationalKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
+                key="k",
+                raw_value="0",
+                default=True,
+            )
+        )
+        with self.assertRaises(RuntimeError):
+            RelationalKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
+                key="k",
+                raw_value=object(),
+                default=False,
+            )
 
     def test_read_dbm_entries_and_lock_id(self) -> None:
         class _FakeDB:

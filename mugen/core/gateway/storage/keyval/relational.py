@@ -103,6 +103,23 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
             )
             raise RuntimeError("Relational keyval backend is unavailable.") from exc
 
+    @staticmethod
+    def _parse_guard_flag(*, key: str, raw_value: object, default: bool) -> bool:
+        if raw_value is None:
+            return default
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, str):
+            normalized = raw_value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        raise RuntimeError(
+            f"Invalid boolean value for {key}: {raw_value!r}. "
+            "Use true/false (or on/off, yes/no, 1/0)."
+        )
+
     def _legacy_import_enabled(self) -> bool:
         raw = getattr(
             getattr(
@@ -121,7 +138,11 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
             "enabled",
             False,
         )
-        return bool(raw)
+        return self._parse_guard_flag(
+            key="mugen.storage.keyval.legacy_import.enabled",
+            raw_value=raw,
+            default=False,
+        )
 
     def _resolve_legacy_import_dbm_path(self) -> str:
         legacy_import_cfg = getattr(

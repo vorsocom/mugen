@@ -51,6 +51,23 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
 
         self._harden_storage_permissions()
 
+    @staticmethod
+    def _parse_guard_flag(*, key: str, raw_value: object, default: bool) -> bool:
+        if raw_value is None:
+            return default
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, str):
+            normalized = raw_value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        raise RuntimeError(
+            f"Invalid boolean value for {key}: {raw_value!r}. "
+            "Use true/false (or on/off, yes/no, 1/0)."
+        )
+
     def _validate_environment_policy(self) -> None:
         environment = getattr(
             getattr(self._config, "mugen", SimpleNamespace()),
@@ -75,7 +92,11 @@ class DBMKeyValStorageGateway(IKeyValStorageGateway):
             False,
         )
 
-        if bool(allow_non_dev):
+        if self._parse_guard_flag(
+            key="mugen.storage.keyval.dbm.allow_non_dev",
+            raw_value=allow_non_dev,
+            default=False,
+        ):
             return
 
         if str(environment).strip().lower() in {"development", "dev", "testing"}:

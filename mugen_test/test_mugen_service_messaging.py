@@ -43,7 +43,11 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
 
     def _new_service(self) -> DefaultMessagingService:
         svc = DefaultMessagingService(
-            config=Mock(),
+            config=SimpleNamespace(
+                mugen=SimpleNamespace(
+                    messaging=SimpleNamespace(extension_timeout_seconds=10.0)
+                )
+            ),
             completion_gateway=Mock(),
             keyval_storage_gateway=Mock(),
             logging_gateway=Mock(),
@@ -383,6 +387,85 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(responses, [{"type": "ctx", "content": "valid"}])
         invalid_ext.handle_message.assert_not_awaited()
         valid_ext.handle_message.assert_awaited_once()
+
+    async def test_handle_text_message_times_out_hung_extension_and_continues(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        svc._extension_timeout_seconds = 0.01  # pylint: disable=protected-access
+
+        async def _hung_callback(**_kwargs):
+            await asyncio.sleep(10)
+            return [{"type": "text", "content": "late"}]
+
+        hung = _DummyMhExt(
+            platforms=["web"],
+            message_types=["text"],
+            callback=_hung_callback,
+        )
+        fast = _DummyMhExt(
+            platforms=["web"],
+            message_types=["text"],
+            response=[{"type": "text", "content": "fast"}],
+        )
+        svc._mh_extensions = [hung, fast]
+
+        responses = await svc.handle_text_message(
+            platform="web",
+            room_id="conv-timeout",
+            sender="user-timeout",
+            message="hello",
+        )
+
+        self.assertEqual(responses, [{"type": "text", "content": "fast"}])
+        self.assertTrue(svc._logging_gateway.warning.called)  # pylint: disable=protected-access
+        self.assertTrue(
+            any(
+                "timed out" in str(call.args[0])
+                for call in svc._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
+            )
+        )
+
+    async def test_handle_text_message_without_timeout_awaits_handler_directly(self) -> None:
+        svc = self._new_service()
+        svc._extension_timeout_seconds = None  # pylint: disable=protected-access
+        ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response=[{"type": "text", "content": "ok"}],
+        )
+        svc._mh_extensions = [ext]
+
+        result = await svc.handle_text_message(
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+        )
+        self.assertEqual(result, [{"type": "text", "content": "ok"}])
+
+    def test_extension_timeout_resolution_handles_invalid_shapes(self) -> None:
+        svc = self._new_service()
+
+        svc._config = SimpleNamespace(  # pylint: disable=protected-access
+            mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds=None))
+        )
+        self.assertIsNone(svc._resolve_extension_timeout_seconds())  # pylint: disable=protected-access
+
+        svc._config = SimpleNamespace(  # pylint: disable=protected-access
+            mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds=object()))
+        )
+        self.assertIsNone(svc._resolve_extension_timeout_seconds())  # pylint: disable=protected-access
+
+        svc._config = SimpleNamespace(  # pylint: disable=protected-access
+            mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds="bad"))
+        )
+        self.assertIsNone(svc._resolve_extension_timeout_seconds())  # pylint: disable=protected-access
+
+        svc._config = SimpleNamespace(  # pylint: disable=protected-access
+            mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds=0))
+        )
+        self.assertIsNone(svc._resolve_extension_timeout_seconds())  # pylint: disable=protected-access
 
     def test_composed_helpers_and_normalization_branches(self) -> None:
         svc = self._new_service()

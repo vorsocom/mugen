@@ -24,6 +24,19 @@ from mugen.core.api import api
 
 _PHASE_B_READINESS_GRACE_KEY = "phase_b_readiness_grace_seconds"
 _PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
+_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY = "phase_b_degrade_on_critical_exit"
+
+
+def _parse_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
 
 
 def _resolve_bootstrap_status() -> dict[str, Any]:
@@ -35,6 +48,10 @@ def _resolve_bootstrap_status() -> dict[str, Any]:
         "phase_b_started_at": state.get(PHASE_B_STARTED_AT_KEY),
         "phase_b_readiness_grace_seconds": state.get(_PHASE_B_READINESS_GRACE_KEY, 0.0),
         "phase_b_critical_platforms": state.get(_PHASE_B_CRITICAL_PLATFORMS_KEY, []),
+        "phase_b_degrade_on_critical_exit": state.get(
+            _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY,
+            True,
+        ),
         "phase_b_platform_statuses": state.get(PHASE_B_PLATFORM_STATUSES_KEY, {}),
         "phase_b_platform_errors": state.get(PHASE_B_PLATFORM_ERRORS_KEY, {}),
     }
@@ -46,6 +63,7 @@ def _resolve_failed_platforms(
     platform_statuses: dict[str, str],
     platform_errors: dict[str, Any],
     ignore_starting: bool,
+    degrade_on_critical_exit: bool,
 ) -> tuple[list[str], dict[str, str]]:
     failed: list[str] = []
     reasons: dict[str, str] = {}
@@ -54,6 +72,8 @@ def _resolve_failed_platforms(
         if status == PHASE_STATUS_HEALTHY:
             continue
         if ignore_starting and status == PHASE_STATUS_STARTING:
+            continue
+        if status == PHASE_STATUS_STOPPED and degrade_on_critical_exit is not True:
             continue
 
         failed.append(platform)
@@ -95,6 +115,10 @@ async def core_health_ready():
     phase_b_status = status["phase_b_status"]
     phase_b_error = status["phase_b_error"]
     phase_b_started_at = status["phase_b_started_at"]
+    degrade_on_critical_exit = _parse_bool(
+        status["phase_b_degrade_on_critical_exit"],
+        default=True,
+    )
     critical_platforms = status["phase_b_critical_platforms"]
     if not isinstance(critical_platforms, list):
         critical_platforms = []
@@ -127,6 +151,7 @@ async def core_health_ready():
         platform_statuses=platform_statuses,
         platform_errors=platform_errors,
         ignore_starting=False,
+        degrade_on_critical_exit=degrade_on_critical_exit,
     )
     ready = (
         phase_a_status == PHASE_STATUS_HEALTHY
@@ -148,6 +173,7 @@ async def core_health_ready():
                 platform_statuses=platform_statuses,
                 platform_errors=platform_errors,
                 ignore_starting=True,
+                degrade_on_critical_exit=degrade_on_critical_exit,
             )
         ready = (
             phase_a_status == PHASE_STATUS_HEALTHY

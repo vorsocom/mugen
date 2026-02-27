@@ -4,6 +4,7 @@ __all__ = ["DefaultWhatsAppClient", "WhatsAppAPIResponse"]
 
 import asyncio
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from http import HTTPMethod
 from io import BytesIO
 import json
@@ -793,41 +794,41 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         download_complete = False
         started = time.perf_counter()
         try:
-            response = await self._client_session.get(url, **kwargs)
-            if response.status != 200:
-                self._logging_gateway.error(
-                    f"Media download failed with status code {response.status}."
-                )
-                return None
+            async with self._managed_http_get(url, **kwargs) as response:
+                if response.status != 200:
+                    self._logging_gateway.error(
+                        f"Media download failed with status code {response.status}."
+                    )
+                    return None
 
-            extension = mimetypes.guess_extension(mimetype.split(";")[0].strip())
-            if not extension:
-                return None
+                extension = mimetypes.guess_extension(mimetype.split(";")[0].strip())
+                if not extension:
+                    return None
 
-            fd, file_path = tempfile.mkstemp(suffix=extension)
-            os.close(fd)
-            bytes_written = 0
-            with open(file_path, "wb") as file:
-                if hasattr(response, "content") and hasattr(
-                    response.content, "iter_chunked"
-                ):
-                    async for chunk in response.content.iter_chunked(8192):
-                        bytes_written += len(chunk)
+                fd, file_path = tempfile.mkstemp(suffix=extension)
+                os.close(fd)
+                bytes_written = 0
+                with open(file_path, "wb") as file:
+                    if hasattr(response, "content") and hasattr(
+                        response.content, "iter_chunked"
+                    ):
+                        async for chunk in response.content.iter_chunked(8192):
+                            bytes_written += len(chunk)
+                            if bytes_written > self._max_download_bytes:
+                                self._logging_gateway.error(
+                                    "Downloaded media exceeded max allowed size."
+                                )
+                                return None
+                            file.write(chunk)
+                    else:
+                        body = await response.read()
+                        bytes_written = len(body)
                         if bytes_written > self._max_download_bytes:
                             self._logging_gateway.error(
                                 "Downloaded media exceeded max allowed size."
                             )
                             return None
-                        file.write(chunk)
-                else:
-                    body = await response.read()
-                    bytes_written = len(body)
-                    if bytes_written > self._max_download_bytes:
-                        self._logging_gateway.error(
-                            "Downloaded media exceeded max allowed size."
-                        )
-                        return None
-                    file.write(body)
+                        file.write(body)
             download_complete = True
             latency_ms = (time.perf_counter() - started) * 1000
             self._logging_gateway.debug(
@@ -846,6 +847,19 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         finally:
             if not download_complete and file_path and os.path.exists(file_path):
                 os.remove(file_path)
+
+    @asynccontextmanager
+    async def _managed_http_get(self, url: str, **kwargs):
+        response = await self._client_session.get(url, **kwargs)
+        try:
+            yield response
+        finally:
+            release = getattr(response, "release", None)
+            if callable(release):
+                release()
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
 
     async def _send_message(self, data: dict) -> dict | None:
         """Utility for all message functions."""

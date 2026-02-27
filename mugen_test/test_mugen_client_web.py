@@ -403,6 +403,34 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(isinstance(materialized, str) and os.path.exists(materialized))
         await client.close()
 
+    async def test_resolve_media_source_path_keeps_existing_object_refs(self) -> None:
+        cfg = _build_config(basedir=self.tmpdir.name)
+        cfg.web.media.backend = "object"
+        client = DefaultWebClient(
+            config=cfg,
+            ipc_service=Mock(),
+            keyval_storage_gateway=_InMemoryKeyVal(),
+            logging_gateway=Mock(),
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        stored_ref = await client._media_storage_gateway.store_bytes(  # pylint: disable=protected-access
+            b"payload",
+            filename_hint="x.bin",
+        )
+
+        resolved_ref = await client._resolve_media_source_path(  # pylint: disable=protected-access
+            file_path=stored_ref,
+            filename="x.bin",
+        )
+
+        self.assertEqual(resolved_ref, stored_ref)
+        materialized = await client._materialize_media_reference(  # pylint: disable=protected-access
+            resolved_ref
+        )
+        self.assertTrue(isinstance(materialized, str) and os.path.exists(materialized))
+        await client.close()
+
     async def test_invalid_media_backend_raises(self) -> None:
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "bad-backend"
@@ -2803,7 +2831,25 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         update_none_session = _SequenceSession(
             [
                 _SequenceResult(),
-                _SequenceResult(rows=[{"id": 5}]),
+                _SequenceResult(
+                    rows=[
+                        {
+                            "job_id": "job-5",
+                            "conversation_id": "conv-5",
+                            "sender": "u1",
+                            "message_type": "text",
+                            "payload": {"text": "hello"},
+                            "status": "pending",
+                            "attempts": 0,
+                            "created_at": None,
+                            "updated_at": None,
+                            "lease_expires_at": None,
+                            "error_message": None,
+                            "completed_at": None,
+                            "client_message_id": "cid-5",
+                        }
+                    ]
+                ),
                 _SequenceResult(rows=[]),
             ]
         )
@@ -2813,7 +2859,25 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         success_session = _SequenceSession(
             [
                 _SequenceResult(),
-                _SequenceResult(rows=[{"id": 8}]),
+                _SequenceResult(
+                    rows=[
+                        {
+                            "job_id": "job-8",
+                            "conversation_id": "conv-8",
+                            "sender": "u1",
+                            "message_type": "text",
+                            "payload": {"text": "hello"},
+                            "status": "pending",
+                            "attempts": 0,
+                            "created_at": None,
+                            "updated_at": None,
+                            "lease_expires_at": None,
+                            "error_message": None,
+                            "completed_at": None,
+                            "client_message_id": "cid-8",
+                        }
+                    ]
+                ),
                 _SequenceResult(
                     rows=[
                         {
@@ -2855,6 +2919,12 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             "lease recovery reset stale jobs",
             str(self.logger.warning.call_args.args[0]),
         )
+
+    async def test_mark_job_status_relational_returns_when_job_missing(self) -> None:
+        missing_session = _SequenceSession([_SequenceResult(rows=[])])
+        _force_relational_session(self.client, missing_session)
+        await self.client._mark_job_done("missing")  # pylint: disable=protected-access
+        self.assertEqual(len(missing_session.calls), 1)
 
     async def test_persist_media_reference_does_not_delete_when_ref_unchanged(self) -> None:
         source_path = Path(self.tmpdir.name) / "keep.bin"
@@ -3020,18 +3090,80 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(active_file.exists())
         self.assertFalse(stale_file.exists())
 
-        mark_session = _SequenceSession([_SequenceResult(), _SequenceResult()])
+        mark_session = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "job_id": "job-1",
+                            "conversation_id": "conv-1",
+                            "sender": "u1",
+                            "message_type": "text",
+                            "payload": {"text": "hello"},
+                            "status": "processing",
+                            "attempts": 1,
+                            "created_at": None,
+                            "updated_at": None,
+                            "lease_expires_at": None,
+                            "error_message": None,
+                            "completed_at": None,
+                            "client_message_id": "cid-1",
+                        }
+                    ]
+                ),
+                _SequenceResult(),
+            ]
+        )
         _force_relational_session(self.client, mark_session)
         await self.client._mark_job_done("job-1")  # pylint: disable=protected-access
-        mark_sql, mark_params = mark_session.calls[0]
+        mark_sql, mark_params = mark_session.calls[1]
         self.assertIn(
             "SET status = CAST(:status AS mugen.citext)",
             mark_sql,
         )
         self.assertEqual(mark_params["status"], "done")
-        self.assertTrue(mark_params["is_done"])
         self.assertEqual(mark_params["job_id"], "job-1")
         self.assertIsNone(mark_params["error_message"])
+        self.assertIsNotNone(mark_params["completed_at"])
+
+        failed_mark_session = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "job_id": "job-2",
+                            "conversation_id": "conv-1",
+                            "sender": "u1",
+                            "message_type": "text",
+                            "payload": {"text": "hello"},
+                            "status": "processing",
+                            "attempts": 1,
+                            "created_at": None,
+                            "updated_at": None,
+                            "lease_expires_at": None,
+                            "error_message": None,
+                            "completed_at": None,
+                            "client_message_id": "cid-1",
+                        }
+                    ]
+                ),
+                _SequenceResult(),
+            ]
+        )
+        _force_relational_session(self.client, failed_mark_session)
+        await self.client._mark_job_failed("job-2", "boom")  # pylint: disable=protected-access
+        failed_sql, failed_params = failed_mark_session.calls[1]
+        self.assertIn(
+            "SET status = CAST(:status AS mugen.citext)",
+            failed_sql,
+        )
+        self.assertEqual(failed_params["status"], "failed")
+        self.assertEqual(failed_params["job_id"], "job-2")
+        self.assertEqual(failed_params["error_message"], "boom")
+        self.assertIsNotNone(failed_params["completed_at"])
+
+        recovery_noop_session = _SequenceSession([SimpleNamespace(rowcount=0)])
+        _force_relational_session(self.client, recovery_noop_session)
         await self.client._recover_stale_processing_jobs_unlocked()  # pylint: disable=protected-access
 
         recovery_warning = _SequenceSession([SimpleNamespace(rowcount=3)])

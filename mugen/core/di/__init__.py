@@ -16,7 +16,6 @@ from importlib import import_module
 import inspect
 import logging
 import os
-import sys
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -51,6 +50,10 @@ _CONFIG_NAMESPACE_CONVERSION = NamespaceConfig(
     raw_attr="dict",
     add_aliases=False,
 )
+
+
+class ContainerBootstrapError(RuntimeError):
+    """Raised when DI container bootstrap configuration is invalid."""
 
 
 def _nested_namespace_from_dict(items: dict, ns: SimpleNamespace) -> None:
@@ -543,12 +546,13 @@ def _build_provider_from_spec(
 ) -> None:
     """Build a provider using declarative spec metadata."""
     if spec.required_platform is not None:
-        active_platforms = _get_active_platforms(config)
-        if active_platforms is None:
+        raw_active_platforms = _get_active_platforms(config)
+        normalized_active_platforms = _normalize_platforms(raw_active_platforms)
+        if raw_active_platforms is None:
             logger.error(f"Invalid configuration ({spec.provider_name}).")
             return
 
-        if spec.required_platform not in active_platforms:
+        if spec.required_platform not in normalized_active_platforms:
             if spec.inactive_platform_warning is not None:
                 logger.warning(spec.inactive_platform_warning)
             return
@@ -632,9 +636,11 @@ def _load_config(config_file: str) -> dict:
             # Add base directory to configuration.
             config["basedir"] = basedir
             return config
-    except FileNotFoundError:
-        # Exit application if config file not found.
-        sys.exit(1)
+    except FileNotFoundError as exc:
+        raise ContainerBootstrapError(
+            "Configuration file not found. "
+            f"Set MUGEN_CONFIG_FILE to a valid path (received: {config_file!r})."
+        ) from exc
 
 
 def _resolve_config_file() -> str:
