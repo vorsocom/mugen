@@ -414,8 +414,8 @@ class TestDependencyInjector(unittest.TestCase):
             async def __aexit__(self, exc_type, exc_val, exc_tb):
                 pass
 
-            async def start_server(self):
-                pass
+            async def start_server(self, started_callback=None):
+                _ = started_callback
 
         telnet_client = DummyTelnetClientClass(
             config=config,

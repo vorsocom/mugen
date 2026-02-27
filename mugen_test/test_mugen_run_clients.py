@@ -263,6 +263,17 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["matrix"], PHASE_STATUS_DEGRADED)
         self.assertIsNotNone(state[PHASE_B_PLATFORM_ERRORS_KEY]["matrix"])
 
+    async def test_validate_phase_b_runtime_config_raises_without_logger_for_invalid_shape(
+        self,
+    ) -> None:
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms="web"))
+        with self.assertRaises(BootstrapConfigError):
+            mugen_mod.validate_phase_b_runtime_config(
+                config=config,
+                bootstrap_state={},
+                logger=None,
+            )
+
     async def test_run_platform_clients_keeps_platform_starting_until_started_callback(self) -> None:
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
@@ -627,6 +638,32 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 logger_provider=lambda: app.logger,
             )
 
+    async def test_run_platform_clients_raises_on_unknown_active_platform(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web", "unknown"]))
+
+        with self.assertRaises(BootstrapConfigError):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+    async def test_run_platform_clients_raises_on_known_but_inactive_critical_platform(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
+        state["phase_b_critical_platforms"] = ["matrix"]
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+
+        with self.assertRaises(BootstrapConfigError):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
     async def test_run_platform_clients_marks_platform_degraded_on_exception(self) -> None:
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
@@ -644,6 +681,74 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         state = app.extensions["mugen"]["bootstrap"]
         self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_DEGRADED)
         self.assertIn("RuntimeError: worker failure", state[PHASE_B_PLATFORM_ERRORS_KEY]["web"])
+
+    async def test_run_platform_clients_keeps_telnet_starting_until_started_callback(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["telnet"]))
+        allow_start = asyncio.Event()
+        keep_running = asyncio.Event()
+
+        async def _run_telnet_client(*, started_callback=None) -> None:
+            await allow_start.wait()
+            if callable(started_callback):
+                started_callback()
+            await keep_running.wait()
+
+        with unittest.mock.patch(
+            "mugen.run_telnet_client",
+            new=_run_telnet_client,
+        ):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.sleep(0)
+            state = app.extensions["mugen"]["bootstrap"]
+            self.assertEqual(
+                state[PHASE_B_PLATFORM_STATUSES_KEY]["telnet"],
+                PHASE_STATUS_STARTING,
+            )
+
+            allow_start.set()
+            await asyncio.sleep(0)
+            self.assertEqual(
+                state[PHASE_B_PLATFORM_STATUSES_KEY]["telnet"],
+                PHASE_STATUS_HEALTHY,
+            )
+
+            runner.cancel()
+            with self.assertRaises(asyncio.exceptions.CancelledError):
+                await runner
+
+    async def test_run_platform_clients_marks_telnet_degraded_on_bind_failure(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["telnet"]))
+
+        async def _fail_telnet(*, started_callback=None) -> None:
+            _ = started_callback
+            raise OSError("address already in use")
+
+        with unittest.mock.patch("mugen.run_telnet_client", new=_fail_telnet):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["telnet"],
+            PHASE_STATUS_DEGRADED,
+        )
+        self.assertIn(
+            "OSError: address already in use",
+            str(state[PHASE_B_PLATFORM_ERRORS_KEY]["telnet"]),
+        )
 
     async def test_run_platform_clients_raises_config_error_on_task_creation_attribute_error(
         self,

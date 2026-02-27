@@ -23,6 +23,7 @@ __all__ = [
     "run_clients",
     "run_platform_clients",
     "run_web_client",
+    "validate_phase_b_runtime_config",
 ]
 
 import asyncio
@@ -69,6 +70,11 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
+from mugen.core.utility.platforms import (
+    SUPPORTED_CORE_PLATFORMS,
+    normalize_platforms,
+    unknown_platforms,
+)
 
 _PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
 _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY = "phase_b_degrade_on_critical_exit"
@@ -163,22 +169,8 @@ def _parse_bool(value: object, *, default: bool) -> bool:
     return default
 
 
-def _normalize_platform_name(value: object) -> str:
-    return str(value).strip().lower()
-
-
 def _normalize_platform_list(values: object) -> list[str]:
-    if not isinstance(values, list):
-        return []
-    normalized: list[str] = []
-    for item in values:
-        platform = _normalize_platform_name(item)
-        if platform == "":
-            continue
-        if platform in normalized:
-            continue
-        normalized.append(platform)
-    return normalized
+    return normalize_platforms(values)
 
 
 def _resolve_phase_b_critical_platforms(
@@ -198,6 +190,65 @@ def _resolve_phase_b_critical_platforms(
         return resolved
 
     return list(active_platforms)
+
+
+def validate_phase_b_runtime_config(
+    *,
+    config: SimpleNamespace,
+    bootstrap_state: dict,
+    logger: ILoggingGateway | None = None,
+) -> tuple[list[str], list[str], bool]:
+    """Resolve and validate runtime platform configuration for phase B."""
+    raw_platforms = getattr(getattr(config, "mugen", SimpleNamespace()), "platforms", None)
+    if not isinstance(raw_platforms, list):
+        if logger is not None:
+            logger.error("Invalid platform configuration.")
+        raise BootstrapConfigError("Invalid platform configuration.")
+
+    active_platforms = _normalize_platform_list(raw_platforms)
+    unsupported_platforms = unknown_platforms(active_platforms)
+    if unsupported_platforms:
+        supported_platforms_text = ", ".join(sorted(SUPPORTED_CORE_PLATFORMS))
+        unsupported_platforms_text = ", ".join(unsupported_platforms)
+        raise BootstrapConfigError(
+            "Invalid platform configuration. "
+            "mugen.platforms includes unsupported platform(s): "
+            f"{unsupported_platforms_text}. "
+            f"Supported platforms: {supported_platforms_text}."
+        )
+
+    critical_platforms = _resolve_phase_b_critical_platforms(
+        config,
+        bootstrap_state,
+        active_platforms,
+    )
+    unsupported_critical_platforms = unknown_platforms(critical_platforms)
+    if unsupported_critical_platforms:
+        supported_platforms_text = ", ".join(sorted(SUPPORTED_CORE_PLATFORMS))
+        unsupported_platforms_text = ", ".join(unsupported_critical_platforms)
+        raise BootstrapConfigError(
+            "Invalid runtime critical platform configuration. "
+            "mugen.runtime.phase_b.critical_platforms includes unsupported platform(s): "
+            f"{unsupported_platforms_text}. "
+            f"Supported platforms: {supported_platforms_text}."
+        )
+
+    invalid_critical_platforms = [
+        platform
+        for platform in critical_platforms
+        if platform not in active_platforms
+    ]
+    if invalid_critical_platforms:
+        active_platforms_text = ", ".join(active_platforms) if active_platforms else "<none>"
+        invalid_platforms_text = ", ".join(invalid_critical_platforms)
+        raise BootstrapConfigError(
+            "Invalid runtime critical platform configuration. "
+            "mugen.runtime.phase_b.critical_platforms includes unsupported platform(s): "
+            f"{invalid_platforms_text}. Enabled platforms: {active_platforms_text}."
+        )
+
+    degrade_on_critical_exit = _resolve_degrade_on_critical_exit(config, bootstrap_state)
+    return active_platforms, critical_platforms, degrade_on_critical_exit
 
 
 def _resolve_degrade_on_critical_exit(config: SimpleNamespace, bootstrap_state: dict) -> bool:
@@ -472,30 +523,13 @@ async def run_platform_clients(
     environment = str(
         getattr(getattr(config, "mugen", SimpleNamespace()), "environment", "")
     ).strip().lower()
-    raw_platforms = getattr(getattr(config, "mugen", SimpleNamespace()), "platforms", None)
-    if not isinstance(raw_platforms, list):
-        logger.error("Invalid platform configuration.")
-        raise BootstrapConfigError("Invalid platform configuration.")
-    active_platforms = _normalize_platform_list(raw_platforms)
-    critical_platforms = _resolve_phase_b_critical_platforms(
-        config,
-        bootstrap_state,
-        active_platforms,
-    )
-    degrade_on_critical_exit = _resolve_degrade_on_critical_exit(config, bootstrap_state)
-    invalid_critical_platforms = [
-        platform
-        for platform in critical_platforms
-        if platform not in active_platforms
-    ]
-    if invalid_critical_platforms:
-        active_platforms_text = ", ".join(active_platforms) if active_platforms else "<none>"
-        invalid_platforms_text = ", ".join(invalid_critical_platforms)
-        raise BootstrapConfigError(
-            "Invalid runtime critical platform configuration. "
-            "mugen.runtime.phase_b.critical_platforms includes unsupported platform(s): "
-            f"{invalid_platforms_text}. Enabled platforms: {active_platforms_text}."
+    active_platforms, critical_platforms, degrade_on_critical_exit = (
+        validate_phase_b_runtime_config(
+            config=config,
+            bootstrap_state=bootstrap_state,
+            logger=logger,
         )
+    )
     bootstrap_state[_PHASE_B_CRITICAL_PLATFORMS_KEY] = critical_platforms
     bootstrap_state[_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = degrade_on_critical_exit
     _ensure_platform_state(
@@ -979,9 +1013,7 @@ async def run_telnet_client(
 
     async with telnet_client as client:
         try:
-            if callable(started_callback):
-                started_callback()
-            await asyncio.create_task(client.start_server())
+            await client.start_server(started_callback=started_callback)
             logger.debug("Telnet client started.")
         except asyncio.exceptions.CancelledError:
             logger.error("Telnet client shutting down.")

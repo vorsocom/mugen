@@ -3,6 +3,7 @@
 __all__ = ["DefaultTelnetClient"]
 
 import asyncio
+from collections.abc import Callable
 from types import SimpleNamespace, TracebackType
 
 from mugen.core.contract.client.telnet import ITelnetClient
@@ -51,7 +52,10 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
         self._logging_gateway.debug("DefaultTelnetClient.__aexit__")
         return False
 
-    async def start_server(self) -> None:
+    async def start_server(
+        self,
+        started_callback: Callable[[], None] | None = None,
+    ) -> None:
         server = await asyncio.start_server(
             self._handle_connection,
             self._config.telnet.socket.host,
@@ -65,6 +69,8 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
                 )
             else:
                 self._logging_gateway.info("Telnet server started.")
+            if callable(started_callback):
+                started_callback()
             await server.serve_forever()
 
     def _resolve_session_identity(
