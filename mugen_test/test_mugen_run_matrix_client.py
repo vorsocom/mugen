@@ -107,6 +107,45 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(logger.output[0], "DEBUG:test_app:Matrix client started.")
 
+    async def test_started_callback_is_invoked_after_first_sync(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            matrix=SimpleNamespace(
+                assistant=SimpleNamespace(
+                    name="Test Agent",
+                )
+            )
+        )
+        started = unittest.mock.Mock()
+
+        class DummyMatrixClient:
+            synced = SimpleNamespace(wait=unittest.mock.AsyncMock())
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(return_value=None)
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        await run_matrix_client(
+            config_provider=lambda: config,
+            logger_provider=lambda: app.logger,
+            matrix_provider=DummyMatrixClient,
+            started_callback=started,
+        )
+        started.assert_called_once_with()
+
     async def test_cancelled_error(self) -> None:
         """Test effects of asyncio.exceptions.CancelledError."""
         # Create dummy app to get context.

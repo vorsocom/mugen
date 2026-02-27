@@ -73,6 +73,7 @@ from mugen.core.contract.service.platform import IPlatformService
 _PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
 _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY = "phase_b_degrade_on_critical_exit"
 
+
 class BootstrapError(RuntimeError):
     """Base error type for application bootstrap failures."""
 
@@ -256,6 +257,7 @@ def _refresh_phase_b_status(
     bootstrap_state: dict,
     *,
     critical_platforms: list[str],
+    degrade_on_critical_exit: bool = True,
 ) -> None:
     statuses = bootstrap_state.get(PHASE_B_PLATFORM_STATUSES_KEY)
     if not isinstance(statuses, dict):
@@ -286,6 +288,11 @@ def _refresh_phase_b_status(
             continue
         if platform_status == PHASE_STATUS_STARTING:
             starting.append(platform)
+            continue
+        if (
+            platform_status == PHASE_STATUS_STOPPED
+            and degrade_on_critical_exit is not True
+        ):
             continue
         if platform_status not in {PHASE_STATUS_HEALTHY}:
             unexpected.append(platform)
@@ -476,6 +483,19 @@ async def run_platform_clients(
         active_platforms,
     )
     degrade_on_critical_exit = _resolve_degrade_on_critical_exit(config, bootstrap_state)
+    invalid_critical_platforms = [
+        platform
+        for platform in critical_platforms
+        if platform not in active_platforms
+    ]
+    if invalid_critical_platforms:
+        active_platforms_text = ", ".join(active_platforms) if active_platforms else "<none>"
+        invalid_platforms_text = ", ".join(invalid_critical_platforms)
+        raise BootstrapConfigError(
+            "Invalid runtime critical platform configuration. "
+            "mugen.runtime.phase_b.critical_platforms includes unsupported platform(s): "
+            f"{invalid_platforms_text}. Enabled platforms: {active_platforms_text}."
+        )
     bootstrap_state[_PHASE_B_CRITICAL_PLATFORMS_KEY] = critical_platforms
     bootstrap_state[_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = degrade_on_critical_exit
     _ensure_platform_state(
@@ -491,6 +511,47 @@ async def run_platform_clients(
             )
 
     tasks: dict[str, asyncio.Task] = {}
+
+    def _on_platform_started(platform_name: str) -> None:
+        shutdown_requested = _parse_bool(
+            bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
+            default=False,
+        )
+        if shutdown_requested:
+            return
+        _set_platform_status(
+            bootstrap_state,
+            platform=platform_name,
+            status=PHASE_STATUS_HEALTHY,
+            error=None,
+        )
+        _refresh_phase_b_status(
+            bootstrap_state,
+            critical_platforms=critical_platforms,
+            degrade_on_critical_exit=degrade_on_critical_exit,
+        )
+
+    def _invoke_platform_runner(platform_name: str, runner) -> object:
+        started_signalled = False
+
+        def _started_callback() -> None:
+            nonlocal started_signalled
+            if started_signalled:
+                return
+            started_signalled = True
+            _on_platform_started(platform_name)
+
+        try:
+            return runner(started_callback=_started_callback)
+        except TypeError as exc:
+            if "started_callback" not in str(exc):
+                raise
+
+        async def _legacy_runner() -> None:
+            _started_callback()
+            await runner()
+
+        return _legacy_runner()
 
     def _on_platform_task_done(platform_name: str, task: asyncio.Task) -> None:
         shutdown_requested = _parse_bool(
@@ -519,6 +580,7 @@ async def run_platform_clients(
             _refresh_phase_b_status(
                 bootstrap_state,
                 critical_platforms=critical_platforms,
+                degrade_on_critical_exit=degrade_on_critical_exit,
             )
             return
 
@@ -555,6 +617,7 @@ async def run_platform_clients(
             _refresh_phase_b_status(
                 bootstrap_state,
                 critical_platforms=critical_platforms,
+                degrade_on_critical_exit=degrade_on_critical_exit,
             )
             return
 
@@ -568,6 +631,7 @@ async def run_platform_clients(
         _refresh_phase_b_status(
             bootstrap_state,
             critical_platforms=critical_platforms,
+            degrade_on_critical_exit=degrade_on_critical_exit,
         )
         logger.error(
             f"{platform_name} client failed ({error_message})."
@@ -576,12 +640,9 @@ async def run_platform_clients(
     try:
         if "matrix" in active_platforms:
             logger.debug("Running matrix client.")
-            task = asyncio.create_task(run_matrix_client(), name="mugen.platform.matrix")
-            _set_platform_status(
-                bootstrap_state,
-                platform="matrix",
-                status=PHASE_STATUS_HEALTHY,
-                error=None,
+            task = asyncio.create_task(
+                _invoke_platform_runner("matrix", run_matrix_client),
+                name="mugen.platform.matrix",
             )
             task.add_done_callback(
                 lambda done_task, platform_name="matrix": _on_platform_task_done(
@@ -592,12 +653,9 @@ async def run_platform_clients(
 
         if "telnet" in active_platforms:
             logger.debug("Running telnet client.")
-            task = asyncio.create_task(run_telnet_client(), name="mugen.platform.telnet")
-            _set_platform_status(
-                bootstrap_state,
-                platform="telnet",
-                status=PHASE_STATUS_HEALTHY,
-                error=None,
+            task = asyncio.create_task(
+                _invoke_platform_runner("telnet", run_telnet_client),
+                name="mugen.platform.telnet",
             )
             task.add_done_callback(
                 lambda done_task, platform_name="telnet": _on_platform_task_done(
@@ -609,14 +667,8 @@ async def run_platform_clients(
         if "whatsapp" in active_platforms:
             logger.debug("Running whatsapp client.")
             task = asyncio.create_task(
-                run_whatsapp_client(),
+                _invoke_platform_runner("whatsapp", run_whatsapp_client),
                 name="mugen.platform.whatsapp",
-            )
-            _set_platform_status(
-                bootstrap_state,
-                platform="whatsapp",
-                status=PHASE_STATUS_HEALTHY,
-                error=None,
             )
             task.add_done_callback(
                 lambda done_task, platform_name="whatsapp": _on_platform_task_done(
@@ -627,12 +679,9 @@ async def run_platform_clients(
 
         if "web" in active_platforms:
             logger.debug("Running web client.")
-            task = asyncio.create_task(run_web_client(), name="mugen.platform.web")
-            _set_platform_status(
-                bootstrap_state,
-                platform="web",
-                status=PHASE_STATUS_HEALTHY,
-                error=None,
+            task = asyncio.create_task(
+                _invoke_platform_runner("web", run_web_client),
+                name="mugen.platform.web",
             )
             task.add_done_callback(
                 lambda done_task, platform_name="web": _on_platform_task_done(
@@ -647,6 +696,7 @@ async def run_platform_clients(
     _refresh_phase_b_status(
         bootstrap_state,
         critical_platforms=critical_platforms,
+        degrade_on_critical_exit=degrade_on_critical_exit,
     )
 
     if not tasks:
@@ -921,6 +971,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
 async def run_telnet_client(
     logger_provider=_logger_provider,
     telnet_provider=_telnet_provider,
+    started_callback=None,
 ) -> None:
     """Run assistant for Telnet server."""
     logger: ILoggingGateway = logger_provider()
@@ -928,16 +979,20 @@ async def run_telnet_client(
 
     async with telnet_client as client:
         try:
+            if callable(started_callback):
+                started_callback()
             await asyncio.create_task(client.start_server())
             logger.debug("Telnet client started.")
         except asyncio.exceptions.CancelledError:
             logger.error("Telnet client shutting down.")
+            raise
 
 
 async def run_matrix_client(
     config_provider=_config_provider,
     logger_provider=_logger_provider,
     matrix_provider=_matrix_provider,
+    started_callback=None,
 ) -> None:
     """Run assistant for the Matrix platform."""
     config: SimpleNamespace = config_provider()
@@ -968,6 +1023,9 @@ async def run_matrix_client(
             # Cleanup device list and trust known devices.
             # matrix_client.cleanup_known_user_devices_list()
             await client.trust_known_user_devices()
+
+            if callable(started_callback):
+                started_callback()
 
         retry_attempt = 0
         while True:
@@ -1024,12 +1082,15 @@ async def run_matrix_client(
 async def run_whatsapp_client(
     logger_provider=_logger_provider,
     whatsapp_provider=_whatsapp_provider,
+    started_callback=None,
 ) -> None:
     """Run assistant for the whatsapp platform."""
     logger: ILoggingGateway = logger_provider()
     whatsapp_client: IWhatsAppClient = whatsapp_provider()
 
     await whatsapp_client.init()
+    if callable(started_callback):
+        started_callback()
     logger.debug("WhatsApp client started.")
     try:
         await asyncio.Event().wait()
@@ -1046,12 +1107,15 @@ async def run_whatsapp_client(
 async def run_web_client(
     logger_provider=_logger_provider,
     web_provider=_web_provider,
+    started_callback=None,
 ) -> None:
     """Run assistant for the web platform."""
     logger: ILoggingGateway = logger_provider()
     web_client: IWebClient = web_provider()
 
     await web_client.init()
+    if callable(started_callback):
+        started_callback()
     logger.debug("Web client started.")
     try:
         await web_client.wait_until_stopped()

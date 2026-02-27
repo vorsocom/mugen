@@ -559,9 +559,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(ex.exception.code, 404)
 
-        expand_error = RGQLExpandError("expand failed")
-        expand_error.status_code = 422
-        expand_error.message = "expand failed"
+        expand_error = RGQLExpandError(422, "expand failed")
         opts = SimpleNamespace(
             select=["Name"],
             expand=[SimpleNamespace(path="Role", levels=None)],
@@ -1352,9 +1350,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(ex.exception.code, 400)
 
-        expand_error = RGQLExpandError("expand failed")
-        expand_error.status_code = 422
-        expand_error.message = "expand failed"
+        expand_error = RGQLExpandError(422, "expand failed")
         with (
             patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
             patch.object(rgql_mod, "RGQLToRelationalAdapter", new=lambda: _Adapter()),

@@ -11,7 +11,11 @@ from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedR
 from sentence_transformers import SentenceTransformer
 
 from mugen.core.contract.dto.qdrant.search import QdrantSearchVendorParams
-from mugen.core.contract.gateway.knowledge import IKnowledgeGateway, KnowledgeSearchResult
+from mugen.core.contract.gateway.knowledge import (
+    IKnowledgeGateway,
+    KnowledgeGatewayRuntimeError,
+    KnowledgeSearchResult,
+)
 from mugen.core.contract.gateway.logging import ILoggingGateway
 
 
@@ -350,11 +354,17 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                     "count": False,
                 },
             )
-        except (ResponseHandlingException, UnexpectedResponse, asyncio.TimeoutError):
+        except (ResponseHandlingException, UnexpectedResponse, asyncio.TimeoutError) as exc:
+            operation = "count" if params.count is True else "search"
             self._logging_gateway.warning(
-                "QdrantKnowledgeGateway - ResponseHandlingException"
+                "QdrantKnowledgeGateway transport failure "
+                f"(operation={operation} error={type(exc).__name__}: {exc})"
             )
-            return KnowledgeSearchResult(items=[], total_count=0, raw_vendor=None)
+            raise KnowledgeGatewayRuntimeError(
+                provider="qdrant",
+                operation=operation,
+                cause=exc,
+            ) from exc
 
     def _request_timeout_kwargs(self) -> dict[str, float]:
         if self._api_timeout_seconds is None:

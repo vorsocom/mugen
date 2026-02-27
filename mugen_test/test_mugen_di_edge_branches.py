@@ -336,6 +336,30 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
 
         logger.warning.assert_not_called()
 
+    def test_build_provider_from_spec_normalizes_active_platform_names(self) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(config=object())
+        spec = di._ProviderSpec(
+            provider_name="dummy_provider",
+            injector_attr="dummy_provider",
+            interface=ICompletionGateway,
+            module_path=("mugen", "modules", "dummy"),
+            constructor_bindings=(("config", "config"),),
+            required_platform="web",
+            inactive_platform_warning="inactive",
+        )
+
+        with patch.object(di, "_import_provider_module", return_value=None) as import_module:
+            di._build_provider_from_spec(
+                {"mugen": {"platforms": [" WEB "]}},
+                injector,
+                spec=spec,
+                logger=logger,
+            )
+
+        import_module.assert_called_once()
+        logger.warning.assert_not_called()
+
     def test_container_proxy_setattr_forwards_non_internal_attrs(self) -> None:
         proxy = di._ContainerProxy()
         target = SimpleNamespace()

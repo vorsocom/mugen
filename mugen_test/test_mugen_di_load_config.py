@@ -14,9 +14,7 @@ class TestDILoadConfig(unittest.TestCase):
     def test_config_file_not_found(self) -> None:
         """Test effects of unavailable config file."""
 
-        # Expect SystemExit since the config file would
-        # not be found.
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(di.ContainerBootstrapError):
             di._load_config("unavailable_file.toml")
 
     def test_config_file_is_available(self) -> None:

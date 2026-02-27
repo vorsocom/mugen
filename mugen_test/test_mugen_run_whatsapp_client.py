@@ -2,6 +2,7 @@
 
 import asyncio
 import unittest
+from unittest.mock import Mock
 
 from quart import Quart
 
@@ -68,3 +69,26 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any("Failed to close whatsapp client (boom)." in msg for msg in logger.output)
         )
+
+    async def test_started_callback_is_invoked(self) -> None:
+        app = Quart("test_app")
+        started = Mock()
+
+        class DummyWhatsAppClient:
+            async def init(self) -> None:
+                ...
+
+            async def close(self) -> None:
+                ...
+
+        task = asyncio.create_task(
+            run_whatsapp_client(
+                logger_provider=lambda: app.logger,
+                whatsapp_provider=DummyWhatsAppClient,
+                started_callback=started,
+            )
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        started.assert_called_once_with()

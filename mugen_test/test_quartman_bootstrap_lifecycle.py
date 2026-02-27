@@ -131,6 +131,11 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch.object(
                 quartman,
+                "_resolve_phase_b_runtime_controls",
+                return_value=(0.0, ["whatsapp"], True),
+            ),
+            unittest.mock.patch.object(
+                quartman,
                 "run_platform_clients",
                 new=_phase_b_runner,
             ),
@@ -181,6 +186,73 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             quartman._on_platform_clients_done(task, started_at=0.0)
 
         self.assertTrue(any("phase_b failed" in msg for msg in logs.output))
+
+    async def test_done_callback_keeps_healthy_when_stopped_critical_exit_is_allowed(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        state = quartman._bootstrap_state()
+        state[quartman.PHASE_B_STATUS_KEY] = quartman.PHASE_STATUS_HEALTHY
+        state[quartman._PHASE_B_CRITICAL_PLATFORMS_KEY] = ["web"]
+        state[quartman._PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = False
+        state[quartman.PHASE_B_PLATFORM_STATUSES_KEY] = {"web": quartman.PHASE_STATUS_STOPPED}
+        state[quartman.PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        task = asyncio.create_task(asyncio.sleep(0))
+        await task
+
+        quartman._on_platform_clients_done(task, started_at=0.0)
+        self.assertEqual(
+            state[quartman.PHASE_B_STATUS_KEY],
+            quartman.PHASE_STATUS_HEALTHY,
+        )
+
+    async def test_done_callback_parses_degrade_flag_values(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        state = quartman._bootstrap_state()
+
+        async def _completed_task() -> asyncio.Task:
+            task = asyncio.create_task(asyncio.sleep(0))
+            await task
+            return task
+
+        state.clear()
+        state[quartman.PHASE_B_STATUS_KEY] = quartman.PHASE_STATUS_HEALTHY
+        state[quartman._PHASE_B_CRITICAL_PLATFORMS_KEY] = ["web"]
+        state[quartman._PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = "on"
+        state[quartman.PHASE_B_PLATFORM_STATUSES_KEY] = {"web": quartman.PHASE_STATUS_STOPPED}
+        state[quartman.PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+        quartman._on_platform_clients_done(await _completed_task(), started_at=0.0)
+        self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+
+        state.clear()
+        state[quartman.PHASE_B_STATUS_KEY] = quartman.PHASE_STATUS_HEALTHY
+        state[quartman._PHASE_B_CRITICAL_PLATFORMS_KEY] = ["web"]
+        state[quartman._PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = "off"
+        state[quartman.PHASE_B_PLATFORM_STATUSES_KEY] = {"web": quartman.PHASE_STATUS_STOPPED}
+        state[quartman.PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+        quartman._on_platform_clients_done(await _completed_task(), started_at=0.0)
+        self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_HEALTHY)
+
+        state.clear()
+        state[quartman.PHASE_B_STATUS_KEY] = quartman.PHASE_STATUS_HEALTHY
+        state[quartman._PHASE_B_CRITICAL_PLATFORMS_KEY] = ["web"]
+        state[quartman._PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = "invalid"
+        state[quartman.PHASE_B_PLATFORM_STATUSES_KEY] = {"web": quartman.PHASE_STATUS_HEALTHY}
+        state[quartman.PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+        quartman._on_platform_clients_done(await _completed_task(), started_at=0.0)
+        self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_HEALTHY)
+
+        state.clear()
+        state[quartman.PHASE_B_STATUS_KEY] = quartman.PHASE_STATUS_HEALTHY
+        state[quartman._PHASE_B_CRITICAL_PLATFORMS_KEY] = ["web"]
+        state[quartman._PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = object()
+        state[quartman.PHASE_B_PLATFORM_STATUSES_KEY] = {"web": quartman.PHASE_STATUS_HEALTHY}
+        state[quartman.PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+        quartman._on_platform_clients_done(await _completed_task(), started_at=0.0)
+        self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_HEALTHY)
 
     async def test_startup_skips_when_platform_task_already_active(self) -> None:
         app = Quart("quartman_test")

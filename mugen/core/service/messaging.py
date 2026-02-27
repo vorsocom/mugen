@@ -2,6 +2,7 @@
 
 __all__ = ["DefaultMessagingService"]
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
@@ -56,6 +57,63 @@ class DefaultMessagingService(IMessagingService):
         self._rag_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._rpp_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._normalize_composed_message_use_case = NormalizeComposedMessageUseCase()
+        self._extension_timeout_seconds = self._resolve_extension_timeout_seconds()
+
+    def _resolve_extension_timeout_seconds(self) -> float | None:
+        messaging_cfg = getattr(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "messaging", None),
+            "extension_timeout_seconds",
+            None,
+        )
+        if messaging_cfg in [None, ""]:
+            return None
+        if not isinstance(messaging_cfg, (int, float, str)):
+            return None
+        try:
+            timeout_seconds = float(messaging_cfg)
+        except (TypeError, ValueError):
+            self._logging_gateway.warning(
+                "Invalid extension timeout configuration; disabling timeout enforcement."
+            )
+            return None
+        if timeout_seconds <= 0:
+            self._logging_gateway.warning(
+                "Extension timeout must be positive; disabling timeout enforcement."
+            )
+            return None
+        return timeout_seconds
+
+    async def _invoke_message_handler(
+        self,
+        *,
+        extension: IMHExtension,
+        platform: str,
+        room_id: str,
+        sender: str,
+        message: dict | str,
+        message_context: list[dict] | None = None,
+    ) -> list[dict] | None:
+        coroutine = extension.handle_message(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message=message,
+            message_context=message_context,
+        )
+
+        timeout_seconds = self._extension_timeout_seconds
+        if timeout_seconds is None:
+            return await coroutine
+
+        try:
+            return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            self._logging_gateway.warning(
+                "Messaging extension handler timed out "
+                f"(extension={type(extension).__module__}.{type(extension).__qualname__} "
+                f"timeout_seconds={timeout_seconds})."
+            )
+            return None
 
     @staticmethod
     def _extension_platform_key(ext: Any) -> tuple[str, ...]:
@@ -242,29 +300,14 @@ class DefaultMessagingService(IMessagingService):
         message: str,
         message_context: list[dict] | None = None,
     ) -> list[dict] | None:
-        # Call message handlers.
-        handler_responses: list[dict] = []
-        for mh_ext in self._mh_extensions:
-            # Filter extensions that don't support the
-            # calling platform.
-            if not mh_ext.platform_supported(platform):
-                continue
-
-            # Filter extensions that don't handle text
-            # messages.
-            if "text" not in mh_ext.message_types:
-                continue
-
-            resp = await mh_ext.handle_message(
-                platform=platform,
-                room_id=room_id,
-                sender=sender,
-                message=message,
-                message_context=message_context,
-            )
-
-            if resp:
-                handler_responses += resp
+        handler_responses = await self._collect_message_handler_responses(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message=message,
+            message_types={"text"},
+            message_context=message_context,
+        )
 
         if not handler_responses:
             return [
@@ -315,6 +358,7 @@ class DefaultMessagingService(IMessagingService):
         sender: str,
         message: dict | str,
         message_types: set[str],
+        message_context: list[dict] | None = None,
     ) -> list[dict]:
         handler_responses: list[dict] = []
         for mh_ext in self._mh_extensions:
@@ -328,11 +372,13 @@ class DefaultMessagingService(IMessagingService):
             if not any(message_type in supported_message_types for message_type in message_types):
                 continue
 
-            resp = await mh_ext.handle_message(
+            resp = await self._invoke_message_handler(
+                extension=mh_ext,
                 platform=platform,
                 room_id=room_id,
                 sender=sender,
                 message=message,
+                message_context=message_context,
             )
 
             if resp:

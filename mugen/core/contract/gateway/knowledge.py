@@ -1,6 +1,10 @@
 """Provides an abstract base class for knowledge gateways."""
 
-__all__ = ["IKnowledgeGateway", "KnowledgeSearchResult"]
+__all__ = [
+    "IKnowledgeGateway",
+    "KnowledgeGatewayRuntimeError",
+    "KnowledgeSearchResult",
+]
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -16,6 +20,24 @@ class KnowledgeSearchResult:
     items: list[dict[str, Any]] = field(default_factory=list)
     total_count: int | None = None
     raw_vendor: dict[str, Any] | None = None
+
+
+class KnowledgeGatewayRuntimeError(RuntimeError):
+    """Raised when a knowledge provider fails at runtime."""
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        operation: str,
+        cause: BaseException,
+    ) -> None:
+        self.provider = str(provider)
+        self.operation = str(operation)
+        self.cause = cause
+        super().__init__(
+            f"{self.provider} {self.operation} failed: {type(cause).__name__}: {cause}"
+        )
 
 
 class IKnowledgeGateway(ABC):  # pylint: disable=too-few-public-methods

@@ -3,6 +3,7 @@
 import asyncio
 from types import TracebackType
 import unittest
+from unittest.mock import Mock
 
 from quart import Quart
 
@@ -70,12 +71,41 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
                 """Start Telnet server."""
                 raise asyncio.exceptions.CancelledError
 
-        with (self.assertLogs(logger="test_app", level="DEBUG") as logger,):
+        with (
+            self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            self.assertRaises(asyncio.exceptions.CancelledError),
+        ):
             await run_telnet_client(
                 logger_provider=lambda: app.logger,
                 telnet_provider=DummyTelnetClient,
             )
-            self.assertEqual(
-                logger.output[0],
-                "ERROR:test_app:Telnet client shutting down.",
-            )
+        self.assertEqual(
+            logger.output[0],
+            "ERROR:test_app:Telnet client shutting down.",
+        )
+
+    async def test_started_callback_is_invoked(self) -> None:
+        app = Quart("test_app")
+
+        class DummyTelnetClient(ITelnetClient):
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+            async def start_server(self) -> None:
+                return None
+
+        started = Mock()
+        await run_telnet_client(
+            logger_provider=lambda: app.logger,
+            telnet_provider=DummyTelnetClient,
+            started_callback=started,
+        )
+        started.assert_called_once_with()

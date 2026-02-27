@@ -263,6 +263,114 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["matrix"], PHASE_STATUS_DEGRADED)
         self.assertIsNotNone(state[PHASE_B_PLATFORM_ERRORS_KEY]["matrix"])
 
+    async def test_run_platform_clients_keeps_platform_starting_until_started_callback(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        allow_start = asyncio.Event()
+        keep_running = asyncio.Event()
+
+        async def _run_web_client(*, started_callback=None) -> None:
+            await allow_start.wait()
+            if callable(started_callback):
+                started_callback()
+            await keep_running.wait()
+
+        with unittest.mock.patch("mugen.run_web_client", new=_run_web_client):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.sleep(0)
+            state = app.extensions["mugen"]["bootstrap"]
+            self.assertEqual(
+                state[PHASE_B_PLATFORM_STATUSES_KEY]["web"],
+                PHASE_STATUS_STARTING,
+            )
+            self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_STARTING)
+
+            allow_start.set()
+            await asyncio.sleep(0)
+            self.assertEqual(
+                state[PHASE_B_PLATFORM_STATUSES_KEY]["web"],
+                PHASE_STATUS_HEALTHY,
+            )
+
+            runner.cancel()
+            with self.assertRaises(asyncio.exceptions.CancelledError):
+                await runner
+
+    async def test_run_platform_clients_started_callback_ignored_when_shutdown_requested(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        allow_start = asyncio.Event()
+
+        async def _run_web_client(*, started_callback=None) -> None:
+            await allow_start.wait()
+            if callable(started_callback):
+                started_callback()
+
+        with unittest.mock.patch("mugen.run_web_client", new=_run_web_client):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.sleep(0)
+            state = app.extensions["mugen"]["bootstrap"]
+            state[SHUTDOWN_REQUESTED_KEY] = True
+            allow_start.set()
+            await runner
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED)
+
+    async def test_run_platform_clients_ignores_duplicate_started_callback_signal(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
+        state["phase_b_degrade_on_critical_exit"] = False
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+
+        async def _run_web_client(*, started_callback=None) -> None:
+            if callable(started_callback):
+                started_callback()
+                started_callback()
+
+        with unittest.mock.patch("mugen.run_web_client", new=_run_web_client):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+
+    async def test_run_platform_clients_rethrows_unexpected_type_error_from_runner(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+
+        def _bad_runner(*, started_callback=None):  # noqa: ARG001
+            raise TypeError("boom")
+
+        with unittest.mock.patch("mugen.run_web_client", new=_bad_runner):
+            with self.assertRaises(TypeError):
+                await run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+
     async def test_run_platform_clients_handles_cancellation(
         self,
     ) -> None:
@@ -444,6 +552,17 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_STARTING)
 
+        state = {
+            PHASE_B_PLATFORM_STATUSES_KEY: {"web": PHASE_STATUS_STOPPED},
+            PHASE_B_PLATFORM_ERRORS_KEY: {"web": None},
+        }
+        mugen_mod._refresh_phase_b_status(  # pylint: disable=protected-access
+            state,
+            critical_platforms=["web"],
+            degrade_on_critical_exit=False,
+        )
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+
     async def test_run_platform_clients_marks_stopped_when_shutdown_requested(
         self,
     ) -> None:
@@ -477,7 +596,8 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
     async def test_run_platform_clients_marks_noncritical_clean_exit_as_stopped(self) -> None:
         app = Quart("test_app")
         state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
-        state["phase_b_critical_platforms"] = ["matrix"]
+        state["phase_b_critical_platforms"] = ["web"]
+        state["phase_b_degrade_on_critical_exit"] = False
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
 
         with unittest.mock.patch(
@@ -492,7 +612,20 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
 
         state = app.extensions["mugen"]["bootstrap"]
         self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED)
-        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_STARTING)
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+
+    async def test_run_platform_clients_raises_on_invalid_critical_platform(self) -> None:
+        app = Quart("test_app")
+        state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
+        state["phase_b_critical_platforms"] = ["not-enabled"]
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+
+        with self.assertRaises(BootstrapConfigError):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
 
     async def test_run_platform_clients_marks_platform_degraded_on_exception(self) -> None:
         app = Quart("test_app")

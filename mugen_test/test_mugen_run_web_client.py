@@ -2,6 +2,7 @@
 
 import asyncio
 import unittest
+from unittest.mock import Mock
 
 from quart import Quart
 
@@ -68,3 +69,29 @@ class TestMuGenInitRunWebClient(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(any("Web client shutting down." in msg for msg in logger.output))
         self.assertTrue(any("Failed to close web client (boom)." in msg for msg in logger.output))
+
+    async def test_started_callback_is_invoked(self) -> None:
+        app = Quart("test_app")
+        started = Mock()
+
+        class DummyWebClient:
+            async def init(self) -> None:
+                ...
+
+            async def close(self) -> None:
+                ...
+
+            async def wait_until_stopped(self) -> None:
+                await asyncio.Event().wait()
+
+        task = asyncio.create_task(
+            run_web_client(
+                logger_provider=lambda: app.logger,
+                web_provider=DummyWebClient,
+                started_callback=started,
+            )
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        started.assert_called_once_with()

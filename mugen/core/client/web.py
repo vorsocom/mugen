@@ -801,7 +801,9 @@ class DefaultWebClient(IWebClient):
 
                     selected = await session.execute(
                         sa_text(
-                            "SELECT id "
+                            "SELECT job_id, conversation_id, sender, message_type, payload, "
+                            "status, attempts, created_at, updated_at, lease_expires_at, "
+                            "error_message, completed_at, client_message_id "
                             "FROM mugen.web_queue_job "
                             "WHERE status = 'pending' "
                             "ORDER BY created_at ASC "
@@ -813,24 +815,50 @@ class DefaultWebClient(IWebClient):
                     if selected_row is None:
                         return None
 
-                    claimed_until = self._to_utc_datetime(
-                        now_epoch + self._queue_processing_lease_seconds
+                    selected_job = self._queue_job_record_to_payload(selected_row)
+                    claimed_view = self._queue_job_lifecycle_use_case.claim(
+                        job=selected_job,
+                        now_iso=now_iso,
+                        lease_expires_at=(
+                            now_epoch + self._queue_processing_lease_seconds
+                        ),
                     )
                     updated = await session.execute(
                         sa_text(
                             "UPDATE mugen.web_queue_job "
-                            "SET status = 'processing', "
-                            "attempts = attempts + 1, "
-                            "updated_at = now(), "
-                            "lease_expires_at = :lease_expires_at "
-                            "WHERE id = :id "
+                            "SET status = CAST(:status AS mugen.citext), "
+                            "attempts = :attempts, "
+                            "updated_at = :updated_at, "
+                            "lease_expires_at = :lease_expires_at, "
+                            "error_message = :error_message, "
+                            "completed_at = :completed_at "
+                            "WHERE job_id = :job_id "
                             "RETURNING job_id, conversation_id, sender, message_type, payload, "
                             "status, attempts, created_at, updated_at, lease_expires_at, "
                             "error_message, completed_at, client_message_id"
                         ),
                         {
-                            "id": selected_row.get("id"),
-                            "lease_expires_at": claimed_until,
+                            "status": claimed_view.get("status"),
+                            "attempts": int(claimed_view.get("attempts") or 0),
+                            "updated_at": (
+                                self._iso_to_utc_datetime(claimed_view.get("updated_at"))
+                                or self._to_utc_datetime(now_epoch)
+                            ),
+                            "lease_expires_at": (
+                                self._to_utc_datetime(float(claimed_view.get("lease_expires_at")))
+                                if self._coerce_float(claimed_view.get("lease_expires_at"))
+                                is not None
+                                else None
+                            ),
+                            "error_message": (
+                                str(claimed_view.get("error"))
+                                if claimed_view.get("error") not in [None, ""]
+                                else None
+                            ),
+                            "completed_at": self._iso_to_utc_datetime(
+                                claimed_view.get("completed_at")
+                            ),
+                            "job_id": str(selected_row.get("job_id")),
                         },
                     )
                     row = updated.mappings().one_or_none()
@@ -1310,10 +1338,10 @@ class DefaultWebClient(IWebClient):
     ) -> str | None:
         if isinstance(file_path, str) and file_path != "":
             if await self._media_storage_gateway.exists(file_path):
-                return await self._media_storage_gateway.materialize(file_path)
+                return file_path
             normalized_path = os.path.abspath(file_path)
             if await self._media_storage_gateway.exists(normalized_path):
-                return await self._media_storage_gateway.materialize(normalized_path)
+                return normalized_path
             if os.path.exists(normalized_path) is not True:
                 return None
             return await self._media_storage_gateway.store_file(
@@ -1776,6 +1804,33 @@ class DefaultWebClient(IWebClient):
     async def _mark_job_failed(self, job_id: str, error: str) -> None:
         await self._mark_job_status(job_id, status="failed", error=error)
 
+    def _apply_queue_job_status_transition(
+        self,
+        *,
+        job: dict[str, Any],
+        status: str,
+        error: str | None,
+        now_iso: str,
+    ) -> dict[str, Any]:
+        if status == "done":
+            return self._queue_job_lifecycle_use_case.complete(
+                job=job,
+                now_iso=now_iso,
+            )
+        if status == "failed":
+            return self._queue_job_lifecycle_use_case.fail(
+                job=job,
+                now_iso=now_iso,
+                error=str(error or ""),
+            )
+
+        next_job = dict(job)
+        next_job["status"] = status
+        next_job["lease_expires_at"] = None
+        next_job["updated_at"] = now_iso
+        next_job["error"] = error
+        return next_job
+
     async def _mark_job_status(
         self,
         job_id: str,
@@ -1784,27 +1839,54 @@ class DefaultWebClient(IWebClient):
         error: str | None,
     ) -> None:
         normalized_status = str(status).strip().lower()
-        is_done = normalized_status == "done"
+        now_iso = self._utc_now_iso()
         async with self._storage_lock:
             if self._using_relational_web_storage():
                 async with self._relational_session() as session:
+                    result = await session.execute(
+                        sa_text(
+                            "SELECT job_id, conversation_id, sender, message_type, payload, "
+                            "status, attempts, created_at, updated_at, lease_expires_at, "
+                            "error_message, completed_at, client_message_id "
+                            "FROM mugen.web_queue_job "
+                            "WHERE job_id = :job_id"
+                        ),
+                        {"job_id": job_id},
+                    )
+                    row = result.mappings().one_or_none()
+                    if row is None:
+                        return
+
+                    transitioned = self._apply_queue_job_status_transition(
+                        job=self._queue_job_record_to_payload(row),
+                        status=normalized_status,
+                        error=error,
+                        now_iso=now_iso,
+                    )
                     await session.execute(
                         sa_text(
                             "UPDATE mugen.web_queue_job "
                             "SET status = CAST(:status AS mugen.citext), "
                             "lease_expires_at = NULL, "
-                            "updated_at = now(), "
+                            "updated_at = :updated_at, "
                             "error_message = :error_message, "
-                            "completed_at = CASE "
-                            "WHEN :is_done THEN now() "
-                            "ELSE NULL "
-                            "END "
+                            "completed_at = :completed_at "
                             "WHERE job_id = :job_id"
                         ),
                         {
-                            "status": normalized_status,
-                            "is_done": is_done,
-                            "error_message": error,
+                            "status": str(transitioned.get("status", normalized_status)),
+                            "updated_at": (
+                                self._iso_to_utc_datetime(transitioned.get("updated_at"))
+                                or self._to_utc_datetime(self._epoch_now())
+                            ),
+                            "error_message": (
+                                str(transitioned.get("error"))
+                                if transitioned.get("error") not in [None, ""]
+                                else None
+                            ),
+                            "completed_at": self._iso_to_utc_datetime(
+                                transitioned.get("completed_at")
+                            ),
                             "job_id": job_id,
                         },
                     )
@@ -1815,27 +1897,14 @@ class DefaultWebClient(IWebClient):
                 if str(queue_job.get("id")) != job_id:
                     continue
 
-                now_iso = self._utc_now_iso()
-                if normalized_status == "done":
-                    queue_job.update(
-                        self._queue_job_lifecycle_use_case.complete(
-                            job=queue_job,
-                            now_iso=now_iso,
-                        )
+                queue_job.update(
+                    self._apply_queue_job_status_transition(
+                        job=queue_job,
+                        status=normalized_status,
+                        error=error,
+                        now_iso=now_iso,
                     )
-                elif normalized_status == "failed":
-                    queue_job.update(
-                        self._queue_job_lifecycle_use_case.fail(
-                            job=queue_job,
-                            now_iso=now_iso,
-                            error=str(error or ""),
-                        )
-                    )
-                else:
-                    queue_job["status"] = normalized_status
-                    queue_job["lease_expires_at"] = None
-                    queue_job["updated_at"] = now_iso
-                    queue_job["error"] = error
+                )
                 await self._write_queue_state_unlocked(queue_state)
                 return
 
