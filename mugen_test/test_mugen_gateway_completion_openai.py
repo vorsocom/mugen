@@ -336,6 +336,74 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             stream_options={"include_usage": True},
         )
 
+    async def test_get_completion_vendor_stream_parses_string_false(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        response_payload = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(content="hello"),
+                )
+            ],
+            usage=None,
+        )
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=response_payload),
+                ),
+            ),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            vendor_params={"stream": "false"},
+        )
+        await gateway.get_completion(request)
+
+        api.chat.completions.create.assert_awaited_once_with(
+            messages=[{"role": "user", "content": "hello"}],
+            model="gpt-4o-mini",
+            temperature=0.1,
+            top_p=0.8,
+            stream=False,
+        )
+
+    async def test_get_completion_rejects_invalid_vendor_stream_boolean(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(),
+                ),
+            ),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            vendor_params={"stream": "definitely"},
+        )
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "Invalid boolean value for vendor_params.stream",
+        ):
+            await gateway.get_completion(request)
+
     async def test_get_completion_uses_operation_token_defaults(self) -> None:
         config = _make_config()
         config.openai.api.dict["completion"]["max_completion_tokens"] = "21"

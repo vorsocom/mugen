@@ -82,3 +82,38 @@ def to_timeout_milliseconds(seconds: float | None) -> int | None:
     if seconds is None:
         return None
     return max(1, int(ceil(float(seconds) * 1000.0)))
+
+
+def parse_bool_like(
+    *,
+    value: Any,
+    field_name: str,
+    provider_label: str,
+) -> bool:
+    """Parse strict boolean-like values used in provider/vendor params."""
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, int):
+        if value in {0, 1}:
+            return bool(value)
+        raise ValueError(
+            f"{provider_label}: Invalid boolean value for {field_name}. "
+            "Use true/false (or on/off, yes/no, 1/0)."
+        )
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(
+            f"{provider_label}: Invalid boolean value for {field_name}. "
+            "Use true/false (or on/off, yes/no, 1/0)."
+        )
+
+    raise ValueError(
+        f"{provider_label}: Invalid boolean value for {field_name}. "
+        "Use true/false (or on/off, yes/no, 1/0)."
+    )

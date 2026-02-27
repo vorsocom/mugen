@@ -16,6 +16,7 @@ from mugen.core.contract.gateway.completion import (
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import (
+    parse_bool_like,
     resolve_optional_positive_float,
     warn_missing_in_production,
 )
@@ -256,7 +257,11 @@ class OpenAICompletionGateway(ICompletionGateway):
             operation_config=operation_config,
         )
         if max_tokens is not None:
-            if bool(request.vendor_params.get(self._legacy_max_tokens_vendor_flag)):
+            if self._resolve_vendor_bool(
+                request,
+                key=self._legacy_max_tokens_vendor_flag,
+                default=False,
+            ):
                 kwargs["max_tokens"] = int(max_tokens)
             else:
                 kwargs["max_completion_tokens"] = int(max_tokens)
@@ -703,12 +708,56 @@ class OpenAICompletionGateway(ICompletionGateway):
             top_p = float(operation_config["top_p"])
         return top_p
 
-    @staticmethod
-    def _resolve_stream(request: CompletionRequest) -> bool:
-        stream = bool(request.inference.stream)
+    def _resolve_stream(self, request: CompletionRequest) -> bool:
+        stream = self._parse_bool_like(
+            request=request,
+            value=request.inference.stream,
+            field_name="inference.stream",
+        )
         if "stream" in request.vendor_params:
-            stream = bool(request.vendor_params["stream"])
+            stream = self._parse_bool_like(
+                request=request,
+                value=request.vendor_params["stream"],
+                field_name="vendor_params.stream",
+            )
         return stream
+
+    def _resolve_vendor_bool(
+        self,
+        request: CompletionRequest,
+        *,
+        key: str,
+        default: bool,
+    ) -> bool:
+        if key not in request.vendor_params:
+            return default
+        return self._parse_bool_like(
+            request=request,
+            value=request.vendor_params[key],
+            field_name=f"vendor_params.{key}",
+        )
+
+    def _parse_bool_like(
+        self,
+        *,
+        request: CompletionRequest,
+        value: Any,
+        field_name: str,
+    ) -> bool:
+        try:
+            return parse_bool_like(
+                value=value,
+                field_name=field_name,
+                provider_label="OpenAICompletionGateway",
+            )
+        except ValueError as exc:
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=request.operation,
+                message=str(exc),
+                cause=exc,
+                timeout_applied=self._timeout_seconds,
+            ) from exc
 
     @staticmethod
     def _resolve_stream_options(request: CompletionRequest) -> dict[str, Any] | None:

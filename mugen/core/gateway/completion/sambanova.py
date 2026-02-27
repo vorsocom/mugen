@@ -20,6 +20,7 @@ from mugen.core.contract.gateway.completion import (
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import (
+    parse_bool_like,
     resolve_optional_positive_float,
     to_timeout_milliseconds,
     warn_missing_in_production,
@@ -117,9 +118,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             operation_config=operation_config,
         )
 
-        stream = bool(completion_request.inference.stream)
-        if "stream" in completion_request.vendor_params:
-            stream = bool(completion_request.vendor_params["stream"])
+        stream = self._resolve_stream(completion_request)
         stream_options = self._resolve_stream_options(completion_request)
 
         headers: list[str] = [
@@ -143,7 +142,11 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             data[token_limit_field] = max_tokens
             if (
                 token_limit_field == "max_completion_tokens"
-                and bool(completion_request.vendor_params.get("sambanova_emit_legacy_max_tokens"))
+                and self._resolve_vendor_bool(
+                    completion_request,
+                    key="sambanova_emit_legacy_max_tokens",
+                    default=False,
+                )
             ):
                 data["max_tokens"] = max_tokens
         if stream:
@@ -282,8 +285,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             return "max_completion_tokens"
         return "max_tokens"
 
-    @staticmethod
-    def _resolve_stream_options(request: CompletionRequest) -> dict[str, Any]:
+    def _resolve_stream_options(self, request: CompletionRequest) -> dict[str, Any]:
         stream_options = request.inference.stream_options
         resolved: dict[str, Any] = {}
         if isinstance(stream_options, dict) and stream_options:
@@ -296,13 +298,68 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         if "include_usage" in request.vendor_params:
             resolved.setdefault(
                 "include_usage",
-                bool(request.vendor_params["include_usage"]),
+                self._resolve_vendor_bool(
+                    request,
+                    key="include_usage",
+                    default=False,
+                ),
             )
 
         if not resolved:
             resolved = {"include_usage": False}
 
         return resolved
+
+    def _resolve_stream(self, request: CompletionRequest) -> bool:
+        stream = self._parse_bool_like(
+            request=request,
+            value=request.inference.stream,
+            field_name="inference.stream",
+        )
+        if "stream" in request.vendor_params:
+            stream = self._parse_bool_like(
+                request=request,
+                value=request.vendor_params["stream"],
+                field_name="vendor_params.stream",
+            )
+        return stream
+
+    def _resolve_vendor_bool(
+        self,
+        request: CompletionRequest,
+        *,
+        key: str,
+        default: bool,
+    ) -> bool:
+        if key not in request.vendor_params:
+            return default
+        return self._parse_bool_like(
+            request=request,
+            value=request.vendor_params[key],
+            field_name=f"vendor_params.{key}",
+        )
+
+    def _parse_bool_like(
+        self,
+        *,
+        request: CompletionRequest,
+        value: Any,
+        field_name: str,
+    ) -> bool:
+        try:
+            return parse_bool_like(
+                value=value,
+                field_name=field_name,
+                provider_label="SambaNovaCompletionGateway",
+            )
+        except ValueError as exc:
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=request.operation,
+                message=str(exc),
+                cause=exc,
+                timeout_applied=self._read_timeout_seconds,
+            ) from exc
 
     @staticmethod
     def _resolve_stop_sequences(
