@@ -1383,16 +1383,49 @@ class DefaultWebClient(IWebClient):
             return None
 
         normalized_input_path = os.path.abspath(file_path)
-        if (
-            persisted_ref != normalized_input_path
-            and os.path.exists(normalized_input_path)
-        ):
-            try:
-                os.remove(normalized_input_path)
-            except OSError:
-                ...
+        if persisted_ref == normalized_input_path:
+            return persisted_ref
+
+        managed_cleanup_candidate = self._resolve_managed_upload_cleanup_path(
+            normalized_input_path
+        )
+        if managed_cleanup_candidate is None:
+            if os.path.exists(normalized_input_path):
+                self._logging_gateway.debug(
+                    "Skipping media source cleanup for unmanaged path "
+                    f"path={normalized_input_path!r}."
+                )
+            return persisted_ref
+
+        try:
+            os.remove(managed_cleanup_candidate)
+        except OSError as exc:
+            self._logging_gateway.warning(
+                "Failed to cleanup managed media upload path "
+                f"path={managed_cleanup_candidate!r} error={exc}"
+            )
 
         return persisted_ref
+
+    def _resolve_managed_upload_cleanup_path(self, file_path: str) -> str | None:
+        if not isinstance(file_path, str) or file_path.strip() == "":
+            return None
+
+        try:
+            resolved_input = Path(file_path).resolve()
+            resolved_media_root = Path(self._media_storage_path).resolve()
+        except OSError:
+            return None
+
+        try:
+            resolved_input.relative_to(resolved_media_root)
+        except ValueError:
+            return None
+
+        if resolved_input.is_file() is not True:
+            return None
+
+        return str(resolved_input)
 
     async def _materialize_media_reference(self, value: Any) -> str | None:
         if not isinstance(value, str) or value.strip() == "":
@@ -1804,6 +1837,27 @@ class DefaultWebClient(IWebClient):
     async def _mark_job_failed(self, job_id: str, error: str) -> None:
         await self._mark_job_status(job_id, status="failed", error=error)
 
+    def _can_apply_terminal_queue_transition(
+        self,
+        *,
+        job_id: str,
+        current_status: Any,
+        next_status: str,
+    ) -> bool:
+        if next_status not in {"done", "failed"}:
+            return True
+
+        normalized_current_status = str(current_status or "").strip().lower()
+        if normalized_current_status == "processing":
+            return True
+
+        self._logging_gateway.warning(
+            "Skipping queue status transition that violates lifecycle invariant "
+            f"job_id={job_id} current_status={normalized_current_status!r} "
+            f"next_status={next_status!r}."
+        )
+        return False
+
     def _apply_queue_job_status_transition(
         self,
         *,
@@ -1857,45 +1911,79 @@ class DefaultWebClient(IWebClient):
                     if row is None:
                         return
 
+                    current_job = self._queue_job_record_to_payload(row)
+                    if not self._can_apply_terminal_queue_transition(
+                        job_id=job_id,
+                        current_status=current_job.get("status"),
+                        next_status=normalized_status,
+                    ):
+                        return
+
                     transitioned = self._apply_queue_job_status_transition(
-                        job=self._queue_job_record_to_payload(row),
+                        job=current_job,
                         status=normalized_status,
                         error=error,
                         now_iso=now_iso,
                     )
-                    await session.execute(
-                        sa_text(
-                            "UPDATE mugen.web_queue_job "
-                            "SET status = CAST(:status AS mugen.citext), "
-                            "lease_expires_at = NULL, "
-                            "updated_at = :updated_at, "
-                            "error_message = :error_message, "
-                            "completed_at = :completed_at "
-                            "WHERE job_id = :job_id"
-                        ),
-                        {
-                            "status": str(transitioned.get("status", normalized_status)),
-                            "updated_at": (
-                                self._iso_to_utc_datetime(transitioned.get("updated_at"))
-                                or self._to_utc_datetime(self._epoch_now())
-                            ),
-                            "error_message": (
-                                str(transitioned.get("error"))
-                                if transitioned.get("error") not in [None, ""]
-                                else None
-                            ),
-                            "completed_at": self._iso_to_utc_datetime(
-                                transitioned.get("completed_at")
-                            ),
-                            "job_id": job_id,
-                        },
+                    update_sql = (
+                        "UPDATE mugen.web_queue_job "
+                        "SET status = CAST(:status AS mugen.citext), "
+                        "lease_expires_at = NULL, "
+                        "updated_at = :updated_at, "
+                        "error_message = :error_message, "
+                        "completed_at = :completed_at "
                     )
+                    update_params = {
+                        "status": str(transitioned.get("status", normalized_status)),
+                        "updated_at": (
+                            self._iso_to_utc_datetime(transitioned.get("updated_at"))
+                            or self._to_utc_datetime(self._epoch_now())
+                        ),
+                        "error_message": (
+                            str(transitioned.get("error"))
+                            if transitioned.get("error") not in [None, ""]
+                            else None
+                        ),
+                        "completed_at": self._iso_to_utc_datetime(
+                            transitioned.get("completed_at")
+                        ),
+                        "job_id": job_id,
+                    }
+                    if normalized_status in {"done", "failed"}:
+                        update_sql += (
+                            "WHERE job_id = :job_id "
+                            "AND status = CAST(:current_status AS mugen.citext)"
+                        )
+                        update_params["current_status"] = "processing"
+                    else:
+                        update_sql += "WHERE job_id = :job_id"
+
+                    update_result = await session.execute(
+                        sa_text(update_sql),
+                        update_params,
+                    )
+                    if (
+                        normalized_status in {"done", "failed"}
+                        and getattr(update_result, "rowcount", None) == 0
+                    ):
+                        self._logging_gateway.warning(
+                            "Skipped queue terminal transition due to relational "
+                            f"precondition mismatch job_id={job_id} "
+                            f"next_status={normalized_status!r}."
+                        )
                 return
 
             queue_state = await self._read_queue_state_unlocked()
             for queue_job in queue_state["jobs"]:
                 if str(queue_job.get("id")) != job_id:
                     continue
+
+                if not self._can_apply_terminal_queue_transition(
+                    job_id=job_id,
+                    current_status=queue_job.get("status"),
+                    next_status=normalized_status,
+                ):
+                    return
 
                 queue_job.update(
                     self._apply_queue_job_status_transition(
