@@ -536,6 +536,121 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(os.path.abspath(external_path), managed_ref)
         self.assertTrue(await self.client._media_storage_gateway.exists(managed_ref))  # pylint: disable=protected-access
 
+    async def test_persist_media_reference_does_not_delete_external_source_file(self) -> None:
+        cfg = _build_config(basedir=self.tmpdir.name)
+        cfg.web.media.backend = "object"
+        client = DefaultWebClient(
+            config=cfg,
+            ipc_service=Mock(),
+            keyval_storage_gateway=_InMemoryKeyVal(),
+            logging_gateway=Mock(),
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        external_path = os.path.join(self.tmpdir.name, "external-source.bin")
+        with open(external_path, "wb") as handle:
+            handle.write(b"payload")
+
+        persisted_ref = await client._persist_media_reference(  # pylint: disable=protected-access
+            file_path=external_path,
+            filename_hint="external-source.bin",
+        )
+
+        self.assertTrue(isinstance(persisted_ref, str) and persisted_ref.startswith("object:"))
+        self.assertTrue(os.path.exists(external_path))
+        await client.close()
+
+    async def test_persist_media_reference_cleans_up_managed_upload_path(self) -> None:
+        cfg = _build_config(basedir=self.tmpdir.name)
+        cfg.web.media.backend = "object"
+        client = DefaultWebClient(
+            config=cfg,
+            ipc_service=Mock(),
+            keyval_storage_gateway=_InMemoryKeyVal(),
+            logging_gateway=Mock(),
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        os.makedirs(client._media_storage_path, exist_ok=True)  # pylint: disable=protected-access
+        managed_path = os.path.join(client._media_storage_path, "managed-upload.bin")  # pylint: disable=protected-access
+        with open(managed_path, "wb") as handle:
+            handle.write(b"payload")
+
+        persisted_ref = await client._persist_media_reference(  # pylint: disable=protected-access
+            file_path=managed_path,
+            filename_hint="managed-upload.bin",
+        )
+
+        self.assertTrue(isinstance(persisted_ref, str) and persisted_ref.startswith("object:"))
+        self.assertFalse(os.path.exists(managed_path))
+        await client.close()
+
+    async def test_persist_media_reference_skips_cleanup_for_missing_source_path(self) -> None:
+        missing_path = os.path.join(self.tmpdir.name, "missing-source.bin")
+        with patch.object(
+            self.client,
+            "_resolve_media_source_path",
+            new=AsyncMock(return_value="object:missing"),
+        ):
+            persisted = await self.client._persist_media_reference(  # pylint: disable=protected-access
+                file_path=missing_path,
+                filename_hint="missing-source.bin",
+            )
+        self.assertEqual(persisted, "object:missing")
+
+    async def test_persist_media_reference_logs_warning_when_managed_cleanup_fails(
+        self,
+    ) -> None:
+        cfg = _build_config(basedir=self.tmpdir.name)
+        cfg.web.media.backend = "object"
+        client_logger = Mock()
+        client = DefaultWebClient(
+            config=cfg,
+            ipc_service=Mock(),
+            keyval_storage_gateway=_InMemoryKeyVal(),
+            logging_gateway=client_logger,
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        os.makedirs(client._media_storage_path, exist_ok=True)  # pylint: disable=protected-access
+        managed_path = os.path.join(client._media_storage_path, "managed-fail.bin")  # pylint: disable=protected-access
+        with open(managed_path, "wb") as handle:
+            handle.write(b"payload")
+
+        with patch("os.remove", side_effect=OSError("denied")):
+            persisted = await client._persist_media_reference(  # pylint: disable=protected-access
+                file_path=managed_path,
+                filename_hint="managed-fail.bin",
+            )
+
+        self.assertTrue(isinstance(persisted, str) and persisted.startswith("object:"))
+        client_logger.warning.assert_called_once()
+        self.assertIn(
+            "Failed to cleanup managed media upload path",
+            str(client_logger.warning.call_args.args[0]),
+        )
+        await client.close()
+
+    async def test_resolve_managed_upload_cleanup_path_branch_coverage(self) -> None:
+        self.assertIsNone(
+            self.client._resolve_managed_upload_cleanup_path("   ")  # pylint: disable=protected-access
+        )
+
+        with patch("mugen.core.client.web.Path.resolve", side_effect=OSError()):
+            self.assertIsNone(
+                self.client._resolve_managed_upload_cleanup_path(  # pylint: disable=protected-access
+                    "/tmp/example.bin"
+                )
+            )
+
+        media_dir = Path(self.client._media_storage_path)  # pylint: disable=protected-access
+        media_dir.mkdir(parents=True, exist_ok=True)
+        self.assertIsNone(
+            self.client._resolve_managed_upload_cleanup_path(  # pylint: disable=protected-access
+                str(media_dir)
+            )
+        )
+
     async def test_mark_job_status_else_branch_and_close_error_swallow(self) -> None:
         payload = await self.client.enqueue_message(
             auth_user="user-1",
@@ -558,6 +673,27 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             side_effect=RuntimeError("boom")
         )
         await self.client.close()
+
+    async def test_mark_job_done_skips_invalid_terminal_transition_for_keyval(self) -> None:
+        payload = await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-invalid-transition",
+            message_type="text",
+            text="hello",
+            client_message_id="cid-invalid-terminal",
+        )
+
+        self.logger.reset_mock()
+        await self.client._mark_job_done(payload["job_id"])  # pylint: disable=protected-access
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            queue_state = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+        self.assertEqual(queue_state["jobs"][0]["status"], "pending")
+        self.logger.warning.assert_called_once()
+        self.assertIn(
+            "violates lifecycle invariant",
+            str(self.logger.warning.call_args.args[0]),
+        )
 
     async def test_ensure_media_directory_skips_for_object_backend(self) -> None:
         cfg = _build_config(basedir=self.tmpdir.name)
@@ -2926,6 +3062,116 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         await self.client._mark_job_done("missing")  # pylint: disable=protected-access
         self.assertEqual(len(missing_session.calls), 1)
 
+    async def test_mark_job_status_relational_skips_invalid_terminal_transition(self) -> None:
+        pending_session = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "job_id": "job-pending",
+                            "conversation_id": "conv-1",
+                            "sender": "u1",
+                            "message_type": "text",
+                            "payload": {"text": "hello"},
+                            "status": "pending",
+                            "attempts": 1,
+                            "created_at": None,
+                            "updated_at": None,
+                            "lease_expires_at": None,
+                            "error_message": None,
+                            "completed_at": None,
+                            "client_message_id": "cid-pending",
+                        }
+                    ]
+                ),
+            ]
+        )
+        _force_relational_session(self.client, pending_session)
+        self.logger.reset_mock()
+        await self.client._mark_job_done("job-pending")  # pylint: disable=protected-access
+
+        self.assertEqual(len(pending_session.calls), 1)
+        self.logger.warning.assert_called_once()
+        self.assertIn(
+            "violates lifecycle invariant",
+            str(self.logger.warning.call_args.args[0]),
+        )
+
+    async def test_mark_job_status_relational_non_terminal_update_has_no_precondition(
+        self,
+    ) -> None:
+        processing_session = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "job_id": "job-processing",
+                            "conversation_id": "conv-1",
+                            "sender": "u1",
+                            "message_type": "text",
+                            "payload": {"text": "hello"},
+                            "status": "processing",
+                            "attempts": 1,
+                            "created_at": None,
+                            "updated_at": None,
+                            "lease_expires_at": None,
+                            "error_message": None,
+                            "completed_at": None,
+                            "client_message_id": "cid-processing",
+                        }
+                    ]
+                ),
+                _SequenceResult(),
+            ]
+        )
+        _force_relational_session(self.client, processing_session)
+        await self.client._mark_job_status(  # pylint: disable=protected-access
+            "job-processing",
+            status="processing",
+            error="still-running",
+        )
+
+        update_sql, update_params = processing_session.calls[1]
+        self.assertIn("WHERE job_id = :job_id", update_sql)
+        self.assertNotIn("current_status", update_params)
+
+    async def test_mark_job_status_relational_warns_when_terminal_update_precondition_fails(
+        self,
+    ) -> None:
+        precondition_fail_session = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "job_id": "job-race",
+                            "conversation_id": "conv-1",
+                            "sender": "u1",
+                            "message_type": "text",
+                            "payload": {"text": "hello"},
+                            "status": "processing",
+                            "attempts": 1,
+                            "created_at": None,
+                            "updated_at": None,
+                            "lease_expires_at": None,
+                            "error_message": None,
+                            "completed_at": None,
+                            "client_message_id": "cid-race",
+                        }
+                    ]
+                ),
+                SimpleNamespace(rowcount=0),
+            ]
+        )
+        _force_relational_session(self.client, precondition_fail_session)
+        self.logger.reset_mock()
+        await self.client._mark_job_done("job-race")  # pylint: disable=protected-access
+
+        self.logger.warning.assert_called_once()
+        self.assertIn(
+            "precondition mismatch",
+            str(self.logger.warning.call_args.args[0]),
+        )
+
     async def test_persist_media_reference_does_not_delete_when_ref_unchanged(self) -> None:
         source_path = Path(self.tmpdir.name) / "keep.bin"
         source_path.write_bytes(b"x")
@@ -3121,8 +3367,13 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             "SET status = CAST(:status AS mugen.citext)",
             mark_sql,
         )
+        self.assertIn(
+            "AND status = CAST(:current_status AS mugen.citext)",
+            mark_sql,
+        )
         self.assertEqual(mark_params["status"], "done")
         self.assertEqual(mark_params["job_id"], "job-1")
+        self.assertEqual(mark_params["current_status"], "processing")
         self.assertIsNone(mark_params["error_message"])
         self.assertIsNotNone(mark_params["completed_at"])
 
@@ -3157,8 +3408,13 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             "SET status = CAST(:status AS mugen.citext)",
             failed_sql,
         )
+        self.assertIn(
+            "AND status = CAST(:current_status AS mugen.citext)",
+            failed_sql,
+        )
         self.assertEqual(failed_params["status"], "failed")
         self.assertEqual(failed_params["job_id"], "job-2")
+        self.assertEqual(failed_params["current_status"], "processing")
         self.assertEqual(failed_params["error_message"], "boom")
         self.assertIsNotNone(failed_params["completed_at"])
 

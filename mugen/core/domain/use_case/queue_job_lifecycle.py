@@ -35,6 +35,8 @@ class QueueJobLifecycleUseCase:
         now_iso: str,
     ) -> dict[str, Any]:
         self._require_dict(job)
+        if job.get("status") != "processing":
+            raise ValueError("Only processing jobs can be completed")
         next_job = dict(job)
         next_job["status"] = "done"
         next_job["error"] = None
@@ -51,6 +53,8 @@ class QueueJobLifecycleUseCase:
         error: str,
     ) -> dict[str, Any]:
         self._require_dict(job)
+        if job.get("status") != "processing":
+            raise ValueError("Only processing jobs can be failed")
         next_job = dict(job)
         next_job["status"] = "failed"
         next_job["error"] = str(error)
