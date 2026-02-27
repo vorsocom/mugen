@@ -3,6 +3,7 @@
 __all__ = ["ITelnetClient"]
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from types import TracebackType
 
 
@@ -23,5 +24,8 @@ class ITelnetClient(ABC):  # pylint: disable=too-few-public-methods
         """Finalisation routine."""
 
     @abstractmethod
-    async def start_server(self) -> None:
+    async def start_server(
+        self,
+        started_callback: Callable[[], None] | None = None,
+    ) -> None:
         """Start Telnet server."""

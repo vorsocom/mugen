@@ -130,17 +130,19 @@ class TestMugenClientTelnet(unittest.IsolatedAsyncioTestCase):
     async def test_start_server_uses_config_and_runs_forever(self) -> None:
         client = self._new_client()
         server = _DummyServer()
+        started = Mock()
 
         with patch(
             "mugen.core.client.telnet.asyncio.start_server",
             new=AsyncMock(return_value=server),
         ) as start_server:
-            await client.start_server()
+            await client.start_server(started_callback=started)
 
         start_server.assert_awaited_once_with(
             client._handle_connection, "127.0.0.1", 2323
         )
         server.serve_forever.assert_awaited_once()
+        started.assert_called_once_with()
         client._logging_gateway.info.assert_called_once_with(
             "Telnet server running on 127.0.0.1:2323."
         )

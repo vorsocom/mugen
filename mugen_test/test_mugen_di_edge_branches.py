@@ -287,6 +287,36 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             di._validate_container(config, injector)
 
+    def test_validate_container_rejects_unknown_platforms(self) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=logger,
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            relational_storage_gateway=object(),
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+        )
+        config = {
+            "mugen": {
+                "platforms": [" web ", "unknown"],
+            }
+        }
+        with self.assertRaises(RuntimeError):
+            di._validate_container(config, injector)
+
+        self.assertTrue(
+            any(
+                call.args[0] == "Unsupported platform configuration detected: %s."
+                and call.args[1] == "unknown"
+                for call in logger.error.call_args_list
+            )
+        )
+
     def test_build_provider_from_spec_handles_attribute_error_when_injector_invalid(
         self,
     ) -> None:

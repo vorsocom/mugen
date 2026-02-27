@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.platform import IPlatformService
+from mugen.core.utility.platforms import normalize_platforms
 
 
 class DefaultPlatformService(IPlatformService):
@@ -21,10 +22,10 @@ class DefaultPlatformService(IPlatformService):
 
     @property
     def active_platforms(self) -> list[str]:
-        return self._config.mugen.platforms
+        return normalize_platforms(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "platforms", [])
+        )
 
     def extension_supported(self, ext) -> bool:
-        return (
-            not ext.platforms
-            or len(list(set(ext.platforms) & set(self.active_platforms))) != 0
-        )
+        ext_platforms = normalize_platforms(getattr(ext, "platforms", []))
+        return not ext_platforms or bool(set(ext_platforms) & set(self.active_platforms))

@@ -244,6 +244,56 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(to_device_event_types, expected_to_device_event_types)
 
+    def test_matrix_secrets_encryption_required_normalizes_platform_names(self) -> None:
+        client = object.__new__(DefaultMatrixClient)
+        client._config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                environment="production",
+                platforms=[" Matrix ", "web"],
+            )
+        )
+
+        self.assertTrue(
+            client._matrix_secrets_encryption_required()  # pylint: disable=protected-access
+        )
+
+    def test_init_requires_encryption_key_for_matrix_in_production(self) -> None:
+        config = SimpleNamespace(
+            basedir="/tmp",
+            mugen=SimpleNamespace(
+                environment="production",
+                platforms=[" Matrix "],
+            ),
+            matrix=SimpleNamespace(
+                homeserver="https://matrix.example.com",
+                client=SimpleNamespace(user="@assistant:example.com"),
+                storage=SimpleNamespace(olm=SimpleNamespace(path="olm")),
+            ),
+            security=SimpleNamespace(
+                secrets=SimpleNamespace(
+                    encryption_key=None,
+                )
+            ),
+        )
+
+        with (
+            patch.object(
+                matrix_mod.IMatrixClient,
+                "__init__",
+                autospec=True,
+                return_value=None,
+            ),
+            self.assertRaises(RuntimeError),
+        ):
+            DefaultMatrixClient(
+                config=config,
+                ipc_service=Mock(),
+                keyval_storage_gateway=Mock(),
+                logging_gateway=Mock(),
+                messaging_service=Mock(),
+                user_service=Mock(),
+            )
+
     def _client(self) -> DefaultMatrixClient:
         client = object.__new__(_MatrixClientForTests)
         client._config = SimpleNamespace(

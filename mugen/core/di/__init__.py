@@ -37,6 +37,7 @@ from mugen.core.contract.service.nlp import INLPService
 from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.contract.service.user import IUserService
 from mugen.core.utility.collection.namespace import NamespaceConfig, to_namespace
+from mugen.core.utility.platforms import normalize_platforms, unknown_platforms
 
 from .injector import DependencyInjector
 
@@ -130,18 +131,7 @@ def _get_active_platforms(config: dict) -> list[str] | None:
 
 
 def _normalize_platforms(values: list[str] | None) -> list[str]:
-    if not isinstance(values, list):
-        return []
-
-    normalized: list[str] = []
-    for item in values:
-        platform = str(item).strip().lower()
-        if platform == "":
-            continue
-        if platform in normalized:
-            continue
-        normalized.append(platform)
-    return normalized
+    return normalize_platforms(values)
 
 
 def _resolve_runtime_profile_override(config: dict) -> str:
@@ -186,10 +176,23 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
     profile = _infer_runtime_profile(config)
     active_platforms = _normalize_platforms(_get_active_platforms(config))
     active_platform_set = set(active_platforms)
+    unsupported_platforms = unknown_platforms(active_platforms)
 
     logger = injector.logging_gateway
     if logger is None:
         logger = logging.getLogger()
+
+    if unsupported_platforms:
+        unsupported_platforms_text = ", ".join(unsupported_platforms)
+        logger.error(
+            "Unsupported platform configuration detected: %s.",
+            unsupported_platforms_text,
+        )
+        raise RuntimeError(
+            "Unsupported platform configuration: "
+            f"{unsupported_platforms_text}. "
+            "Allowed values are matrix, telnet, web, whatsapp."
+        )
 
     if profile == "api_only" and active_platforms:
         logger.error(

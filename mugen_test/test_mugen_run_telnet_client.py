@@ -34,8 +34,10 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
             ) -> bool:
                 """Finalisation routine."""
 
-            async def start_server(self) -> None:
+            async def start_server(self, started_callback=None) -> None:
                 """Start Telnet server."""
+                if callable(started_callback):
+                    started_callback()
 
         with (self.assertLogs(logger="test_app", level="DEBUG") as logger,):
             await run_telnet_client(
@@ -67,7 +69,7 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
             ) -> bool:
                 """Finalisation routine."""
 
-            async def start_server(self) -> None:
+            async def start_server(self, started_callback=None) -> None:
                 """Start Telnet server."""
                 raise asyncio.exceptions.CancelledError
 
@@ -99,10 +101,43 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
             ) -> bool:
                 return False
 
-            async def start_server(self) -> None:
-                return None
+            async def start_server(self, started_callback=None) -> None:
+                if callable(started_callback):
+                    started_callback()
 
         started = Mock()
+        await run_telnet_client(
+            logger_provider=lambda: app.logger,
+            telnet_provider=DummyTelnetClient,
+            started_callback=started,
+        )
+        started.assert_called_once_with()
+
+    async def test_started_callback_is_not_invoked_until_client_reports_started(self) -> None:
+        app = Quart("test_app")
+        started = Mock()
+
+        class DummyTelnetClient(ITelnetClient):
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+            async def start_server(self, started_callback=None) -> None:
+                if started.called:
+                    raise AssertionError("started callback fired before server startup")
+                await asyncio.sleep(0)
+                if started.called:
+                    raise AssertionError("started callback fired before server startup")
+                if callable(started_callback):
+                    started_callback()
+
         await run_telnet_client(
             logger_provider=lambda: app.logger,
             telnet_provider=DummyTelnetClient,

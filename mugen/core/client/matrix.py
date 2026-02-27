@@ -61,6 +61,7 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.utility.platforms import normalize_platforms
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
     PROCESSING_STATE_STOP,
@@ -255,7 +256,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         environment = str(
             getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
         ).strip().lower()
-        platforms = getattr(getattr(self._config, "mugen", SimpleNamespace()), "platforms", [])
+        platforms = normalize_platforms(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "platforms", [])
+        )
         return environment == "production" and "matrix" in platforms
 
     def _build_secret_cipher(self) -> Fernet | None:

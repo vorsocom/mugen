@@ -18,6 +18,7 @@ from mugen import (
     bootstrap_app,
     create_quart_app,
     run_platform_clients,
+    validate_phase_b_runtime_config,
 )
 from mugen.bootstrap_state import (
     BOOTSTRAP_STATE_KEY,
@@ -230,6 +231,15 @@ async def startup():
     readiness_grace_seconds, critical_platforms, degrade_on_critical_exit = (
         _resolve_phase_b_runtime_controls()
     )
+    runtime_config = getattr(di.container, "config", None)
+    if runtime_config is not None:
+        _, critical_platforms, degrade_on_critical_exit = (
+            validate_phase_b_runtime_config(
+                config=runtime_config,
+                bootstrap_state=state,
+                logger=app.logger,
+            )
+        )
     state[_PHASE_B_READINESS_GRACE_KEY] = readiness_grace_seconds
     state[_PHASE_B_CRITICAL_PLATFORMS_KEY] = critical_platforms
     state[_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = degrade_on_critical_exit
