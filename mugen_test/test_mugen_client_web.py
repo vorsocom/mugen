@@ -240,6 +240,37 @@ class _SequenceSession:
         return response
 
 
+class _HeartbeatTaskDouble:
+    def __init__(
+        self,
+        *,
+        done_sequence: list[bool],
+        result_value=None,
+        await_cancelled: bool = False,
+    ) -> None:
+        self._done_sequence = list(done_sequence)
+        self._result_value = result_value
+        self._await_cancelled = await_cancelled
+
+    def done(self) -> bool:
+        if self._done_sequence:
+            return self._done_sequence.pop(0)
+        return True
+
+    def result(self):
+        if isinstance(self._result_value, BaseException):
+            raise self._result_value
+        return self._result_value
+
+    def __await__(self):
+        async def _wait():
+            if self._await_cancelled:
+                raise asyncio.CancelledError()
+            return None
+
+        return _wait().__await__()
+
+
 def _force_relational_session(client: DefaultWebClient, session: _SequenceSession) -> None:
     @asynccontextmanager
     async def _session_cm():
@@ -1015,6 +1046,516 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(queue["jobs"][0]["status"], "pending")
 
+    async def test_process_claimed_job_renews_processing_lease_while_active(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-lease-renew",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        self.client._queue_processing_lease_heartbeat_seconds = 0.01  # pylint: disable=protected-access
+
+        async def _slow_dispatch(_job):
+            await asyncio.sleep(0.05)
+            return [{"type": "text", "content": "ok"}]
+
+        with (
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(side_effect=_slow_dispatch),
+            ),
+            patch.object(
+                self.client,
+                "_renew_processing_lease",
+                new=AsyncMock(return_value=True),
+            ) as renew_lease,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        self.assertGreaterEqual(renew_lease.await_count, 1)
+
+    async def test_claim_next_job_does_not_reclaim_active_processing_job(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-no-reclaim",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        self.client._queue_processing_lease_seconds = 0.3  # pylint: disable=protected-access
+        self.client._queue_processing_lease_heartbeat_seconds = 0.05  # pylint: disable=protected-access
+
+        async def _slow_dispatch(_job):
+            await asyncio.sleep(0.5)
+            return [{"type": "text", "content": "ok"}]
+
+        with patch.object(
+            self.client,
+            "_dispatch_job_to_messaging",
+            new=AsyncMock(side_effect=_slow_dispatch),
+        ):
+            worker_task = asyncio.create_task(
+                self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+            )
+            await asyncio.sleep(0.35)
+            reclaimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+            await worker_task
+
+        self.assertIsNone(reclaimed)
+
+    async def test_process_claimed_job_skips_terminal_side_effects_when_lease_lost(
+        self,
+    ) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-lease-lost",
+            message_type="text",
+            text="hello",
+            client_message_id="cid-lease-lost",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+
+        async def _slow_dispatch(_job):
+            await asyncio.sleep(0.01)
+            return [{"type": "text", "content": "ok"}]
+
+        with (
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(side_effect=_slow_dispatch),
+            ),
+            patch.object(
+                self.client,
+                "_run_processing_lease_heartbeat",
+                new=AsyncMock(return_value="lease_lost"),
+            ),
+            patch.object(
+                self.client,
+                "_mark_job_done",
+                new=AsyncMock(),
+            ) as mark_done,
+            patch.object(
+                self.client,
+                "_mark_job_failed",
+                new=AsyncMock(),
+            ) as mark_failed,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        mark_done.assert_not_awaited()
+        mark_failed.assert_not_awaited()
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "Skipping web queue job side effects after lease loss" in message
+                and "reason=lease_lost" in message
+                for message in warning_messages
+            )
+        )
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            events = await self.client._read_replay_events_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-lease-lost",
+                last_event_id=None,
+            )
+        emitted_types = {event.get("event") for event in events}
+        self.assertFalse(bool({"message", "system", "error"} & emitted_types))
+
+    async def test_derive_queue_lease_heartbeat_seconds_handles_invalid_input(self) -> None:
+        derived = self.client._derive_queue_lease_heartbeat_seconds("not-a-number")  # pylint: disable=protected-access
+        self.assertEqual(derived, 1.0)
+
+    async def test_renew_processing_lease_keyval_branches(self) -> None:
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
+                {
+                    "version": 1,
+                    "jobs": [
+                        {
+                            "id": "other-job",
+                            "status": "processing",
+                        },
+                        {
+                            "id": "target-job",
+                            "status": "pending",
+                        },
+                    ],
+                }
+            )
+
+        renewed_missing = await self.client._renew_processing_lease(  # pylint: disable=protected-access
+            job_id="missing-job"
+        )
+        self.assertFalse(renewed_missing)
+
+        renewed_pending = await self.client._renew_processing_lease(  # pylint: disable=protected-access
+            job_id="target-job"
+        )
+        self.assertFalse(renewed_pending)
+
+    async def test_renew_processing_lease_relational_branches(self) -> None:
+        success_session = _SequenceSession([SimpleNamespace(rowcount=1)])
+        _force_relational_session(self.client, success_session)
+        renewed = await self.client._renew_processing_lease(  # pylint: disable=protected-access
+            job_id="job-rel"
+        )
+        self.assertTrue(renewed)
+        sql, params = success_session.calls[0]
+        self.assertIn("UPDATE mugen.web_queue_job", sql)
+        self.assertEqual(params["job_id"], "job-rel")
+        self.assertEqual(params["current_status"], "processing")
+
+        failure_session = _SequenceSession([SimpleNamespace(rowcount=0)])
+        _force_relational_session(self.client, failure_session)
+        renewed = await self.client._renew_processing_lease(  # pylint: disable=protected-access
+            job_id="job-rel-missing"
+        )
+        self.assertFalse(renewed)
+
+    async def test_run_processing_lease_heartbeat_failure_and_loss_paths(self) -> None:
+        self.client._queue_processing_lease_heartbeat_seconds = 0.001  # pylint: disable=protected-access
+
+        with patch.object(
+            self.client,
+            "_renew_processing_lease",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            failure_reason = await self.client._run_processing_lease_heartbeat(  # pylint: disable=protected-access
+                job_id="job-failure",
+                stop_event=asyncio.Event(),
+            )
+        self.assertEqual(failure_reason, "lease_renew_failed")
+
+        with patch.object(
+            self.client,
+            "_renew_processing_lease",
+            new=AsyncMock(return_value=False),
+        ):
+            loss_reason = await self.client._run_processing_lease_heartbeat(  # pylint: disable=protected-access
+                job_id="job-loss",
+                stop_event=asyncio.Event(),
+            )
+        self.assertEqual(loss_reason, "lease_lost")
+
+    async def test_process_claimed_job_handles_cancelled_heartbeat_task(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-cancelled-heartbeat",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        heartbeat_task = _HeartbeatTaskDouble(
+            done_sequence=[True],
+            result_value=asyncio.CancelledError(),
+            await_cancelled=True,
+        )
+        def _fake_create_task(coro, *args, **kwargs):  # noqa: ARG001
+            coro.close()
+            return heartbeat_task
+
+        with (
+            patch(
+                "mugen.core.client.web.asyncio.create_task",
+                side_effect=_fake_create_task,
+            ),
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
+            ),
+            patch.object(
+                self.client,
+                "_mark_job_done",
+                new=AsyncMock(),
+            ) as mark_done,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        mark_done.assert_awaited_once()
+
+    async def test_process_claimed_job_treats_heartbeat_result_errors_as_lease_failure(
+        self,
+    ) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-heartbeat-result-error",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        heartbeat_task = _HeartbeatTaskDouble(
+            done_sequence=[True],
+            result_value=RuntimeError("broken"),
+        )
+        def _fake_create_task(coro, *args, **kwargs):  # noqa: ARG001
+            coro.close()
+            return heartbeat_task
+
+        with (
+            patch(
+                "mugen.core.client.web.asyncio.create_task",
+                side_effect=_fake_create_task,
+            ),
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
+            ),
+            patch.object(
+                self.client,
+                "_mark_job_done",
+                new=AsyncMock(),
+            ) as mark_done,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        mark_done.assert_not_awaited()
+
+    async def test_process_claimed_job_skips_fallback_emit_on_lease_loss(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-skip-fallback",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        heartbeat_task = _HeartbeatTaskDouble(
+            done_sequence=[False, True],
+            result_value="lease_lost",
+        )
+        def _fake_create_task(coro, *args, **kwargs):  # noqa: ARG001
+            coro.close()
+            return heartbeat_task
+
+        with (
+            patch(
+                "mugen.core.client.web.asyncio.create_task",
+                side_effect=_fake_create_task,
+            ),
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch.object(
+                self.client,
+                "_mark_job_done",
+                new=AsyncMock(),
+            ) as mark_done,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        mark_done.assert_not_awaited()
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any("stage=emit_fallback_response" in message for message in warning_messages)
+        )
+
+    async def test_process_claimed_job_skips_response_emit_on_lease_loss(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-skip-response",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        heartbeat_task = _HeartbeatTaskDouble(
+            done_sequence=[False, True],
+            result_value="lease_lost",
+        )
+        def _fake_create_task(coro, *args, **kwargs):  # noqa: ARG001
+            coro.close()
+            return heartbeat_task
+
+        with (
+            patch(
+                "mugen.core.client.web.asyncio.create_task",
+                side_effect=_fake_create_task,
+            ),
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
+            ),
+            patch.object(
+                self.client,
+                "_mark_job_done",
+                new=AsyncMock(),
+            ) as mark_done,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        mark_done.assert_not_awaited()
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(any("stage=emit_response_0" in message for message in warning_messages))
+
+    async def test_process_claimed_job_skips_mark_done_on_late_lease_loss(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-skip-mark-done",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        heartbeat_task = _HeartbeatTaskDouble(
+            done_sequence=[False, False, True],
+            result_value="lease_lost",
+        )
+        def _fake_create_task(coro, *args, **kwargs):  # noqa: ARG001
+            coro.close()
+            return heartbeat_task
+
+        with (
+            patch(
+                "mugen.core.client.web.asyncio.create_task",
+                side_effect=_fake_create_task,
+            ),
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
+            ),
+            patch.object(
+                self.client,
+                "_mark_job_done",
+                new=AsyncMock(),
+            ) as mark_done,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        mark_done.assert_not_awaited()
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(any("stage=mark_done" in message for message in warning_messages))
+
+    async def test_process_claimed_job_skips_exception_flow_on_lease_loss(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-skip-exception",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        heartbeat_task = _HeartbeatTaskDouble(
+            done_sequence=[True],
+            result_value="lease_lost",
+        )
+        def _fake_create_task(coro, *args, **kwargs):  # noqa: ARG001
+            coro.close()
+            return heartbeat_task
+
+        with (
+            patch(
+                "mugen.core.client.web.asyncio.create_task",
+                side_effect=_fake_create_task,
+            ),
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            patch.object(
+                self.client,
+                "_mark_job_failed",
+                new=AsyncMock(),
+            ) as mark_failed,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        mark_failed.assert_not_awaited()
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(any("stage=handle_exception" in message for message in warning_messages))
+
+    async def test_process_claimed_job_skips_mark_failed_on_late_lease_loss(
+        self,
+    ) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-skip-mark-failed",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        heartbeat_task = _HeartbeatTaskDouble(
+            done_sequence=[False, True],
+            result_value="lease_lost",
+        )
+        def _fake_create_task(coro, *args, **kwargs):  # noqa: ARG001
+            coro.close()
+            return heartbeat_task
+
+        with (
+            patch(
+                "mugen.core.client.web.asyncio.create_task",
+                side_effect=_fake_create_task,
+            ),
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            patch.object(
+                self.client,
+                "_mark_job_failed",
+                new=AsyncMock(),
+            ) as mark_failed,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        mark_failed.assert_not_awaited()
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(any("stage=mark_failed" in message for message in warning_messages))
+
+    async def test_media_ref_collection_helper_branches(self) -> None:
+        self.assertIsNone(self.client._normalise_media_ref("  "))  # pylint: disable=protected-access
+        self.assertEqual(
+            self.client._collect_media_refs_from_queue_payload("not-json"),  # pylint: disable=protected-access
+            set(),
+        )
+        self.assertEqual(
+            self.client._collect_media_refs_from_queue_payload(123),  # pylint: disable=protected-access
+            set(),
+        )
+        self.assertEqual(
+            self.client._collect_media_refs_from_queue_payload(  # pylint: disable=protected-access
+                {"metadata": {"attachments": []}}
+            ),
+            set(),
+        )
+        self.assertEqual(
+            self.client._collect_media_refs_from_queued_job("bad"),  # pylint: disable=protected-access
+            set(),
+        )
+        self.assertEqual(
+            self.client._collect_media_refs_from_composed_metadata(  # pylint: disable=protected-access
+                {"attachments": "bad"}
+            ),
+            set(),
+        )
+        refs = self.client._collect_media_refs_from_composed_metadata(  # pylint: disable=protected-access
+            {
+                "attachments": [
+                    None,
+                    {"file_path": None},
+                    {"file_path": " object:attachment "},
+                ]
+            }
+        )
+        self.assertEqual(refs, {"object:attachment"})
+
     async def test_media_token_creation_expiry_and_authorization(self) -> None:
         media_file = Path(self.tmpdir.name) / "asset.bin"
         media_file.write_bytes(b"123")
@@ -1090,6 +1631,66 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.keyval.has_key(expired_token_key))
         self.assertFalse(old_file.exists())
         self.assertTrue(active_file.exists())
+
+    async def test_media_cleanup_keeps_pending_queue_media_refs_until_terminal(self) -> None:
+        media_dir = Path(self.client._media_storage_path)  # pylint: disable=protected-access
+        media_dir.mkdir(parents=True, exist_ok=True)
+        queued_file = media_dir / "queued.bin"
+        queued_file.write_bytes(b"x")
+        os.utime(queued_file, (0, 0))
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
+                {
+                    "version": 1,
+                    "jobs": [
+                        {
+                            "id": "job-pending-media",
+                            "status": "pending",
+                            "file_path": str(queued_file.resolve()),
+                        }
+                    ],
+                }
+            )
+
+        await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
+        self.assertTrue(queued_file.exists())
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            queue_state = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+            queue_state["jobs"][0]["status"] = "done"
+            await self.client._write_queue_state_unlocked(queue_state)  # pylint: disable=protected-access
+
+        await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
+        self.assertFalse(queued_file.exists())
+
+    async def test_media_cleanup_keeps_processing_composed_attachment_refs(self) -> None:
+        media_dir = Path(self.client._media_storage_path)  # pylint: disable=protected-access
+        media_dir.mkdir(parents=True, exist_ok=True)
+        attachment_file = media_dir / "queued-attachment.bin"
+        attachment_file.write_bytes(b"x")
+        os.utime(attachment_file, (0, 0))
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
+                {
+                    "version": 1,
+                    "jobs": [
+                        {
+                            "id": "job-processing-attachment",
+                            "status": "processing",
+                            "metadata": {
+                                "attachments": [
+                                    {"file_path": str(attachment_file.resolve())}
+                                ]
+                            },
+                        }
+                    ],
+                }
+            )
+
+        await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
+        self.assertTrue(attachment_file.exists())
 
     async def test_unsupported_response_type_emits_error_event(self) -> None:
         self.messaging.handle_text_message = AsyncMock(
@@ -3297,6 +3898,50 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                 data={"message": {"type": "text", "content": "x"}},
             )
 
+    async def test_cleanup_media_relational_includes_queue_payload_refs(self) -> None:
+        cleanup_session = _SequenceSession(
+            [
+                _SequenceResult(rows=[]),
+                _SequenceResult(
+                    rows=[
+                        {
+                            "payload": {
+                                "file_path": "object:pending",
+                                "metadata": {
+                                    "attachments": [
+                                        {"file_path": "object:attach-a"},
+                                    ]
+                                },
+                            }
+                        },
+                        {
+                            "payload": json.dumps(
+                                {
+                                    "file_path": "object:processing",
+                                    "metadata": {
+                                        "attachments": [
+                                            {"file_path": "object:attach-b"},
+                                        ]
+                                    },
+                                }
+                            )
+                        },
+                    ]
+                ),
+            ]
+        )
+        _force_relational_session(self.client, cleanup_session)
+        self.client._media_storage_gateway.cleanup = AsyncMock()  # pylint: disable=protected-access
+
+        await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
+
+        cleanup_kwargs = self.client._media_storage_gateway.cleanup.await_args.kwargs  # pylint: disable=protected-access
+        active_refs = cleanup_kwargs["active_refs"]
+        self.assertIn("object:pending", active_refs)
+        self.assertIn("object:processing", active_refs)
+        self.assertIn("object:attach-a", active_refs)
+        self.assertIn("object:attach-b", active_refs)
+
     async def test_relational_queue_owner_cleanup_and_event_log_helpers(self) -> None:
         media_dir = Path(self.client._media_storage_path)  # pylint: disable=protected-access
         media_dir.mkdir(parents=True, exist_ok=True)
@@ -3329,6 +3974,7 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                     ]
                 ),
                 _SequenceResult(),
+                _SequenceResult(rows=[]),
             ]
         )
         _force_relational_session(self.client, cleanup_session)
