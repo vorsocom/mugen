@@ -154,6 +154,11 @@ class DefaultWebClient(IWebClient):
             self._default_queue_processing_lease_seconds,
             minimum=1.0,
         )
+        self._queue_processing_lease_heartbeat_seconds = (
+            self._derive_queue_lease_heartbeat_seconds(
+                self._queue_processing_lease_seconds
+            )
+        )
         self._queue_max_pending_jobs = self._resolve_int_config(
             ("web", "queue", "max_pending_jobs"),
             self._default_queue_max_pending_jobs,
@@ -903,12 +908,112 @@ class DefaultWebClient(IWebClient):
 
             return claimed_job
 
+    @staticmethod
+    def _derive_queue_lease_heartbeat_seconds(lease_seconds: float) -> float:
+        try:
+            normalized_lease_seconds = float(lease_seconds)
+        except (TypeError, ValueError):
+            normalized_lease_seconds = 1.0
+        return max(1.0, min(normalized_lease_seconds / 3.0, 10.0))
+
+    async def _renew_processing_lease(self, *, job_id: str) -> bool:
+        now_epoch = self._epoch_now()
+        now_iso = self._utc_now_iso()
+        next_lease_expires_at = now_epoch + self._queue_processing_lease_seconds
+        async with self._storage_lock:
+            if self._using_relational_web_storage():
+                async with self._relational_session() as session:
+                    result = await session.execute(
+                        sa_text(
+                            "UPDATE mugen.web_queue_job "
+                            "SET lease_expires_at = :lease_expires_at, "
+                            "updated_at = :updated_at "
+                            "WHERE job_id = :job_id "
+                            "AND status = CAST(:current_status AS mugen.citext)"
+                        ),
+                        {
+                            "lease_expires_at": self._to_utc_datetime(next_lease_expires_at),
+                            "updated_at": (
+                                self._iso_to_utc_datetime(now_iso)
+                                or self._to_utc_datetime(now_epoch)
+                            ),
+                            "job_id": job_id,
+                            "current_status": "processing",
+                        },
+                    )
+                return int(getattr(result, "rowcount", 0) or 0) > 0
+
+            queue_state = await self._read_queue_state_unlocked()
+            for queue_job in queue_state["jobs"]:
+                if str(queue_job.get("id")) != job_id:
+                    continue
+                if str(queue_job.get("status", "")).strip().lower() != "processing":
+                    return False
+                queue_job["lease_expires_at"] = next_lease_expires_at
+                queue_job["updated_at"] = now_iso
+                await self._write_queue_state_unlocked(queue_state)
+                return True
+            return False
+
+    async def _run_processing_lease_heartbeat(
+        self,
+        *,
+        job_id: str,
+        stop_event: asyncio.Event,
+    ) -> str | None:
+        while True:
+            try:
+                await asyncio.wait_for(
+                    stop_event.wait(),
+                    timeout=self._queue_processing_lease_heartbeat_seconds,
+                )
+                return None
+            except asyncio.TimeoutError:
+                ...
+
+            try:
+                renewed = await self._renew_processing_lease(job_id=job_id)
+            except Exception:  # pylint: disable=broad-exception-caught
+                return "lease_renew_failed"
+
+            if renewed is not True:
+                return "lease_lost"
+
     async def _process_claimed_job(self, job: dict[str, Any]) -> None:
         job_id = str(job.get("id"))
         conversation_id = str(job.get("conversation_id"))
         sender = str(job.get("sender"))
         message_type = str(job.get("message_type", "")).strip().lower()
         client_message_id = job.get("client_message_id")
+        lease_heartbeat_stop = asyncio.Event()
+        lease_heartbeat_task = asyncio.create_task(
+            self._run_processing_lease_heartbeat(
+                job_id=job_id,
+                stop_event=lease_heartbeat_stop,
+            ),
+            name=f"mugen.web.lease_heartbeat.{job_id}",
+        )
+
+        def _lease_loss_reason() -> str | None:
+            if lease_heartbeat_task.done() is not True:
+                return None
+            try:
+                return lease_heartbeat_task.result()
+            except asyncio.CancelledError:
+                return None
+            except Exception:  # pylint: disable=broad-exception-caught
+                return "lease_renew_failed"
+
+        def _should_skip_side_effects(stage: str) -> bool:
+            reason = _lease_loss_reason()
+            if reason is None:
+                return False
+            self._logging_gateway.warning(
+                "Skipping web queue job side effects after lease loss "
+                f"(job_id={job_id} conversation_id={conversation_id} "
+                f"stage={stage} reason={reason})."
+            )
+            return True
 
         await self._emit_thinking_signal(
             conversation_id=conversation_id,
@@ -920,6 +1025,8 @@ class DefaultWebClient(IWebClient):
 
         try:
             responses = await self._dispatch_job_to_messaging(job)
+            if _should_skip_side_effects("post_dispatch"):
+                return
 
             if not responses:
                 reason = "none" if responses is None else "empty-list"
@@ -931,6 +1038,8 @@ class DefaultWebClient(IWebClient):
                     f"client_message_id={client_message_id} "
                     f"message_type={message_type})."
                 )
+                if _should_skip_side_effects("emit_fallback_response"):
+                    return
                 await self._append_event(
                     conversation_id=conversation_id,
                     event_type="system",
@@ -952,7 +1061,7 @@ class DefaultWebClient(IWebClient):
                             f"client_message_id={client_message_id} "
                             f"response_index={response_index} "
                             f"content_type={content_type})."
-                        )
+                    )
 
                     event = await self._response_to_event(
                         response=response,
@@ -960,6 +1069,8 @@ class DefaultWebClient(IWebClient):
                         conversation_id=conversation_id,
                     )
 
+                    if _should_skip_side_effects(f"emit_response_{response_index}"):
+                        return
                     await self._append_event(
                         conversation_id=conversation_id,
                         event_type=event["event_type"],
@@ -971,8 +1082,12 @@ class DefaultWebClient(IWebClient):
                         },
                     )
 
+            if _should_skip_side_effects("mark_done"):
+                return
             await self._mark_job_done(job_id)
         except Exception as exc:  # pylint: disable=broad-exception-caught
+            if _should_skip_side_effects("handle_exception"):
+                return
             await self._append_event(
                 conversation_id=conversation_id,
                 event_type="error",
@@ -983,8 +1098,15 @@ class DefaultWebClient(IWebClient):
                     "error": str(exc),
                 },
             )
+            if _should_skip_side_effects("mark_failed"):
+                return
             await self._mark_job_failed(job_id, str(exc))
         finally:
+            lease_heartbeat_stop.set()
+            try:
+                await lease_heartbeat_task
+            except asyncio.CancelledError:
+                ...
             await self._emit_thinking_signal(
                 conversation_id=conversation_id,
                 job_id=job_id,
@@ -1791,6 +1913,18 @@ class DefaultWebClient(IWebClient):
                         file_path = row.get("file_path")
                         if isinstance(file_path, str) and file_path != "":
                             active_refs.add(file_path)
+
+                    queue_result = await session.execute(
+                        sa_text(
+                            "SELECT payload "
+                            "FROM mugen.web_queue_job "
+                            "WHERE status IN ('pending', 'processing')"
+                        )
+                    )
+                    for row in queue_result.mappings().all():
+                        active_refs.update(
+                            self._collect_media_refs_from_queue_payload(row.get("payload"))
+                        )
             else:
                 cursor: str | None = None
                 media_keys: list[str] = []
@@ -1825,11 +1959,83 @@ class DefaultWebClient(IWebClient):
                     if isinstance(media_ref, str) and media_ref != "":
                         active_refs.add(media_ref)
 
+                queue_state = await self._read_queue_state_unlocked()
+                for queue_job in queue_state["jobs"]:
+                    if (
+                        str(queue_job.get("status", "")).strip().lower()
+                        not in {"pending", "processing"}
+                    ):
+                        continue
+                    active_refs.update(
+                        self._collect_media_refs_from_queued_job(queue_job)
+                    )
+
         await self._media_storage_gateway.cleanup(
             active_refs=active_refs,
             retention_seconds=self._media_retention_seconds,
             now_epoch=now_epoch,
         )
+
+    @staticmethod
+    def _normalise_media_ref(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        if normalized == "":
+            return None
+        return normalized
+
+    def _collect_media_refs_from_queue_payload(self, payload: Any) -> set[str]:
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return set()
+        if not isinstance(payload, dict):
+            return set()
+
+        refs: set[str] = set()
+        file_path = self._normalise_media_ref(payload.get("file_path"))
+        if file_path is not None:
+            refs.add(file_path)
+        refs.update(
+            self._collect_media_refs_from_composed_metadata(
+                payload.get("metadata")
+            )
+        )
+        return refs
+
+    def _collect_media_refs_from_queued_job(self, queue_job: Any) -> set[str]:
+        if not isinstance(queue_job, dict):
+            return set()
+
+        refs: set[str] = set()
+        file_path = self._normalise_media_ref(queue_job.get("file_path"))
+        if file_path is not None:
+            refs.add(file_path)
+        refs.update(
+            self._collect_media_refs_from_composed_metadata(
+                queue_job.get("metadata")
+            )
+        )
+        return refs
+
+    def _collect_media_refs_from_composed_metadata(self, metadata: Any) -> set[str]:
+        if not isinstance(metadata, dict):
+            return set()
+
+        attachments = metadata.get("attachments")
+        if not isinstance(attachments, list):
+            return set()
+
+        refs: set[str] = set()
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            file_path = self._normalise_media_ref(attachment.get("file_path"))
+            if file_path is not None:
+                refs.add(file_path)
+        return refs
 
     async def _mark_job_done(self, job_id: str) -> None:
         await self._mark_job_status(job_id, status="done", error=None)
