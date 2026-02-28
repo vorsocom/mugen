@@ -14,13 +14,15 @@ from mugen.bootstrap_state import (
     PHASE_B_PLATFORM_STATUSES_KEY,
     PHASE_B_STARTED_AT_KEY,
     PHASE_B_STATUS_KEY,
-    PHASE_STATUS_DEGRADED,
     PHASE_STATUS_HEALTHY,
-    PHASE_STATUS_STARTING,
-    PHASE_STATUS_STOPPED,
     get_bootstrap_state,
 )
 from mugen.core.api import api
+from mugen.core.domain.use_case.phase_b_health import (
+    PHASE_STATUS_DEGRADED,
+    PhaseBHealthInput,
+    evaluate_phase_b_health,
+)
 
 _PHASE_B_READINESS_GRACE_KEY = "phase_b_readiness_grace_seconds"
 _PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
@@ -49,22 +51,16 @@ def _parse_nonnegative_float(value: object, *, default: float) -> float:
     return parsed
 
 
-def _phase_b_starting_within_grace(
-    *,
-    phase_b_status: str,
-    phase_b_started_at: object,
-    readiness_grace_seconds: float,
-) -> bool:
-    if phase_b_status != PHASE_STATUS_STARTING:
-        return False
-    if readiness_grace_seconds <= 0:
-        return False
-    try:
-        started_at = float(phase_b_started_at)
-    except (TypeError, ValueError):
-        return False
-    elapsed_seconds = perf_counter() - started_at
-    return elapsed_seconds < readiness_grace_seconds
+def _normalize_platform_list(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    normalized: list[str] = []
+    for item in values:
+        platform = str(item).strip().lower()
+        if platform == "" or platform in normalized:
+            continue
+        normalized.append(platform)
+    return normalized
 
 
 def _resolve_bootstrap_status() -> dict[str, Any]:
@@ -83,40 +79,6 @@ def _resolve_bootstrap_status() -> dict[str, Any]:
         "phase_b_platform_statuses": state.get(PHASE_B_PLATFORM_STATUSES_KEY, {}),
         "phase_b_platform_errors": state.get(PHASE_B_PLATFORM_ERRORS_KEY, {}),
     }
-
-
-def _resolve_failed_platforms(
-    *,
-    critical_platforms: list[str],
-    platform_statuses: dict[str, str],
-    platform_errors: dict[str, Any],
-    ignore_starting: bool,
-    degrade_on_critical_exit: bool,
-) -> tuple[list[str], dict[str, str]]:
-    failed: list[str] = []
-    reasons: dict[str, str] = {}
-    for platform in critical_platforms:
-        status = str(platform_statuses.get(platform, PHASE_STATUS_STARTING) or "")
-        if status == PHASE_STATUS_HEALTHY:
-            continue
-        if ignore_starting and status == PHASE_STATUS_STARTING:
-            continue
-        if status == PHASE_STATUS_STOPPED and degrade_on_critical_exit is not True:
-            continue
-
-        failed.append(platform)
-        reason = platform_errors.get(platform)
-        if reason in [None, ""]:
-            if status == PHASE_STATUS_STARTING:
-                reason = "platform still starting"
-            elif status == PHASE_STATUS_STOPPED:
-                reason = "platform stopped"
-            elif status == PHASE_STATUS_DEGRADED:
-                reason = "platform degraded"
-            else:
-                reason = f"platform status={status}"
-        reasons[platform] = str(reason)
-    return failed, reasons
 
 
 @api.get("/core/health/live")
@@ -140,55 +102,37 @@ async def core_health_ready():
     """Readiness health probe."""
     status = _resolve_bootstrap_status()
     phase_a_status = status["phase_a_status"]
-    phase_b_status = status["phase_b_status"]
-    phase_b_error = status["phase_b_error"]
     readiness_grace_seconds = _parse_nonnegative_float(
         status["phase_b_readiness_grace_seconds"],
         default=0.0,
-    )
-    ignore_starting = _phase_b_starting_within_grace(
-        phase_b_status=phase_b_status,
-        phase_b_started_at=status["phase_b_started_at"],
-        readiness_grace_seconds=readiness_grace_seconds,
     )
     degrade_on_critical_exit = _parse_bool(
         status["phase_b_degrade_on_critical_exit"],
         default=True,
     )
-    critical_platforms = status["phase_b_critical_platforms"]
-    if not isinstance(critical_platforms, list):
-        critical_platforms = []
-    critical_platforms = [
-        str(platform).strip().lower()
-        for platform in critical_platforms
-        if str(platform).strip() != ""
-    ]
+    critical_platforms = _normalize_platform_list(status["phase_b_critical_platforms"])
 
-    platform_statuses_raw = status["phase_b_platform_statuses"]
-    platform_statuses: dict[str, str] = {}
-    if isinstance(platform_statuses_raw, dict):
-        for platform, platform_status in platform_statuses_raw.items():
-            normalized_platform = str(platform).strip().lower()
-            if normalized_platform == "":
-                continue
-            platform_statuses[normalized_platform] = str(platform_status or "")
-
-    platform_errors_raw = status["phase_b_platform_errors"]
-    platform_errors: dict[str, Any] = {}
-    if isinstance(platform_errors_raw, dict):
-        for platform, error in platform_errors_raw.items():
-            normalized_platform = str(platform).strip().lower()
-            if normalized_platform == "":
-                continue
-            platform_errors[normalized_platform] = error
-
-    failed_platforms, reasons = _resolve_failed_platforms(
-        critical_platforms=critical_platforms,
-        platform_statuses=platform_statuses,
-        platform_errors=platform_errors,
-        ignore_starting=ignore_starting,
-        degrade_on_critical_exit=degrade_on_critical_exit,
+    health = evaluate_phase_b_health(
+        PhaseBHealthInput(
+            platform_statuses=status["phase_b_platform_statuses"],
+            platform_errors=status["phase_b_platform_errors"],
+            critical_platforms=critical_platforms,
+            degrade_on_critical_exit=degrade_on_critical_exit,
+            shutdown_requested=False,
+            phase_b_status=status["phase_b_status"],
+            phase_b_error=status["phase_b_error"],
+            phase_b_started_at=status["phase_b_started_at"],
+            readiness_grace_seconds=readiness_grace_seconds,
+            include_starting_failures=True,
+            preserve_reported_degraded=True,
+            default_critical_platforms_to_statuses=False,
+            now_monotonic=perf_counter(),
+        )
     )
+    phase_b_status = health.phase_b_status
+    phase_b_error = health.phase_b_error
+    failed_platforms = health.failed_critical_platforms
+    reasons = health.reasons
     ready = (
         phase_a_status == PHASE_STATUS_HEALTHY
         and phase_b_status != PHASE_STATUS_DEGRADED

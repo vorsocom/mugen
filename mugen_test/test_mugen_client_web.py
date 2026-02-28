@@ -1194,6 +1194,12 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             )
         emitted_types = {event.get("event") for event in events}
         self.assertFalse(bool({"message", "system", "error"} & emitted_types))
+        thinking_states = [
+            str(event.get("data", {}).get("state"))
+            for event in events
+            if event.get("event") == "thinking"
+        ]
+        self.assertEqual(thinking_states, ["start"])
 
     async def test_process_claimed_job_skips_side_effects_when_owner_no_longer_matches(
         self,
@@ -1221,7 +1227,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 self.client,
                 "_processing_owner_matches",
-                new=AsyncMock(side_effect=[True, False]),
+                new=AsyncMock(side_effect=[True, False, False]),
             ),
             patch.object(
                 self.client,
@@ -1283,6 +1289,46 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             any(
                 "Skipping web queue job side effects after lease loss" in message
                 and "reason=lease_renew_failed" in message
+                for message in warning_messages
+            )
+        )
+
+    async def test_process_claimed_job_logs_final_lease_loss_when_stop_is_suppressed(
+        self,
+    ) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-final-loss",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+
+        async def _loss_after_stop(*, job_id, stop_event, expected_attempt=None):
+            _ = job_id
+            _ = expected_attempt
+            await stop_event.wait()
+            return "lease_lost"
+
+        with (
+            patch.object(
+                self.client,
+                "_run_processing_lease_heartbeat",
+                new=AsyncMock(side_effect=_loss_after_stop),
+            ),
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
+            ),
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "stage=emit_processing_stop" in message and "reason=lease_lost" in message
                 for message in warning_messages
             )
         )
