@@ -10,10 +10,10 @@ from mugen import run_whatsapp_client
 
 
 class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
-    """Unit tests for mugen.run_telnet_client."""
+    """Unit tests for mugen.run_whatsapp_client."""
 
     async def test_normal_run(self) -> None:
-        """Test normal run of telnet client."""
+        """Test normal run of WhatsApp client."""
         # Create dummy app to get context.
         app = Quart("test_app")
 

@@ -386,6 +386,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock())
         client._direct_room_ids = set()
         client._matrix_ipc_queue_size = 256
+        client._matrix_ipc_enqueue_timeout_seconds = 2.0
         client._matrix_ipc_queue = None
         client._matrix_ipc_worker_task = None
         client._matrix_ipc_worker_stop = asyncio.Event()
@@ -498,6 +499,19 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             256,
         )
 
+    async def test_matrix_ipc_enqueue_timeout_resolution_paths(self) -> None:
+        client = self._client()
+        client._config.matrix.ipc = SimpleNamespace(enqueue_timeout_seconds="invalid")
+        self.assertEqual(
+            client._resolve_matrix_ipc_enqueue_timeout_seconds(),  # pylint: disable=protected-access
+            2.0,
+        )
+        client._config.matrix.ipc = SimpleNamespace(enqueue_timeout_seconds=0)
+        self.assertEqual(
+            client._resolve_matrix_ipc_enqueue_timeout_seconds(),  # pylint: disable=protected-access
+            2.0,
+        )
+
     async def test_start_matrix_ipc_worker_guards(self) -> None:
         client = self._client()
         client._ipc_service = None
@@ -583,7 +597,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             await client._matrix_ipc_worker_loop()  # pylint: disable=protected-access
         self.assertTrue(client._logging_gateway.warning.called)
 
-    async def test_dispatch_matrix_event_hook_queue_overflow_policy(self) -> None:
+    async def test_dispatch_matrix_event_hook_enqueue_timeout_fallback_policy(self) -> None:
         client = self._client()
         client._start_matrix_ipc_worker = Mock()
         client._matrix_ipc_queue = asyncio.Queue(maxsize=1)
@@ -591,15 +605,54 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             IPCCommandRequest(platform="matrix", command="matrix_event", data={})
         )
 
-        await client._dispatch_matrix_event_hook(  # pylint: disable=protected-access
-            callback_name="_cb_tag_event",
-            event=SimpleNamespace(),
+        async def _raise_timeout(awaitable, timeout):  # noqa: ARG001
+            awaitable.close()
+            raise asyncio.TimeoutError()
+
+        with patch("mugen.core.client.matrix.asyncio.wait_for", new=_raise_timeout):
+            await client._dispatch_matrix_event_hook(  # pylint: disable=protected-access
+                callback_name="_cb_tag_event",
+                event=SimpleNamespace(),
+            )
+        self.assertEqual(
+            client._matrix_metrics["matrix.ipc.dispatch.enqueue_timeout"],  # pylint: disable=protected-access
+            1,
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.ipc.dispatch.queue_full_drop_new"],  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.ipc.dispatch.fallback_inline_success"],  # pylint: disable=protected-access
             1,
         )
         self.assertTrue(client._logging_gateway.warning.called)
+
+    async def test_dispatch_matrix_event_hook_enqueue_timeout_fallback_failure(self) -> None:
+        client = self._client()
+        client._start_matrix_ipc_worker = Mock()
+        client._matrix_ipc_queue = asyncio.Queue(maxsize=1)
+        client._matrix_ipc_queue.put_nowait(
+            IPCCommandRequest(platform="matrix", command="matrix_event", data={})
+        )
+
+        async def _raise_timeout(awaitable, timeout):  # noqa: ARG001
+            awaitable.close()
+            raise asyncio.TimeoutError()
+
+        client._dispatch_matrix_ipc_request = AsyncMock(  # pylint: disable=protected-access
+            side_effect=RuntimeError("fallback-fail")
+        )
+        with patch("mugen.core.client.matrix.asyncio.wait_for", new=_raise_timeout):
+            await client._dispatch_matrix_event_hook(  # pylint: disable=protected-access
+                callback_name="_cb_tag_event",
+                event=SimpleNamespace(),
+            )
+
+        self.assertEqual(
+            client._matrix_metrics["matrix.ipc.dispatch.enqueue_timeout"],  # pylint: disable=protected-access
+            1,
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.ipc.dispatch.fallback_inline_failed"],  # pylint: disable=protected-access
+            1,
+        )
 
     async def test_aenter_uses_saved_credentials_when_access_token_exists(self) -> None:
         client = self._client()

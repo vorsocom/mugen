@@ -105,6 +105,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     _matrix_event_hook_payload_version: int = 1
 
     _default_matrix_ipc_queue_size: int = 256
+    _default_matrix_ipc_enqueue_timeout_seconds: float = 2.0
 
     _sync_key: str = "matrix_client_sync_next_batch"
     _encrypted_secret_prefix: str = "enc:v1:"
@@ -135,6 +136,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._user_service = user_service
         self._direct_room_ids: set[str] = set()
         self._matrix_ipc_queue_size = self._resolve_matrix_ipc_queue_size()
+        self._matrix_ipc_enqueue_timeout_seconds = (
+            self._resolve_matrix_ipc_enqueue_timeout_seconds()
+        )
         self._matrix_ipc_queue: asyncio.Queue | None = None
         self._matrix_ipc_worker_task: asyncio.Task | None = None
         self._matrix_ipc_worker_stop = asyncio.Event()
@@ -318,6 +322,21 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             parsed = self._default_matrix_ipc_queue_size
         if parsed <= 0:
             return self._default_matrix_ipc_queue_size
+        return parsed
+
+    def _resolve_matrix_ipc_enqueue_timeout_seconds(self) -> float:
+        raw_value = getattr(
+            getattr(getattr(self._config, "matrix", SimpleNamespace()), "ipc", None),
+            "enqueue_timeout_seconds",
+            self._default_matrix_ipc_enqueue_timeout_seconds,
+        )
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            return self._default_matrix_ipc_enqueue_timeout_seconds
+
+        if parsed <= 0:
+            return self._default_matrix_ipc_enqueue_timeout_seconds
         return parsed
 
     def _start_matrix_ipc_worker(self) -> None:
@@ -776,15 +795,33 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             return
 
         try:
-            self._matrix_ipc_queue.put_nowait(payload)
-        except asyncio.QueueFull:
-            self._increment_matrix_metric("matrix.ipc.dispatch.queue_full_drop_new")
+            await asyncio.wait_for(
+                self._matrix_ipc_queue.put(payload),
+                timeout=self._matrix_ipc_enqueue_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            self._increment_matrix_metric("matrix.ipc.dispatch.enqueue_timeout")
             self._logging_gateway.warning(
-                "Matrix event extension dispatch skipped."
+                "Matrix event extension enqueue timed out; dispatching inline."
                 f" callback={callback_name}"
                 f" event={event_type}"
-                " reason=queue_full_drop_new"
+                f" enqueue_timeout_seconds={self._matrix_ipc_enqueue_timeout_seconds}"
             )
+            try:
+                await self._dispatch_matrix_ipc_request(payload)
+                self._increment_matrix_metric(
+                    "matrix.ipc.dispatch.fallback_inline_success"
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self._increment_matrix_metric(
+                    "matrix.ipc.dispatch.fallback_inline_failed"
+                )
+                self._logging_gateway.warning(
+                    "Matrix event extension inline fallback dispatch failed."
+                    f" callback={callback_name}"
+                    f" event={event_type}"
+                    f" error={type(exc).__name__}: {exc}"
+                )
 
     async def _handle_non_core_event_callback(
         self,

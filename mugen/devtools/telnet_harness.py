@@ -1,27 +1,74 @@
-"""Provides an implementation of ITelnetClient."""
+"""Development/testing telnet harness."""
 
-__all__ = ["DefaultTelnetClient"]
+__all__ = ["DevTelnetHarnessClient", "run_dev_telnet_server"]
 
 import asyncio
+import ipaddress
 from collections.abc import Callable
 from types import SimpleNamespace, TracebackType
 
-from mugen.core.contract.client.telnet import ITelnetClient
+from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 
+_ALLOWED_ENVIRONMENTS = frozenset({"development", "testing"})
+_DEFAULT_HOST = "127.0.0.1"
+_DEFAULT_PORT = 2323
 
-class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-methods
-    """An implementation of ITelnetClient."""
+
+def _config_provider():
+    return di.container.config
+
+
+def _logger_provider():
+    return di.container.logging_gateway
+
+
+def _ipc_provider():
+    return di.container.ipc_service
+
+
+def _keyval_provider():
+    return di.container.keyval_storage_gateway
+
+
+def _messaging_provider():
+    return di.container.messaging_service
+
+
+def _user_provider():
+    return di.container.user_service
+
+
+def _resolve_environment(config: SimpleNamespace) -> str:
+    return str(
+        getattr(getattr(config, "mugen", SimpleNamespace()), "environment", "")
+    ).strip().lower()
+
+
+def _is_loopback_host(host: object) -> bool:
+    if not isinstance(host, str) or host.strip() == "":
+        return False
+    normalized = host.strip().lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+class DevTelnetHarnessClient:  # pylint: disable=too-few-public-methods
+    """A development/testing telnet harness adapter."""
 
     _default_read_timeout_seconds: float = 300.0
-
     _default_max_prompt_bytes: int = 4096
 
-    def __init__(  # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-arguments
+    def __init__(
         self,
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
@@ -38,9 +85,11 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
         self._user_service = user_service
         self._read_timeout_seconds = self._resolve_read_timeout_seconds()
         self._max_prompt_bytes = self._resolve_max_prompt_bytes()
+        self._host = self._resolve_host()
+        self._port = self._resolve_port()
 
-    async def __aenter__(self) -> "DefaultTelnetClient":
-        self._logging_gateway.debug("DefaultTelnetClient.__aenter__")
+    async def __aenter__(self) -> "DevTelnetHarnessClient":
+        self._logging_gateway.debug("DevTelnetHarnessClient.__aenter__")
         return self
 
     async def __aexit__(
@@ -49,8 +98,39 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> bool:
-        self._logging_gateway.debug("DefaultTelnetClient.__aexit__")
+        _ = (exc_type, exc_val, exc_tb)
+        self._logging_gateway.debug("DevTelnetHarnessClient.__aexit__")
         return False
+
+    def _resolve_host(self) -> str:
+        host = getattr(
+            getattr(getattr(self._config, "telnet", None), "socket", None),
+            "host",
+            _DEFAULT_HOST,
+        )
+        if not isinstance(host, str) or host.strip() == "":
+            host = _DEFAULT_HOST
+        resolved = host.strip()
+        if _is_loopback_host(resolved) is not True:
+            raise RuntimeError(
+                "Dev telnet harness must bind to a loopback host "
+                "(127.0.0.1, ::1, or localhost)."
+            )
+        return resolved
+
+    def _resolve_port(self) -> int:
+        raw_port = getattr(
+            getattr(getattr(self._config, "telnet", None), "socket", None),
+            "port",
+            _DEFAULT_PORT,
+        )
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError):
+            port = _DEFAULT_PORT
+        if port <= 0:
+            port = _DEFAULT_PORT
+        return port
 
     async def start_server(
         self,
@@ -58,17 +138,17 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
     ) -> None:
         server = await asyncio.start_server(
             self._handle_connection,
-            self._config.telnet.socket.host,
-            int(self._config.telnet.socket.port),
+            self._host,
+            self._port,
         )
         async with server:
             if server.sockets:
                 sock = server.sockets[0].getsockname()
                 self._logging_gateway.info(
-                    f"Telnet server running on {sock[0]}:{sock[1]}."
+                    f"Dev telnet harness listening on {sock[0]}:{sock[1]}."
                 )
             else:
-                self._logging_gateway.info("Telnet server started.")
+                self._logging_gateway.info("Dev telnet harness started.")
             if callable(started_callback):
                 started_callback()
             await server.serve_forever()
@@ -120,10 +200,8 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
         except (TypeError, ValueError):
             timeout = self._default_read_timeout_seconds
 
-        # A non-positive timeout disables idle timeout checks.
         if timeout <= 0:
             return None
-
         return timeout
 
     def _resolve_max_prompt_bytes(self) -> int:
@@ -139,7 +217,6 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
 
         if max_prompt_bytes <= 0:
             return self._default_max_prompt_bytes
-
         return max_prompt_bytes
 
     async def _readline(self, reader: asyncio.StreamReader) -> bytes | None:
@@ -245,3 +322,42 @@ class DefaultTelnetClient(ITelnetClient):  # pylint: disable=too-few-public-meth
             text_responses.append(str(content))
 
         return text_responses
+
+
+async def run_dev_telnet_server(
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    ipc_provider=_ipc_provider,
+    keyval_provider=_keyval_provider,
+    messaging_provider=_messaging_provider,
+    user_provider=_user_provider,
+    started_callback=None,
+) -> None:
+    """Run the development/testing telnet harness."""
+    config: SimpleNamespace = config_provider()
+    logger: ILoggingGateway = logger_provider()
+    environment = _resolve_environment(config)
+    if environment not in _ALLOWED_ENVIRONMENTS:
+        raise RuntimeError(
+            "Dev telnet harness is only allowed in development/testing environments."
+        )
+
+    harness = DevTelnetHarnessClient(
+        config=config,
+        ipc_service=ipc_provider(),
+        keyval_storage_gateway=keyval_provider(),
+        logging_gateway=logger,
+        messaging_service=messaging_provider(),
+        user_service=user_provider(),
+    )
+    async with harness as client:
+        await client.start_server(started_callback=started_callback)
+        logger.debug("Dev telnet harness started.")
+
+
+def _main() -> None:
+    asyncio.run(run_dev_telnet_server())
+
+
+if __name__ == "__main__":  # pragma: no cover
+    _main()

@@ -138,7 +138,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(phase_b_runner.await_count, 0)
         self.assertIsNone(state.get(quartman._PLATFORM_CLIENTS_TASK_KEY))
 
-    async def test_startup_fails_fast_on_production_telnet_policy_before_phase_b_task(
+    async def test_startup_fails_fast_on_unsupported_telnet_platform_before_phase_b_task(
         self,
     ) -> None:
         app = Quart("quartman_test")
@@ -147,10 +147,8 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=["telnet"],
-                environment="production",
                 runtime=unittest.mock.Mock(phase_b=unittest.mock.Mock()),
             ),
-            telnet=unittest.mock.Mock(allow_in_production=False),
         )
 
         with (
@@ -525,12 +523,12 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         with (
             unittest.mock.patch.object(
                 quartman.di,
-                "shutdown_container",
+                "shutdown_container_async",
                 side_effect=RuntimeError("boom"),
             ),
             self.assertLogs(logger=app.name, level="WARNING") as logs,
         ):
-            quartman._shutdown_container()
+            await quartman._shutdown_container()
 
         self.assertTrue(any("Container shutdown failed" in msg for msg in logs.output))
 

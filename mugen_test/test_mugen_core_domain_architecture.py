@@ -6,6 +6,8 @@ import ast
 from pathlib import Path
 import unittest
 
+from mugen.core.utility.platforms import SUPPORTED_CORE_PLATFORMS
+
 
 class TestCoreDomainArchitecture(unittest.TestCase):
     """Ensures core domain modules remain infrastructure-agnostic."""
@@ -78,6 +80,34 @@ class TestCoreDomainArchitecture(unittest.TestCase):
 
         self.assertNotIn("_resolve_failed_platforms", function_names)
         self.assertNotIn("_phase_b_starting_within_grace", function_names)
+
+    def test_core_platform_allow_list_excludes_telnet(self) -> None:
+        self.assertEqual(set(SUPPORTED_CORE_PLATFORMS), {"matrix", "web", "whatsapp"})
+        self.assertNotIn("telnet", SUPPORTED_CORE_PLATFORMS)
+
+    def test_core_runtime_bootstrap_does_not_import_dev_telnet_harness(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        runtime_path = repo_root / "mugen" / "__init__.py"
+        module_tree = ast.parse(runtime_path.read_text(encoding="utf-8"))
+        forbidden_imports = {
+            "mugen.devtools",
+            "mugen.devtools.telnet_harness",
+            "mugen.core.client.telnet",
+            "mugen.core.contract.client.telnet",
+        }
+
+        violations: list[str] = []
+        for node in ast.walk(module_tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in forbidden_imports:
+                        violations.append(alias.name)
+            if isinstance(node, ast.ImportFrom):
+                module_name = node.module or ""
+                if module_name in forbidden_imports:
+                    violations.append(module_name)
+
+        self.assertEqual(violations, [])
 
 
 if __name__ == "__main__":

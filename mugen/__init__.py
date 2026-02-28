@@ -57,7 +57,6 @@ from mugen.config import AppConfig
 from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.client.matrix import IMatrixClient
-from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.extension.cp import ICPExtension
@@ -123,10 +122,6 @@ def _platform_provider():
     return di.container.platform_service
 
 
-def _telnet_provider():
-    return di.container.telnet_client
-
-
 def _matrix_provider():
     return di.container.matrix_client
 
@@ -149,23 +144,6 @@ def _extension_enabled(ext: SimpleNamespace) -> bool:
         if normalized in {"false", "0", "no", "off"}:
             return False
     return bool(raw_enabled)
-
-
-def _telnet_allowed_in_production(config: SimpleNamespace) -> bool:
-    raw_value = getattr(
-        getattr(config, "telnet", SimpleNamespace()),
-        "allow_in_production",
-        False,
-    )
-    if isinstance(raw_value, bool):
-        return raw_value
-    if isinstance(raw_value, str):
-        normalized = raw_value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return False
 
 
 def _parse_bool(value: object, *, default: bool) -> bool:
@@ -289,16 +267,6 @@ def validate_phase_b_runtime_config(
             f"{unsupported_platforms_text}. "
             f"Supported platforms: {supported_platforms_text}."
         )
-
-    environment = str(
-        getattr(getattr(config, "mugen", SimpleNamespace()), "environment", "")
-    ).strip().lower()
-    if "telnet" in active_platforms and environment == "production":
-        if _telnet_allowed_in_production(config) is not True:
-            raise BootstrapConfigError(
-                "Telnet platform is disabled in production. Set "
-                "telnet.allow_in_production=true to override."
-            )
 
     critical_platforms = _resolve_phase_b_critical_platforms(
         config,
@@ -784,19 +752,6 @@ async def run_platform_clients(
             )
             tasks["matrix"] = task
 
-        if "telnet" in active_platforms:
-            logger.debug("Running telnet client.")
-            task = asyncio.create_task(
-                _invoke_platform_runner("telnet", run_telnet_client),
-                name="mugen.platform.telnet",
-            )
-            task.add_done_callback(
-                lambda done_task, platform_name="telnet": _on_platform_task_done(
-                    platform_name, done_task
-                )
-            )
-            tasks["telnet"] = task
-
         if "whatsapp" in active_platforms:
             logger.debug("Running whatsapp client.")
             task = asyncio.create_task(
@@ -1099,28 +1054,6 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
         f" total_extensions={len(extensions)}"
         f" elapsed_seconds={perf_counter() - sweep_started_at:.3f}"
     )
-
-
-async def run_telnet_client(
-    logger_provider=_logger_provider,
-    telnet_provider=_telnet_provider,
-    started_callback=None,
-    degraded_callback=None,
-    healthy_callback=None,
-) -> None:
-    """Run assistant for Telnet server."""
-    _ = degraded_callback
-    _ = healthy_callback
-    logger: ILoggingGateway = logger_provider()
-    telnet_client: ITelnetClient = telnet_provider()
-
-    async with telnet_client as client:
-        try:
-            await client.start_server(started_callback=started_callback)
-            logger.debug("Telnet client started.")
-        except asyncio.exceptions.CancelledError:
-            logger.error("Telnet client shutting down.")
-            raise
 
 
 async def run_matrix_client(

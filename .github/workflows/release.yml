@@ -79,7 +79,6 @@ jobs:
           poetry run python scripts/prepare_ci_config.py \
             --sample conf/mugen.toml.sample \
             --output mugen.toml \
-            --keyval-db-path .tmp/ci/storage.db \
             --rdbms-url postgresql+psycopg://mugen:mugen@127.0.0.1:5432/mugen \
             --aws-region us-east-1 \
             --enable-web-platform

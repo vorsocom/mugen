@@ -7,17 +7,12 @@ environment = "development"
 logger.level = 10
 logger.name = "COM.VORSOCOMPUTING.MUGEN"
 platforms = [
-  "telnet",
-  # "web",
+  "web",
   # "matrix",
   # "whatsapp",
 ]
-storage.keyval.dbm.path = "/absolute/path/to/data/storage.db"
-storage.keyval.dbm.allow_non_dev = false
 storage.keyval.relational.namespace_default = "core"
 storage.keyval.relational.list_limit_default = 200
-storage.keyval.legacy_import.enabled = true
-storage.keyval.legacy_import.dbm_path = "/absolute/path/to/data/storage.db"
 runtime.phase_b.readiness_grace_seconds = 0.0
 runtime.phase_b.critical_platforms = ["web"]
 runtime.phase_b.degrade_on_critical_exit = true
@@ -42,7 +37,6 @@ timeout_seconds = 10.0
 max_timeout_seconds = 30.0
 
 [mugen.modules.core]
-client.telnet = "mugen.core.client.telnet"
 client.matrix = "mugen.core.client.matrix"
 client.whatsapp = "mugen.core.client.whatsapp"
 client.web = "mugen.core.client.web"
@@ -392,6 +386,7 @@ media.allowed_mimetypes = [
 ]
 media.max_download_bytes = 20_971_520   # 20 MiB
 ipc.queue_size = 256
+ipc.enqueue_timeout_seconds = 2.0
 security.device_trust.mode = "strict_known"
 # Optional allowlist entries used when security.device_trust.mode = "allowlist".
 # [[matrix.security.device_trust.allowlist]]
@@ -485,11 +480,10 @@ use_ssl = false
 starttls = true
 starttls_required = true
 
-# === Telnet ===
+# === Telnet (dev/test harness only) ===
 [telnet]
 socket.host = "localhost"
 socket.port = 8888
-allow_in_production = false
 # Maximum seconds to wait for input before disconnecting (<=0 disables timeout).
 read_timeout_seconds = 300.0
 # Maximum raw input bytes accepted for one prompt.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from types import SimpleNamespace
 import threading
 import unittest
@@ -305,9 +304,6 @@ def _make_config(
     *,
     namespace_default="core",
     list_limit_default=200,
-    legacy_import_enabled=False,
-    legacy_import_dbm_path=None,
-    dbm_path="storage.db",
     basedir="/srv/mugen",
 ):
     return SimpleNamespace(
@@ -320,11 +316,6 @@ def _make_config(
                         namespace_default=namespace_default,
                         list_limit_default=list_limit_default,
                     ),
-                    legacy_import=SimpleNamespace(
-                        enabled=legacy_import_enabled,
-                        dbm_path=legacy_import_dbm_path,
-                    ),
-                    dbm=SimpleNamespace(path=dbm_path),
                 )
             )
         ),
@@ -502,87 +493,6 @@ class TestMugenGatewayStorageKeyvalRelational(unittest.IsolatedAsyncioTestCase):
         await gateway.aclose()
         gateway._stop_sync_loop.assert_not_called()  # pylint: disable=protected-access
 
-    async def test_legacy_import_paths(self) -> None:
-        disabled_gateway = _new_gateway(
-            engine=_MemoryRelationalEngine(),
-            config=_make_config(legacy_import_enabled=False),
-            logger=Mock(),
-        )
-        await disabled_gateway._maybe_import_legacy_dbm()  # pylint: disable=protected-access
-
-        logger = Mock()
-        engine = _MemoryRelationalEngine()
-        engine.rows[("core", "legacy")] = {
-            "namespace": "core",
-            "entry_key": "legacy",
-            "payload": b"existing",
-            "codec": "bytes",
-            "row_version": 1,
-            "expires_at": None,
-            "created_at": engine._now(),
-            "updated_at": engine._now(),
-        }
-        config = _make_config(
-            legacy_import_enabled=True,
-            legacy_import_dbm_path="/tmp/legacy.db",
-        )
-        gateway = _new_gateway(engine=engine, config=config, logger=logger)
-
-        with patch("mugen.core.gateway.storage.keyval.relational.os.path.exists", return_value=False):
-            await gateway._maybe_import_legacy_dbm()  # pylint: disable=protected-access
-        logger.info.assert_called()
-
-        logger.reset_mock()
-        with (
-            patch("mugen.core.gateway.storage.keyval.relational.os.path.exists", return_value=True),
-            patch.object(
-                gateway,
-                "_read_dbm_entries",  # pylint: disable=protected-access
-                return_value=[
-                    ("legacy", b"payload", "bytes"),
-                    ("fresh", b"payload-new", "bytes"),
-                ],
-            ),
-        ):
-            await gateway._maybe_import_legacy_dbm()  # pylint: disable=protected-access
-
-        migrated = engine.rows.get(("core", "legacy"))
-        migrated_fresh = engine.rows.get(("core", "fresh"))
-        marker = engine.rows.get(("__meta__", "legacy_dbm_import_v1"))
-        self.assertIsNotNone(migrated)
-        self.assertIsNotNone(migrated_fresh)
-        self.assertIsNotNone(marker)
-        self.assertEqual(migrated["payload"], b"existing")
-        self.assertEqual(migrated_fresh["payload"], b"payload-new")
-        self.assertEqual(marker["codec"], "application/json")
-
-        logger.reset_mock()
-        with (
-            patch("mugen.core.gateway.storage.keyval.relational.os.path.exists", return_value=True),
-            patch.object(
-                gateway,
-                "_read_dbm_entries",  # pylint: disable=protected-access
-                side_effect=AssertionError("legacy import should be skipped when marker exists"),
-            ),
-        ):
-            await gateway._maybe_import_legacy_dbm()  # pylint: disable=protected-access
-        logger.info.assert_called_with(
-            "Legacy keyval import marker found; skipping startup import."
-        )
-
-        failing_gateway = _new_gateway(engine=_MemoryRelationalEngine(), config=config, logger=Mock())
-        with (
-            patch("mugen.core.gateway.storage.keyval.relational.os.path.exists", return_value=True),
-            patch.object(
-                failing_gateway,
-                "_read_dbm_entries",  # pylint: disable=protected-access
-                side_effect=RuntimeError("bad dbm"),
-            ),
-            self.assertRaises(RuntimeError),
-        ):
-            await failing_gateway._maybe_import_legacy_dbm()  # pylint: disable=protected-access
-
-
 class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
     """Covers sync compatibility wrappers and init helper branches."""
 
@@ -665,9 +575,6 @@ class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
             config=_make_config(
                 namespace_default="  ",
                 list_limit_default="bad",
-                legacy_import_enabled=True,
-                legacy_import_dbm_path="relative.db",
-                dbm_path="dbm.db",
                 basedir="/srv/app",
             ),
             logger=logger,
@@ -684,10 +591,6 @@ class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
         self.assertIsNone(gateway._resolve_expires_at("bad"))  # pylint: disable=protected-access
         self.assertIsNone(gateway._resolve_expires_at(-1))  # pylint: disable=protected-access
         self.assertIsNotNone(gateway._resolve_expires_at(1.0))  # pylint: disable=protected-access
-        self.assertEqual(
-            gateway._resolve_legacy_import_dbm_path(),  # pylint: disable=protected-access
-            os.path.abspath("/srv/app/relative.db"),
-        )
 
         with self.assertRaises(ValueError):
             gateway._normalize_namespace(1)  # type: ignore[arg-type]  # pylint: disable=protected-access
@@ -700,53 +603,8 @@ class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
         with self.assertRaises(ValueError):
             gateway._coerce_payload(1)  # type: ignore[arg-type]  # pylint: disable=protected-access
 
-    def test_legacy_import_enabled_rejects_invalid_flag_values(self) -> None:
-        gateway = _new_gateway(
-            config=_make_config(legacy_import_enabled="maybe"),
-            logger=Mock(),
-        )
-        with self.assertRaises(RuntimeError):
-            gateway._legacy_import_enabled()  # pylint: disable=protected-access
-
+    def test_list_limit_and_namespace_default_boundaries(self) -> None:
         logger = Mock()
-        missing_path_gateway = _new_gateway(
-            config=_make_config(
-                legacy_import_enabled=True,
-                legacy_import_dbm_path="",
-                dbm_path="",
-            ),
-            logger=logger,
-        )
-        with self.assertRaises(RuntimeError):
-            missing_path_gateway._resolve_legacy_import_dbm_path()  # pylint: disable=protected-access
-
-        absolute_path_gateway = _new_gateway(
-            config=_make_config(
-                legacy_import_enabled=True,
-                legacy_import_dbm_path="/tmp/legacy.db",
-                dbm_path="fallback.db",
-            ),
-            logger=logger,
-        )
-        self.assertEqual(
-            absolute_path_gateway._resolve_legacy_import_dbm_path(),  # pylint: disable=protected-access
-            "/tmp/legacy.db",
-        )
-
-        no_basedir_gateway = _new_gateway(
-            config=_make_config(
-                legacy_import_enabled=True,
-                legacy_import_dbm_path="relative-only.db",
-                basedir=None,
-            ),
-            logger=logger,
-        )
-        self.assertTrue(
-            no_basedir_gateway._resolve_legacy_import_dbm_path().endswith(  # pylint: disable=protected-access
-                "relative-only.db"
-            )
-        )
-
         list_default_zero = _new_gateway(
             config=_make_config(list_limit_default=0),
             logger=logger,
@@ -765,63 +623,7 @@ class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
         )
         self.assertEqual(namespace_non_string._resolve_namespace_default(), "core")  # pylint: disable=protected-access
 
-    def test_parse_guard_flag_supports_none_and_string_values(self) -> None:
-        self.assertFalse(
-            RelationalKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
-                key="k",
-                raw_value=None,
-                default=False,
-            )
-        )
-        self.assertTrue(
-            RelationalKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
-                key="k",
-                raw_value="on",
-                default=False,
-            )
-        )
-        self.assertFalse(
-            RelationalKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
-                key="k",
-                raw_value="0",
-                default=True,
-            )
-        )
-        with self.assertRaises(RuntimeError):
-            RelationalKeyValStorageGateway._parse_guard_flag(  # pylint: disable=protected-access
-                key="k",
-                raw_value=object(),
-                default=False,
-            )
-
-    def test_read_dbm_entries_and_lock_id(self) -> None:
-        class _FakeDB:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
-                return False
-
-            def keys(self):
-                return [b"alpha", b"bin", b"", "bad", b"\xff"]
-
-            def __getitem__(self, key):
-                if key == b"alpha":
-                    return b"text"
-                if key == b"bin":
-                    return b"\xff"
-                return b"\xff"
-
-        with patch("mugen.core.gateway.storage.keyval.relational.dbm.gnu.open", return_value=_FakeDB()):
-            rows = RelationalKeyValStorageGateway._read_dbm_entries("/tmp/db")  # pylint: disable=protected-access
-        self.assertEqual(
-            rows,
-            [("alpha", b"text", "text/utf-8"), ("bin", b"\xff", "bytes")],
-        )
-        self.assertIsInstance(
-            RelationalKeyValStorageGateway._legacy_import_lock_id("abc"),  # pylint: disable=protected-access
-            int,
-        )
+    def test_to_entry_handles_memoryview_and_non_bytes_payload(self) -> None:
 
         entry_from_memoryview = RelationalKeyValStorageGateway._to_entry(  # pylint: disable=protected-access
             {

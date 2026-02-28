@@ -713,7 +713,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                         )
                     ],
                 ),
-                platforms=["telnet"],
+                platforms=["matrix"],
             )
         )
 
@@ -845,7 +845,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                         )
                     ],
                 ),
-                platforms=["telnet"],
+                platforms=["matrix"],
             )
         )
 
@@ -958,7 +958,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                         )
                     ],
                 ),
-                platforms=["telnet"],
+                platforms=["matrix"],
             )
         )
 
@@ -1072,7 +1072,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                         )
                     ],
                 ),
-                platforms=["telnet"],
+                platforms=["matrix"],
             )
         )
 
@@ -1209,7 +1209,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                         )
                     ],
                 ),
-                platforms=["telnet"],
+                platforms=["matrix"],
             )
         )
 
@@ -1349,7 +1349,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                         )
                     ],
                 ),
-                platforms=["telnet"],
+                platforms=["matrix"],
             )
         )
 
@@ -1482,7 +1482,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                         )
                     ],
                 ),
-                platforms=["telnet"],
+                platforms=["matrix"],
             )
         )
 

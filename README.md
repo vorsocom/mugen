@@ -120,17 +120,23 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 
 Bootstrap lifecycle at startup:
 1. **Phase A (blocking):** load/register extensions, then register the API blueprint.
-2. **Phase B (background):** start long-running platform clients (Matrix/Telnet/WhatsApp/Web).
+2. **Phase B (background):** start long-running platform clients (Matrix/WhatsApp/Web).
 
 The server does not begin serving requests until Phase A completes successfully.
 
-You can now open a new terminal and connect to the running instance using Telnet:
+For development/testing, you can run the telnet harness in a separate process:
+
+```bash
+~$ python -m mugen.devtools.telnet_harness
+```
+
+Then connect locally:
 
 ```bash
 ~$ telnet localhost 8888
 ```
 
-**Note:** The Telnet client is for **development use only** and should not be used in production environments.
+**Note:** The telnet harness is for **development/testing only** and is blocked in production.
 
 ## Building Applications with muGen
 

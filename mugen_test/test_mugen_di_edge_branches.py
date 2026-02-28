@@ -134,7 +134,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                         }
                     }
                 },
-                "platforms": ["matrix", "telnet", "whatsapp", "web"],
+                "platforms": ["matrix", "whatsapp", "web"],
             }
         }
 
@@ -144,9 +144,68 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         injector.logging_gateway.error.assert_any_call("Missing provider (knowledge_gateway).")
         injector.logging_gateway.error.assert_any_call("Missing provider (email_gateway).")
         injector.logging_gateway.error.assert_any_call("Missing provider (matrix_client).")
-        injector.logging_gateway.error.assert_any_call("Missing provider (telnet_client).")
         injector.logging_gateway.error.assert_any_call("Missing provider (whatsapp_client).")
         injector.logging_gateway.error.assert_any_call("Missing provider (web_client).")
+
+    def test_validate_container_rejects_removed_legacy_keyval_paths(self) -> None:
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=Mock(),
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+        )
+
+        with self.assertRaises(RuntimeError):
+            di._validate_container(
+                {
+                    "mugen": {
+                        "platforms": [],
+                        "storage": {"keyval": {"legacy_import": {"enabled": False}}},
+                    }
+                },
+                injector,
+            )
+
+        with self.assertRaises(RuntimeError):
+            di._validate_container(
+                {
+                    "mugen": {
+                        "platforms": [],
+                        "modules": {
+                            "core": {
+                                "client": {
+                                    "telnet": "mugen.core.client.telnet"
+                                }
+                            }
+                        },
+                    }
+                },
+                injector,
+            )
+
+        with self.assertRaises(RuntimeError):
+            di._validate_container(
+                {
+                    "mugen": {
+                        "platforms": [],
+                        "modules": {
+                            "core": {
+                                "gateway": {
+                                    "storage": {
+                                        "keyval": "mugen.core.gateway.storage.keyval.dbm"
+                                    }
+                                }
+                            }
+                        },
+                    }
+                },
+                injector,
+            )
 
     def test_validate_container_uses_root_logger_when_injector_logger_is_missing(
         self,
@@ -286,6 +345,29 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         }
         with self.assertRaises(RuntimeError):
             di._validate_container(config, injector)
+
+    def test_validate_container_platform_full_without_matrix_platform(self) -> None:
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=Mock(),
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            relational_storage_gateway=object(),
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+            whatsapp_client=object(),
+        )
+        config = {
+            "mugen": {
+                "runtime": {"profile": "platform_full"},
+                "platforms": ["whatsapp"],
+            }
+        }
+
+        di._validate_container(config, injector)
 
     def test_validate_container_rejects_unknown_platforms(self) -> None:
         logger = Mock()

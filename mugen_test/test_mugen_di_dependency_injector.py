@@ -5,7 +5,6 @@ import unittest
 
 from mugen.core import di
 from mugen.core.contract.client.matrix import IMatrixClient
-from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -40,7 +39,6 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.messaging_service)
         self.assertIsNone(injector.knowledge_gateway)
         self.assertIsNone(injector.matrix_client)
-        self.assertIsNone(injector.telnet_client)
         self.assertIsNone(injector.whatsapp_client)
         self.assertIsNone(injector.web_client)
 
@@ -393,39 +391,6 @@ class TestDependencyInjector(unittest.TestCase):
             user_service=user_service,
         )
 
-        # Telnet Client
-        class DummyTelnetClientClass(ITelnetClient):
-            """Dummy Telnet class."""
-
-            def __init__(  # pylint: disable=too-many-arguments
-                self,
-                config,
-                ipc_service,
-                keyval_storage_gateway,
-                logging_gateway,
-                messaging_service,
-                user_service,
-            ):
-                pass
-
-            async def __aenter__(self):
-                pass
-
-            async def __aexit__(self, exc_type, exc_val, exc_tb):
-                pass
-
-            async def start_server(self, started_callback=None):
-                _ = started_callback
-
-        telnet_client = DummyTelnetClientClass(
-            config=config,
-            ipc_service=ipc_service,
-            keyval_storage_gateway=keyval_storage_gateway,
-            logging_gateway=logging_gateway,
-            messaging_service=messaging_service,
-            user_service=user_service,
-        )
-
         # WhatsApp Client
         class DummyWhatsAppClientClass(IWhatsAppClient):
             """Dummy WhatsApp class."""
@@ -654,7 +619,6 @@ class TestDependencyInjector(unittest.TestCase):
             messaging_service=messaging_service,
             knowledge_gateway=knowledge_gateway,
             matrix_client=matrix_client,
-            telnet_client=telnet_client,
             whatsapp_client=whatsapp_client,
             web_client=web_client,
         )
@@ -672,7 +636,6 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.messaging_service, messaging_service)
         self.assertEqual(injector.knowledge_gateway, knowledge_gateway)
         self.assertEqual(injector.matrix_client, matrix_client)
-        self.assertEqual(injector.telnet_client, telnet_client)
         self.assertEqual(injector.whatsapp_client, whatsapp_client)
         self.assertEqual(injector.web_client, web_client)
 
