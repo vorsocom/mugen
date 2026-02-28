@@ -14,6 +14,10 @@ class IWhatsAppClient(ABC):
         """Perform startup routine."""
 
     @abstractmethod
+    async def verify_startup(self) -> bool:
+        """Perform startup probe and return readiness result."""
+
+    @abstractmethod
     async def close(self) -> None:
         """Perform shutdown routine."""
 

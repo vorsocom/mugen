@@ -170,7 +170,7 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
 
         async with self._encoder_lock:
             if self._encoder is None:
-                self._encoder = self._build_encoder()
+                self._encoder = await asyncio.to_thread(self._build_encoder)
             return self._encoder
 
     async def _encode_search_term(self, search_term: str) -> list[float]:

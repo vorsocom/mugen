@@ -1121,10 +1121,13 @@ async def run_whatsapp_client(
     whatsapp_client: IWhatsAppClient = whatsapp_provider()
 
     await whatsapp_client.init()
-    if callable(started_callback):
-        started_callback()
-    logger.debug("WhatsApp client started.")
     try:
+        startup_verified = await whatsapp_client.verify_startup()
+        if startup_verified is not True:
+            raise RuntimeError("WhatsApp startup probe failed.")
+        if callable(started_callback):
+            started_callback()
+        logger.debug("WhatsApp client started.")
         await asyncio.Event().wait()
     except asyncio.exceptions.CancelledError:
         logger.debug("WhatsApp client shutting down.")

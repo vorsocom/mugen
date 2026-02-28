@@ -726,6 +726,34 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             str(self.logger.warning.call_args.args[0]),
         )
 
+    async def test_mark_job_done_skips_attempt_mismatch_for_keyval(self) -> None:
+        payload = await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-attempt-mismatch",
+            message_type="text",
+            text="hello",
+            client_message_id="cid-attempt-mismatch",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed["status"], "processing")
+
+        self.logger.reset_mock()
+        await self.client._mark_job_done(  # pylint: disable=protected-access
+            payload["job_id"],
+            expected_attempt=int(claimed["attempts"]) + 1,
+        )
+
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            queue_state = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
+        self.assertEqual(queue_state["jobs"][0]["status"], "processing")
+        self.assertEqual(queue_state["jobs"][0]["attempts"], int(claimed["attempts"]))
+        self.logger.warning.assert_called_once()
+        self.assertIn(
+            "precondition mismatch",
+            str(self.logger.warning.call_args.args[0]),
+        )
+
     async def test_ensure_media_directory_skips_for_object_backend(self) -> None:
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "object"
@@ -1167,6 +1195,98 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         emitted_types = {event.get("event") for event in events}
         self.assertFalse(bool({"message", "system", "error"} & emitted_types))
 
+    async def test_process_claimed_job_skips_side_effects_when_owner_no_longer_matches(
+        self,
+    ) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-owner-lost",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+
+        with (
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
+            ),
+            patch.object(
+                self.client,
+                "_run_processing_lease_heartbeat",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                self.client,
+                "_processing_owner_matches",
+                new=AsyncMock(side_effect=[True, False]),
+            ),
+            patch.object(
+                self.client,
+                "_mark_job_done",
+                new=AsyncMock(),
+            ) as mark_done,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        mark_done.assert_not_awaited()
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "Skipping web queue job side effects after lease loss" in message
+                and "reason=lease_lost" in message
+                for message in warning_messages
+            )
+        )
+
+    async def test_process_claimed_job_skips_side_effects_when_owner_check_errors(
+        self,
+    ) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-owner-check-error",
+            message_type="text",
+            text="hello",
+        )
+        claimed = await self.client._claim_next_job()  # pylint: disable=protected-access
+        self.assertIsNotNone(claimed)
+
+        with (
+            patch.object(
+                self.client,
+                "_dispatch_job_to_messaging",
+                new=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
+            ),
+            patch.object(
+                self.client,
+                "_run_processing_lease_heartbeat",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                self.client,
+                "_processing_owner_matches",
+                new=AsyncMock(side_effect=RuntimeError("db unavailable")),
+            ),
+            patch.object(
+                self.client,
+                "_mark_job_done",
+                new=AsyncMock(),
+            ) as mark_done,
+        ):
+            await self.client._process_claimed_job(claimed)  # pylint: disable=protected-access
+
+        mark_done.assert_not_awaited()
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "Skipping web queue job side effects after lease loss" in message
+                and "reason=lease_renew_failed" in message
+                for message in warning_messages
+            )
+        )
+
     async def test_derive_queue_lease_heartbeat_seconds_handles_invalid_input(self) -> None:
         derived = self.client._derive_queue_lease_heartbeat_seconds("not-a-number")  # pylint: disable=protected-access
         self.assertEqual(derived, 1.0)
@@ -1180,10 +1300,17 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                         {
                             "id": "other-job",
                             "status": "processing",
+                            "attempts": 2,
                         },
                         {
                             "id": "target-job",
                             "status": "pending",
+                            "attempts": 1,
+                        },
+                        {
+                            "id": "processing-job",
+                            "status": "processing",
+                            "attempts": 3,
                         },
                     ],
                 }
@@ -1199,17 +1326,31 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(renewed_pending)
 
+        renewed_mismatched_attempt = await self.client._renew_processing_lease(  # pylint: disable=protected-access
+            job_id="processing-job",
+            expected_attempt=2,
+        )
+        self.assertFalse(renewed_mismatched_attempt)
+
+        renewed_matching_attempt = await self.client._renew_processing_lease(  # pylint: disable=protected-access
+            job_id="processing-job",
+            expected_attempt=3,
+        )
+        self.assertTrue(renewed_matching_attempt)
+
     async def test_renew_processing_lease_relational_branches(self) -> None:
         success_session = _SequenceSession([SimpleNamespace(rowcount=1)])
         _force_relational_session(self.client, success_session)
         renewed = await self.client._renew_processing_lease(  # pylint: disable=protected-access
-            job_id="job-rel"
+            job_id="job-rel",
+            expected_attempt=4,
         )
         self.assertTrue(renewed)
         sql, params = success_session.calls[0]
         self.assertIn("UPDATE mugen.web_queue_job", sql)
         self.assertEqual(params["job_id"], "job-rel")
         self.assertEqual(params["current_status"], "processing")
+        self.assertEqual(params["expected_attempt"], 4)
 
         failure_session = _SequenceSession([SimpleNamespace(rowcount=0)])
         _force_relational_session(self.client, failure_session)
@@ -1221,27 +1362,132 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
     async def test_run_processing_lease_heartbeat_failure_and_loss_paths(self) -> None:
         self.client._queue_processing_lease_heartbeat_seconds = 0.001  # pylint: disable=protected-access
 
+        renew_failure = AsyncMock(side_effect=RuntimeError("boom"))
         with patch.object(
             self.client,
             "_renew_processing_lease",
-            new=AsyncMock(side_effect=RuntimeError("boom")),
+            new=renew_failure,
         ):
             failure_reason = await self.client._run_processing_lease_heartbeat(  # pylint: disable=protected-access
                 job_id="job-failure",
                 stop_event=asyncio.Event(),
+                expected_attempt=2,
             )
         self.assertEqual(failure_reason, "lease_renew_failed")
+        renew_failure.assert_awaited_once_with(
+            job_id="job-failure",
+            expected_attempt=2,
+        )
 
+        renew_lost = AsyncMock(return_value=False)
         with patch.object(
             self.client,
             "_renew_processing_lease",
-            new=AsyncMock(return_value=False),
+            new=renew_lost,
         ):
             loss_reason = await self.client._run_processing_lease_heartbeat(  # pylint: disable=protected-access
                 job_id="job-loss",
                 stop_event=asyncio.Event(),
+                expected_attempt=9,
             )
         self.assertEqual(loss_reason, "lease_lost")
+        renew_lost.assert_awaited_once_with(
+            job_id="job-loss",
+            expected_attempt=9,
+        )
+
+    async def test_processing_owner_matches_keyval_uses_processing_and_attempts(self) -> None:
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
+                {
+                    "version": 1,
+                    "jobs": [
+                        {"id": "job-1", "status": "processing", "attempts": 3},
+                        {"id": "job-2", "status": "pending", "attempts": 3},
+                    ],
+                }
+            )
+
+        self.assertTrue(
+            await self.client._processing_owner_matches(  # pylint: disable=protected-access
+                job_id="job-1",
+                expected_attempt=3,
+            )
+        )
+        self.assertFalse(
+            await self.client._processing_owner_matches(  # pylint: disable=protected-access
+                job_id="job-1",
+                expected_attempt=2,
+            )
+        )
+        self.assertFalse(
+            await self.client._processing_owner_matches(  # pylint: disable=protected-access
+                job_id="job-2",
+                expected_attempt=3,
+            )
+        )
+        self.assertFalse(
+            await self.client._processing_owner_matches(  # pylint: disable=protected-access
+                job_id="missing-job",
+                expected_attempt=3,
+            )
+        )
+
+    async def test_processing_owner_matches_relational_uses_processing_and_attempts(self) -> None:
+        relational_session = _SequenceSession(
+            [
+                _SequenceResult(
+                    rows=[
+                        {
+                            "status": "processing",
+                            "attempts": 5,
+                        }
+                    ]
+                ),
+                _SequenceResult(
+                    rows=[
+                        {
+                            "status": "processing",
+                            "attempts": 6,
+                        }
+                    ]
+                ),
+                _SequenceResult(
+                    rows=[
+                        {
+                            "status": "pending",
+                            "attempts": 6,
+                        }
+                    ]
+                ),
+                _SequenceResult(rows=[]),
+            ]
+        )
+        _force_relational_session(self.client, relational_session)
+        self.assertTrue(
+            await self.client._processing_owner_matches(  # pylint: disable=protected-access
+                job_id="job-rel",
+                expected_attempt=5,
+            )
+        )
+        self.assertFalse(
+            await self.client._processing_owner_matches(  # pylint: disable=protected-access
+                job_id="job-rel",
+                expected_attempt=5,
+            )
+        )
+        self.assertFalse(
+            await self.client._processing_owner_matches(  # pylint: disable=protected-access
+                job_id="job-rel",
+                expected_attempt=6,
+            )
+        )
+        self.assertFalse(
+            await self.client._processing_owner_matches(  # pylint: disable=protected-access
+                job_id="job-rel",
+                expected_attempt=6,
+            )
+        )
 
     async def test_process_claimed_job_handles_cancelled_heartbeat_task(self) -> None:
         await self.client.enqueue_message(
@@ -3765,13 +4011,17 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         )
         _force_relational_session(self.client, precondition_fail_session)
         self.logger.reset_mock()
-        await self.client._mark_job_done("job-race")  # pylint: disable=protected-access
+        await self.client._mark_job_done(  # pylint: disable=protected-access
+            "job-race",
+            expected_attempt=2,
+        )
 
         self.logger.warning.assert_called_once()
         self.assertIn(
             "precondition mismatch",
             str(self.logger.warning.call_args.args[0]),
         )
+        self.assertEqual(precondition_fail_session.calls[1][1]["expected_attempt"], 2)
 
     async def test_persist_media_reference_does_not_delete_when_ref_unchanged(self) -> None:
         source_path = Path(self.tmpdir.name) / "keep.bin"
@@ -4017,9 +4267,11 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             "AND status = CAST(:current_status AS mugen.citext)",
             mark_sql,
         )
+        self.assertIn("AND attempts = :expected_attempt", mark_sql)
         self.assertEqual(mark_params["status"], "done")
         self.assertEqual(mark_params["job_id"], "job-1")
         self.assertEqual(mark_params["current_status"], "processing")
+        self.assertEqual(mark_params["expected_attempt"], 1)
         self.assertIsNone(mark_params["error_message"])
         self.assertIsNotNone(mark_params["completed_at"])
 
@@ -4058,9 +4310,11 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             "AND status = CAST(:current_status AS mugen.citext)",
             failed_sql,
         )
+        self.assertIn("AND attempts = :expected_attempt", failed_sql)
         self.assertEqual(failed_params["status"], "failed")
         self.assertEqual(failed_params["job_id"], "job-2")
         self.assertEqual(failed_params["current_status"], "processing")
+        self.assertEqual(failed_params["expected_attempt"], 1)
         self.assertEqual(failed_params["error_message"], "boom")
         self.assertIsNotNone(failed_params["completed_at"])
 

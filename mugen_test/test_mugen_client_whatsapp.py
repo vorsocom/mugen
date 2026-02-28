@@ -121,6 +121,36 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
 
         session_cls.assert_not_called()
 
+    async def test_verify_startup_returns_true_on_2xx_probe(self) -> None:
+        client = self._new_client()
+        client._call_api = AsyncMock(  # pylint: disable=protected-access
+            return_value={"ok": True, "status": 200}
+        )
+
+        verified = await client.verify_startup()
+
+        self.assertTrue(verified)
+        kwargs = client._call_api.await_args.kwargs  # pylint: disable=protected-access
+        self.assertEqual(kwargs["path"], "123456789")
+        self.assertEqual(kwargs["method"], HTTPMethod.GET)
+        self.assertIsInstance(kwargs["correlation_id"], str)
+        self.assertNotEqual(kwargs["correlation_id"], "")
+
+    async def test_verify_startup_logs_and_returns_false_on_probe_failure(self) -> None:
+        client = self._new_client()
+        client._call_api = AsyncMock(  # pylint: disable=protected-access
+            return_value={"ok": False, "status": 401, "error": "unauthorized"}
+        )
+
+        verified = await client.verify_startup()
+
+        self.assertFalse(verified)
+        client._logging_gateway.error.assert_called()
+        self.assertIn(
+            "WhatsApp startup probe failed",
+            str(client._logging_gateway.error.call_args.args[0]),
+        )
+
     async def test_close_skips_already_closed_session_and_clears_reference(
         self,
     ) -> None:

@@ -250,6 +250,38 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         timeout = aiohttp.ClientTimeout(total=self._http_timeout_seconds)
         self._client_session = aiohttp.ClientSession(timeout=timeout)
 
+    async def verify_startup(self) -> bool:
+        correlation_id = self._new_correlation_id()
+        phone_number_id = str(self._config.whatsapp.business.phone_number_id)
+        probe_response = await self._call_api(
+            path=phone_number_id,
+            method=HTTPMethod.GET,
+            correlation_id=correlation_id,
+        )
+        if (
+            isinstance(probe_response, dict)
+            and probe_response.get("ok") is True
+            and isinstance(probe_response.get("status"), int)
+            and 200 <= int(probe_response.get("status")) < 300
+        ):
+            return True
+
+        status = (
+            probe_response.get("status")
+            if isinstance(probe_response, dict)
+            else None
+        )
+        error = (
+            probe_response.get("error")
+            if isinstance(probe_response, dict)
+            else "startup probe returned unexpected payload"
+        )
+        self._logging_gateway.error(
+            f"[cid={correlation_id}] WhatsApp startup probe failed "
+            f"status={status} error={error!r}."
+        )
+        return False
+
     async def close(self) -> None:
         self._logging_gateway.debug("DefaultWhatsAppClient.close")
         if self._client_session is None:

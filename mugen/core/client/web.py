@@ -916,7 +916,47 @@ class DefaultWebClient(IWebClient):
             normalized_lease_seconds = 1.0
         return max(1.0, min(normalized_lease_seconds / 3.0, 10.0))
 
-    async def _renew_processing_lease(self, *, job_id: str) -> bool:
+    async def _processing_owner_matches(
+        self,
+        *,
+        job_id: str,
+        expected_attempt: int,
+    ) -> bool:
+        async with self._storage_lock:
+            if self._using_relational_web_storage():
+                async with self._relational_session() as session:
+                    result = await session.execute(
+                        sa_text(
+                            "SELECT status, attempts "
+                            "FROM mugen.web_queue_job "
+                            "WHERE job_id = :job_id"
+                        ),
+                        {"job_id": job_id},
+                    )
+                    row = result.mappings().one_or_none()
+                if row is None:
+                    return False
+                return (
+                    str(row.get("status", "")).strip().lower() == "processing"
+                    and int(row.get("attempts") or 0) == int(expected_attempt)
+                )
+
+            queue_state = await self._read_queue_state_unlocked()
+            for queue_job in queue_state["jobs"]:
+                if str(queue_job.get("id")) != job_id:
+                    continue
+                return (
+                    str(queue_job.get("status", "")).strip().lower() == "processing"
+                    and int(queue_job.get("attempts") or 0) == int(expected_attempt)
+                )
+            return False
+
+    async def _renew_processing_lease(
+        self,
+        *,
+        job_id: str,
+        expected_attempt: int | None = None,
+    ) -> bool:
         now_epoch = self._epoch_now()
         now_iso = self._utc_now_iso()
         next_lease_expires_at = now_epoch + self._queue_processing_lease_seconds
@@ -930,6 +970,7 @@ class DefaultWebClient(IWebClient):
                             "updated_at = :updated_at "
                             "WHERE job_id = :job_id "
                             "AND status = CAST(:current_status AS mugen.citext)"
+                            "AND (:expected_attempt IS NULL OR attempts = :expected_attempt)"
                         ),
                         {
                             "lease_expires_at": self._to_utc_datetime(next_lease_expires_at),
@@ -939,6 +980,11 @@ class DefaultWebClient(IWebClient):
                             ),
                             "job_id": job_id,
                             "current_status": "processing",
+                            "expected_attempt": (
+                                int(expected_attempt)
+                                if expected_attempt is not None
+                                else None
+                            ),
                         },
                     )
                 return int(getattr(result, "rowcount", 0) or 0) > 0
@@ -948,6 +994,11 @@ class DefaultWebClient(IWebClient):
                 if str(queue_job.get("id")) != job_id:
                     continue
                 if str(queue_job.get("status", "")).strip().lower() != "processing":
+                    return False
+                if (
+                    expected_attempt is not None
+                    and int(queue_job.get("attempts") or 0) != int(expected_attempt)
+                ):
                     return False
                 queue_job["lease_expires_at"] = next_lease_expires_at
                 queue_job["updated_at"] = now_iso
@@ -960,6 +1011,7 @@ class DefaultWebClient(IWebClient):
         *,
         job_id: str,
         stop_event: asyncio.Event,
+        expected_attempt: int | None = None,
     ) -> str | None:
         while True:
             try:
@@ -972,7 +1024,10 @@ class DefaultWebClient(IWebClient):
                 ...
 
             try:
-                renewed = await self._renew_processing_lease(job_id=job_id)
+                renewed = await self._renew_processing_lease(
+                    job_id=job_id,
+                    expected_attempt=expected_attempt,
+                )
             except Exception:  # pylint: disable=broad-exception-caught
                 return "lease_renew_failed"
 
@@ -985,11 +1040,13 @@ class DefaultWebClient(IWebClient):
         sender = str(job.get("sender"))
         message_type = str(job.get("message_type", "")).strip().lower()
         client_message_id = job.get("client_message_id")
+        expected_attempt = int(job.get("attempts") or 0)
         lease_heartbeat_stop = asyncio.Event()
         lease_heartbeat_task = asyncio.create_task(
             self._run_processing_lease_heartbeat(
                 job_id=job_id,
                 stop_event=lease_heartbeat_stop,
+                expected_attempt=expected_attempt,
             ),
             name=f"mugen.web.lease_heartbeat.{job_id}",
         )
@@ -1004,14 +1061,36 @@ class DefaultWebClient(IWebClient):
             except Exception:  # pylint: disable=broad-exception-caught
                 return "lease_renew_failed"
 
-        def _should_skip_side_effects(stage: str) -> bool:
+        async def _should_skip_side_effects(stage: str) -> bool:
             reason = _lease_loss_reason()
-            if reason is None:
+            if reason is not None:
+                self._logging_gateway.warning(
+                    "Skipping web queue job side effects after lease loss "
+                    f"(job_id={job_id} conversation_id={conversation_id} "
+                    f"stage={stage} reason={reason})."
+                )
+                return True
+
+            try:
+                owns_job = await self._processing_owner_matches(
+                    job_id=job_id,
+                    expected_attempt=expected_attempt,
+                )
+            except Exception:  # pylint: disable=broad-exception-caught
+                self._logging_gateway.warning(
+                    "Skipping web queue job side effects after lease loss "
+                    f"(job_id={job_id} conversation_id={conversation_id} "
+                    f"stage={stage} reason=lease_renew_failed)."
+                )
+                return True
+
+            if owns_job is True:
                 return False
+
             self._logging_gateway.warning(
                 "Skipping web queue job side effects after lease loss "
                 f"(job_id={job_id} conversation_id={conversation_id} "
-                f"stage={stage} reason={reason})."
+                f"stage={stage} reason=lease_lost)."
             )
             return True
 
@@ -1025,7 +1104,7 @@ class DefaultWebClient(IWebClient):
 
         try:
             responses = await self._dispatch_job_to_messaging(job)
-            if _should_skip_side_effects("post_dispatch"):
+            if await _should_skip_side_effects("post_dispatch"):
                 return
 
             if not responses:
@@ -1038,7 +1117,7 @@ class DefaultWebClient(IWebClient):
                     f"client_message_id={client_message_id} "
                     f"message_type={message_type})."
                 )
-                if _should_skip_side_effects("emit_fallback_response"):
+                if await _should_skip_side_effects("emit_fallback_response"):
                     return
                 await self._append_event(
                     conversation_id=conversation_id,
@@ -1069,7 +1148,7 @@ class DefaultWebClient(IWebClient):
                         conversation_id=conversation_id,
                     )
 
-                    if _should_skip_side_effects(f"emit_response_{response_index}"):
+                    if await _should_skip_side_effects(f"emit_response_{response_index}"):
                         return
                     await self._append_event(
                         conversation_id=conversation_id,
@@ -1082,11 +1161,11 @@ class DefaultWebClient(IWebClient):
                         },
                     )
 
-            if _should_skip_side_effects("mark_done"):
+            if await _should_skip_side_effects("mark_done"):
                 return
-            await self._mark_job_done(job_id)
+            await self._mark_job_done(job_id, expected_attempt=expected_attempt)
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            if _should_skip_side_effects("handle_exception"):
+            if await _should_skip_side_effects("handle_exception"):
                 return
             await self._append_event(
                 conversation_id=conversation_id,
@@ -1098,9 +1177,13 @@ class DefaultWebClient(IWebClient):
                     "error": str(exc),
                 },
             )
-            if _should_skip_side_effects("mark_failed"):
+            if await _should_skip_side_effects("mark_failed"):
                 return
-            await self._mark_job_failed(job_id, str(exc))
+            await self._mark_job_failed(
+                job_id,
+                str(exc),
+                expected_attempt=expected_attempt,
+            )
         finally:
             lease_heartbeat_stop.set()
             try:
@@ -2037,11 +2120,32 @@ class DefaultWebClient(IWebClient):
                 refs.add(file_path)
         return refs
 
-    async def _mark_job_done(self, job_id: str) -> None:
-        await self._mark_job_status(job_id, status="done", error=None)
+    async def _mark_job_done(
+        self,
+        job_id: str,
+        *,
+        expected_attempt: int | None = None,
+    ) -> None:
+        await self._mark_job_status(
+            job_id,
+            status="done",
+            error=None,
+            expected_attempt=expected_attempt,
+        )
 
-    async def _mark_job_failed(self, job_id: str, error: str) -> None:
-        await self._mark_job_status(job_id, status="failed", error=error)
+    async def _mark_job_failed(
+        self,
+        job_id: str,
+        error: str,
+        *,
+        expected_attempt: int | None = None,
+    ) -> None:
+        await self._mark_job_status(
+            job_id,
+            status="failed",
+            error=error,
+            expected_attempt=expected_attempt,
+        )
 
     def _can_apply_terminal_queue_transition(
         self,
@@ -2097,6 +2201,7 @@ class DefaultWebClient(IWebClient):
         *,
         status: str,
         error: str | None,
+        expected_attempt: int | None = None,
     ) -> None:
         normalized_status = str(status).strip().lower()
         now_iso = self._utc_now_iso()
@@ -2158,9 +2263,15 @@ class DefaultWebClient(IWebClient):
                     if normalized_status in {"done", "failed"}:
                         update_sql += (
                             "WHERE job_id = :job_id "
-                            "AND status = CAST(:current_status AS mugen.citext)"
+                            "AND status = CAST(:current_status AS mugen.citext) "
+                            "AND attempts = :expected_attempt"
                         )
                         update_params["current_status"] = "processing"
+                        update_params["expected_attempt"] = (
+                            int(expected_attempt)
+                            if expected_attempt is not None
+                            else int(current_job.get("attempts") or 0)
+                        )
                     else:
                         update_sql += "WHERE job_id = :job_id"
 
@@ -2189,6 +2300,17 @@ class DefaultWebClient(IWebClient):
                     current_status=queue_job.get("status"),
                     next_status=normalized_status,
                 ):
+                    return
+                if (
+                    normalized_status in {"done", "failed"}
+                    and expected_attempt is not None
+                    and int(queue_job.get("attempts") or 0) != int(expected_attempt)
+                ):
+                    self._logging_gateway.warning(
+                        "Skipped queue terminal transition due to keyval "
+                        f"precondition mismatch job_id={job_id} "
+                        f"next_status={normalized_status!r}."
+                    )
                     return
 
                 queue_job.update(
