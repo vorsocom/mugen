@@ -1,9 +1,13 @@
 """Unit tests for completion timeout helper functions."""
 
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
+    require_fields_in_production,
+    warn_missing_in_production,
     to_timeout_milliseconds,
 )
 
@@ -81,6 +85,43 @@ class TestMugenGatewayCompletionTimeoutConfig(unittest.TestCase):
                 field_name="field",
                 provider_label="Provider",
             )
+
+    def test_require_fields_in_production_raises_for_missing_values(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Provider: Missing required production configuration field\\(s\\): timeout_seconds.",
+        ):
+            require_fields_in_production(
+                config=SimpleNamespace(mugen=SimpleNamespace(environment="production")),
+                provider_label="Provider",
+                field_values={"timeout_seconds": None},
+            )
+
+    def test_require_fields_in_production_ignores_non_production(self) -> None:
+        require_fields_in_production(
+            config=SimpleNamespace(mugen=SimpleNamespace(environment="development")),
+            provider_label="Provider",
+            field_values={"timeout_seconds": None},
+        )
+
+    def test_require_fields_in_production_accepts_all_present(self) -> None:
+        require_fields_in_production(
+            config=SimpleNamespace(mugen=SimpleNamespace(environment="production")),
+            provider_label="Provider",
+            field_values={"timeout_seconds": 1.0},
+        )
+
+    def test_warn_missing_in_production_emits_warning_for_missing_values(self) -> None:
+        logging_gateway = Mock()
+        warn_missing_in_production(
+            config=SimpleNamespace(mugen=SimpleNamespace(environment="production")),
+            provider_label="Provider",
+            logging_gateway=logging_gateway,
+            field_values={"timeout_seconds": None},
+        )
+        logging_gateway.warning.assert_called_once_with(
+            "Provider: timeout_seconds is not configured in production."
+        )
 
 
 if __name__ == "__main__":

@@ -216,20 +216,36 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
             warnings,
         )
 
-    def test_warn_missing_timeout_in_production_only(self) -> None:
+    def test_fail_fast_when_timeout_missing_in_production_only(self) -> None:
         dev_config = _make_config(environment="development", timeout_seconds=None)
         _, _, dev_logger, _ = _build_gateway(config=dev_config)
         self.assertFalse(dev_logger.warning.called)
 
         prod_config = _make_config(environment="production", timeout_seconds=None)
-        _, _, prod_logger, _ = _build_gateway(config=prod_config)
-        prod_logger.warning.assert_called_with(
-            "QdrantKnowledgeGateway: timeout_seconds is not configured in production."
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "QdrantKnowledgeGateway: Missing required production configuration field\\(s\\): timeout_seconds.",
+        ):
+            _build_gateway(config=prod_config)
 
         prod_with_timeout = _make_config(environment="production", timeout_seconds=2.0)
         _, _, prod_timeout_logger, _ = _build_gateway(config=prod_with_timeout)
         prod_timeout_logger.warning.assert_not_called()
+
+    def test_warn_missing_timeout_in_production_warns_when_called_directly(self) -> None:
+        gateway = QdrantKnowledgeGateway.__new__(QdrantKnowledgeGateway)
+        gateway._config = _make_config(  # pylint: disable=protected-access
+            environment="production",
+            timeout_seconds=None,
+        )
+        gateway._api_timeout_seconds = None  # pylint: disable=protected-access
+        gateway._logging_gateway = Mock()  # pylint: disable=protected-access
+
+        gateway._warn_missing_timeout_in_production()  # pylint: disable=protected-access
+
+        gateway._logging_gateway.warning.assert_called_once_with(  # pylint: disable=protected-access
+            "QdrantKnowledgeGateway: timeout_seconds is not configured in production."
+        )
 
     async def test_get_encoder_builds_once_and_reuses_encoder(self) -> None:
         config = _make_config(encoder_preload=False)

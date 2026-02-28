@@ -867,10 +867,16 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(gateway._resolve_timeout_seconds())
         self.assertGreaterEqual(gateway._logging_gateway.warning.call_count, 2)  # pylint: disable=protected-access
 
-    def test_production_warning_when_timeout_missing(self) -> None:
+    def test_constructor_raises_when_timeout_missing_in_production(self) -> None:
         config = _make_config()
         config.mugen = SimpleNamespace(environment="production")
         logging_gateway = Mock()
-        with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=Mock()):
+        with (
+            patch("mugen.core.gateway.completion.groqq.AsyncGroq") as async_groq,
+            self.assertRaisesRegex(
+                RuntimeError,
+                "GroqCompletionGateway: Missing required production configuration field\\(s\\): timeout_seconds.",
+            ),
+        ):
             GroqCompletionGateway(config, logging_gateway)
-        logging_gateway.warning.assert_called_once()
+        async_groq.assert_not_called()

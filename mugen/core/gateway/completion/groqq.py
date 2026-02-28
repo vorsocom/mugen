@@ -18,6 +18,7 @@ from mugen.core.contract.gateway.completion import (
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
+    require_fields_in_production,
     resolve_optional_positive_float,
     warn_missing_in_production,
 )
@@ -71,6 +72,11 @@ class GroqCompletionGateway(ICompletionGateway):
         self._logging_gateway = logging_gateway
         timeout_seconds = self._resolve_timeout_seconds()
         self._timeout_seconds = timeout_seconds
+        require_fields_in_production(
+            config=self._config,
+            provider_label="GroqCompletionGateway",
+            field_values={"timeout_seconds": self._timeout_seconds},
+        )
         client_kwargs: dict[str, Any] = {
             "api_key": self._config.groq.api.key,
         }

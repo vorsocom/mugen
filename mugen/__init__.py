@@ -29,6 +29,7 @@ __all__ = [
 
 import asyncio
 from importlib import import_module
+import inspect
 import random
 import re
 from time import perf_counter
@@ -1166,11 +1167,19 @@ async def run_matrix_client(
 
     # Initialise matrix client.
     async with matrix_client as client:
-        # We have to wait on the first sync event to perform some setup tasks.
-        async def wait_on_first_sync():
+        started_signalled = False
+        runtime_degraded = False
+        consecutive_sync_failures = 0
 
-            # Wait for first sync to complete.
+        # We have to wait on the first sync event to perform some setup tasks.
+        async def wait_on_sync_ready():
+            nonlocal started_signalled
+            nonlocal runtime_degraded
+            nonlocal consecutive_sync_failures
+
+            # Wait for a fresh sync to complete.
             await client.synced.wait()
+            consecutive_sync_failures = 0
 
             # Set profile name if it's not already set.
             profile = await client.get_profile()
@@ -1185,17 +1194,31 @@ async def run_matrix_client(
             # matrix_client.cleanup_known_user_devices_list()
             await client.trust_known_user_devices()
 
-            if callable(started_callback):
-                started_callback()
-            if callable(healthy_callback):
-                healthy_callback()
+            if started_signalled is not True:
+                if callable(started_callback):
+                    started_callback()
+                if callable(healthy_callback):
+                    healthy_callback()
+                started_signalled = True
+                runtime_degraded = False
+                return
 
-        retry_attempt = 0
+            if runtime_degraded is True and callable(healthy_callback):
+                healthy_callback()
+            runtime_degraded = False
+
         while True:
             try:
+                synced_signal = getattr(client, "synced", None)
+                clear_sync_signal = getattr(synced_signal, "clear", None)
+                if callable(clear_sync_signal):
+                    clear_result = clear_sync_signal()
+                    if inspect.isawaitable(clear_result):
+                        await clear_result
+
                 # Start process loop.
                 await asyncio.gather(
-                    asyncio.create_task(wait_on_first_sync()),
+                    asyncio.create_task(wait_on_sync_ready()),
                     asyncio.create_task(
                         client.sync_forever(
                             since=client.sync_token,
@@ -1223,25 +1246,26 @@ async def run_matrix_client(
                     logger.error("Matrix client authentication failed; shutting down.")
                     raise RuntimeError("Matrix client authentication failed.") from exc
 
-                if retry_attempt >= max_sync_retries:
+                if consecutive_sync_failures >= max_sync_retries:
                     logger.error("Matrix client sync failed after max retries.")
                     raise RuntimeError("Matrix client sync failed after max retries.") from exc
 
-                if callable(degraded_callback):
+                if runtime_degraded is not True and callable(degraded_callback):
                     degraded_callback(f"{type(exc).__name__}: {exc}")
+                runtime_degraded = True
 
                 delay_seconds = min(
                     backoff_max_seconds,
-                    (backoff_base_seconds * (2**retry_attempt))
+                    (backoff_base_seconds * (2**consecutive_sync_failures))
                     + random.uniform(0, backoff_jitter_seconds),
                 )
                 logger.warning(
                     "Matrix client sync error; retrying."
-                    f" attempt={retry_attempt + 1}/{max_sync_retries}"
+                    f" attempt={consecutive_sync_failures + 1}/{max_sync_retries}"
                     f" delay_seconds={delay_seconds:.2f}"
                     f" error={type(exc).__name__}: {exc}"
                 )
-                retry_attempt += 1
+                consecutive_sync_failures += 1
                 await asyncio.sleep(delay_seconds)
 
 

@@ -1087,18 +1087,22 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(gateway._resolve_optional_positive_int(0, "i"))
         self.assertGreaterEqual(gateway._logging_gateway.warning.call_count, 4)
 
-    def test_production_warns_when_timeout_controls_missing(self) -> None:
+    def test_constructor_raises_when_timeout_controls_missing_in_production(self) -> None:
         config = _make_config()
         config.mugen = SimpleNamespace(environment="production")
         logging_gateway = Mock()
 
-        with patch(
-            "mugen.core.gateway.completion.bedrock.boto3.client",
-            return_value=Mock(),
+        with (
+            patch("mugen.core.gateway.completion.bedrock.boto3.client") as boto_client,
+            self.assertRaisesRegex(
+                RuntimeError,
+                "BedrockCompletionGateway: Missing required production configuration field\\(s\\): "
+                "connect_timeout_seconds, max_attempts, read_timeout_seconds.",
+            ),
         ):
             BedrockCompletionGateway(config, logging_gateway)
 
-        self.assertGreaterEqual(logging_gateway.warning.call_count, 3)
+        boto_client.assert_not_called()
 
     def test_production_with_timeout_controls_does_not_emit_missing_warnings(self) -> None:
         config = _make_config()

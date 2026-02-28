@@ -799,7 +799,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             ):
                 await gateway.get_completion(request)
 
-    def test_timeout_parser_and_production_warnings(self) -> None:
+    def test_timeout_parser_and_production_fail_fast(self) -> None:
         gateway = SambaNovaCompletionGateway.__new__(SambaNovaCompletionGateway)
         gateway._config = _make_config()  # pylint: disable=protected-access
         gateway._logging_gateway = Mock()  # pylint: disable=protected-access
@@ -811,8 +811,12 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         config = _make_config()
         config.mugen = SimpleNamespace(environment="production")
         logging_gateway = Mock()
-        SambaNovaCompletionGateway(config, logging_gateway)
-        self.assertGreaterEqual(logging_gateway.warning.call_count, 2)
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "SambaNovaCompletionGateway: Missing required production configuration field\\(s\\): "
+            "connect_timeout_seconds, read_timeout_seconds.",
+        ):
+            SambaNovaCompletionGateway(config, logging_gateway)
 
     def test_perform_request_applies_timeout_options(self) -> None:
         config = _make_config()

@@ -28,6 +28,8 @@ class DefaultMessagingService(IMessagingService):
 
     _thread_list_version: int = 1
 
+    _default_extension_timeout_seconds: float = 10.0
+
     # pylint: disable=too-many-arguments
     # pylint: disable=too-many-positional-arguments
     def __init__(
@@ -60,23 +62,51 @@ class DefaultMessagingService(IMessagingService):
         self._extension_timeout_seconds = self._resolve_extension_timeout_seconds()
 
     def _resolve_extension_timeout_seconds(self) -> float | None:
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+        ).strip().lower()
+        production_mode = environment == "production"
         messaging_cfg = getattr(
             getattr(getattr(self._config, "mugen", SimpleNamespace()), "messaging", None),
             "extension_timeout_seconds",
             None,
         )
         if messaging_cfg in [None, ""]:
+            if production_mode:
+                self._logging_gateway.warning(
+                    "Messaging extension timeout missing in production; "
+                    f"using default {self._default_extension_timeout_seconds:.1f}s."
+                )
+                return self._default_extension_timeout_seconds
             return None
         if not isinstance(messaging_cfg, (int, float, str)):
+            if production_mode:
+                self._logging_gateway.warning(
+                    "Invalid extension timeout configuration in production; "
+                    f"using default {self._default_extension_timeout_seconds:.1f}s."
+                )
+                return self._default_extension_timeout_seconds
             return None
         try:
             timeout_seconds = float(messaging_cfg)
         except (TypeError, ValueError):
+            if production_mode:
+                self._logging_gateway.warning(
+                    "Invalid extension timeout configuration in production; "
+                    f"using default {self._default_extension_timeout_seconds:.1f}s."
+                )
+                return self._default_extension_timeout_seconds
             self._logging_gateway.warning(
                 "Invalid extension timeout configuration; disabling timeout enforcement."
             )
             return None
         if timeout_seconds <= 0:
+            if production_mode:
+                self._logging_gateway.warning(
+                    "Extension timeout must be positive in production; "
+                    f"using default {self._default_extension_timeout_seconds:.1f}s."
+                )
+                return self._default_extension_timeout_seconds
             self._logging_gateway.warning(
                 "Extension timeout must be positive; disabling timeout enforcement."
             )

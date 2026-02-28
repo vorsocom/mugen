@@ -1921,13 +1921,19 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(gateway._usage_from_payload(_EmptyPayload()))
 
-    def test_constructor_warns_when_timeout_missing_in_production(self) -> None:
+    def test_constructor_raises_when_timeout_missing_in_production(self) -> None:
         config = _make_config()
         config.openai.api.timeout_seconds = None
         config.mugen = SimpleNamespace(environment="production")
         logging_gateway = Mock()
 
-        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=Mock()):
+        with (
+            patch("mugen.core.gateway.completion.openai.AsyncOpenAI") as async_openai,
+            self.assertRaisesRegex(
+                RuntimeError,
+                "OpenAICompletionGateway: Missing required production configuration field\\(s\\): timeout_seconds.",
+            ),
+        ):
             OpenAICompletionGateway(config, logging_gateway)
 
-        logging_gateway.warning.assert_called_once()
+        async_openai.assert_not_called()

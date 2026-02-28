@@ -21,6 +21,7 @@ from mugen.core.contract.gateway.completion import (
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import (
+    require_fields_in_production,
     resolve_optional_positive_float,
     resolve_optional_positive_int,
     warn_missing_in_production,
@@ -52,6 +53,15 @@ class BedrockCompletionGateway(ICompletionGateway):
         self._max_attempts = self._resolve_optional_positive_int(
             getattr(self._config.aws.bedrock.api, "max_attempts", None),
             "max_attempts",
+        )
+        require_fields_in_production(
+            config=self._config,
+            provider_label="BedrockCompletionGateway",
+            field_values={
+                "connect_timeout_seconds": self._connect_timeout_seconds,
+                "read_timeout_seconds": self._read_timeout_seconds,
+                "max_attempts": self._max_attempts,
+            },
         )
 
         boto_config_kwargs: dict[str, Any] = {}

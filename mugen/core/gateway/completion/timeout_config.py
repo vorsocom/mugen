@@ -77,6 +77,33 @@ def warn_missing_in_production(
         )
 
 
+def require_fields_in_production(
+    *,
+    config: SimpleNamespace,
+    provider_label: str,
+    field_values: dict[str, Any],
+) -> None:
+    """Fail fast in production when required controls are missing/invalid."""
+    environment = str(
+        getattr(getattr(config, "mugen", SimpleNamespace()), "environment", "")
+    ).strip().lower()
+    if environment != "production":
+        return
+
+    missing = sorted(
+        field_name
+        for field_name, value in field_values.items()
+        if value is None
+    )
+    if not missing:
+        return
+
+    raise RuntimeError(
+        f"{provider_label}: Missing required production configuration field(s): "
+        f"{', '.join(missing)}."
+    )
+
+
 def to_timeout_milliseconds(seconds: float | None) -> int | None:
     """Convert timeout seconds to milliseconds without collapsing sub-second values."""
     if seconds is None:
