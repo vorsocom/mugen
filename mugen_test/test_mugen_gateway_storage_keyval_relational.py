@@ -494,6 +494,14 @@ class TestMugenGatewayStorageKeyvalRelationalInit(unittest.IsolatedAsyncioTestCa
         with self.assertRaises(RuntimeError):
             await gateway._ensure_backend_ready()  # pylint: disable=protected-access
 
+    async def test_check_readiness_delegates_to_backend_readiness_helper(self) -> None:
+        gateway = _new_gateway()
+        gateway._ensure_backend_ready = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await gateway.check_readiness()
+
+        gateway._ensure_backend_ready.assert_awaited_once()  # type: ignore[attr-defined]  # pylint: disable=protected-access
+
     def test_init_builds_engine_and_runtime_flags(self) -> None:
         config = _make_config()
         logger = Mock()

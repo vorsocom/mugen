@@ -8,9 +8,50 @@ from mugen.core import di
 from mugen.core.contract.gateway.completion import ICompletionGateway
 
 
+class _CloseAwareAwaitable:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    def __await__(self):
+        if False:
+            yield
+        return None
+
+
 # pylint: disable=protected-access
 class TestMugenDIEdgeBranches(unittest.TestCase):
     """Exercise remaining branch-heavy DI helpers."""
+
+    @staticmethod
+    def _readiness_config(
+        *,
+        profile: str = "api_only",
+        platforms: list[str] | None = None,
+        include_relational: bool = False,
+    ) -> dict:
+        config: dict = {
+            "mugen": {
+                "runtime": {"profile": profile},
+                "platforms": [] if platforms is None else platforms,
+                "modules": {
+                    "core": {
+                        "gateway": {
+                            "storage": {
+                                "keyval": "mugen.gateway.keyval:KeyValProvider",
+                            }
+                        }
+                    }
+                },
+            }
+        }
+        if include_relational:
+            config["mugen"]["modules"]["core"]["gateway"]["storage"]["relational"] = (  # type: ignore[index]
+                "mugen.gateway.rdbms:RelationalProvider"
+            )
+        return config
 
     def test_split_class_path_rejects_module_only_value(self) -> None:
         with self.assertRaises(RuntimeError):
@@ -727,3 +768,170 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             "Provider construction failed (optional_provider)",
             logger.warning.call_args.args[0],
         )
+
+    def test_resolve_readiness_provider_names_keyval_only_by_default(self) -> None:
+        config = self._readiness_config()
+        self.assertEqual(
+            di._resolve_readiness_provider_names(config),
+            ["keyval_storage_gateway"],
+        )
+
+    def test_resolve_readiness_provider_names_includes_relational_when_configured(
+        self,
+    ) -> None:
+        config = self._readiness_config(include_relational=True)
+        self.assertEqual(
+            di._resolve_readiness_provider_names(config),
+            ["keyval_storage_gateway", "relational_storage_gateway"],
+        )
+
+    def test_resolve_readiness_provider_names_web_profile_includes_web_store(self) -> None:
+        config = self._readiness_config(
+            profile="web_only",
+            platforms=[" web "],
+            include_relational=False,
+        )
+        self.assertEqual(
+            di._resolve_readiness_provider_names(config),
+            [
+                "keyval_storage_gateway",
+                "relational_storage_gateway",
+                "web_runtime_store",
+            ],
+        )
+
+    def test_await_readiness_probe_sync_returns_for_non_awaitable(self) -> None:
+        di._await_readiness_probe_sync(  # pylint: disable=protected-access
+            None,
+            provider_name="keyval_storage_gateway",
+            configured_class_path="mugen.gateway.keyval:KeyValProvider",
+        )
+
+    def test_await_readiness_probe_sync_runs_when_no_event_loop(self) -> None:
+        awaitable = _CloseAwareAwaitable()
+        with patch(
+            "mugen.core.di.asyncio.get_running_loop",
+            side_effect=RuntimeError,
+        ):
+            with patch("mugen.core.di.asyncio.run") as run_mock:
+                di._await_readiness_probe_sync(  # pylint: disable=protected-access
+                    awaitable,
+                    provider_name="keyval_storage_gateway",
+                    configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                )
+        run_mock.assert_called_once_with(awaitable)
+
+    def test_await_readiness_probe_sync_runs_in_thread_when_loop_is_running(
+        self,
+    ) -> None:
+        marker = {"ready": False}
+
+        async def _ready() -> None:
+            marker["ready"] = True
+
+        with patch(
+            "mugen.core.di.asyncio.get_running_loop",
+            return_value=object(),
+        ):
+            di._await_readiness_probe_sync(  # pylint: disable=protected-access
+                _ready(),
+                provider_name="keyval_storage_gateway",
+                configured_class_path="mugen.gateway.keyval:KeyValProvider",
+            )
+        self.assertTrue(marker["ready"])
+
+    def test_await_readiness_probe_sync_propagates_thread_error(self) -> None:
+        async def _boom() -> None:
+            raise RuntimeError("readiness boom")
+
+        with patch(
+            "mugen.core.di.asyncio.get_running_loop",
+            return_value=object(),
+        ):
+            with self.assertRaises(di.ProviderBootstrapError) as raised:
+                di._await_readiness_probe_sync(  # pylint: disable=protected-access
+                    _boom(),
+                    provider_name="keyval_storage_gateway",
+                    configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                )
+        self.assertIn("RuntimeError: readiness boom", str(raised.exception))
+
+    def test_validate_required_provider_readiness_succeeds_for_ready_provider(self) -> None:
+        class _ReadyProvider:  # pylint: disable=too-few-public-methods
+            def __init__(self) -> None:
+                self.ready = False
+
+            async def check_readiness(self) -> None:
+                self.ready = True
+
+        provider = _ReadyProvider()
+        injector = di.injector.DependencyInjector(
+            keyval_storage_gateway=provider,
+        )
+
+        di._validate_required_provider_readiness(  # pylint: disable=protected-access
+            self._readiness_config(),
+            injector,
+        )
+        self.assertTrue(provider.ready)
+
+    def test_validate_required_provider_readiness_fails_for_missing_provider(self) -> None:
+        injector = di.injector.DependencyInjector()
+        with self.assertRaises(di.ProviderBootstrapError) as raised:
+            di._validate_required_provider_readiness(  # pylint: disable=protected-access
+                self._readiness_config(),
+                injector,
+            )
+
+        self.assertIn("keyval_storage_gateway", str(raised.exception))
+        self.assertIn("mugen.gateway.keyval:KeyValProvider", str(raised.exception))
+
+    def test_validate_required_provider_readiness_fails_for_missing_hook(self) -> None:
+        injector = di.injector.DependencyInjector(
+            keyval_storage_gateway=object(),
+        )
+
+        with self.assertRaises(di.ProviderBootstrapError) as raised:
+            di._validate_required_provider_readiness(  # pylint: disable=protected-access
+                self._readiness_config(),
+                injector,
+            )
+
+        self.assertIn("check_readiness is unavailable", str(raised.exception))
+
+    def test_validate_required_provider_readiness_wraps_provider_exception(self) -> None:
+        class _FailingProvider:  # pylint: disable=too-few-public-methods
+            async def check_readiness(self) -> None:
+                raise RuntimeError("backend unavailable")
+
+        injector = di.injector.DependencyInjector(
+            keyval_storage_gateway=_FailingProvider(),
+        )
+
+        with self.assertRaises(di.ProviderBootstrapError) as raised:
+            di._validate_required_provider_readiness(  # pylint: disable=protected-access
+                self._readiness_config(),
+                injector,
+            )
+
+        self.assertIn("RuntimeError: backend unavailable", str(raised.exception))
+
+    def test_validate_required_provider_readiness_preserves_bootstrap_error(self) -> None:
+        class _Provider:  # pylint: disable=too-few-public-methods
+            def check_readiness(self) -> None:
+                return None
+
+        injector = di.injector.DependencyInjector(
+            keyval_storage_gateway=_Provider(),
+        )
+
+        with patch(
+            "mugen.core.di._await_readiness_probe_sync",
+            side_effect=di.ProviderBootstrapError("forced bootstrap error"),
+        ):
+            with self.assertRaises(di.ProviderBootstrapError) as raised:
+                di._validate_required_provider_readiness(  # pylint: disable=protected-access
+                    self._readiness_config(),
+                    injector,
+                )
+        self.assertEqual(str(raised.exception), "forced bootstrap error")

@@ -65,9 +65,12 @@ class TestDILoadConfig(unittest.TestCase):
                             target="mugen.core.di._build_provider",
                         ):
                             with unittest.mock.patch(
-                                target="mugen.core.di._validate_container",
+                                target="mugen.core.di._validate_required_provider_readiness",
                             ):
-                                di._build_container()
+                                with unittest.mock.patch(
+                                    target="mugen.core.di._validate_container",
+                                ):
+                                    di._build_container()
 
         load_config.assert_called_once_with("mugen.toml")
 
@@ -98,9 +101,12 @@ class TestDILoadConfig(unittest.TestCase):
                             target="mugen.core.di._build_provider",
                         ):
                             with unittest.mock.patch(
-                                target="mugen.core.di._validate_container",
+                                target="mugen.core.di._validate_required_provider_readiness",
                             ):
-                                di._build_container()
+                                with unittest.mock.patch(
+                                    target="mugen.core.di._validate_container",
+                                ):
+                                    di._build_container()
 
         load_config.assert_called_once_with(override)
 

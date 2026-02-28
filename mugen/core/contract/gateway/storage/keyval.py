@@ -30,6 +30,10 @@ class IKeyValStorageGateway(ABC):
         """Close the storage instance asynchronously."""
 
     @abstractmethod
+    async def check_readiness(self) -> None:
+        """Validate backend connectivity/readiness for fail-fast startup checks."""
+
+    @abstractmethod
     async def get_entry(
         self,
         key: str,

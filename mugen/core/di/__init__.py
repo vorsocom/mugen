@@ -17,6 +17,8 @@ from importlib import import_module
 import inspect
 import logging
 import os
+from queue import Queue
+import threading
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -595,6 +597,115 @@ _PROVIDER_BUILD_ORDER = (
 )
 
 
+def _configured_class_path_for_spec(config: dict, spec: _ProviderSpec) -> object:
+    return _config_path_value(config, *spec.module_path)
+
+
+def _resolve_readiness_provider_names(config: dict) -> list[str]:
+    """Resolve providers that must pass readiness before bootstrap succeeds."""
+    profile = _infer_runtime_profile(config)
+    active_platforms = _normalize_platforms(_get_active_platforms(config))
+
+    readiness_provider_names: list[str] = ["keyval_storage_gateway"]
+    relational_configured = _config_path_exists(
+        config,
+        "mugen",
+        "modules",
+        "core",
+        "gateway",
+        "storage",
+        "relational",
+    )
+    relational_required = (
+        relational_configured is True
+        or (profile in {"web_only", "platform_full"} and "web" in active_platforms)
+    )
+    if relational_required:
+        readiness_provider_names.append("relational_storage_gateway")
+
+    if profile in {"web_only", "platform_full"} and "web" in active_platforms:
+        readiness_provider_names.append("web_runtime_store")
+
+    return list(dict.fromkeys(readiness_provider_names))
+
+
+def _await_readiness_probe_sync(
+    maybe_awaitable,
+    *,
+    provider_name: str,
+    configured_class_path: object,
+) -> None:
+    if inspect.isawaitable(maybe_awaitable) is not True:
+        return
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(maybe_awaitable)
+        return
+    readiness_outcome: Queue[Exception | None] = Queue(maxsize=1)
+
+    def _probe_worker() -> None:
+        try:
+            asyncio.run(maybe_awaitable)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            readiness_outcome.put(exc)
+            return
+        readiness_outcome.put(None)
+
+    thread = threading.Thread(target=_probe_worker, daemon=True)
+    thread.start()
+    thread.join()
+
+    thread_error = readiness_outcome.get()
+    if thread_error is not None:
+        raise ProviderBootstrapError(
+            "Provider readiness failed "
+            f"({provider_name}) class_path={configured_class_path!r}: "
+            f"{type(thread_error).__name__}: {thread_error}"
+        ) from thread_error
+
+
+def _validate_required_provider_readiness(
+    config: dict,
+    injector: DependencyInjector,
+) -> None:
+    """Run required provider readiness checks before runtime validation."""
+    for provider_name in _resolve_readiness_provider_names(config):
+        spec = _PROVIDER_SPECS[provider_name]
+        configured_class_path = _configured_class_path_for_spec(config, spec)
+        provider = getattr(injector, spec.injector_attr, None)
+        if provider is None:
+            raise ProviderBootstrapError(
+                "Provider readiness failed "
+                f"({provider_name}) class_path={configured_class_path!r}: "
+                "provider instance is unavailable."
+            )
+
+        check_readiness = getattr(provider, "check_readiness", None)
+        if callable(check_readiness) is not True:
+            raise ProviderBootstrapError(
+                "Provider readiness failed "
+                f"({provider_name}) class_path={configured_class_path!r}: "
+                "check_readiness is unavailable."
+            )
+
+        try:
+            _await_readiness_probe_sync(
+                check_readiness(),
+                provider_name=provider_name,
+                configured_class_path=configured_class_path,
+            )
+        except ProviderBootstrapError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise ProviderBootstrapError(
+                "Provider readiness failed "
+                f"({provider_name}) class_path={configured_class_path!r}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+
 def _get_bootstrap_provider_logger(config: dict) -> logging.Logger:
     """Resolve a logger before a logging provider is available."""
     if isinstance(config, dict):
@@ -793,6 +904,7 @@ def _build_container() -> DependencyInjector:
             strict_required=True,
         )
 
+    _validate_required_provider_readiness(config, injector)
     _validate_container(config, injector)
 
     return injector
@@ -869,8 +981,11 @@ async def _shutdown_provider_async(
 
 def _provider_specs_for_shutdown() -> list[_ProviderSpec]:
     """Return provider specs in reverse build order for dependency-safe cleanup."""
-    ordered_specs = [spec for spec in _PROVIDER_SPECS.values()]
-    return list(reversed(ordered_specs))
+    ordered_provider_names = ("logging_gateway",) + _PROVIDER_BUILD_ORDER
+    return [
+        _PROVIDER_SPECS[provider_name]
+        for provider_name in reversed(ordered_provider_names)
+    ]
 
 
 def _shutdown_injector(injector: DependencyInjector | None) -> None:

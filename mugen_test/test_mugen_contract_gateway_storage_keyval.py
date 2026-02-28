@@ -24,6 +24,10 @@ class _MemoryKeyValGateway(IKeyValStorageGateway):
     async def aclose(self) -> None:
         self.closed = True
 
+    async def check_readiness(self) -> None:
+        if self.closed:
+            raise RuntimeError("gateway closed")
+
     async def get_entry(
         self,
         key: str,
