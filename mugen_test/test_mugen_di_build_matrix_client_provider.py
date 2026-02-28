@@ -358,6 +358,25 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                     def verify_user_devices(self, user_id):
                         pass
 
+                    async def sync_forever(
+                        self,
+                        *,
+                        since=None,
+                        timeout=100,
+                        full_state=True,
+                        set_presence="online",
+                    ):
+                        _ = (since, timeout, full_state, set_presence)
+                        return None
+
+                    async def get_profile(self, user_id=None):
+                        _ = user_id
+                        return None
+
+                    async def set_displayname(self, displayname):
+                        _ = displayname
+                        return None
+
                 DummyMatrixClientClass.__module__ = "valid_matrix_module"
 
 

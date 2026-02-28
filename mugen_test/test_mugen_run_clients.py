@@ -31,7 +31,10 @@ def _test_config(*, platforms: list[str]) -> SimpleNamespace:
         mugen_cfg.modules = SimpleNamespace(
             core=SimpleNamespace(
                 gateway=SimpleNamespace(
-                    storage=SimpleNamespace(relational="configured"),
+                    storage=SimpleNamespace(
+                        relational="configured",
+                        web_runtime="configured",
+                    ),
                 )
             )
         )
@@ -647,6 +650,47 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 config={"mugen": {"modules": {"core": {"gateway": {"storage": {}}}}}},
                 active_platforms=["web"],
                 relational_storage_gateway_provider=lambda: object(),
+            )
+
+        class _ReadyRelational:  # pylint: disable=too-few-public-methods
+            def check_readiness(self) -> None:
+                return None
+
+        with self.assertRaises(BootstrapConfigError):
+            mugen_mod.validate_web_relational_runtime_config(
+                config=relational_config,
+                active_platforms=["web"],
+                relational_storage_gateway_provider=lambda: _ReadyRelational(),
+                web_runtime_store_provider=lambda: object(),
+            )
+
+        web_runtime_config = {
+            "mugen": {
+                "modules": {
+                    "core": {
+                        "gateway": {
+                            "storage": {
+                                "relational": "configured",
+                                "web_runtime": "configured",
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        with self.assertRaises(BootstrapConfigError):
+            mugen_mod.validate_web_relational_runtime_config(
+                config=web_runtime_config,
+                active_platforms=["web"],
+                relational_storage_gateway_provider=lambda: _ReadyRelational(),
+                web_runtime_store_provider=lambda: None,
+            )
+        with self.assertRaises(BootstrapConfigError):
+            mugen_mod.validate_web_relational_runtime_config(
+                config=web_runtime_config,
+                active_platforms=["web"],
+                relational_storage_gateway_provider=lambda: _ReadyRelational(),
+                web_runtime_store_provider=lambda: object(),
             )
 
         config = SimpleNamespace(

@@ -147,6 +147,9 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
 
         injector.logging_gateway.error.assert_any_call("Missing provider (knowledge_gateway).")
         injector.logging_gateway.error.assert_any_call("Missing provider (email_gateway).")
+        injector.logging_gateway.error.assert_any_call(
+            "Missing provider (web_runtime_store)."
+        )
         injector.logging_gateway.error.assert_any_call("Missing provider (matrix_client).")
         injector.logging_gateway.error.assert_any_call("Missing provider (whatsapp_client).")
         injector.logging_gateway.error.assert_any_call("Missing provider (web_client).")
@@ -486,3 +489,241 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         proxy._injector = target
         proxy.some_attribute = "value"
         self.assertEqual(target.some_attribute, "value")
+
+    def test_build_provider_from_spec_strict_required_raises_on_missing_config(self) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(config=object())
+        spec = di._ProviderSpec(
+            provider_name="dummy_provider",
+            injector_attr="dummy_provider",
+            interface=ICompletionGateway,
+            module_path=("mugen", "modules", "dummy"),
+            constructor_bindings=(("config", "config"),),
+        )
+
+        with self.assertRaises(di.ProviderBootstrapError):
+            di._build_provider_from_spec(
+                config={"mugen": {"modules": {"core": {}}}},
+                injector=injector,
+                spec=spec,
+                logger=logger,
+                strict_required=True,
+            )
+
+    def test_build_provider_from_spec_strict_optional_ignores_missing_config(self) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(config=object())
+        spec = di._ProviderSpec(
+            provider_name="optional_provider",
+            injector_attr="optional_provider",
+            interface=ICompletionGateway,
+            module_path=("mugen", "modules", "optional"),
+            constructor_bindings=(("config", "config"),),
+            required=False,
+        )
+
+        di._build_provider_from_spec(
+            config={"mugen": {"modules": {"core": {}}}},
+            injector=injector,
+            spec=spec,
+            logger=logger,
+            strict_required=True,
+        )
+        logger.error.assert_not_called()
+
+    def test_resolve_provider_class_raises_runtime_for_missing_config_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "Invalid configuration"):
+            di._resolve_provider_class(
+                config={},
+                provider_name="dummy_provider",
+                module_path=("mugen", "modules", "dummy"),
+                interface=ICompletionGateway,
+            )
+
+    def test_build_provider_from_spec_strict_required_raises_on_invalid_platform_shape(
+        self,
+    ) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(config=object())
+        spec = di._ProviderSpec(
+            provider_name="dummy_provider",
+            injector_attr="dummy_provider",
+            interface=ICompletionGateway,
+            module_path=("mugen", "modules", "dummy"),
+            constructor_bindings=(("config", "config"),),
+            required_platform="web",
+        )
+        with self.assertRaises(di.ProviderBootstrapError):
+            di._build_provider_from_spec(
+                config={"mugen": {"platforms": "web"}},
+                injector=injector,
+                spec=spec,
+                logger=logger,
+                strict_required=True,
+            )
+
+    def test_build_provider_from_spec_strict_required_raises_when_resolution_fails(self) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(config=object())
+        spec = di._ProviderSpec(
+            provider_name="dummy_provider",
+            injector_attr="dummy_provider",
+            interface=ICompletionGateway,
+            module_path=("mugen", "modules", "dummy"),
+            constructor_bindings=(("config", "config"),),
+        )
+        config = {"mugen": {"modules": {"dummy": "dummy.module:Dummy"}}}
+        with patch.object(
+            di,
+            "_resolve_provider_class",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertRaises(di.ProviderBootstrapError):
+                di._build_provider_from_spec(
+                    config=config,
+                    injector=injector,
+                    spec=spec,
+                    logger=logger,
+                    strict_required=True,
+                )
+
+    def test_build_provider_from_spec_strict_required_raises_on_validate_injector_config(
+        self,
+    ) -> None:
+        logger = Mock()
+
+        class DummyProvider:  # pylint: disable=too-few-public-methods
+            def __init__(self, config):  # pylint: disable=unused-argument
+                pass
+
+        spec = di._ProviderSpec(
+            provider_name="dummy_provider",
+            injector_attr="dummy_provider",
+            interface=ICompletionGateway,
+            module_path=("mugen", "modules", "dummy"),
+            constructor_bindings=(("config", "config"),),
+        )
+        config = {"mugen": {"modules": {"dummy": "dummy.module:Dummy"}}}
+        with patch.object(di, "_resolve_provider_class", return_value=DummyProvider):
+            with self.assertRaises(di.ProviderBootstrapError):
+                di._build_provider_from_spec(
+                    config=config,
+                    injector=object(),
+                    spec=spec,
+                    logger=logger,
+                    validate_injector_config=True,
+                    strict_required=True,
+                )
+
+    def test_build_provider_from_spec_strict_required_raises_on_attribute_error(self) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(config=object())
+
+        class DummyProvider:  # pylint: disable=too-few-public-methods
+            def __init__(self, config, missing):  # pylint: disable=unused-argument
+                pass
+
+        spec = di._ProviderSpec(
+            provider_name="dummy_provider",
+            injector_attr="dummy_provider",
+            interface=ICompletionGateway,
+            module_path=("mugen", "modules", "dummy"),
+            constructor_bindings=(("config", "config"), ("missing", "missing")),
+        )
+        config = {"mugen": {"modules": {"dummy": "dummy.module:Dummy"}}}
+        with patch.object(di, "_resolve_provider_class", return_value=DummyProvider):
+            with self.assertRaises(di.ProviderBootstrapError):
+                di._build_provider_from_spec(
+                    config=config,
+                    injector=injector,
+                    spec=spec,
+                    logger=logger,
+                    strict_required=True,
+                )
+
+    def test_build_provider_from_spec_strict_required_raises_on_constructor_exception(
+        self,
+    ) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(config=object())
+
+        class DummyProvider:  # pylint: disable=too-few-public-methods
+            def __init__(self, config):  # pylint: disable=unused-argument
+                raise ValueError("boom")
+
+        spec = di._ProviderSpec(
+            provider_name="dummy_provider",
+            injector_attr="dummy_provider",
+            interface=ICompletionGateway,
+            module_path=("mugen", "modules", "dummy"),
+            constructor_bindings=(("config", "config"),),
+        )
+        config = {"mugen": {"modules": {"dummy": "dummy.module:Dummy"}}}
+        with patch.object(di, "_resolve_provider_class", return_value=DummyProvider):
+            with self.assertRaises(di.ProviderBootstrapError):
+                di._build_provider_from_spec(
+                    config=config,
+                    injector=injector,
+                    spec=spec,
+                    logger=logger,
+                    strict_required=True,
+                )
+
+    def test_build_provider_from_spec_constructor_exception_logs_error_for_required(self) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(config=object())
+
+        class DummyProvider:  # pylint: disable=too-few-public-methods
+            def __init__(self, config):  # pylint: disable=unused-argument
+                raise ValueError("boom")
+
+        spec = di._ProviderSpec(
+            provider_name="dummy_provider",
+            injector_attr="dummy_provider",
+            interface=ICompletionGateway,
+            module_path=("mugen", "modules", "dummy"),
+            constructor_bindings=(("config", "config"),),
+            required=True,
+        )
+        config = {"mugen": {"modules": {"dummy": "dummy.module:Dummy"}}}
+        with patch.object(di, "_resolve_provider_class", return_value=DummyProvider):
+            di._build_provider_from_spec(
+                config=config,
+                injector=injector,
+                spec=spec,
+                logger=logger,
+                strict_required=False,
+            )
+        logger.error.assert_called_with("Invalid injector (dummy_provider).")
+
+    def test_build_provider_from_spec_constructor_exception_logs_warning_for_optional(
+        self,
+    ) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(config=object())
+
+        class DummyProvider:  # pylint: disable=too-few-public-methods
+            def __init__(self, config):  # pylint: disable=unused-argument
+                raise ValueError("boom")
+
+        spec = di._ProviderSpec(
+            provider_name="optional_provider",
+            injector_attr="optional_provider",
+            interface=ICompletionGateway,
+            module_path=("mugen", "modules", "optional"),
+            constructor_bindings=(("config", "config"),),
+            required=False,
+        )
+        config = {"mugen": {"modules": {"optional": "dummy.module:Dummy"}}}
+        with patch.object(di, "_resolve_provider_class", return_value=DummyProvider):
+            di._build_provider_from_spec(
+                config=config,
+                injector=injector,
+                spec=spec,
+                logger=logger,
+            )
+        logger.warning.assert_called()
+        self.assertIn(
+            "Provider construction failed (optional_provider)",
+            logger.warning.call_args.args[0],
+        )

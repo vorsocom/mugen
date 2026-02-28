@@ -31,6 +31,7 @@ from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
+from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.nlp import INLPService
@@ -55,6 +56,10 @@ _CONFIG_NAMESPACE_CONVERSION = NamespaceConfig(
 
 class ContainerBootstrapError(RuntimeError):
     """Raised when DI container bootstrap configuration is invalid."""
+
+
+class ProviderBootstrapError(ContainerBootstrapError):
+    """Raised when a required provider fails deterministic bootstrap."""
 
 
 def _nested_namespace_from_dict(items: dict, ns: SimpleNamespace) -> None:
@@ -293,6 +298,7 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
     ]
     if "web" in active_platform_set:
         required.append("relational_storage_gateway")
+        required.append("web_runtime_store")
 
     missing = [name for name in required if getattr(injector, name) is None]
 
@@ -388,6 +394,7 @@ class _ProviderSpec:
     invalid_config_exceptions: tuple[type[Exception], ...] = (KeyError,)
     required_platform: str | None = None
     inactive_platform_warning: str | None = None
+    required: bool = True
 
 
 _PROVIDER_SPECS = {
@@ -418,6 +425,7 @@ _PROVIDER_SPECS = {
             ("logging_gateway", "logging_gateway"),
         ),
         invalid_config_exceptions=(KeyError, ValueError),
+        required=False,
     ),
     "ipc_service": _ProviderSpec(
         provider_name="ipc_service",
@@ -448,6 +456,20 @@ _PROVIDER_SPECS = {
             ("config", "config"),
             ("logging_gateway", "logging_gateway"),
         ),
+    ),
+    "web_runtime_store": _ProviderSpec(
+        provider_name="web_runtime_store",
+        injector_attr="web_runtime_store",
+        interface=IWebRuntimeStore,
+        module_path=("mugen", "modules", "core", "gateway", "storage", "web_runtime"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("relational_storage_gateway", "relational_storage_gateway"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required_platform="web",
+        inactive_platform_warning="Web platform not active. Runtime store not loaded.",
     ),
     "nlp_service": _ProviderSpec(
         provider_name="nlp_service",
@@ -499,6 +521,7 @@ _PROVIDER_SPECS = {
             ("logging_gateway", "logging_gateway"),
         ),
         invalid_config_exceptions=(KeyError, ValueError),
+        required=False,
     ),
     "matrix_client": _ProviderSpec(
         provider_name="matrix_client",
@@ -543,7 +566,7 @@ _PROVIDER_SPECS = {
             ("config", "config"),
             ("ipc_service", "ipc_service"),
             ("keyval_storage_gateway", "keyval_storage_gateway"),
-            ("relational_storage_gateway", "relational_storage_gateway"),
+            ("web_runtime_store", "web_runtime_store"),
             ("logging_gateway", "logging_gateway"),
             ("messaging_service", "messaging_service"),
             ("user_service", "user_service"),
@@ -560,6 +583,7 @@ _PROVIDER_BUILD_ORDER = (
     "ipc_service",
     "keyval_storage_gateway",
     "relational_storage_gateway",
+    "web_runtime_store",
     "nlp_service",
     "platform_service",
     "user_service",
@@ -589,19 +613,40 @@ def _build_provider_from_spec(
     spec: _ProviderSpec,
     logger: ILoggingGateway | logging.Logger,
     validate_injector_config: bool = False,
+    strict_required: bool = False,
 ) -> None:
     """Build a provider using declarative spec metadata."""
+    raise_errors = strict_required and spec.required
+
     if spec.required_platform is not None:
         raw_active_platforms = _get_active_platforms(config)
         normalized_active_platforms = _normalize_platforms(raw_active_platforms)
         if raw_active_platforms is None:
-            logger.error(f"Invalid configuration ({spec.provider_name}).")
+            message = f"Invalid configuration ({spec.provider_name})."
+            if raise_errors:
+                raise ProviderBootstrapError(message)
+            logger.error(message)
             return
 
         if spec.required_platform not in normalized_active_platforms:
             if spec.inactive_platform_warning is not None:
                 logger.warning(spec.inactive_platform_warning)
             return
+
+    configured = _config_path_exists(config, *spec.module_path)
+    if configured is not True:
+        if spec.required is not True:
+            return
+        if raise_errors:
+            message = (
+                f"Missing required provider configuration ({spec.provider_name}) at "
+                f"{'.'.join(spec.module_path)}."
+            )
+            raise ProviderBootstrapError(message)
+        logger.error(f"Invalid configuration ({spec.provider_name}).")
+        return
+
+    configured_class_path = _config_path_value(config, *spec.module_path)
 
     try:
         provider_class = _resolve_provider_class(
@@ -612,13 +657,25 @@ def _build_provider_from_spec(
             invalid_config_exceptions=spec.invalid_config_exceptions,
         )
     except RuntimeError as exc:
-        logger.error(str(exc))
+        if raise_errors:
+            message = (
+                f"Provider bootstrap failed ({spec.provider_name}) "
+                f"class_path={configured_class_path!r}: {exc}"
+            )
+            raise ProviderBootstrapError(message) from exc
+        if spec.required:
+            logger.error(str(exc))
+        else:
+            logger.warning(str(exc))
         return
 
     if validate_injector_config and (
         injector is None or not hasattr(injector, "config")
     ):
-        logger.error(f"Invalid injector ({spec.provider_name}).")
+        message = f"Invalid injector ({spec.provider_name})."
+        if raise_errors:
+            raise ProviderBootstrapError(message)
+        logger.error(message)
         return
 
     try:
@@ -628,8 +685,22 @@ def _build_provider_from_spec(
         }
         setattr(injector, spec.injector_attr, provider_class(**provider_kwargs))
     except AttributeError as exc:
-        logger.error(f"Invalid injector ({spec.provider_name}).")
+        message = f"Invalid injector ({spec.provider_name})."
+        if raise_errors:
+            raise ProviderBootstrapError(message) from exc
+        logger.error(message)
         logger.debug(str(exc))
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        message = (
+            f"Provider construction failed ({spec.provider_name}) "
+            f"class_path={configured_class_path!r}: {type(exc).__name__}: {exc}"
+        )
+        if raise_errors:
+            raise ProviderBootstrapError(message) from exc
+        if spec.required:
+            logger.error(f"Invalid injector ({spec.provider_name}).")
+        else:
+            logger.warning(message)
 
 
 def _build_provider(
@@ -637,6 +708,7 @@ def _build_provider(
     injector: DependencyInjector,
     *,
     provider_name: str,
+    strict_required: bool = False,
 ) -> None:
     """Build a provider by name."""
     spec = _PROVIDER_SPECS[provider_name]
@@ -649,6 +721,7 @@ def _build_provider(
             spec=spec,
             logger=logger,
             validate_injector_config=True,
+            strict_required=strict_required,
         )
         return
 
@@ -661,6 +734,7 @@ def _build_provider(
         injector,
         spec=spec,
         logger=logger,
+        strict_required=strict_required,
     )
 
 
@@ -704,10 +778,20 @@ def _build_container() -> DependencyInjector:
 
     _build_config_provider(config, injector)
 
-    _build_provider(config, injector, provider_name="logging_gateway")
+    _build_provider(
+        config,
+        injector,
+        provider_name="logging_gateway",
+        strict_required=True,
+    )
 
     for provider_name in _PROVIDER_BUILD_ORDER:
-        _build_provider(config, injector, provider_name=provider_name)
+        _build_provider(
+            config,
+            injector,
+            provider_name=provider_name,
+            strict_required=True,
+        )
 
     _validate_container(config, injector)
 

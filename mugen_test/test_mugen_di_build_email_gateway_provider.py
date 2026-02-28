@@ -44,7 +44,7 @@ class TestDIBuildEmailGateway(unittest.TestCase):
             _load_config.return_value = {}
 
             with (
-                self.assertLogs("root", level="ERROR") as logger,
+                self.assertLogs("root", level="WARNING") as logger,
                 unittest.mock.patch(
                     target="mugen.core.di._load_config",
                     new_callable=_load_config,
@@ -56,9 +56,9 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                 di._build_provider(config, injector, provider_name="email_gateway")
 
                 self.assertEqual(logger.records[0].name, "root")
-                self.assertEqual(
-                    logger.output[0],
-                    "ERROR:root:Invalid configuration (email_gateway).",
+                self.assertIn(
+                    "WARNING:root:Using root logger (email_gateway).",
+                    logger.output,
                 )
         except:  # pylint: disable=bare-except
             self.fail("Exception raised unexpectedly.")
@@ -70,7 +70,7 @@ class TestDIBuildEmailGateway(unittest.TestCase):
             _load_config.return_value = {}
 
             with (
-                self.assertLogs("root", level="ERROR") as logger,
+                self.assertLogs("root", level="WARNING") as logger,
                 unittest.mock.patch(
                     target="mugen.core.di._load_config",
                     new_callable=_load_config,
@@ -92,9 +92,13 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                 di._build_provider(config, injector, provider_name="email_gateway")
 
                 self.assertEqual(logger.records[0].name, "root")
-                self.assertEqual(
-                    logger.output[0],
-                    "ERROR:root:Could not import module (email_gateway).",
+                self.assertIn(
+                    "WARNING:root:Using root logger (email_gateway).",
+                    logger.output,
+                )
+                self.assertIn(
+                    "WARNING:root:Could not import module (email_gateway).",
+                    logger.output,
                 )
         except:  # pylint: disable=bare-except
             self.fail("Exception raised unexpectedly.")
@@ -106,7 +110,7 @@ class TestDIBuildEmailGateway(unittest.TestCase):
             _load_config.return_value = {}
 
             with (
-                self.assertLogs("root", level="ERROR") as logger,
+                self.assertLogs("root", level="WARNING") as logger,
                 unittest.mock.patch(
                     target="mugen.core.di._load_config",
                     new_callable=_load_config,
@@ -140,9 +144,13 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                     di._build_provider(config, injector, provider_name="email_gateway")
 
                     self.assertEqual(logger.records[0].name, "root")
-                    self.assertEqual(
-                        logger.output[0],
-                        "ERROR:root:Valid subclass not found (email_gateway).",
+                    self.assertIn(
+                        "WARNING:root:Using root logger (email_gateway).",
+                        logger.output,
+                    )
+                    self.assertIn(
+                        "WARNING:root:Valid subclass not found (email_gateway).",
+                        logger.output,
                     )
         except:  # pylint: disable=bare-except
             self.fail("Exception raised unexpectedly.")

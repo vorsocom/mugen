@@ -33,6 +33,8 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.email_gateway)
         self.assertIsNone(injector.ipc_service)
         self.assertIsNone(injector.keyval_storage_gateway)
+        self.assertIsNone(injector.relational_storage_gateway)
+        self.assertIsNone(injector.web_runtime_store)
         self.assertIsNone(injector.nlp_service)
         self.assertIsNone(injector.platform_service)
         self.assertIsNone(injector.user_service)
@@ -422,6 +424,25 @@ class TestDependencyInjector(unittest.TestCase):
             def verify_user_devices(self, user_id):
                 pass
 
+            async def sync_forever(
+                self,
+                *,
+                since=None,
+                timeout=100,
+                full_state=True,
+                set_presence="online",
+            ):
+                _ = (since, timeout, full_state, set_presence)
+                return None
+
+            async def get_profile(self, user_id=None):
+                _ = user_id
+                return None
+
+            async def set_displayname(self, displayname):
+                _ = displayname
+                return None
+
         matrix_client = DummyMatrixClientClass(
             config=config,
             ipc_service=ipc_service,
@@ -644,6 +665,8 @@ class TestDependencyInjector(unittest.TestCase):
             messaging_service=messaging_service,
             user_service=user_service,
         )
+        relational_storage_gateway = object()
+        web_runtime_store = object()
 
         ## Create injector.
         injector = di.injector.DependencyInjector(
@@ -653,6 +676,8 @@ class TestDependencyInjector(unittest.TestCase):
             email_gateway=email_gateway,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
+            relational_storage_gateway=relational_storage_gateway,
+            web_runtime_store=web_runtime_store,
             nlp_service=nlp_service,
             platform_service=platform_service,
             user_service=user_service,
@@ -670,6 +695,8 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.email_gateway, email_gateway)
         self.assertEqual(injector.ipc_service, ipc_service)
         self.assertEqual(injector.keyval_storage_gateway, keyval_storage_gateway)
+        self.assertEqual(injector.relational_storage_gateway, relational_storage_gateway)
+        self.assertEqual(injector.web_runtime_store, web_runtime_store)
         self.assertEqual(injector.nlp_service, nlp_service)
         self.assertEqual(injector.platform_service, platform_service)
         self.assertEqual(injector.user_service, user_service)

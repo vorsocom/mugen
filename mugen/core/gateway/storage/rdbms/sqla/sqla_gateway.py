@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import AsyncIterator, Mapping
 
 from sqlalchemy import Table
+from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -57,6 +58,11 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
     async def aclose(self) -> None:
         """Dispose SQLAlchemy engine resources."""
         await self._engine.dispose()
+
+    async def check_readiness(self) -> None:
+        """Validate relational connectivity for fail-fast startup checks."""
+        async with self._engine.connect() as conn:
+            await conn.execute(sa_text("SELECT 1"))
 
     @asynccontextmanager
     async def unit_of_work(self) -> AsyncIterator[IRelationalUnitOfWork]:

@@ -42,6 +42,23 @@ class _FakeSessionMaker:
         return _AsyncCM(self._session)
 
 
+class _FakeConn:
+    def __init__(self):
+        self.executed = []
+
+    async def execute(self, stmt):
+        self.executed.append(str(stmt))
+        return None
+
+
+class _FakeEngine:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def connect(self):
+        return _AsyncCM(self._conn)
+
+
 class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
     """Covers gateway initialization, registration, and context managers."""
 
@@ -122,3 +139,25 @@ class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
             self.assertIs(raw, fake_session)
 
         self.assertEqual(fake_session.begin_calls, 2)
+
+    async def test_check_readiness_runs_probe_query(self) -> None:
+        with (
+            patch.object(sqla_gateway, "create_async_engine", return_value="engine"),
+            patch.object(
+                sqla_gateway,
+                "build_table_registry_from_base",
+                return_value={"widgets": self.widgets},
+            ),
+            patch.object(sqla_gateway, "async_sessionmaker", return_value="session-maker"),
+        ):
+            gateway = SQLAlchemyRelationalStorageGateway(
+                config=self.config,
+                logging_gateway=SimpleNamespace(),
+            )
+
+        conn = _FakeConn()
+        gateway._engine = _FakeEngine(conn)  # pylint: disable=protected-access
+
+        await gateway.check_readiness()
+
+        self.assertEqual(conn.executed, ["SELECT 1"])

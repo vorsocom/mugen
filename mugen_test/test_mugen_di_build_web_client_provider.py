@@ -220,7 +220,7 @@ class TestDIBuildWebClient(unittest.TestCase):
                         config,
                         ipc_service,
                         keyval_storage_gateway,
-                        relational_storage_gateway,
+                        web_runtime_store,
                         logging_gateway,
                         messaging_service,
                         user_service,

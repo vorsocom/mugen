@@ -71,6 +71,14 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
+from mugen.core.runtime.phase_b_bootstrap import (
+    PHASE_B_CRITICAL_PLATFORMS_KEY as _PHASE_B_CRITICAL_PLATFORMS_KEY,
+    PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY as _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY,
+    PHASE_B_STARTUP_PLAN_KEY as _PHASE_B_STARTUP_PLAN_KEY,
+    PhaseBStartupPlan,
+    apply_phase_b_startup_state,
+    build_phase_b_startup_plan,
+)
 from mugen.core.runtime.phase_b_controls import (
     parse_bool as _parse_bool,
 )
@@ -81,8 +89,6 @@ from mugen.core.utility.platforms import (
     unknown_platforms,
 )
 
-_PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
-_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY = "phase_b_degrade_on_critical_exit"
 _WHATSAPP_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
 
 
@@ -134,6 +140,10 @@ def _relational_storage_gateway_provider():
     return di.container.relational_storage_gateway
 
 
+def _web_runtime_store_provider():
+    return di.container.web_runtime_store
+
+
 def _extension_enabled(ext: SimpleNamespace) -> bool:
     """Resolve whether an extension is enabled by configuration."""
     raw_enabled = getattr(ext, "enabled", True)
@@ -178,6 +188,7 @@ def validate_web_relational_runtime_config(
     config: SimpleNamespace,
     active_platforms: list[str],
     relational_storage_gateway_provider=_relational_storage_gateway_provider,
+    web_runtime_store_provider=_web_runtime_store_provider,
 ) -> None:
     """Validate relational web runtime dependencies before task scheduling."""
     if "web" not in active_platforms:
@@ -205,14 +216,38 @@ def validate_web_relational_runtime_config(
             "relational_storage_gateway provider is unavailable."
         )
 
-    raw_session = getattr(relational_storage_gateway, "raw_session", None)
-    if callable(raw_session):
-        return
+    relational_check_readiness = getattr(relational_storage_gateway, "check_readiness", None)
+    if callable(relational_check_readiness) is not True:
+        raise BootstrapConfigError(
+            "Relational web storage is configured but "
+            "relational_storage_gateway.check_readiness is unavailable."
+        )
 
-    raise BootstrapConfigError(
-        "Relational web storage is configured but "
-        "relational_storage_gateway.raw_session is unavailable."
+    web_runtime_configured = _config_path_exists(
+        config,
+        "mugen",
+        "modules",
+        "core",
+        "gateway",
+        "storage",
+        "web_runtime",
     )
+    if web_runtime_configured is not True:
+        raise BootstrapConfigError(
+            "Web platform requires web runtime store configuration at "
+            "mugen.modules.core.gateway.storage.web_runtime."
+        )
+
+    web_runtime_store = web_runtime_store_provider()
+    if web_runtime_store is None:
+        raise BootstrapConfigError(
+            "Web runtime store is configured but web_runtime_store provider is unavailable."
+        )
+    web_runtime_check_readiness = getattr(web_runtime_store, "check_readiness", None)
+    if callable(web_runtime_check_readiness) is not True:
+        raise BootstrapConfigError(
+            "Web runtime store is configured but check_readiness is unavailable."
+        )
 
 
 def _resolve_phase_b_critical_platforms(
@@ -484,28 +519,47 @@ async def run_platform_clients(
     whatsapp_provider=_whatsapp_provider,
     web_provider=_web_provider,
     relational_storage_gateway_provider=_relational_storage_gateway_provider,
+    web_runtime_store_provider=_web_runtime_store_provider,
 ) -> None:
     """Phase B bootstrap for long-running platform clients."""
     config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
     bootstrap_state = get_bootstrap_state(app)
-    bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
-    bootstrap_state[PHASE_B_ERROR_KEY] = None
     bootstrap_state[SHUTDOWN_REQUESTED_KEY] = False
-    active_platforms, critical_platforms, degrade_on_critical_exit = (
-        validate_phase_b_runtime_config(
+    startup_plan = bootstrap_state.pop(_PHASE_B_STARTUP_PLAN_KEY, None)
+    if not isinstance(startup_plan, PhaseBStartupPlan):
+        startup_plan = build_phase_b_startup_plan(
             config=config,
             bootstrap_state=bootstrap_state,
             logger=logger,
+            validate_phase_b_runtime_config=validate_phase_b_runtime_config,
+            validate_web_relational_runtime_config=lambda **kwargs: (
+                validate_web_relational_runtime_config(
+                    **kwargs,
+                    relational_storage_gateway_provider=(
+                        relational_storage_gateway_provider
+                    ),
+                    web_runtime_store_provider=web_runtime_store_provider,
+                )
+            ),
+            include_startup_timeout=False,
         )
-    )
-    validate_web_relational_runtime_config(
-        config=config,
-        active_platforms=active_platforms,
-        relational_storage_gateway_provider=relational_storage_gateway_provider,
-    )
-    bootstrap_state[_PHASE_B_CRITICAL_PLATFORMS_KEY] = critical_platforms
-    bootstrap_state[_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = degrade_on_critical_exit
+        apply_phase_b_startup_state(
+            bootstrap_state,
+            plan=startup_plan,
+            reset_started_at=True,
+        )
+    else:
+        apply_phase_b_startup_state(
+            bootstrap_state,
+            plan=startup_plan,
+            reset_started_at=False,
+        )
+
+    active_platforms = list(startup_plan.active_platforms)
+    critical_platforms = list(startup_plan.critical_platforms)
+    degrade_on_critical_exit = bool(startup_plan.degrade_on_critical_exit)
+
     _ensure_platform_state(
         bootstrap_state,
         active_platforms=active_platforms,

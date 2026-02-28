@@ -54,6 +54,10 @@ class IRelationalStorageGateway(ABC):
     async def aclose(self) -> None:
         """Close underlying async resources (for example, DB engines)."""
 
+    @abstractmethod
+    async def check_readiness(self) -> None:
+        """Validate connectivity/readiness for startup fail-fast checks."""
+
     async def count_many(
         self,
         table: str,
