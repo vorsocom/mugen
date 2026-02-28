@@ -450,6 +450,9 @@ class TestDependencyInjector(unittest.TestCase):
             async def init(self):
                 pass
 
+            async def verify_startup(self) -> bool:
+                return True
+
             async def close(self):
                 pass
 

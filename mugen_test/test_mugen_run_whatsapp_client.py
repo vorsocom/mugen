@@ -2,7 +2,7 @@
 
 import asyncio
 import unittest
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from quart import Quart
 
@@ -22,6 +22,9 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
 
             async def init(self) -> None:
                 """Perform startup routine."""
+
+            async def verify_startup(self) -> bool:
+                return True
 
             async def close(self) -> None:
                 """Perform shutdown routine."""
@@ -52,6 +55,9 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
             async def init(self) -> None:
                 ...
 
+            async def verify_startup(self) -> bool:
+                return True
+
             async def close(self) -> None:
                 raise RuntimeError("boom")
 
@@ -78,6 +84,9 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
             async def init(self) -> None:
                 ...
 
+            async def verify_startup(self) -> bool:
+                return True
+
             async def close(self) -> None:
                 ...
 
@@ -92,3 +101,28 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         started.assert_called_once_with()
+
+    async def test_probe_failure_does_not_invoke_started_callback(self) -> None:
+        app = Quart("test_app")
+        started = Mock()
+        closed = AsyncMock()
+
+        class DummyWhatsAppClient:
+            async def init(self) -> None:
+                ...
+
+            async def verify_startup(self) -> bool:
+                return False
+
+            async def close(self) -> None:
+                await closed()
+
+        with self.assertRaises(RuntimeError):
+            await run_whatsapp_client(
+                logger_provider=lambda: app.logger,
+                whatsapp_provider=DummyWhatsAppClient,
+                started_callback=started,
+            )
+
+        started.assert_not_called()
+        closed.assert_awaited_once()

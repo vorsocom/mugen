@@ -682,6 +682,34 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_DEGRADED)
         self.assertIn("RuntimeError: worker failure", state[PHASE_B_PLATFORM_ERRORS_KEY]["web"])
 
+    async def test_run_platform_clients_marks_whatsapp_degraded_when_startup_probe_fails(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["whatsapp"]))
+
+        async def _probe_fail(*, started_callback=None) -> None:
+            _ = started_callback
+            raise RuntimeError("WhatsApp startup probe failed.")
+
+        with unittest.mock.patch("mugen.run_whatsapp_client", new=_probe_fail):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                whatsapp_provider=lambda: None,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["whatsapp"],
+            PHASE_STATUS_DEGRADED,
+        )
+        self.assertIn(
+            "WhatsApp startup probe failed.",
+            str(state[PHASE_B_PLATFORM_ERRORS_KEY]["whatsapp"]),
+        )
+
     async def test_run_platform_clients_keeps_telnet_starting_until_started_callback(
         self,
     ) -> None:

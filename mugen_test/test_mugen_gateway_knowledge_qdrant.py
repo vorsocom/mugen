@@ -217,13 +217,46 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         config = _make_config(encoder_preload=False)
         gateway, _, _, _ = _build_gateway(config=config)
         built_encoder = object()
-        with patch.object(gateway, "_build_encoder", return_value=built_encoder) as build_encoder:
+        with (
+            patch.object(gateway, "_build_encoder", return_value=built_encoder) as build_encoder,
+            patch(
+                "mugen.core.gateway.knowledge.qdrant.asyncio.to_thread",
+                new=AsyncMock(side_effect=lambda func: func()),
+            ) as to_thread,
+        ):
             first = await gateway._get_encoder()  # pylint: disable=protected-access
             second = await gateway._get_encoder()  # pylint: disable=protected-access
 
         self.assertIs(first, built_encoder)
         self.assertIs(second, built_encoder)
         build_encoder.assert_called_once()
+        to_thread.assert_awaited_once()
+
+    async def test_get_encoder_concurrent_first_calls_use_single_build(self) -> None:
+        config = _make_config(encoder_preload=False)
+        gateway, _, _, _ = _build_gateway(config=config)
+        built_encoder = object()
+
+        async def _to_thread(func):
+            await asyncio.sleep(0)
+            return func()
+
+        with (
+            patch.object(gateway, "_build_encoder", return_value=built_encoder) as build_encoder,
+            patch(
+                "mugen.core.gateway.knowledge.qdrant.asyncio.to_thread",
+                new=AsyncMock(side_effect=_to_thread),
+            ) as to_thread,
+        ):
+            first, second = await asyncio.gather(
+                gateway._get_encoder(),  # pylint: disable=protected-access
+                gateway._get_encoder(),  # pylint: disable=protected-access
+            )
+
+        self.assertIs(first, built_encoder)
+        self.assertIs(second, built_encoder)
+        build_encoder.assert_called_once()
+        to_thread.assert_awaited_once()
 
     async def test_get_encoder_handles_encoder_set_while_waiting_for_lock(self) -> None:
         config = _make_config(encoder_preload=False)
