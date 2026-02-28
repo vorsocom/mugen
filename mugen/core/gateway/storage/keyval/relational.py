@@ -3,11 +3,8 @@
 __all__ = ["RelationalKeyValStorageGateway"]
 
 import asyncio
-import dbm.gnu
 from datetime import datetime, timedelta, timezone
-import hashlib
 import json
-import os
 import threading
 from types import SimpleNamespace
 from typing import Any
@@ -32,9 +29,6 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
     _default_namespace = "core"
     _default_list_limit = 200
     _max_list_limit = 2000
-    _legacy_import_marker_namespace = "__meta__"
-    _legacy_import_marker_key = "legacy_dbm_import_v1"
-    _legacy_import_lock_name = "mugen:keyval:legacy-db-import:v1"
 
     def __init__(
         self,
@@ -64,7 +58,6 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
 
         # Fail fast on broken relational connectivity or missing table.
         self._run_sync(self._verify_backend_ready())
-        self._run_sync(self._maybe_import_legacy_dbm())
 
     def _run_sync_loop(self) -> None:
         asyncio.set_event_loop(self._sync_loop)
@@ -102,249 +95,6 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
                 "Relational keyval backend failed readiness checks."
             )
             raise RuntimeError("Relational keyval backend is unavailable.") from exc
-
-    @staticmethod
-    def _parse_guard_flag(*, key: str, raw_value: object, default: bool) -> bool:
-        if raw_value is None:
-            return default
-        if isinstance(raw_value, bool):
-            return raw_value
-        if isinstance(raw_value, str):
-            normalized = raw_value.strip().lower()
-            if normalized in {"1", "true", "yes", "on"}:
-                return True
-            if normalized in {"0", "false", "no", "off"}:
-                return False
-        raise RuntimeError(
-            f"Invalid boolean value for {key}: {raw_value!r}. "
-            "Use true/false (or on/off, yes/no, 1/0)."
-        )
-
-    def _legacy_import_enabled(self) -> bool:
-        raw = getattr(
-            getattr(
-                getattr(
-                    getattr(
-                        getattr(self._config, "mugen", SimpleNamespace()),
-                        "storage",
-                        SimpleNamespace(),
-                    ),
-                    "keyval",
-                    SimpleNamespace(),
-                ),
-                "legacy_import",
-                SimpleNamespace(),
-            ),
-            "enabled",
-            False,
-        )
-        return self._parse_guard_flag(
-            key="mugen.storage.keyval.legacy_import.enabled",
-            raw_value=raw,
-            default=False,
-        )
-
-    def _resolve_legacy_import_dbm_path(self) -> str:
-        legacy_import_cfg = getattr(
-            getattr(
-                getattr(
-                    getattr(
-                        getattr(self._config, "mugen", SimpleNamespace()),
-                        "storage",
-                        SimpleNamespace(),
-                    ),
-                    "keyval",
-                    SimpleNamespace(),
-                ),
-                "legacy_import",
-                SimpleNamespace(),
-            ),
-            "dbm_path",
-            None,
-        )
-        dbm_cfg_path = getattr(
-            getattr(
-                getattr(
-                    getattr(
-                        getattr(self._config, "mugen", SimpleNamespace()),
-                        "storage",
-                        SimpleNamespace(),
-                    ),
-                    "keyval",
-                    SimpleNamespace(),
-                ),
-                "dbm",
-                SimpleNamespace(),
-            ),
-            "path",
-            None,
-        )
-
-        candidate = legacy_import_cfg
-        if not isinstance(candidate, str) or candidate.strip() == "":
-            candidate = dbm_cfg_path
-
-        if not isinstance(candidate, str) or candidate.strip() == "":
-            raise RuntimeError(
-                "Legacy keyval import is enabled but no DBM path is configured."
-            )
-
-        path = candidate.strip()
-        if os.path.isabs(path):
-            return path
-
-        basedir = getattr(self._config, "basedir", None)
-        if isinstance(basedir, str) and basedir != "":
-            return os.path.abspath(os.path.join(basedir, path))
-        return os.path.abspath(path)
-
-    @staticmethod
-    def _legacy_import_lock_id(lock_name: str) -> int:
-        digest = hashlib.sha256(lock_name.encode("utf-8")).digest()
-        return int.from_bytes(digest[:8], byteorder="big", signed=False) % (2**63)
-
-    @staticmethod
-    def _read_dbm_entries(path: str) -> list[tuple[str, bytes, str]]:
-        entries: list[tuple[str, bytes, str]] = []
-        with dbm.gnu.open(path, "r") as db:
-            for raw_key in db.keys():
-                if not isinstance(raw_key, bytes):
-                    continue
-
-                try:
-                    key = raw_key.decode("utf-8")
-                except UnicodeDecodeError:
-                    continue
-
-                if key == "":
-                    continue
-
-                payload = db[raw_key]
-                codec = "bytes"
-                try:
-                    payload.decode("utf-8")
-                    codec = "text/utf-8"
-                except UnicodeDecodeError:
-                    codec = "bytes"
-
-                entries.append((key, payload, codec))
-
-        return entries
-
-    async def _maybe_import_legacy_dbm(self) -> None:
-        if self._legacy_import_enabled() is not True:
-            return
-
-        dbm_path = self._resolve_legacy_import_dbm_path()
-        if os.path.exists(dbm_path) is not True:
-            self._logging_gateway.info(
-                "Legacy keyval DBM file not found; skipping startup import "
-                f"path={dbm_path!r}."
-            )
-            return
-
-        lock_id = self._legacy_import_lock_id(self._legacy_import_lock_name)
-
-        try:
-            async with self._engine.begin() as conn:
-                await conn.execute(
-                    sa_text("SELECT pg_advisory_lock(:lock_id)"),
-                    {"lock_id": lock_id},
-                )
-
-                try:
-                    marker_result = await conn.execute(
-                        sa_text(
-                            "SELECT row_version "
-                            "FROM mugen.core_keyval_entry "
-                            "WHERE namespace = :namespace "
-                            "AND entry_key = :entry_key"
-                        ),
-                        {
-                            "namespace": self._legacy_import_marker_namespace,
-                            "entry_key": self._legacy_import_marker_key,
-                        },
-                    )
-                    marker_row = marker_result.mappings().one_or_none()
-                    if marker_row is not None:
-                        self._logging_gateway.info(
-                            "Legacy keyval import marker found; skipping startup import."
-                        )
-                        return
-
-                    entries = self._read_dbm_entries(dbm_path)
-                    inserted = 0
-                    skipped_existing = 0
-
-                    for key, payload, codec in entries:
-                        insert_result = await conn.execute(
-                            sa_text(
-                                "INSERT INTO mugen.core_keyval_entry "
-                                "(namespace, entry_key, payload, codec, expires_at) "
-                                "VALUES (:namespace, :entry_key, :payload, :codec, NULL) "
-                                "ON CONFLICT (namespace, entry_key) DO NOTHING"
-                            ),
-                            {
-                                "namespace": self._namespace_default,
-                                "entry_key": key,
-                                "payload": payload,
-                                "codec": codec,
-                            },
-                        )
-
-                        if int(insert_result.rowcount or 0) == 1:
-                            inserted += 1
-                        else:
-                            skipped_existing += 1
-
-                    marker_payload = json.dumps(
-                        {
-                            "version": 1,
-                            "source": "legacy_dbm_import",
-                            "dbm_path": dbm_path,
-                            "namespace": self._namespace_default,
-                            "discovered": len(entries),
-                            "inserted": inserted,
-                            "skipped_existing": skipped_existing,
-                            "completed_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                        ensure_ascii=True,
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-
-                    await conn.execute(
-                        sa_text(
-                            "INSERT INTO mugen.core_keyval_entry "
-                            "(namespace, entry_key, payload, codec, expires_at) "
-                            "VALUES (:namespace, :entry_key, :payload, 'application/json', NULL) "
-                            "ON CONFLICT (namespace, entry_key) DO UPDATE "
-                            "SET payload = EXCLUDED.payload, "
-                            "codec = EXCLUDED.codec, "
-                            "updated_at = now()"
-                        ),
-                        {
-                            "namespace": self._legacy_import_marker_namespace,
-                            "entry_key": self._legacy_import_marker_key,
-                            "payload": marker_payload,
-                        },
-                    )
-
-                    self._logging_gateway.info(
-                        "Legacy keyval startup import completed."
-                        f" discovered={len(entries)} inserted={inserted}"
-                        f" skipped_existing={skipped_existing}"
-                    )
-                finally:
-                    await conn.execute(
-                        sa_text("SELECT pg_advisory_unlock(:lock_id)"),
-                        {"lock_id": lock_id},
-                    )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            self._logging_gateway.error(
-                "Legacy keyval startup import failed."
-                f" error={type(exc).__name__}: {exc}"
-            )
-            raise RuntimeError("Legacy keyval startup import failed.") from exc
 
     def _resolve_namespace_default(self) -> str:
         namespace = getattr(

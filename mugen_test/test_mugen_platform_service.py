@@ -12,11 +12,11 @@ class TestMugenPlatformService(unittest.TestCase):
 
     def test_active_platforms_and_extension_supported(self) -> None:
         config = SimpleNamespace(
-            mugen=SimpleNamespace(platforms=["matrix", "telnet"])
+            mugen=SimpleNamespace(platforms=["matrix", "web"])
         )
         service = DefaultPlatformService(config=config, logging_gateway=Mock())
 
-        self.assertEqual(service.active_platforms, ["matrix", "telnet"])
+        self.assertEqual(service.active_platforms, ["matrix", "web"])
         self.assertTrue(service.extension_supported(SimpleNamespace(platforms=[])))
         self.assertTrue(service.extension_supported(SimpleNamespace(platforms=["matrix"])))
         self.assertFalse(service.extension_supported(SimpleNamespace(platforms=["whatsapp"])))
@@ -30,4 +30,4 @@ class TestMugenPlatformService(unittest.TestCase):
         self.assertEqual(service.active_platforms, ["web", "matrix"])
         self.assertTrue(service.extension_supported(SimpleNamespace(platforms=["Web"])))
         self.assertTrue(service.extension_supported(SimpleNamespace(platforms=(" matrix ",))))
-        self.assertFalse(service.extension_supported(SimpleNamespace(platforms=["telnet"])))
+        self.assertFalse(service.extension_supported(SimpleNamespace(platforms=["whatsapp"])))

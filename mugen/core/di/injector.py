@@ -6,7 +6,6 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Any, Mapping
 
 from mugen.core.contract.client.matrix import IMatrixClient
-from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.di.injector import IDependencyInjector
@@ -46,7 +45,6 @@ class DependencyInjector(IDependencyInjector):
         messaging_service: IMessagingService = None,
         knowledge_gateway: IKnowledgeGateway = None,
         matrix_client: IMatrixClient = None,
-        telnet_client: ITelnetClient = None,
         whatsapp_client: IWhatsAppClient = None,
         web_client: IWebClient = None,
     ):
@@ -63,7 +61,6 @@ class DependencyInjector(IDependencyInjector):
         self.__messaging_service = messaging_service
         self.__knowledge_gateway = knowledge_gateway
         self.__matrix_client = matrix_client
-        self.__telnet_client = telnet_client
         self.__whatsapp_client = whatsapp_client
         self.__web_client = web_client
 
@@ -172,14 +169,6 @@ class DependencyInjector(IDependencyInjector):
     @matrix_client.setter
     def matrix_client(self, value: IMatrixClient) -> None:
         self.__matrix_client = value
-
-    @property
-    def telnet_client(self) -> ITelnetClient:
-        return self.__telnet_client
-
-    @telnet_client.setter
-    def telnet_client(self, value: ITelnetClient) -> None:
-        self.__telnet_client = value
 
     @property
     def whatsapp_client(self) -> IWhatsAppClient:

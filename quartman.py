@@ -124,9 +124,9 @@ def _parse_bool(value: object, *, default: bool) -> bool:
     return default
 
 
-def _shutdown_container() -> None:
+async def _shutdown_container() -> None:
     try:
-        di.shutdown_container()
+        await di.shutdown_container_async()
     except Exception as exc:  # pylint: disable=broad-exception-caught
         app.logger.warning("Container shutdown failed (%s).", exc)
 
@@ -270,12 +270,12 @@ async def shutdown():
     state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
     state[PHASE_B_ERROR_KEY] = None
     if not isinstance(task, asyncio.Task):
-        _shutdown_container()
+        await _shutdown_container()
         return
 
     if task.done():
         state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
-        _shutdown_container()
+        await _shutdown_container()
         return
 
     app.logger.debug("Cancelling platform client runner task.")
@@ -286,4 +286,4 @@ async def shutdown():
         app.logger.debug("Platform client runner task cancelled during shutdown.")
     finally:
         state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
-        _shutdown_container()
+        await _shutdown_container()

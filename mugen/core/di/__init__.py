@@ -9,6 +9,7 @@ __all__ = [
     "container",
     "reset_container",
     "shutdown_container",
+    "shutdown_container_async",
 ]
 
 import asyncio
@@ -21,7 +22,6 @@ from types import SimpleNamespace
 
 import tomlkit
 
-from mugen.core.contract.client.telnet import ITelnetClient
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
@@ -117,6 +117,60 @@ def _config_path_exists(config: dict, *path: str) -> bool:
     return True
 
 
+def _config_path_value(config: dict, *path: str):
+    node = config
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return None
+        node = node[key]
+    return node
+
+
+def _validate_removed_legacy_paths(
+    config: dict,
+    logger: ILoggingGateway | logging.Logger,
+) -> None:
+    keyval_module = _config_path_value(
+        config,
+        "mugen",
+        "modules",
+        "core",
+        "gateway",
+        "storage",
+        "keyval",
+    )
+    if str(keyval_module).strip() == "mugen.core.gateway.storage.keyval.dbm":
+        logger.error(
+            "Removed legacy keyval backend configured: mugen.core.gateway.storage.keyval.dbm"
+        )
+        raise RuntimeError(
+            "Legacy keyval DBM backend is no longer supported. "
+            "Use mugen.core.gateway.storage.keyval.relational."
+        )
+
+    if _config_path_exists(
+        config,
+        "mugen",
+        "storage",
+        "keyval",
+        "legacy_import",
+    ):
+        logger.error(
+            "Removed keyval legacy import configuration detected: mugen.storage.keyval.legacy_import"
+        )
+        raise RuntimeError(
+            "Legacy keyval startup import is no longer supported. "
+            "Remove mugen.storage.keyval.legacy_import from configuration."
+        )
+
+    if _config_path_exists(config, "mugen", "modules", "core", "client", "telnet"):
+        logger.error("Removed core telnet client configuration detected.")
+        raise RuntimeError(
+            "Core telnet client is no longer supported. "
+            "Use the dev/test telnet harness module instead of core runtime wiring."
+        )
+
+
 def _get_active_platforms(config: dict) -> list[str] | None:
     """Get configured platform list from app configuration."""
     try:
@@ -182,6 +236,8 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
     if logger is None:
         logger = logging.getLogger()
 
+    _validate_removed_legacy_paths(config, logger)
+
     if unsupported_platforms:
         unsupported_platforms_text = ", ".join(unsupported_platforms)
         logger.error(
@@ -191,7 +247,7 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         raise RuntimeError(
             "Unsupported platform configuration: "
             f"{unsupported_platforms_text}. "
-            "Allowed values are matrix, telnet, web, whatsapp."
+            "Allowed values are matrix, web, whatsapp."
         )
 
     if profile == "api_only" and active_platforms:
@@ -256,8 +312,6 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
     if profile == "platform_full":
         if "matrix" in active_platform_set and injector.matrix_client is None:
             missing.append("matrix_client")
-        if "telnet" in active_platform_set and injector.telnet_client is None:
-            missing.append("telnet_client")
         if "whatsapp" in active_platform_set and injector.whatsapp_client is None:
             missing.append("whatsapp_client")
         if "web" in active_platform_set and injector.web_client is None:
@@ -456,23 +510,6 @@ _PROVIDER_SPECS = {
         required_platform="matrix",
         inactive_platform_warning="Matrix platform not active. Client not loaded.",
     ),
-    "telnet_client": _ProviderSpec(
-        provider_name="telnet_client",
-        injector_attr="telnet_client",
-        interface=ITelnetClient,
-        module_path=("mugen", "modules", "core", "client", "telnet"),
-        constructor_bindings=(
-            ("config", "config"),
-            ("ipc_service", "ipc_service"),
-            ("keyval_storage_gateway", "keyval_storage_gateway"),
-            ("logging_gateway", "logging_gateway"),
-            ("messaging_service", "messaging_service"),
-            ("user_service", "user_service"),
-        ),
-        invalid_config_exceptions=(KeyError, ValueError),
-        required_platform="telnet",
-        inactive_platform_warning="Telnet platform not active. Client not loaded.",
-    ),
     "whatsapp_client": _ProviderSpec(
         provider_name="whatsapp_client",
         injector_attr="whatsapp_client",
@@ -522,7 +559,6 @@ _PROVIDER_BUILD_ORDER = (
     "messaging_service",
     "knowledge_gateway",
     "matrix_client",
-    "telnet_client",
     "whatsapp_client",
     "web_client",
 )
@@ -682,12 +718,36 @@ def _shutdown_provider(
     provider: object | None,
     logger: ILoggingGateway | logging.Logger,
 ) -> None:
-    """Best-effort shutdown for one provider instance."""
+    """Synchronous cleanup wrapper for non-running-loop contexts."""
+    if provider is None:
+        return
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            asyncio.run(_shutdown_provider_async(provider_name, provider, logger))
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(f"Failed to shutdown provider ({provider_name}): {exc}")
+        return
+
+    logger.warning(
+        "Synchronous provider shutdown skipped in running loop (%s); "
+        "use shutdown_container_async().",
+        provider_name,
+    )
+
+
+async def _shutdown_provider_async(
+    provider_name: str,
+    provider: object | None,
+    logger: ILoggingGateway | logging.Logger,
+) -> None:
+    """Deterministically close one provider instance."""
     if provider is None:
         return
 
     maybe_awaitable = None
-
     close = getattr(provider, "close", None)
     if callable(close):
         try:
@@ -709,30 +769,33 @@ def _shutdown_provider(
         return
 
     try:
-        asyncio.run(maybe_awaitable)
-        return
-    except RuntimeError:
-        ...
+        await maybe_awaitable
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning(f"Failed to await provider aclose ({provider_name}): {exc}")
-        return
+        logger.warning(f"Failed to await provider close ({provider_name}): {exc}")
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        logger.warning(
-            f"Could not await provider aclose and no running loop exists ({provider_name})."
-        )
-        return
 
-    loop.create_task(maybe_awaitable)
-    logger.warning(
-        f"Provider close coroutine scheduled in running loop ({provider_name})."
-    )
+def _provider_specs_for_shutdown() -> list[_ProviderSpec]:
+    """Return provider specs in reverse build order for dependency-safe cleanup."""
+    ordered_specs = [spec for spec in _PROVIDER_SPECS.values()]
+    return list(reversed(ordered_specs))
 
 
 def _shutdown_injector(injector: DependencyInjector | None) -> None:
-    """Best-effort provider cleanup for an injector instance."""
+    """Synchronous cleanup wrapper for non-running-loop contexts."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(_shutdown_injector_async(injector))
+        return
+
+    logger = getattr(injector, "logging_gateway", logging.getLogger()) if injector else logging.getLogger()
+    logger.warning(
+        "Synchronous injector shutdown skipped in running loop; use shutdown_container_async()."
+    )
+
+
+async def _shutdown_injector_async(injector: DependencyInjector | None) -> None:
+    """Deterministically cleanup providers for an injector instance."""
     if injector is None:
         return
 
@@ -743,7 +806,7 @@ def _shutdown_injector(injector: DependencyInjector | None) -> None:
     )
 
     seen: set[int] = set()
-    for spec in _PROVIDER_SPECS.values():
+    for spec in _provider_specs_for_shutdown():
         provider = getattr(injector, spec.injector_attr, None)
         if provider is None:
             continue
@@ -754,7 +817,7 @@ def _shutdown_injector(injector: DependencyInjector | None) -> None:
             continue
 
         seen.add(provider_id)
-        _shutdown_provider(spec.provider_name, provider, logger)
+        await _shutdown_provider_async(spec.provider_name, provider, logger)
         setattr(injector, spec.injector_attr, None)
 
     try:
@@ -767,7 +830,7 @@ def _shutdown_injector(injector: DependencyInjector | None) -> None:
         if service_id in seen:
             continue
         seen.add(service_id)
-        _shutdown_provider(f"ext_service:{name}", service, logger)
+        await _shutdown_provider_async(f"ext_service:{name}", service, logger)
 
 
 class _ContainerProxy:
@@ -787,6 +850,11 @@ class _ContainerProxy:
     def shutdown(self) -> None:
         """Shutdown providers and clear the cached injector."""
         _shutdown_injector(self._injector)
+        self._injector = None
+
+    async def shutdown_async(self) -> None:
+        """Shutdown providers asynchronously and clear cached injector."""
+        await _shutdown_injector_async(self._injector)
         self._injector = None
 
     def reset(self) -> None:
@@ -819,3 +887,8 @@ def reset_container() -> None:
 def shutdown_container() -> None:
     """Shutdown all providers and clear the cached injector."""
     container.shutdown()
+
+
+async def shutdown_container_async() -> None:
+    """Shutdown all providers asynchronously and clear the cached injector."""
+    await container.shutdown_async()
