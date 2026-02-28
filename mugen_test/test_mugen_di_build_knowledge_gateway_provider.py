@@ -113,7 +113,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "knowledge": "nonexistent_module",
+                                    "knowledge": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -163,7 +163,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "knowledge": "valid_knowledge_module",
+                                    "knowledge": "valid_knowledge_module:MissingClass",
                                 }
                             }
                         }
@@ -230,7 +230,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "knowledge": "valid_knowledge_module",
+                                    "knowledge": "valid_knowledge_module:DummyKnowledgeGatewayClass",
                                 }
                             }
                         }
@@ -261,7 +261,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_knowledge_module": unittest.mock.Mock(),
+                            "valid_knowledge_module": unittest.mock.Mock(DummyKnowledgeGatewayClass=DummyKnowledgeGatewayClass),
                         },
                     ),
                     unittest.mock.patch(

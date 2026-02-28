@@ -52,7 +52,7 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 modules=SimpleNamespace(
-                    extensions=[SimpleNamespace(type="cp", path="cp_ext")]
+                    extensions=[SimpleNamespace(type="cp", path="cp_ext:_DummyCPExt")]
                 )
             )
         )
@@ -60,13 +60,7 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
         ipc_service = SimpleNamespace(register_ipc_extension=Mock())
         platform_service = SimpleNamespace(extension_supported=Mock(return_value=True))
 
-        with (
-            patch.dict("sys.modules", {"cp_ext": Mock()}),
-            patch(
-                "mugen.core.contract.extension.cp.ICPExtension.__subclasses__",
-                return_value=[_DummyCPExt],
-            ),
-        ):
+        with patch.dict("sys.modules", {"cp_ext": Mock(_DummyCPExt=_DummyCPExt)}):
             await mugen_mod.register_extensions(
                 app=app,
                 config_provider=lambda: config,
@@ -91,7 +85,7 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
             mugen=SimpleNamespace(
                 modules=SimpleNamespace(
                     core=SimpleNamespace(),
-                    extensions=[SimpleNamespace(type="cp", path="cp_ext")],
+                    extensions=[SimpleNamespace(type="cp", path="cp_ext:_DummyCPExt")],
                 )
             )
         )
@@ -100,11 +94,7 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
         platform_service = SimpleNamespace(extension_supported=Mock(return_value=False))
 
         with (
-            patch.dict("sys.modules", {"cp_ext": Mock()}),
-            patch(
-                "mugen.core.contract.extension.cp.ICPExtension.__subclasses__",
-                return_value=[_DummyCPExt],
-            ),
+            patch.dict("sys.modules", {"cp_ext": Mock(_DummyCPExt=_DummyCPExt)}),
             self.assertLogs("test_app", level="WARNING") as logger,
         ):
             await mugen_mod.register_extensions(
@@ -119,6 +109,6 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
         platform_service.extension_supported.assert_called_once()
         messaging_service.register_cp_extension.assert_not_called()
         self.assertIn(
-            "WARNING:test_app:Extension not supported by active platforms: cp_ext.",
+            "WARNING:test_app:Extension not supported by active platforms: cp_ext:_DummyCPExt.",
             logger.output,
         )

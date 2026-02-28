@@ -149,6 +149,14 @@ class TestMugenDIShutdownLifecycleAsync(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Failed to await provider close", logger.warning.call_args.args[0])
 
+        logger.reset_mock()
+        await di._shutdown_provider_async(  # pylint: disable=protected-access
+            "await-fail-aclose",
+            _ProviderWithAClose(awaitable=_AwaitableBoom()),
+            logger,
+        )
+        self.assertIn("Failed to await provider aclose", logger.warning.call_args.args[0])
+
     async def test_shutdown_provider_async_handles_non_awaitable_close_result(self) -> None:
         logger = Mock()
         await di._shutdown_provider_async(  # pylint: disable=protected-access

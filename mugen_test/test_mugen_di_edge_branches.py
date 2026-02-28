@@ -12,34 +12,12 @@ from mugen.core.contract.gateway.completion import ICompletionGateway
 class TestMugenDIEdgeBranches(unittest.TestCase):
     """Exercise remaining branch-heavy DI helpers."""
 
-    def test_get_provider_class_logs_when_multiple_matches_exist(self) -> None:
-        class FirstCompletionGateway(ICompletionGateway):
-            async def get_completion(self, context, operation="completion"):
-                return None
-
-        class SecondCompletionGateway(ICompletionGateway):
-            async def get_completion(self, context, operation="completion"):
-                return None
-
-        FirstCompletionGateway.__module__ = "module.same"
-        SecondCompletionGateway.__module__ = "module.same"
-
-        logger = Mock()
-        with patch(
-            "mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",
-            return_value=[FirstCompletionGateway, SecondCompletionGateway],
-        ):
-            provider = di._get_provider_class(
-                interface=ICompletionGateway,
-                module_name="module.same",
+    def test_split_class_path_rejects_module_only_value(self) -> None:
+        with self.assertRaises(RuntimeError):
+            di._split_class_path(
+                "module.only",
                 provider_name="completion_gateway",
-                logger=logger,
             )
-
-        self.assertIsNone(provider)
-        logger.error.assert_called_once_with(
-            "Multiple valid subclasses found (completion_gateway)."
-        )
 
     def test_config_path_exists_handles_non_dict_missing_and_present_paths(self) -> None:
         self.assertFalse(di._config_path_exists({"mugen": []}, "mugen", "modules"))
@@ -446,18 +424,15 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             module_path=("mugen", "modules", "dummy"),
             constructor_bindings=(("config", "config"),),
         )
+        config = {"mugen": {"modules": {"dummy": "dummy.module:DummyProvider"}}}
 
-        with (
-            patch.object(di, "_import_provider_module", return_value="dummy.module"),
-            patch.object(di, "_get_provider_class", return_value=DummyProvider),
-        ):
+        with patch.object(di, "_resolve_provider_class", return_value=DummyProvider):
             di._build_provider_from_spec(
-                {},
+                config,
                 object(),
                 spec=spec,
                 logger=logger,
             )
-
         logger.error.assert_called_once_with("Invalid injector (dummy_provider).")
 
     def test_build_provider_from_spec_skips_warning_when_inactive_message_missing(
@@ -492,16 +467,17 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             required_platform="web",
             inactive_platform_warning="inactive",
         )
+        config = {"mugen": {"platforms": [" WEB "], "modules": {"dummy": "dummy.module:Dummy"}}}
 
-        with patch.object(di, "_import_provider_module", return_value=None) as import_module:
+        with patch.object(di, "_resolve_provider_class", return_value=Mock()) as resolver:
             di._build_provider_from_spec(
-                {"mugen": {"platforms": [" WEB "]}},
+                config,
                 injector,
                 spec=spec,
                 logger=logger,
             )
 
-        import_module.assert_called_once()
+        resolver.assert_called_once()
         logger.warning.assert_not_called()
 
     def test_container_proxy_setattr_forwards_non_internal_attrs(self) -> None:

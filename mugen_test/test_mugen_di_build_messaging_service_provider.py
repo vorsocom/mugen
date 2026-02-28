@@ -113,7 +113,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "messaging": "nonexistent_module",
+                                    "messaging": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -163,7 +163,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "messaging": "valid_messaging_module",
+                                    "messaging": "valid_messaging_module:MissingClass",
                                 }
                             }
                         }
@@ -232,7 +232,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "messaging": "valid_messaging_module",
+                                    "messaging": "valid_messaging_module:DummyMessagingServiceClass",
                                 }
                             }
                         }
@@ -360,7 +360,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_messaging_module": unittest.mock.Mock(),
+                            "valid_messaging_module": unittest.mock.Mock(DummyMessagingServiceClass=DummyMessagingServiceClass),
                         },
                     ),
                     unittest.mock.patch(

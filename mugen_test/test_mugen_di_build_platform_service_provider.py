@@ -113,7 +113,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "platform": "nonexistent_module",
+                                    "platform": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -163,7 +163,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "platform": "valid_platform_module",
+                                    "platform": "valid_platform_module:MissingClass",
                                 }
                             }
                         }
@@ -232,7 +232,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "platform": "valid_platform_module",
+                                    "platform": "valid_platform_module:DummyPlatformServiceClass",
                                 }
                             }
                         }
@@ -263,7 +263,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_platform_module": unittest.mock.Mock(),
+                            "valid_platform_module": unittest.mock.Mock(DummyPlatformServiceClass=DummyPlatformServiceClass),
                         },
                     ),
                     unittest.mock.patch(

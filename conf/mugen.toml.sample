@@ -14,6 +14,7 @@ platforms = [
 storage.keyval.relational.namespace_default = "core"
 storage.keyval.relational.list_limit_default = 200
 runtime.phase_b.readiness_grace_seconds = 0.0
+runtime.phase_b.startup_timeout_seconds = 30.0
 runtime.phase_b.critical_platforms = ["web"]
 runtime.phase_b.degrade_on_critical_exit = true
 runtime.profile = "platform_full"   # api_only|web_only|platform_full
@@ -37,28 +38,28 @@ timeout_seconds = 10.0
 max_timeout_seconds = 30.0
 
 [mugen.modules.core]
-client.matrix = "mugen.core.client.matrix"
-client.whatsapp = "mugen.core.client.whatsapp"
-client.web = "mugen.core.client.web"
+client.matrix = "mugen.core.client.matrix:DefaultMatrixClient"
+client.whatsapp = "mugen.core.client.whatsapp:DefaultWhatsAppClient"
+client.web = "mugen.core.client.web:DefaultWebClient"
 
-gateway.completion = "mugen.core.gateway.completion.bedrock"
-# gateway.email = "mugen.core.gateway.email.smtp"
-# gateway.email = "mugen.core.gateway.email.ses"
-# gateway.knowledge = "mugen.core.gateway.knowledge.qdrant"
-gateway.logging = "mugen.core.gateway.logging.standard"
-gateway.storage.keyval = "mugen.core.gateway.storage.keyval.relational"
-gateway.storage.relational = "mugen.core.gateway.storage.rdbms.sqla.sqla_gateway"
+gateway.completion = "mugen.core.gateway.completion.bedrock:BedrockCompletionGateway"
+# gateway.email = "mugen.core.gateway.email.smtp:SMTPEmailGateway"
+# gateway.email = "mugen.core.gateway.email.ses:SESEmailGateway"
+# gateway.knowledge = "mugen.core.gateway.knowledge.qdrant:QdrantKnowledgeGateway"
+gateway.logging = "mugen.core.gateway.logging.standard:StandardLoggingGateway"
+gateway.storage.keyval = "mugen.core.gateway.storage.keyval.relational:RelationalKeyValStorageGateway"
+gateway.storage.relational = "mugen.core.gateway.storage.rdbms.sqla.sqla_gateway:SQLAlchemyRelationalStorageGateway"
 
-service.ipc = "mugen.core.service.ipc"
-service.messaging = "mugen.core.service.messaging"
-service.nlp = "mugen.core.service.nlp"
-service.platform = "mugen.core.service.platform"
-service.user = "mugen.core.service.user"
+service.ipc = "mugen.core.service.ipc:DefaultIPCService"
+service.messaging = "mugen.core.service.messaging:DefaultMessagingService"
+service.nlp = "mugen.core.service.nlp:DefaultNLPService"
+service.platform = "mugen.core.service.platform:DefaultPlatformService"
+service.user = "mugen.core.service.user:DefaultUserService"
 
 # Core framework plugins.
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.acp.fw_ext"
+path = "mugen.core.plugin.acp.fw_ext:AdminFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.acp"
 namespace = "com.vorsocomputing.mugen.acp"
@@ -67,7 +68,7 @@ contrib = "mugen.core.plugin.acp.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.audit.fw_ext"
+path = "mugen.core.plugin.audit.fw_ext:AuditFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.audit"
 namespace = "com.vorsocomputing.mugen.audit"
@@ -76,7 +77,7 @@ contrib = "mugen.core.plugin.audit.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.ops_vpn.fw_ext"
+path = "mugen.core.plugin.ops_vpn.fw_ext:OpsVpnFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.ops_vpn"
 namespace = "com.vorsocomputing.mugen.ops_vpn"
@@ -85,7 +86,7 @@ contrib = "mugen.core.plugin.ops_vpn.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.ops_case.fw_ext"
+path = "mugen.core.plugin.ops_case.fw_ext:OpsCaseFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.ops_case"
 namespace = "com.vorsocomputing.mugen.ops_case"
@@ -94,7 +95,7 @@ contrib = "mugen.core.plugin.ops_case.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.ops_sla.fw_ext"
+path = "mugen.core.plugin.ops_sla.fw_ext:OpsSlaFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.ops_sla"
 namespace = "com.vorsocomputing.mugen.ops_sla"
@@ -103,7 +104,7 @@ contrib = "mugen.core.plugin.ops_sla.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.ops_metering.fw_ext"
+path = "mugen.core.plugin.ops_metering.fw_ext:OpsMeteringFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.ops_metering"
 namespace = "com.vorsocomputing.mugen.ops_metering"
@@ -112,7 +113,7 @@ contrib = "mugen.core.plugin.ops_metering.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.ops_workflow.fw_ext"
+path = "mugen.core.plugin.ops_workflow.fw_ext:OpsWorkflowFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.ops_workflow"
 namespace = "com.vorsocomputing.mugen.ops_workflow"
@@ -121,7 +122,7 @@ contrib = "mugen.core.plugin.ops_workflow.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.ops_governance.fw_ext"
+path = "mugen.core.plugin.ops_governance.fw_ext:OpsGovernanceFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.ops_governance"
 namespace = "com.vorsocomputing.mugen.ops_governance"
@@ -130,7 +131,7 @@ contrib = "mugen.core.plugin.ops_governance.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.ops_reporting.fw_ext"
+path = "mugen.core.plugin.ops_reporting.fw_ext:OpsReportingFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.ops_reporting"
 namespace = "com.vorsocomputing.mugen.ops_reporting"
@@ -139,7 +140,7 @@ contrib = "mugen.core.plugin.ops_reporting.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.ops_connector.fw_ext"
+path = "mugen.core.plugin.ops_connector.fw_ext:OpsConnectorFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.ops_connector"
 namespace = "com.vorsocomputing.mugen.ops_connector"
@@ -148,7 +149,7 @@ contrib = "mugen.core.plugin.ops_connector.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.billing.fw_ext"
+path = "mugen.core.plugin.billing.fw_ext:BillingFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.billing"
 namespace = "com.vorsocomputing.mugen.billing"
@@ -157,7 +158,7 @@ contrib = "mugen.core.plugin.billing.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.knowledge_pack.fw_ext"
+path = "mugen.core.plugin.knowledge_pack.fw_ext:KnowledgePackFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.knowledge_pack"
 namespace = "com.vorsocomputing.mugen.knowledge_pack"
@@ -166,7 +167,7 @@ contrib = "mugen.core.plugin.knowledge_pack.contrib"
 
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.channel_orchestration.fw_ext"
+path = "mugen.core.plugin.channel_orchestration.fw_ext:ChannelOrchestrationFWExtension"
 enabled = true
 name = "com.vorsocomputing.mugen.channel_orchestration"
 namespace = "com.vorsocomputing.mugen.channel_orchestration"
@@ -176,7 +177,7 @@ contrib = "mugen.core.plugin.channel_orchestration.contrib"
 # Optional WhatsApp WACAPI framework plugin.
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.whatsapp.wacapi.fw_ext"
+path = "mugen.core.plugin.whatsapp.wacapi.fw_ext:WACAPIFWExtension"
 enabled = false
 name = "com.vorsocomputing.mugen.whatsapp.wacapi"
 namespace = "com.vorsocomputing.mugen.whatsapp.wacapi"
@@ -186,7 +187,7 @@ contrib = "mugen.core.plugin.whatsapp.wacapi.contrib"
 # Optional Web REST/SSE framework plugin.
 [[mugen.modules.core.plugins]]
 type = "fw"
-path = "mugen.core.plugin.web.fw_ext"
+path = "mugen.core.plugin.web.fw_ext:WebFWExtension"
 enabled = false
 name = "com.vorsocomputing.mugen.web"
 namespace = "com.vorsocomputing.mugen.web"
@@ -196,27 +197,27 @@ contrib = "mugen.core.plugin.web.contrib"
 # Context.
 [[mugen.modules.core.plugins]]
 type = "ctx"
-path = "mugen.core.plugin.context.persona.ctx_ext"
+path = "mugen.core.plugin.context.persona.ctx_ext:SystemPersonaCTXExtension"
 
 # Commands.
 [[mugen.modules.core.plugins]]
 type = "cp"
-path = "mugen.core.plugin.command.clear_history.cp_ext"
+path = "mugen.core.plugin.command.clear_history.cp_ext:ClearChatHistoryICPExtension"
 
 # Message handler.
 [[mugen.modules.core.plugins]]
 type = "mh"
-path = "mugen.core.plugin.message_handler.text.mh_ext"
+path = "mugen.core.plugin.message_handler.text.mh_ext:DefaultTextMHExtension"
 
 # Optional WACAPI IPC extension.
 # [[mugen.modules.core.plugins]]
 # type = "ipc"
-# path = "mugen.core.plugin.whatsapp.wacapi.ipc_ext"
+# path = "mugen.core.plugin.whatsapp.wacapi.ipc_ext:WACAPIIPCExtension"
 
 # Downstream extensions.
 # [[mugen.modules.extensions]]
 # type = "cp"
-# path = "your_module.your_ext"
+# path = "your_module:YourExtensionClass"
 
 # === ACP plugin ===
 [acp]

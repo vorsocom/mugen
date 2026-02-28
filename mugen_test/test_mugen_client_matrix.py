@@ -171,7 +171,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                matrix_mod.IMatrixClient, "__init__", autospec=True, return_value=None
+                matrix_mod.AsyncClient, "__init__", autospec=True, return_value=None
             ) as base_init,
             patch.object(
                 DefaultMatrixClient, "add_event_callback", autospec=True

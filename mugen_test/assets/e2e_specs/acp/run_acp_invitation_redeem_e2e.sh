@@ -399,7 +399,9 @@ invite_ttl_seconds = int(sys.argv[5])
 with open(source_path, "r", encoding="utf8") as handle:
     doc = tomlkit.parse(handle.read())
 
-doc["mugen"]["modules"]["core"]["gateway"]["email"] = "mugen.core.gateway.email.smtp"
+doc["mugen"]["modules"]["core"]["gateway"]["email"] = (
+    "mugen.core.gateway.email.smtp:SMTPEmailGateway"
+)
 
 if "smtp" not in doc:
     doc["smtp"] = tomlkit.table()

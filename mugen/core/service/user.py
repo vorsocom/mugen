@@ -28,6 +28,7 @@ class DefaultUserService(IUserService):
         displayname: str,
         room_id: str,
     ) -> None:
+        last_conflict: KeyValConflictError | None = None
         for _ in range(self._default_cas_retries):
             entry = await self._keyval_storage_gateway.get_entry(self._known_users_list_key)
             expected_row_version = 0
@@ -55,16 +56,13 @@ class DefaultUserService(IUserService):
                     expected_row_version=expected_row_version,
                 )
                 return
-            except KeyValConflictError:
+            except KeyValConflictError as exc:
+                last_conflict = exc
                 continue
 
-        # Last-write-wins fallback to avoid dropping updates forever.
-        known_users = await self.get_known_users_list()
-        known_users[user_id] = {
-            "displayname": displayname,
-            "dm_id": room_id,
-        }
-        await self._keyval_storage_gateway.put_json(self._known_users_list_key, known_users)
+        if last_conflict is not None:
+            raise last_conflict
+        raise RuntimeError("Known users update retries exhausted without conflict details.")
 
     async def get_known_users_list(self) -> dict:
         payload = await self._keyval_storage_gateway.get_json(self._known_users_list_key)

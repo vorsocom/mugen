@@ -118,7 +118,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                             "core": {
                                 "gateway": {
                                     "storage": {
-                                        "keyval": "nonexistent_module",
+                                        "keyval": "nonexistent_module:MissingClass",
                                     }
                                 }
                             }
@@ -172,7 +172,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                             "core": {
                                 "gateway": {
                                     "storage": {
-                                        "keyval": "valid_keyval_storage_module",
+                                        "keyval": "valid_keyval_storage_module:MissingClass",
                                     }
                                 }
                             }
@@ -241,7 +241,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                             "core": {
                                 "gateway": {
                                     "storage": {
-                                        "keyval": "valid_keyval_storage_module",
+                                        "keyval": "valid_keyval_storage_module:DummyKeyValStorageGatewayClass",
                                     }
                                 }
                             }
@@ -318,7 +318,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                         pass
 
                 DummyKeyValStorageGatewayClass.__module__ = (
-                    "valid_keyval_storage_module"
+                    "valid_keyval_storage_module:DummyKeyValStorageGatewayClass"
                 )
 
 
@@ -326,7 +326,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_keyval_storage_module": unittest.mock.Mock(),
+                            "valid_keyval_storage_module": unittest.mock.Mock(DummyKeyValStorageGatewayClass=DummyKeyValStorageGatewayClass),
                         },
                     ),
                     unittest.mock.patch(

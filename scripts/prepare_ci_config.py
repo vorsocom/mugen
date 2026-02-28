@@ -13,7 +13,7 @@ from werkzeug.security import generate_password_hash
 
 
 _WEB_PLATFORM = "web"
-_WEB_FRAMEWORK_PLUGIN_PATH = "mugen.core.plugin.web.fw_ext"
+_WEB_FRAMEWORK_PLUGIN_PATH = "mugen.core.plugin.web.fw_ext:WebFWExtension"
 
 
 def _generate_ed25519_private_pem() -> str:

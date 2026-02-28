@@ -50,6 +50,10 @@ class IRelationalStorageGateway(ABC):
             - rollback on exception
         """
 
+    @abstractmethod
+    async def aclose(self) -> None:
+        """Close underlying async resources (for example, DB engines)."""
+
     async def count_many(
         self,
         table: str,

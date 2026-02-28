@@ -20,6 +20,7 @@ import aiofiles
 from cryptography.fernet import Fernet, InvalidToken
 
 from nio import (
+    AsyncClient,
     Api,
     InviteAliasEvent,
     InviteMemberEvent,
@@ -70,7 +71,8 @@ from mugen.core.utility.processing_signal import (
 
 
 class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
-    IMatrixClient
+    AsyncClient,
+    IMatrixClient,
 ):
     """A custom implementation of IMatrixClient."""
 
