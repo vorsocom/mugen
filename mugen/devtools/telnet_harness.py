@@ -359,6 +359,5 @@ def _main() -> None:
     asyncio.run(run_dev_telnet_server())
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     _main()
-
