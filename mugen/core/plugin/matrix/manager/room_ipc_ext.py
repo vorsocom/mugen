@@ -2,8 +2,6 @@
 
 __all__ = ["RoomManagementIPCExtension"]
 
-import pickle
-
 from mugen.core import di
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.extension.ipc import IIPCExtension
@@ -182,7 +180,7 @@ class RoomManagementIPCExtension(IIPCExtension):
             for user_id in self._collect_member_ids(members):
                 response[-1]["members"].append(user_id)
             ## 6. List all chat threads.
-            response[-1]["chat_threads"] = self._load_chat_thread_keys(room_id)
+            response[-1]["chat_threads"] = await self._load_chat_thread_keys(room_id)
         return response
 
     async def _util_leave_room(self, room_id: str) -> None:
@@ -195,16 +193,16 @@ class RoomManagementIPCExtension(IIPCExtension):
         self._logging_gateway.debug(f"Leaving room {room_id}.")
         await self._client.room_leave(room_id)
         chat_threads_list_key = f"chat_threads_list:{room_id}"
-        if self._keyval_storage_gateway.has_key(chat_threads_list_key):
+        if await self._keyval_storage_gateway.exists(chat_threads_list_key):
             ## 2. Delete chat threads.
-            for chat_thread_key in self._load_chat_thread_keys(room_id):
+            for chat_thread_key in await self._load_chat_thread_keys(room_id):
                 self._logging_gateway.debug(f"Deleting chat thread: {chat_thread_key}.")
-                self._keyval_storage_gateway.remove(chat_thread_key)
+                await self._keyval_storage_gateway.delete(chat_thread_key)
             ## 3. Delete chat threads list.
             self._logging_gateway.debug(
                 f"Deleting chat threads list: {chat_threads_list_key}."
             )
-            self._keyval_storage_gateway.remove(chat_threads_list_key)
+            await self._keyval_storage_gateway.delete(chat_threads_list_key)
 
     async def _joined_room_ids(self) -> list[str]:
         rooms = await self._client.joined_rooms()
@@ -251,35 +249,20 @@ class RoomManagementIPCExtension(IIPCExtension):
             return None
         return None
 
-    def _load_chat_thread_keys(self, room_id: str) -> list[str]:
+    async def _load_chat_thread_keys(self, room_id: str) -> list[str]:
         chat_threads_list_key = f"chat_threads_list:{room_id}"
-        if not self._keyval_storage_gateway.has_key(chat_threads_list_key):
+        if not await self._keyval_storage_gateway.exists(chat_threads_list_key):
             return []
-        raw_payload = self._keyval_storage_gateway.get(chat_threads_list_key, False)
-        if raw_payload in [None, ""]:
+        payload = await self._keyval_storage_gateway.get_json(chat_threads_list_key)
+        if payload in [None, ""]:
             return []
-        if isinstance(raw_payload, str):
-            raw_payload = raw_payload.encode("utf-8")
-        if not isinstance(raw_payload, bytes):
-            return []
-        try:
-            chat_threads_list = pickle.loads(raw_payload)
-        except (
-            pickle.PickleError,
-            TypeError,
-            ValueError,
-            EOFError,
-            AttributeError,
-            ImportError,
-        ):
+        if not isinstance(payload, dict):
             self._logging_gateway.warning(
-                "RoomManagementIPCExtension: Failed to decode chat thread list."
+                "RoomManagementIPCExtension: Invalid chat thread list payload."
                 f" room_id={room_id}"
             )
             return []
-        if not isinstance(chat_threads_list, dict):
-            return []
-        threads = chat_threads_list.get("threads")
+        threads = payload.get("threads")
         if not isinstance(threads, list):
             return []
         return [item for item in threads if isinstance(item, str) and item != ""]

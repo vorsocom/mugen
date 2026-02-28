@@ -1,6 +1,4 @@
 """Unit tests for matrix IPC extensions."""
-
-import pickle
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, call, patch
@@ -21,13 +19,28 @@ class _InMemoryKeyValStorageGateway:  # pylint: disable=too-few-public-methods
         self._values: dict[str, object] = dict(values or {})
         self.removed_keys: list[str] = []
 
-    def has_key(self, key: str) -> bool:
+    async def exists(self, key: str, *, namespace: str | None = None) -> bool:
+        del namespace
         return key in self._values
 
-    def get(self, key: str, _decode: bool = True) -> object | None:
+    async def get_json(
+        self,
+        key: str,
+        *,
+        namespace: str | None = None,
+    ) -> object | None:
+        del namespace
         return self._values.get(key)
 
-    def remove(self, key: str) -> object | None:
+    async def delete(
+        self,
+        key: str,
+        *,
+        namespace: str | None = None,
+        expected_row_version: int | None = None,
+    ) -> object | None:
+        del namespace
+        del expected_row_version
         self.removed_keys.append(key)
         return self._values.pop(key, None)
 
@@ -125,10 +138,10 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
     async def test_matrix_list_rooms_returns_normalized_room_details(self) -> None:
         keyval_storage_gateway = _InMemoryKeyValStorageGateway(
             {
-                "chat_threads_list:!room-a:example.com": pickle.dumps(
-                    {"threads": ["thread:1", "thread:2", 99]}
-                ),
-                "chat_threads_list:!room-b:example.com": b"not-a-pickle",
+                "chat_threads_list:!room-a:example.com": {
+                    "threads": ["thread:1", "thread:2", 99]
+                },
+                "chat_threads_list:!room-b:example.com": b"not-json",
             }
         )
         logging_gateway = Mock()
@@ -232,9 +245,7 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
     async def test_matrix_leave_all_rooms_kicks_members_and_cleans_threads(self) -> None:
         keyval_storage_gateway = _InMemoryKeyValStorageGateway(
             {
-                "chat_threads_list:!room-a:example.com": pickle.dumps(
-                    {"threads": ["thread:a"]}
-                ),
+                "chat_threads_list:!room-a:example.com": {"threads": ["thread:a"]},
                 "thread:a": b"payload",
             }
         )
@@ -296,9 +307,7 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
     async def test_matrix_leave_empty_rooms_only_leaves_empty_rooms(self) -> None:
         keyval_storage_gateway = _InMemoryKeyValStorageGateway(
             {
-                "chat_threads_list:!room-a:example.com": pickle.dumps(
-                    {"threads": ["thread:a"]}
-                ),
+                "chat_threads_list:!room-a:example.com": {"threads": ["thread:a"]},
                 "thread:a": b"payload",
             }
         )
@@ -436,41 +445,41 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(  # pylint: disable=protected-access
-            ext._load_chat_thread_keys("!missing:example.com"),
+            await ext._load_chat_thread_keys("!missing:example.com"),
             [],
         )
 
         keyval_storage_gateway._values["chat_threads_list:!empty:example.com"] = ""
         self.assertEqual(  # pylint: disable=protected-access
-            ext._load_chat_thread_keys("!empty:example.com"),
+            await ext._load_chat_thread_keys("!empty:example.com"),
             [],
         )
 
         keyval_storage_gateway._values["chat_threads_list:!string:example.com"] = "bad"
         self.assertEqual(  # pylint: disable=protected-access
-            ext._load_chat_thread_keys("!string:example.com"),
+            await ext._load_chat_thread_keys("!string:example.com"),
             [],
         )
 
         keyval_storage_gateway._values["chat_threads_list:!invalid-type:example.com"] = 123
         self.assertEqual(  # pylint: disable=protected-access
-            ext._load_chat_thread_keys("!invalid-type:example.com"),
+            await ext._load_chat_thread_keys("!invalid-type:example.com"),
             [],
         )
 
-        keyval_storage_gateway._values["chat_threads_list:!list:example.com"] = (
-            pickle.dumps(["thread:1"])
-        )
+        keyval_storage_gateway._values["chat_threads_list:!list:example.com"] = [
+            "thread:1"
+        ]
         self.assertEqual(  # pylint: disable=protected-access
-            ext._load_chat_thread_keys("!list:example.com"),
+            await ext._load_chat_thread_keys("!list:example.com"),
             [],
         )
 
-        keyval_storage_gateway._values["chat_threads_list:!threads:example.com"] = (
-            pickle.dumps({"threads": "thread:1"})
-        )
+        keyval_storage_gateway._values["chat_threads_list:!threads:example.com"] = {
+            "threads": "thread:1"
+        }
         self.assertEqual(  # pylint: disable=protected-access
-            ext._load_chat_thread_keys("!threads:example.com"),
+            await ext._load_chat_thread_keys("!threads:example.com"),
             [],
         )
 

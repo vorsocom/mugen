@@ -11,7 +11,6 @@ __version__ = "0.43.2"
 import asyncio
 import logging
 from time import perf_counter
-from types import SimpleNamespace
 
 from mugen import (
     BootstrapError,
@@ -41,6 +40,10 @@ from mugen.core.domain.use_case.phase_b_health import (
     PhaseBHealthInput,
     evaluate_phase_b_health,
 )
+from mugen.core.runtime.phase_b_controls import (
+    parse_bool,
+    resolve_phase_b_runtime_controls,
+)
 
 _PLATFORM_CLIENTS_TASK_KEY = "platform_clients_task"
 _PHASE_B_READINESS_GRACE_KEY = "phase_b_readiness_grace_seconds"
@@ -62,66 +65,12 @@ def _bootstrap_state() -> dict:
     return mugen_state.setdefault(BOOTSTRAP_STATE_KEY, {})
 
 
+def _parse_bool(value: object, default: bool = False) -> bool:
+    return parse_bool(value, default=default)
+
+
 def _resolve_phase_b_runtime_controls() -> tuple[float, list[str], bool]:
-    config = getattr(di.container, "config", None)
-    if config is None:
-        return 0.0, [], True
-
-    mugen_cfg = getattr(config, "mugen", SimpleNamespace())
-    runtime_cfg = getattr(mugen_cfg, "runtime", SimpleNamespace())
-    phase_b_cfg = getattr(runtime_cfg, "phase_b", SimpleNamespace())
-
-    readiness_grace_raw = getattr(phase_b_cfg, "readiness_grace_seconds", 0.0)
-    try:
-        readiness_grace = float(readiness_grace_raw)
-    except (TypeError, ValueError):
-        readiness_grace = 0.0
-    if readiness_grace < 0:
-        readiness_grace = 0.0
-
-    raw_degrade_on_critical_exit = getattr(phase_b_cfg, "degrade_on_critical_exit", True)
-    if isinstance(raw_degrade_on_critical_exit, bool):
-        degrade_on_critical_exit = raw_degrade_on_critical_exit
-    elif isinstance(raw_degrade_on_critical_exit, str):
-        normalized = raw_degrade_on_critical_exit.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            degrade_on_critical_exit = True
-        elif normalized in {"0", "false", "no", "off"}:
-            degrade_on_critical_exit = False
-        else:
-            degrade_on_critical_exit = True
-    else:
-        degrade_on_critical_exit = True
-
-    critical_platforms_raw = getattr(phase_b_cfg, "critical_platforms", None)
-    if isinstance(critical_platforms_raw, list):
-        critical_platforms = [
-            str(item).strip().lower()
-            for item in critical_platforms_raw
-            if str(item).strip() != ""
-        ]
-        return readiness_grace, critical_platforms, degrade_on_critical_exit
-
-    active_platforms = getattr(mugen_cfg, "platforms", [])
-    if isinstance(active_platforms, list):
-        return readiness_grace, [
-            str(item).strip().lower()
-            for item in active_platforms
-            if str(item).strip() != ""
-        ], degrade_on_critical_exit
-    return readiness_grace, [], degrade_on_critical_exit
-
-
-def _parse_bool(value: object, *, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return default
+    return resolve_phase_b_runtime_controls(getattr(di.container, "config", None))
 
 
 async def _shutdown_container() -> None:

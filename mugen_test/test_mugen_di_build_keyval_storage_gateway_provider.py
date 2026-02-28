@@ -259,22 +259,62 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     def __init__(self, config, logging_gateway):
                         pass
 
-                    def close(self):
+                    async def aclose(self):
                         pass
 
-                    def get(self, key, decode=True):
+                    async def get_entry(
+                        self,
+                        key,
+                        *,
+                        namespace=None,
+                        include_expired=False,
+                    ):
                         pass
 
-                    def has_key(self, key):
+                    async def put_bytes(
+                        self,
+                        key,
+                        value,
+                        *,
+                        namespace=None,
+                        codec="bytes",
+                        expected_row_version=None,
+                        ttl_seconds=None,
+                    ):
                         pass
 
-                    def keys(self):
+                    async def delete(
+                        self,
+                        key,
+                        *,
+                        namespace=None,
+                        expected_row_version=None,
+                    ):
                         pass
 
-                    def put(self, key, value):
+                    async def exists(self, key, *, namespace=None):
                         pass
 
-                    def remove(self, key):
+                    async def list_keys(
+                        self,
+                        *,
+                        prefix="",
+                        namespace=None,
+                        limit=None,
+                        cursor=None,
+                    ):
+                        pass
+
+                    async def compare_and_set(
+                        self,
+                        key,
+                        value,
+                        *,
+                        namespace=None,
+                        codec="bytes",
+                        expected_row_version=0,
+                        ttl_seconds=None,
+                    ):
                         pass
 
                 DummyKeyValStorageGatewayClass.__module__ = (

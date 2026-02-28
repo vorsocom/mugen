@@ -1623,18 +1623,13 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     "xxx_ext": unittest.mock.Mock(),
                 },
             ),
+            self.assertRaises(ExtensionLoadError),
         ):
             await register_extensions(
                 app=app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
             )
-            self.assertEqual(
-                logger.output[2],
-                "WARNING:test_app:Unknown extension type: xxx.",
-            )
-            self.assertEqual(
-                logger.output[3],
-                "WARNING:test_app:Extension not supported by active platforms:"
-                " xxx_ext.",
-            )
+        self.assertTrue(
+            any("Unknown extension type: xxx." in line for line in logger.output)
+        )

@@ -780,18 +780,22 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         )
         self._start_matrix_ipc_worker()
         if self._matrix_ipc_queue is None:
-            async def _dispatch_without_worker() -> None:
-                try:
-                    await self._dispatch_matrix_ipc_request(payload)
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    self._logging_gateway.warning(
-                        "Matrix event extension dispatch failed."
-                        f" callback={callback_name}"
-                        f" event={event_type}"
-                        f" error={type(exc).__name__}: {exc}"
-                    )
-
-            asyncio.create_task(_dispatch_without_worker())
+            self._logging_gateway.warning(
+                "Matrix IPC queue unavailable; dispatching inline."
+                f" callback={callback_name}"
+                f" event={event_type}"
+            )
+            try:
+                await self._dispatch_matrix_ipc_request(payload)
+                self._increment_matrix_metric("matrix.ipc.dispatch.inline_no_queue_success")
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self._increment_matrix_metric("matrix.ipc.dispatch.inline_no_queue_failed")
+                self._logging_gateway.warning(
+                    "Matrix event extension dispatch failed."
+                    f" callback={callback_name}"
+                    f" event={event_type}"
+                    f" error={type(exc).__name__}: {exc}"
+                )
             return
 
         try:

@@ -172,6 +172,397 @@ class _InMemoryKeyVal:
         return KeyValListPage(keys=page_keys, next_cursor=next_cursor)
 
 
+class _MemoryMappings:
+    def __init__(self, rows):
+        self._rows = [dict(row) for row in rows]
+
+    def one_or_none(self):
+        return self._rows[0] if self._rows else None
+
+    def one(self):
+        if not self._rows:
+            raise AssertionError("expected one row")
+        return self._rows[0]
+
+    def all(self):
+        return [dict(row) for row in self._rows]
+
+
+class _MemoryResult:
+    def __init__(self, *, rows=None, scalar_value=None, rowcount=None):
+        self._rows = [dict(row) for row in (rows or [])]
+        self._scalar_value = scalar_value
+        self.rowcount = rowcount
+
+    def mappings(self):
+        return _MemoryMappings(self._rows)
+
+    def scalar(self):
+        return self._scalar_value
+
+    def first(self):
+        if self._rows:
+            return self._rows[0]
+        return None
+
+
+class _InMemoryWebRelationalState:
+    def __init__(self) -> None:
+        self.queue_jobs: dict[str, dict] = {}
+        self.conversation_states: dict[str, dict] = {}
+        self.conversation_events: dict[str, dict[int, dict]] = {}
+        self.media_tokens: dict[str, dict] = {}
+
+
+class _InMemoryWebRelationalSession:
+    def __init__(self, state: _InMemoryWebRelationalState) -> None:
+        self._state = state
+
+    @staticmethod
+    def _norm_sql(stmt: object) -> str:
+        return " ".join(str(stmt).replace("\n", " ").split()).lower()
+
+    @staticmethod
+    def _now():
+        from datetime import datetime, timezone
+
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _payload(value):
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    def _queue_row(self, job_id: str) -> dict | None:
+        row = self._state.queue_jobs.get(job_id)
+        if row is None:
+            return None
+        return dict(row)
+
+    async def execute(self, stmt, params=None):  # noqa: C901, PLR0912, PLR0915
+        sql = self._norm_sql(stmt)
+        args = dict(params or {})
+        now = self._now()
+
+        if sql.startswith("select count(*) from mugen.web_queue_job where status = 'pending'"):
+            pending_count = sum(
+                1
+                for row in self._state.queue_jobs.values()
+                if str(row.get("status", "")).strip().lower() == "pending"
+            )
+            return _MemoryResult(scalar_value=pending_count)
+
+        if sql.startswith("insert into mugen.web_queue_job "):
+            job_id = str(args.get("job_id", ""))
+            row = {
+                "job_id": job_id,
+                "conversation_id": str(args.get("conversation_id", "")),
+                "sender": str(args.get("sender", "")),
+                "message_type": str(args.get("message_type", "")),
+                "payload": self._payload(args.get("payload")),
+                "status": str(args.get("status", "pending")),
+                "attempts": int(args.get("attempts") or 0),
+                "lease_expires_at": args.get("lease_expires_at"),
+                "error_message": args.get("error_message"),
+                "completed_at": args.get("completed_at"),
+                "client_message_id": args.get("client_message_id"),
+                "created_at": args.get("created_at") or now,
+                "updated_at": args.get("updated_at") or now,
+            }
+            self._state.queue_jobs[job_id] = row
+            return _MemoryResult(rowcount=1)
+
+        if (
+            "update mugen.web_queue_job set status = 'pending', lease_expires_at = null, updated_at = now() "
+            in sql
+            and "where status = 'processing'" in sql
+        ):
+            boundary = args.get("now_ts")
+            if boundary is None:
+                boundary = now
+            updated = 0
+            for row in self._state.queue_jobs.values():
+                if str(row.get("status", "")).strip().lower() != "processing":
+                    continue
+                lease_expires_at = row.get("lease_expires_at")
+                if lease_expires_at is None or lease_expires_at <= boundary:
+                    row["status"] = "pending"
+                    row["lease_expires_at"] = None
+                    row["updated_at"] = now
+                    updated += 1
+            return _MemoryResult(rowcount=updated)
+
+        if (
+            "from mugen.web_queue_job where status = 'pending'" in sql
+            and "for update skip locked" in sql
+        ):
+            pending_rows = sorted(
+                (
+                    dict(row)
+                    for row in self._state.queue_jobs.values()
+                    if str(row.get("status", "")).strip().lower() == "pending"
+                ),
+                key=lambda row: row.get("created_at") or now,
+            )
+            return _MemoryResult(rows=pending_rows[:1])
+
+        if (
+            sql.startswith("update mugen.web_queue_job set status = cast(:status as mugen.citext),")
+            and "returning job_id" in sql
+        ):
+            job_id = str(args.get("job_id", ""))
+            row = self._state.queue_jobs.get(job_id)
+            if row is None:
+                return _MemoryResult(rows=[], rowcount=0)
+            row["status"] = args.get("status")
+            row["attempts"] = int(args.get("attempts") or 0)
+            row["updated_at"] = args.get("updated_at") or now
+            row["lease_expires_at"] = args.get("lease_expires_at")
+            row["error_message"] = args.get("error_message")
+            row["completed_at"] = args.get("completed_at")
+            return _MemoryResult(rows=[dict(row)], rowcount=1)
+
+        if sql.startswith("select status, attempts from mugen.web_queue_job where job_id = :job_id"):
+            row = self._queue_row(str(args.get("job_id", "")))
+            return _MemoryResult(rows=[] if row is None else [row])
+
+        if sql.startswith("update mugen.web_queue_job set lease_expires_at = :lease_expires_at"):
+            job_id = str(args.get("job_id", ""))
+            row = self._state.queue_jobs.get(job_id)
+            if row is None:
+                return _MemoryResult(rowcount=0)
+            if str(row.get("status", "")).strip().lower() != str(
+                args.get("current_status", "")
+            ).strip().lower():
+                return _MemoryResult(rowcount=0)
+            expected = args.get("expected_attempt")
+            if expected is not None and int(row.get("attempts") or 0) != int(expected):
+                return _MemoryResult(rowcount=0)
+            row["lease_expires_at"] = args.get("lease_expires_at")
+            row["updated_at"] = args.get("updated_at") or now
+            return _MemoryResult(rowcount=1)
+
+        if (
+            sql.startswith("select job_id, conversation_id, sender, message_type, payload, status, attempts,")
+            and "from mugen.web_queue_job where job_id = :job_id" in sql
+        ):
+            row = self._queue_row(str(args.get("job_id", "")))
+            return _MemoryResult(rows=[] if row is None else [row])
+
+        if (
+            sql.startswith("update mugen.web_queue_job set status = cast(:status as mugen.citext),")
+            and "error_message = :error_message, completed_at = :completed_at where job_id = :job_id"
+            in sql
+        ):
+            job_id = str(args.get("job_id", ""))
+            row = self._state.queue_jobs.get(job_id)
+            if row is None:
+                return _MemoryResult(rowcount=0)
+            if "and status = cast(:current_status as mugen.citext)" in sql:
+                if str(row.get("status", "")).strip().lower() != str(
+                    args.get("current_status", "")
+                ).strip().lower():
+                    return _MemoryResult(rowcount=0)
+                if int(row.get("attempts") or 0) != int(args.get("expected_attempt") or 0):
+                    return _MemoryResult(rowcount=0)
+            row["status"] = args.get("status")
+            row["lease_expires_at"] = None
+            row["updated_at"] = args.get("updated_at") or now
+            row["error_message"] = args.get("error_message")
+            row["completed_at"] = args.get("completed_at")
+            return _MemoryResult(rowcount=1)
+
+        if sql == "delete from mugen.web_queue_job":
+            count = len(self._state.queue_jobs)
+            self._state.queue_jobs.clear()
+            return _MemoryResult(rowcount=count)
+
+        if (
+            sql.startswith("select job_id, conversation_id, sender, message_type, payload, status, attempts,")
+            and "from mugen.web_queue_job order by created_at asc" in sql
+        ):
+            rows = sorted(
+                [dict(row) for row in self._state.queue_jobs.values()],
+                key=lambda row: row.get("created_at") or now,
+            )
+            return _MemoryResult(rows=rows)
+
+        if sql.startswith("select payload from mugen.web_queue_job where status in ('pending', 'processing')"):
+            rows = [
+                {"payload": dict(row.get("payload") or {})}
+                for row in self._state.queue_jobs.values()
+                if str(row.get("status", "")).strip().lower() in {"pending", "processing"}
+            ]
+            return _MemoryResult(rows=rows)
+
+        if sql.startswith(
+            "select token, owner_user_id, file_path, mime_type, filename, expires_at from mugen.web_media_token where token = :token"
+        ):
+            token = str(args.get("token", ""))
+            row = self._state.media_tokens.get(token)
+            return _MemoryResult(rows=[] if row is None else [dict(row)])
+
+        if sql.startswith("delete from mugen.web_media_token where token = :token"):
+            token = str(args.get("token", ""))
+            removed = self._state.media_tokens.pop(token, None)
+            return _MemoryResult(rowcount=1 if removed is not None else 0)
+
+        if sql.startswith("insert into mugen.web_media_token "):
+            token = str(args.get("token", ""))
+            self._state.media_tokens[token] = {
+                "token": token,
+                "owner_user_id": args.get("owner_user_id"),
+                "conversation_id": args.get("conversation_id"),
+                "file_path": args.get("file_path"),
+                "mime_type": args.get("mime_type"),
+                "filename": args.get("filename"),
+                "expires_at": args.get("expires_at"),
+                "created_at": now,
+                "updated_at": now,
+            }
+            return _MemoryResult(rowcount=1)
+
+        if sql.startswith("select token, file_path, expires_at from mugen.web_media_token"):
+            return _MemoryResult(rows=[dict(row) for row in self._state.media_tokens.values()])
+
+        if sql.startswith(
+            "select owner_user_id from mugen.web_conversation_state where conversation_id = :conversation_id"
+        ):
+            conversation_id = str(args.get("conversation_id", ""))
+            row = self._state.conversation_states.get(conversation_id)
+            if row is None:
+                return _MemoryResult(rows=[])
+            return _MemoryResult(rows=[{"owner_user_id": row.get("owner_user_id")}])
+
+        if (
+            sql.startswith("select owner_user_id, stream_generation, next_event_id from mugen.web_conversation_state")
+            and "where conversation_id = :conversation_id" in sql
+        ):
+            conversation_id = str(args.get("conversation_id", ""))
+            row = self._state.conversation_states.get(conversation_id)
+            return _MemoryResult(rows=[] if row is None else [dict(row)])
+
+        if sql.startswith("select stream_generation, stream_version, next_event_id from mugen.web_conversation_state"):
+            conversation_id = str(args.get("conversation_id", ""))
+            row = self._state.conversation_states.get(conversation_id)
+            if row is None:
+                return _MemoryResult(rows=[])
+            return _MemoryResult(
+                rows=[
+                    {
+                        "stream_generation": row.get("stream_generation"),
+                        "stream_version": row.get("stream_version"),
+                        "next_event_id": row.get("next_event_id"),
+                    }
+                ]
+            )
+
+        if sql.startswith("insert into mugen.web_conversation_state "):
+            conversation_id = str(args.get("conversation_id", ""))
+            owner_user_id = args.get("owner_user_id")
+            if owner_user_id in [None, ""]:
+                owner_user_id = "system"
+            next_event_id = int(args.get("next_event_id") or 1)
+            if conversation_id not in self._state.conversation_states:
+                self._state.conversation_states[conversation_id] = {
+                    "conversation_id": conversation_id,
+                    "owner_user_id": owner_user_id,
+                    "stream_generation": args.get("stream_generation"),
+                    "stream_version": args.get("stream_version"),
+                    "next_event_id": next_event_id,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                return _MemoryResult(rowcount=1)
+            if "on conflict (conversation_id) do update" in sql:
+                row = self._state.conversation_states[conversation_id]
+                row["stream_generation"] = args.get("stream_generation")
+                row["stream_version"] = args.get("stream_version")
+                row["next_event_id"] = next_event_id
+                row["updated_at"] = now
+                return _MemoryResult(rowcount=1)
+            return _MemoryResult(rowcount=0)
+
+        if sql.startswith("update mugen.web_conversation_state set next_event_id = :next_event_id"):
+            conversation_id = str(args.get("conversation_id", ""))
+            row = self._state.conversation_states.get(conversation_id)
+            if row is None:
+                return _MemoryResult(rowcount=0)
+            row["next_event_id"] = int(args.get("next_event_id") or 1)
+            row["stream_generation"] = args.get("stream_generation")
+            row["stream_version"] = args.get("stream_version")
+            row["updated_at"] = now
+            return _MemoryResult(rowcount=1)
+
+        if sql.startswith("delete from mugen.web_conversation_event where conversation_id = :conversation_id and event_id < :min_keep_event_id"):
+            conversation_id = str(args.get("conversation_id", ""))
+            min_keep_event_id = int(args.get("min_keep_event_id") or 1)
+            events = self._state.conversation_events.get(conversation_id, {})
+            removed = 0
+            for event_id in list(events):
+                if int(event_id) < min_keep_event_id:
+                    del events[event_id]
+                    removed += 1
+            return _MemoryResult(rowcount=removed)
+
+        if sql.startswith("delete from mugen.web_conversation_event where conversation_id = :conversation_id"):
+            conversation_id = str(args.get("conversation_id", ""))
+            removed = len(self._state.conversation_events.get(conversation_id, {}))
+            self._state.conversation_events[conversation_id] = {}
+            return _MemoryResult(rowcount=removed)
+
+        if sql.startswith("insert into mugen.web_conversation_event "):
+            conversation_id = str(args.get("conversation_id", ""))
+            event_id = int(args.get("event_id") or 0)
+            if event_id <= 0:
+                return _MemoryResult(rowcount=0)
+            payload = self._payload(args.get("payload"))
+            events = self._state.conversation_events.setdefault(conversation_id, {})
+            if event_id in events and "on conflict (conversation_id, event_id) do update" not in sql:
+                return _MemoryResult(rowcount=0)
+            events[event_id] = {
+                "conversation_id": conversation_id,
+                "event_id": event_id,
+                "event_type": str(args.get("event_type", "system")),
+                "payload": payload,
+                "stream_generation": args.get("stream_generation"),
+                "stream_version": int(args.get("stream_version") or 1),
+                "created_at": args.get("created_at") or now,
+                "updated_at": now,
+            }
+            return _MemoryResult(rowcount=1)
+
+        if sql.startswith(
+            "select event_id, event_type, payload, created_at, stream_generation, stream_version from mugen.web_conversation_event where conversation_id = :conversation_id order by event_id desc limit :event_limit"
+        ):
+            conversation_id = str(args.get("conversation_id", ""))
+            limit = int(args.get("event_limit") or 100)
+            events = self._state.conversation_events.get(conversation_id, {})
+            rows = [
+                dict(events[event_id])
+                for event_id in sorted(events, reverse=True)[:limit]
+            ]
+            return _MemoryResult(rows=rows)
+
+        raise AssertionError(f"Unhandled SQL in in-memory relational session: {sql}")
+
+
+class _InMemoryWebRelationalGateway:
+    def __init__(self) -> None:
+        self._state = _InMemoryWebRelationalState()
+
+    @asynccontextmanager
+    async def raw_session(self):
+        yield _InMemoryWebRelationalSession(self._state)
+
+
 class _SequenceMappings:
     def __init__(self, rows):
         self._rows = list(rows)
@@ -287,6 +678,7 @@ def _build_config(*, basedir: str, replay_max_events: int = 5) -> SimpleNamespac
             sse=SimpleNamespace(
                 keepalive_seconds=1,
                 replay_max_events=replay_max_events,
+                enqueue_timeout_seconds=0.01,
             ),
             queue=SimpleNamespace(
                 poll_interval_seconds=0.05,
@@ -316,6 +708,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()
         self.keyval = _InMemoryKeyVal()
+        self.relational = _InMemoryWebRelationalGateway()
         self.logger = Mock()
         self.messaging = SimpleNamespace(
             handle_text_message=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
@@ -330,6 +723,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=_build_config(basedir=self.tmpdir.name),
             ipc_service=Mock(),
             keyval_storage_gateway=self.keyval,
+            relational_storage_gateway=self.relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -382,6 +776,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=Mock(),
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -402,6 +797,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=Mock(),
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -441,6 +837,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=Mock(),
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -470,6 +867,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 config=cfg,
                 ipc_service=Mock(),
                 keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
                 logging_gateway=Mock(),
                 messaging_service=self.messaging,
                 user_service=Mock(),
@@ -574,6 +972,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=Mock(),
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -598,6 +997,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=Mock(),
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -639,6 +1039,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=client_logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -762,6 +1163,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=Mock(),
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -1014,6 +1416,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=_build_config(basedir=self.tmpdir.name, replay_max_events=2),
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -1875,10 +2278,9 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(unauthorized)
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
-            key = self.client._media_token_key(token)  # pylint: disable=protected-access
-            payload = json.loads(self.keyval.get(key))
-            payload["expires_at"] = 0
-            self.keyval.put(key, json.dumps(payload))
+            self.relational._state.media_tokens[token]["expires_at"] = (  # pylint: disable=protected-access
+                self.client._to_utc_datetime(0)  # pylint: disable=protected-access
+            )
 
         expired = await self.client.resolve_media_download(auth_user="user-1", token=token)
         self.assertIsNone(expired)
@@ -1902,25 +2304,20 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             filename="active.bin",
         )
 
-        expired_token_key = self.client._media_token_key("expired")  # pylint: disable=protected-access
-        self.keyval.put(
-            expired_token_key,
-            json.dumps(
-                {
-                    "owner_user_id": "user-1",
-                    "conversation_id": "conv-clean",
-                    "file_path": str(old_file),
-                    "mime_type": "application/octet-stream",
-                    "filename": "old.bin",
-                    "expires_at": 0,
-                }
-            ),
-        )
+        self.relational._state.media_tokens["expired"] = {  # pylint: disable=protected-access
+            "token": "expired",
+            "owner_user_id": "user-1",
+            "conversation_id": "conv-clean",
+            "file_path": str(old_file),
+            "mime_type": "application/octet-stream",
+            "filename": "old.bin",
+            "expires_at": self.client._to_utc_datetime(0),  # pylint: disable=protected-access
+        }
 
         self.assertIsNotNone(token_payload)
         await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
 
-        self.assertFalse(self.keyval.has_key(expired_token_key))
+        self.assertNotIn("expired", self.relational._state.media_tokens)  # pylint: disable=protected-access
         self.assertFalse(old_file.exists())
         self.assertTrue(active_file.exists())
 
@@ -2018,6 +2415,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=_build_config(basedir=self.tmpdir.name),
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -2048,6 +2446,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=_build_config(basedir=self.tmpdir.name),
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -2156,7 +2555,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             last_event_id=None,
         )
         first_none_id = await none_id_stream.__anext__()
-        self.assertIn("id: bad", first_none_id)
+        self.assertEqual(first_none_id, ": ping\n\n")
         await self.client._publish_event(  # pylint: disable=protected-access
             "conv-stream",
             {"id": "bad-live", "event": "system", "data": {}},
@@ -2270,16 +2669,27 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_publish_event_logs_dropped_event_diagnostics(self) -> None:
-        class _AlwaysFullQueue:
+        class _AlwaysBackpressuredQueue:
+            def __init__(self) -> None:
+                self._drained = False
+
+            async def put(self, _item):
+                await asyncio.sleep(1)
+
             def put_nowait(self, _item):
+                if self._drained:
+                    return
                 raise asyncio.QueueFull()
 
             def get_nowait(self):
+                if self._drained:
+                    raise asyncio.QueueEmpty()
+                self._drained = True
                 return {"id": "1"}
 
         async with self.client._subscriber_lock:  # pylint: disable=protected-access
             self.client._subscribers["conv-drop"] = {  # pylint: disable=protected-access
-                _AlwaysFullQueue()
+                _AlwaysBackpressuredQueue()
             }
 
         await self.client._publish_event(  # pylint: disable=protected-access
@@ -2287,24 +2697,13 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             {"id": "2", "event": "system", "data": {}},
         )
 
-        debug_messages = [call.args[0] for call in self.logger.debug.call_args_list]
         warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
         self.assertTrue(
             any(
                 "Web SSE event skipped/dropped" in message
                 and "conversation_id='conv-drop'" in message
                 and "incoming_event_id='2'" in message
-                and "last_event_id='1'" in message
-                and "reason='subscriber_queue_full_drop_oldest'" in message
-                for message in debug_messages
-            )
-        )
-        self.assertTrue(
-            any(
-                "Web SSE event skipped/dropped" in message
-                and "conversation_id='conv-drop'" in message
-                and "incoming_event_id='2'" in message
-                and "reason='subscriber_queue_full_drop_new'" in message
+                and "reason='subscriber_enqueue_timeout_disconnect'" in message
                 for message in warning_messages
             )
         )
@@ -2419,39 +2818,147 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         debug_messages = [call.args[0] for call in self.logger.debug.call_args_list]
         self.assertTrue(
             any(
-                "reason='replay_event_id_not_greater_than_cursor'" in message
+                "reason='replay_generation_changed'" in message
                 for message in debug_messages
             )
         )
 
-    async def test_stream_cursor_and_correlation_helper_branches(self) -> None:
-        event_log_key = self.client._event_log_key("conv-helper")  # pylint: disable=protected-access
-        self.keyval.put(
-            event_log_key,
-            json.dumps(
-                {
-                    "version": self.client._event_log_version,  # pylint: disable=protected-access
-                    "generation": "gen-helper",
-                    "events": {},
-                    "next_event_id": "bad",
-                }
-            ),
+    async def test_stream_events_replay_dedup_and_live_control_payload_branches(self) -> None:
+        self.client._ensure_conversation_owner_unlocked = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+        self.client._read_event_log_unlocked = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={
+                "version": self.client._event_log_version,  # pylint: disable=protected-access
+                "generation": "gen-dup",
+                "next_event_id": 3,
+                "events": [
+                    {"id": "2", "event": "system", "data": {}, "stream_generation": "gen-dup"},
+                    {"id": "1", "event": "system", "data": {}, "stream_generation": "gen-dup"},
+                ],
+            }
         )
+
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-dup",
+            last_event_id=None,
+        )
+        replay_chunk = await stream.__anext__()
+        self.assertIn(":gen-dup:2", replay_chunk)
+
+        async with self.client._subscriber_lock:  # pylint: disable=protected-access
+            subscriber = next(iter(self.client._subscribers["conv-dup"]))  # pylint: disable=protected-access
+        await subscriber.put("invalid-live-event")
+        await subscriber.put(self.client._sse_disconnect_sentinel)  # pylint: disable=protected-access
+
+        with self.assertRaises(StopAsyncIteration):
+            await stream.__anext__()
+
+        debug_messages = [call.args[0] for call in self.logger.debug.call_args_list]
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "reason='replay_event_id_not_greater_than_cursor'" in message
+                for message in debug_messages
+            )
+        )
+        self.assertTrue(
+            any("reason='live_event_invalid_payload'" in message for message in debug_messages)
+        )
+        self.assertTrue(
+            any(
+                "reason='subscriber_disconnected_for_backpressure'" in message
+                for message in warning_messages
+            )
+        )
+
+    async def test_stream_events_replay_allows_non_numeric_event_id(self) -> None:
+        self.client._ensure_conversation_owner_unlocked = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+        self.client._read_event_log_unlocked = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={
+                "version": self.client._event_log_version,  # pylint: disable=protected-access
+                "generation": "gen-none-id",
+                "next_event_id": 2,
+                "events": [
+                    {"id": "bad", "event": "system", "data": {}, "stream_generation": "gen-none-id"},
+                ],
+            }
+        )
+
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-none-id",
+            last_event_id=None,
+        )
+        replay_chunk = await stream.__anext__()
+        self.assertIn("id: bad", replay_chunk)
+        await stream.aclose()
+
+    async def test_disconnect_subscriber_for_backpressure_helper_branches(self) -> None:
+        queue = asyncio.Queue(maxsize=1)
+        await self.client._register_subscriber("conv-disconnect", queue)  # pylint: disable=protected-access
+        await self.client._disconnect_subscriber_for_backpressure(  # pylint: disable=protected-access
+            conversation_id="conv-disconnect",
+            subscriber=queue,
+        )
+        self.assertIs(queue.get_nowait(), self.client._sse_disconnect_sentinel)  # pylint: disable=protected-access
+
+        class _QueueAlwaysFull:
+            def __init__(self) -> None:
+                self._drained = False
+
+            def put_nowait(self, _item):
+                raise asyncio.QueueFull()
+
+            def get_nowait(self):
+                if self._drained:
+                    raise asyncio.QueueEmpty()
+                self._drained = True
+                return {"id": "x"}
+
+        subscriber = _QueueAlwaysFull()
+        async with self.client._subscriber_lock:  # pylint: disable=protected-access
+            self.client._subscribers["conv-disconnect-warn"] = {subscriber}  # pylint: disable=protected-access
+        await self.client._disconnect_subscriber_for_backpressure(  # pylint: disable=protected-access
+            conversation_id="conv-disconnect-warn",
+            subscriber=subscriber,
+        )
+        self.assertTrue(
+            any(
+                "Failed to enqueue SSE disconnect sentinel" in call.args[0]
+                for call in self.logger.warning.call_args_list
+            )
+        )
+
+    def test_collect_media_refs_from_queued_job_and_metadata_branches(self) -> None:
+        refs = self.client._collect_media_refs_from_queued_job(  # pylint: disable=protected-access
+            {"file_path": " /tmp/file.bin ", "metadata": None}
+        )
+        self.assertEqual(refs, {"/tmp/file.bin"})
+        refs_without_file = self.client._collect_media_refs_from_queued_job(  # pylint: disable=protected-access
+            {
+                "file_path": None,
+                "metadata": {"attachments": [{"file_path": " object:blob "}]},
+            }
+        )
+        self.assertEqual(refs_without_file, {"object:blob"})
+        self.assertEqual(
+            self.client._collect_media_refs_from_composed_metadata(None),  # pylint: disable=protected-access
+            set(),
+        )
+
+    async def test_stream_cursor_and_correlation_helper_branches(self) -> None:
+        self.relational._state.conversation_states["conv-helper"] = {  # pylint: disable=protected-access
+            "conversation_id": "conv-helper",
+            "owner_user_id": "user-1",
+            "stream_generation": "gen-helper",
+            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+            "next_event_id": "bad",
+        }
         malformed_events = await self.client._read_event_log_unlocked("conv-helper")  # pylint: disable=protected-access
         self.assertEqual(malformed_events["events"], [])
         self.assertEqual(malformed_events["next_event_id"], 1)
 
-        self.keyval.put(
-            event_log_key,
-            json.dumps(
-                {
-                    "version": self.client._event_log_version,  # pylint: disable=protected-access
-                    "generation": "gen-helper",
-                    "events": [],
-                    "next_event_id": -9,
-                }
-            ),
-        )
+        self.relational._state.conversation_states["conv-helper"]["next_event_id"] = -9  # pylint: disable=protected-access
         non_positive_next = await self.client._read_event_log_unlocked("conv-helper")  # pylint: disable=protected-access
         self.assertEqual(non_positive_next["next_event_id"], 1)
 
@@ -2558,55 +3065,56 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             await self.client.resolve_media_download(auth_user="user-1", token="unknown")
         )
 
-        token_key = self.client._media_token_key("bad-token")  # pylint: disable=protected-access
-        self.keyval.put(token_key, json.dumps({"expires_at": "NaN"}))
+        self.relational._state.media_tokens["bad-token"] = {  # pylint: disable=protected-access
+            "token": "bad-token",
+            "owner_user_id": "user-1",
+            "conversation_id": "conv-invalid",
+            "file_path": os.path.join(self.tmpdir.name, "missing.bin"),
+            "mime_type": "application/octet-stream",
+            "filename": "missing.bin",
+            "expires_at": self.client._to_utc_datetime(0),  # pylint: disable=protected-access
+        }
         self.assertIsNone(
             await self.client.resolve_media_download(auth_user="user-1", token="bad-token")
         )
 
-        token_key = self.client._media_token_key("owner-mismatch")  # pylint: disable=protected-access
-        self.keyval.put(
-            token_key,
-            json.dumps(
-                {
-                    "expires_at": 9999999999,
-                    "owner_user_id": "other",
-                    "file_path": "x",
-                }
-            ),
-        )
+        self.relational._state.media_tokens["owner-mismatch"] = {  # pylint: disable=protected-access
+            "token": "owner-mismatch",
+            "owner_user_id": "other",
+            "conversation_id": "conv-invalid",
+            "file_path": "x",
+            "mime_type": "application/octet-stream",
+            "filename": "x.bin",
+            "expires_at": self.client._to_utc_datetime(9999999999),  # pylint: disable=protected-access
+        }
         self.assertIsNone(
             await self.client.resolve_media_download(
                 auth_user="user-1", token="owner-mismatch"
             )
         )
 
-        token_key = self.client._media_token_key("empty-path")  # pylint: disable=protected-access
-        self.keyval.put(
-            token_key,
-            json.dumps(
-                {
-                    "expires_at": 9999999999,
-                    "owner_user_id": "user-1",
-                    "file_path": "",
-                }
-            ),
-        )
+        self.relational._state.media_tokens["empty-path"] = {  # pylint: disable=protected-access
+            "token": "empty-path",
+            "owner_user_id": "user-1",
+            "conversation_id": "conv-invalid",
+            "file_path": "",
+            "mime_type": "application/octet-stream",
+            "filename": "x.bin",
+            "expires_at": self.client._to_utc_datetime(9999999999),  # pylint: disable=protected-access
+        }
         self.assertIsNone(
             await self.client.resolve_media_download(auth_user="user-1", token="empty-path")
         )
 
-        token_key = self.client._media_token_key("missing-file")  # pylint: disable=protected-access
-        self.keyval.put(
-            token_key,
-            json.dumps(
-                {
-                    "expires_at": 9999999999,
-                    "owner_user_id": "user-1",
-                    "file_path": os.path.join(self.tmpdir.name, "missing.bin"),
-                }
-            ),
-        )
+        self.relational._state.media_tokens["missing-file"] = {  # pylint: disable=protected-access
+            "token": "missing-file",
+            "owner_user_id": "user-1",
+            "conversation_id": "conv-invalid",
+            "file_path": os.path.join(self.tmpdir.name, "missing.bin"),
+            "mime_type": "application/octet-stream",
+            "filename": "missing.bin",
+            "expires_at": self.client._to_utc_datetime(9999999999),  # pylint: disable=protected-access
+        }
         self.assertIsNone(
             await self.client.resolve_media_download(auth_user="user-1", token="missing-file")
         )
@@ -2812,6 +3320,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=_build_config(basedir=self.tmpdir.name),
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3183,8 +3692,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         await self.client._unregister_subscriber("conv-sub", q1)  # pylint: disable=protected-access
         await self.client._unregister_subscriber("conv-sub", q2)  # pylint: disable=protected-access
 
-        # Force QueueFull + QueueEmpty and second QueueFull branches.
+        # Force enqueue timeout and disconnect fallback branches.
         class _QueueAlwaysFull:
+            async def put(self, _item):
+                await asyncio.sleep(1)
+
             def put_nowait(self, _item):
                 raise asyncio.QueueFull()
 
@@ -3194,12 +3706,21 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         class _QueueStillFull:
             def __init__(self):
                 self.calls = 0
+                self._drained = False
+
+            async def put(self, _item):
+                await asyncio.sleep(1)
 
             def put_nowait(self, _item):
                 self.calls += 1
+                if self._drained:
+                    return
                 raise asyncio.QueueFull()
 
             def get_nowait(self):
+                if self._drained:
+                    raise asyncio.QueueEmpty()
+                self._drained = True
                 return {"id": "x"}
 
         async with self.client._subscriber_lock:  # pylint: disable=protected-access
@@ -3210,7 +3731,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         await self.client._publish_event("conv-full", {"id": "2"})  # pylint: disable=protected-access
 
     async def test_publish_cleanup_state_and_helper_branches(self) -> None:
-        # _publish_event QueueFull branch.
+        # _publish_event timeout branch.
         queue = asyncio.Queue(maxsize=1)
         queue.put_nowait({"id": "1"})
         async with self.client._subscriber_lock:  # pylint: disable=protected-access
@@ -3228,12 +3749,24 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         bad_file = media_dir / "bad.bin"
         bad_file.write_bytes(b"x")
         os.utime(bad_file, (0, 0))
-        self.keyval.put("other:key", "{}")
-        self.keyval.put(self.client._media_token_key("invalid"), "not-json")  # pylint: disable=protected-access
-        self.keyval.put(
-            self.client._media_token_key("no-file"),  # pylint: disable=protected-access
-            json.dumps({"expires_at": 9999999999, "file_path": None}),
-        )
+        self.relational._state.media_tokens["invalid"] = {  # pylint: disable=protected-access
+            "token": "invalid",
+            "owner_user_id": "user-1",
+            "conversation_id": "conv-p",
+            "file_path": None,
+            "mime_type": "application/octet-stream",
+            "filename": "invalid.bin",
+            "expires_at": self.client._to_utc_datetime(9999999999),  # pylint: disable=protected-access
+        }
+        self.relational._state.media_tokens["no-file"] = {  # pylint: disable=protected-access
+            "token": "no-file",
+            "owner_user_id": "user-1",
+            "conversation_id": "conv-p",
+            "file_path": None,
+            "mime_type": "application/octet-stream",
+            "filename": "no-file.bin",
+            "expires_at": self.client._to_utc_datetime(9999999999),  # pylint: disable=protected-access
+        }
         fresh_file = media_dir / "fresh.bin"
         fresh_file.write_bytes(b"x")
         with (
@@ -3253,6 +3786,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=_build_config(basedir=self.tmpdir.name),
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3265,6 +3799,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=_build_config(basedir=self.tmpdir.name),
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3322,40 +3857,31 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 create_if_missing=False,
             )
 
-        # read_queue_state jobs non-list.
-        self.keyval.put(self.client._queue_state_key, json.dumps({"jobs": {}}))  # pylint: disable=protected-access
+        # read_queue_state on empty relational store.
         queue = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
         self.assertEqual(queue["jobs"], [])
 
-        # read_event_log malformed fields.
-        self.keyval.put(
-            self.client._event_log_key("conv-e"),  # pylint: disable=protected-access
-            json.dumps({"events": {}, "next_event_id": "bad"}),
-        )
+        # read_event_log malformed relational state fields.
+        self.relational._state.conversation_states["conv-e"] = {  # pylint: disable=protected-access
+            "conversation_id": "conv-e",
+            "owner_user_id": "user-1",
+            "stream_generation": "gen-e",
+            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+            "next_event_id": "bad",
+        }
         log = await self.client._read_event_log_unlocked("conv-e")  # pylint: disable=protected-access
         self.assertEqual(log["events"], [])
         self.assertEqual(log["next_event_id"], 1)
 
-        self.keyval.put(
-            self.client._event_log_key("conv-e2"),  # pylint: disable=protected-access
-            json.dumps({"events": [], "next_event_id": -5}),
-        )
+        self.relational._state.conversation_states["conv-e2"] = {  # pylint: disable=protected-access
+            "conversation_id": "conv-e2",
+            "owner_user_id": "user-1",
+            "stream_generation": "gen-e2",
+            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+            "next_event_id": -5,
+        }
         log = await self.client._read_event_log_unlocked("conv-e2")  # pylint: disable=protected-access
         self.assertEqual(log["next_event_id"], 1)
-
-        # read_json branches.
-        self.keyval.put("bytes_bad", b"\xff")
-        self.assertIsNone(
-            await self.client._read_json_unlocked("bytes_bad")  # pylint: disable=protected-access
-        )
-        self.keyval.put("invalid_json", "{bad")
-        self.assertIsNone(
-            await self.client._read_json_unlocked("invalid_json")  # pylint: disable=protected-access
-        )
-        self.keyval.put("scalar_json", "123")
-        self.assertIsNone(
-            await self.client._read_json_unlocked("scalar_json")  # pylint: disable=protected-access
-        )
 
         # resolve_allowed_mimetypes branches.
         cfg = _build_config(basedir=self.tmpdir.name)
@@ -3364,6 +3890,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3374,6 +3901,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3391,6 +3919,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             config=no_base_cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
+            relational_storage_gateway=_InMemoryWebRelationalGateway(),
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3555,23 +4084,10 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_cleanup_media_tokens_cursor_cycle_and_non_prefix_keys(self) -> None:
-        future = self.client._epoch_now() + 30  # pylint: disable=protected-access
-        self.keyval.list_keys = AsyncMock(
-            side_effect=[
-                KeyValListPage(keys=["web:media_token:a"], next_cursor="cursor"),
-                KeyValListPage(keys=["bad:key"], next_cursor="cursor"),
-            ]
-        )
-        self.client._read_json_unlocked = AsyncMock(  # pylint: disable=protected-access
-            return_value={
-                "expires_at": future,
-                "file_path": "",
-            }
-        )
-
+        self.keyval.list_keys = AsyncMock()
         await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
 
-        self.assertEqual(self.keyval.list_keys.await_count, 2)
+        self.keyval.list_keys.assert_not_called()
 
 
 class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):

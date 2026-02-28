@@ -5,7 +5,6 @@ __all__ = ["RelationalKeyValStorageGateway"]
 import asyncio
 from datetime import datetime, timedelta, timezone
 import json
-import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -40,41 +39,28 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         self._namespace_default = self._resolve_namespace_default()
         self._list_limit_default = self._resolve_list_limit_default()
         self._closed = False
+        self._backend_ready = False
+        self._backend_ready_lock: asyncio.Lock | None = None
 
         self._engine: AsyncEngine = create_async_engine(
             self._config.rdbms.sqlalchemy.url,
         )
 
-        self._sync_loop = asyncio.new_event_loop()
-        self._sync_loop_ready = threading.Event()
-        self._sync_thread = threading.Thread(
-            target=self._run_sync_loop,
-            name="mugen.keyval.relational.sync-loop",
-            daemon=True,
-        )
-        self._sync_thread.start()
-        if self._sync_loop_ready.wait(timeout=5.0) is not True:
-            raise RuntimeError("Failed to initialize relational keyval sync loop.")
-
-        # Fail fast on broken relational connectivity or missing table.
-        self._run_sync(self._verify_backend_ready())
-
-    def _run_sync_loop(self) -> None:
-        asyncio.set_event_loop(self._sync_loop)
-        self._sync_loop_ready.set()
-        self._sync_loop.run_forever()
-
-    def _run_sync(self, awaitable):
+    def _assert_open(self) -> None:
         if self._closed:
             raise RuntimeError("Relational keyval gateway is closed.")
-        future = asyncio.run_coroutine_threadsafe(awaitable, self._sync_loop)
-        return future.result()
 
-    def _stop_sync_loop(self) -> None:
-        if self._sync_loop.is_running():
-            self._sync_loop.call_soon_threadsafe(self._sync_loop.stop)
-        if self._sync_thread.is_alive():
-            self._sync_thread.join(timeout=5.0)
+    async def _ensure_backend_ready(self) -> None:
+        self._assert_open()
+        if self._backend_ready is True:
+            return
+        if self._backend_ready_lock is None:
+            self._backend_ready_lock = asyncio.Lock()
+        async with self._backend_ready_lock:
+            if self._backend_ready is True:
+                return
+            await self._verify_backend_ready()
+            self._backend_ready = True
 
     async def _verify_backend_ready(self) -> None:
         try:
@@ -168,14 +154,6 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         return key
 
     @staticmethod
-    def _coerce_payload(value: str | bytes) -> tuple[bytes, str]:
-        if isinstance(value, bytes):
-            return value, "bytes"
-        if isinstance(value, str):
-            return value.encode("utf-8"), "text/utf-8"
-        raise ValueError("value must be str or bytes")
-
-    @staticmethod
     def _to_entry(row: dict[str, Any]) -> KeyValEntry:
         payload = row.get("payload")
         if isinstance(payload, memoryview):
@@ -247,6 +225,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         namespace: str | None = None,
         include_expired: bool = False,
     ) -> KeyValEntry | None:
+        await self._ensure_backend_ready()
         target_namespace = self._normalize_namespace(namespace)
         target_key = self._normalize_key(key)
         return await self._get_entry_internal(
@@ -328,6 +307,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         expected_row_version: int | None = None,
         ttl_seconds: float | None = None,
     ) -> KeyValEntry:
+        await self._ensure_backend_ready()
         target_namespace = self._normalize_namespace(namespace)
         target_key = self._normalize_key(key)
         if not isinstance(value, bytes):
@@ -484,6 +464,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         namespace: str | None = None,
         expected_row_version: int | None = None,
     ) -> KeyValEntry | None:
+        await self._ensure_backend_ready()
         target_namespace = self._normalize_namespace(namespace)
         target_key = self._normalize_key(key)
 
@@ -539,6 +520,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         *,
         namespace: str | None = None,
     ) -> bool:
+        await self._ensure_backend_ready()
         target_namespace = self._normalize_namespace(namespace)
         target_key = self._normalize_key(key)
 
@@ -576,6 +558,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         limit: int | None = None,
         cursor: str | None = None,
     ) -> KeyValListPage:
+        await self._ensure_backend_ready()
         target_namespace = self._normalize_namespace(namespace)
         safe_prefix = "" if not isinstance(prefix, str) else prefix
         page_limit = self._list_limit_default if limit is None else int(limit)
@@ -630,60 +613,3 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
             await self._engine.dispose()
         finally:
             self._closed = True
-            self._stop_sync_loop()
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        try:
-            self._run_sync(self._engine.dispose())
-        finally:
-            self._closed = True
-            self._stop_sync_loop()
-
-    # Legacy sync contract compatibility.
-    def get(self, key: str, decode: bool = True) -> str | bytes | None:
-        entry = self._run_sync(self.get_entry(key))
-        if entry is None:
-            return None
-        if decode is not True:
-            return entry.payload
-        return entry.as_text()
-
-    def has_key(self, key: str) -> bool:
-        return bool(self._run_sync(self.exists(key)))
-
-    def keys(self) -> list[str]:
-        collected: list[str] = []
-        cursor: str | None = None
-        while True:
-            page = self._run_sync(
-                self.list_keys(
-                    prefix="",
-                    limit=self._list_limit_default,
-                    cursor=cursor,
-                )
-            )
-            collected += page.keys
-            if page.next_cursor in [None, ""]:
-                break
-            if page.next_cursor == cursor:
-                break
-            cursor = page.next_cursor
-        return collected
-
-    def put(self, key: str, value: str | bytes) -> None:
-        payload, codec = self._coerce_payload(value)
-        self._run_sync(
-            self.put_bytes(
-                key,
-                payload,
-                codec=codec,
-            )
-        )
-
-    def remove(self, key: str) -> str | bytes | None:
-        removed = self._run_sync(self.delete(key))
-        if removed is None:
-            return None
-        return removed.payload
