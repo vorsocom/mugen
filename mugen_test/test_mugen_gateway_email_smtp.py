@@ -396,6 +396,38 @@ class TestMugenGatewayEmailSMTP(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(EmailGatewayError):
             SMTPEmailGateway(_make_config(username=123), Mock())  # type: ignore[arg-type]
 
+        with self.assertRaises(EmailGatewayError):
+            SMTPEmailGateway(
+                _make_config(use_ssl="maybe"),  # type: ignore[arg-type]
+                Mock(),
+            )
+
+        with self.assertRaises(EmailGatewayError):
+            SMTPEmailGateway(
+                _make_config(starttls="definitely"),  # type: ignore[arg-type]
+                Mock(),
+            )
+
+        with self.assertRaises(EmailGatewayError):
+            SMTPEmailGateway(
+                _make_config(starttls_required="sometimes"),  # type: ignore[arg-type]
+                Mock(),
+            )
+
+        with self.assertRaises(EmailGatewayError):
+            SMTPEmailGateway(
+                _make_config(use_ssl=1),  # type: ignore[arg-type]
+                Mock(),
+            )
+
+        parsed_gateway = SMTPEmailGateway(
+            _make_config(use_ssl="on", starttls="off", starttls_required="0"),
+            Mock(),
+        )
+        self.assertTrue(parsed_gateway._smtp_config["use_ssl"])
+        self.assertFalse(parsed_gateway._smtp_config["starttls"])
+        self.assertFalse(parsed_gateway._smtp_config["starttls_required"])
+
         gateway = SMTPEmailGateway(
             _make_config(default_from="   ", use_ssl=True, port=None),
             Mock(),

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from time import perf_counter
 from typing import Any
 
 from quart import current_app, jsonify
@@ -114,7 +113,6 @@ async def core_health_ready():
     phase_a_status = status["phase_a_status"]
     phase_b_status = status["phase_b_status"]
     phase_b_error = status["phase_b_error"]
-    phase_b_started_at = status["phase_b_started_at"]
     degrade_on_critical_exit = _parse_bool(
         status["phase_b_degrade_on_critical_exit"],
         default=True,
@@ -158,28 +156,6 @@ async def core_health_ready():
         and phase_b_status != PHASE_STATUS_DEGRADED
         and not failed_platforms
     )
-
-    if phase_b_status == PHASE_STATUS_STARTING:
-        grace_seconds = float(status["phase_b_readiness_grace_seconds"] or 0.0)
-        elapsed = 0.0
-        if phase_b_started_at is not None:
-            try:
-                elapsed = max(0.0, perf_counter() - float(phase_b_started_at))
-            except (TypeError, ValueError):
-                elapsed = 0.0
-        if critical_platforms and elapsed <= grace_seconds:
-            failed_platforms, reasons = _resolve_failed_platforms(
-                critical_platforms=critical_platforms,
-                platform_statuses=platform_statuses,
-                platform_errors=platform_errors,
-                ignore_starting=True,
-                degrade_on_critical_exit=degrade_on_critical_exit,
-            )
-        ready = (
-            phase_a_status == PHASE_STATUS_HEALTHY
-            and phase_b_status != PHASE_STATUS_DEGRADED
-            and not failed_platforms
-        )
 
     return (
         jsonify(

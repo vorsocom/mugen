@@ -217,6 +217,16 @@ def validate_phase_b_runtime_config(
             f"Supported platforms: {supported_platforms_text}."
         )
 
+    environment = str(
+        getattr(getattr(config, "mugen", SimpleNamespace()), "environment", "")
+    ).strip().lower()
+    if "telnet" in active_platforms and environment == "production":
+        if _telnet_allowed_in_production(config) is not True:
+            raise BootstrapConfigError(
+                "Telnet platform is disabled in production. Set "
+                "telnet.allow_in_production=true to override."
+            )
+
     critical_platforms = _resolve_phase_b_critical_platforms(
         config,
         bootstrap_state,
@@ -520,9 +530,6 @@ async def run_platform_clients(
     bootstrap_state[PHASE_B_ERROR_KEY] = None
     bootstrap_state[SHUTDOWN_REQUESTED_KEY] = False
 
-    environment = str(
-        getattr(getattr(config, "mugen", SimpleNamespace()), "environment", "")
-    ).strip().lower()
     active_platforms, critical_platforms, degrade_on_critical_exit = (
         validate_phase_b_runtime_config(
             config=config,
@@ -536,13 +543,6 @@ async def run_platform_clients(
         bootstrap_state,
         active_platforms=active_platforms,
     )
-
-    if "telnet" in active_platforms and environment == "production":
-        if _telnet_allowed_in_production(config) is not True:
-            raise BootstrapConfigError(
-                "Telnet platform is disabled in production. Set "
-                "telnet.allow_in_production=true to override."
-            )
 
     tasks: dict[str, asyncio.Task] = {}
 

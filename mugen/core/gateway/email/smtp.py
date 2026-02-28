@@ -73,9 +73,18 @@ class SMTPEmailGateway(IEmailGateway):
 
         host = self._required_string(getattr(smtp_cfg, "host", None), "smtp.host")
 
-        use_ssl = bool(getattr(smtp_cfg, "use_ssl", False))
-        starttls = bool(getattr(smtp_cfg, "starttls", False))
-        starttls_required = bool(getattr(smtp_cfg, "starttls_required", False))
+        use_ssl = self._required_bool(
+            getattr(smtp_cfg, "use_ssl", False),
+            "smtp.use_ssl",
+        )
+        starttls = self._required_bool(
+            getattr(smtp_cfg, "starttls", False),
+            "smtp.starttls",
+        )
+        starttls_required = self._required_bool(
+            getattr(smtp_cfg, "starttls_required", False),
+            "smtp.starttls_required",
+        )
         if starttls_required:
             starttls = True
 
@@ -393,3 +402,22 @@ class SMTPEmailGateway(IEmailGateway):
             return None
 
         return stripped
+
+    @staticmethod
+    def _required_bool(value: object, field_name: str) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        raise EmailGatewayError(
+            provider=SMTPEmailGateway._provider,
+            operation="initialization",
+            message=(
+                f"{field_name} must be a boolean value "
+                "(true/false, yes/no, on/off, 1/0)."
+            ),
+        )
