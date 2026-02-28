@@ -41,11 +41,6 @@ def _parse_args() -> argparse.Namespace:
         help="Output config path (default: mugen.toml).",
     )
     parser.add_argument(
-        "--keyval-db-path",
-        default=".tmp/ci/storage.db",
-        help="Path for storage.keyval.dbm.path.",
-    )
-    parser.add_argument(
         "--rdbms-url",
         default="postgresql+psycopg://mugen:mugen@127.0.0.1:5432/mugen",
         help="RDBMS URL used for both alembic and sqlalchemy configs.",
@@ -130,7 +125,6 @@ def main() -> int:
 
     doc = tomlkit.parse(sample_path.read_text(encoding="utf-8"))
 
-    doc["mugen"]["storage"]["keyval"]["dbm"]["path"] = args.keyval_db_path
     doc["aws"]["bedrock"]["api"]["region"] = args.aws_region
     doc["rdbms"]["alembic"]["url"] = args.rdbms_url
     doc["rdbms"]["sqlalchemy"]["url"] = args.rdbms_url
