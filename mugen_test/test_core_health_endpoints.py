@@ -87,6 +87,52 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["failed_platforms"], ["web"])
         self.assertIn("web", payload["reasons"])
 
+    async def test_ready_endpoint_returns_503_when_critical_platform_degraded_at_runtime(
+        self,
+    ) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_ERROR_KEY] = None
+        state["phase_b_critical_platforms"] = ["matrix"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"matrix": PHASE_STATUS_DEGRADED}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"matrix": "RuntimeError: sync failed"}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["failed_platforms"], ["matrix"])
+        self.assertEqual(payload["reasons"], {"matrix": "RuntimeError: sync failed"})
+
+    async def test_ready_endpoint_returns_200_after_runtime_recovery_signal(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_ERROR_KEY] = None
+        state["phase_b_critical_platforms"] = ["whatsapp"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"whatsapp": PHASE_STATUS_DEGRADED}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"whatsapp": "probe failed"}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            first_response = await client.get("/api/core/health/ready")
+            first_payload = await first_response.get_json()
+            self.assertEqual(first_response.status_code, 503)
+            self.assertFalse(first_payload["ready"])
+
+            state[PHASE_B_PLATFORM_STATUSES_KEY] = {"whatsapp": PHASE_STATUS_HEALTHY}
+            state[PHASE_B_PLATFORM_ERRORS_KEY] = {"whatsapp": None}
+            second_response = await client.get("/api/core/health/ready")
+            second_payload = await second_response.get_json()
+
+        self.assertEqual(second_response.status_code, 200)
+        self.assertTrue(second_payload["ready"])
+        self.assertEqual(second_payload["failed_platforms"], [])
+
     async def test_ready_endpoint_returns_503_when_starting_past_grace(self) -> None:
         state = self._bootstrap_state()
         state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY

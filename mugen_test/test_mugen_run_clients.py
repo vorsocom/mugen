@@ -382,6 +382,130 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                     logger_provider=lambda: app.logger,
                 )
 
+    async def test_run_platform_clients_rethrows_type_error_for_callback_aware_runner(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+
+        def _bad_runner(**_kwargs):  # noqa: ANN001
+            raise TypeError("boom")
+
+        with unittest.mock.patch("mugen.run_web_client", new=_bad_runner):
+            with self.assertRaises(TypeError):
+                await run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+
+    async def test_run_platform_clients_falls_back_to_legacy_runner_when_started_kw_still_rejected(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
+        state["phase_b_degrade_on_critical_exit"] = False
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+
+        class _LegacyRunner:
+            def __call__(self, **kwargs):  # noqa: ANN003
+                if "degraded_callback" in kwargs:
+                    raise TypeError("unexpected keyword argument 'degraded_callback'")
+                if "started_callback" in kwargs:
+                    raise TypeError("unexpected keyword argument 'started_callback'")
+
+                async def _done() -> None:
+                    return None
+
+                return _done()
+
+        with unittest.mock.patch("mugen.run_web_client", new=_LegacyRunner()):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+
+    async def test_run_platform_clients_runtime_degraded_defaults_reason_when_blank(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        hold = asyncio.Event()
+        degraded = asyncio.Event()
+
+        async def _run_web_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = healthy_callback
+            if callable(started_callback):
+                started_callback()
+            if callable(degraded_callback):
+                degraded_callback(None)
+                degraded.set()
+            await hold.wait()
+
+        with unittest.mock.patch("mugen.run_web_client", new=_run_web_client):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.wait_for(degraded.wait(), timeout=1.0)
+            state = app.extensions["mugen"]["bootstrap"]
+            self.assertEqual(
+                state[PHASE_B_PLATFORM_ERRORS_KEY]["web"],
+                "runtime health check failed",
+            )
+            runner.cancel()
+            with self.assertRaises(asyncio.exceptions.CancelledError):
+                await runner
+
+    async def test_run_platform_clients_ignores_runtime_degraded_callback_after_shutdown_requested(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        trigger = asyncio.Event()
+
+        async def _run_web_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = healthy_callback
+            if callable(started_callback):
+                started_callback()
+            await trigger.wait()
+            if callable(degraded_callback):
+                degraded_callback("late runtime failure")
+
+        with unittest.mock.patch("mugen.run_web_client", new=_run_web_client):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.sleep(0)
+            state = app.extensions["mugen"]["bootstrap"]
+            state[SHUTDOWN_REQUESTED_KEY] = True
+            trigger.set()
+            await runner
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED)
+
     async def test_run_platform_clients_handles_cancellation(
         self,
     ) -> None:
@@ -780,6 +904,114 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
             "WhatsApp startup probe failed.",
             str(state[PHASE_B_PLATFORM_ERRORS_KEY]["whatsapp"]),
         )
+
+    async def test_run_platform_clients_tracks_whatsapp_runtime_degrade_and_recover(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["whatsapp"]))
+        degraded = asyncio.Event()
+        recover = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _run_whatsapp_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            if callable(started_callback):
+                started_callback()
+            if callable(degraded_callback):
+                degraded_callback("RuntimeError: probe failed")
+            degraded.set()
+            await recover.wait()
+            if callable(healthy_callback):
+                healthy_callback()
+            await release.wait()
+
+        with unittest.mock.patch("mugen.run_whatsapp_client", new=_run_whatsapp_client):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.wait_for(degraded.wait(), timeout=1.0)
+            await asyncio.sleep(0)
+            state = app.extensions["mugen"]["bootstrap"]
+            self.assertEqual(
+                state[PHASE_B_PLATFORM_STATUSES_KEY]["whatsapp"],
+                PHASE_STATUS_DEGRADED,
+            )
+            self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
+
+            recover.set()
+            await asyncio.sleep(0)
+            self.assertEqual(
+                state[PHASE_B_PLATFORM_STATUSES_KEY]["whatsapp"],
+                PHASE_STATUS_HEALTHY,
+            )
+            self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+
+            runner.cancel()
+            with self.assertRaises(asyncio.exceptions.CancelledError):
+                await runner
+
+    async def test_run_platform_clients_tracks_matrix_runtime_degrade_and_recover(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix"]))
+        degraded = asyncio.Event()
+        recover = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _run_matrix_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            if callable(started_callback):
+                started_callback()
+            if callable(degraded_callback):
+                degraded_callback("RuntimeError: sync failed")
+            degraded.set()
+            await recover.wait()
+            if callable(healthy_callback):
+                healthy_callback()
+            await release.wait()
+
+        with unittest.mock.patch("mugen.run_matrix_client", new=_run_matrix_client):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.wait_for(degraded.wait(), timeout=1.0)
+            await asyncio.sleep(0)
+            state = app.extensions["mugen"]["bootstrap"]
+            self.assertEqual(
+                state[PHASE_B_PLATFORM_STATUSES_KEY]["matrix"],
+                PHASE_STATUS_DEGRADED,
+            )
+            self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
+
+            recover.set()
+            await asyncio.sleep(0)
+            self.assertEqual(
+                state[PHASE_B_PLATFORM_STATUSES_KEY]["matrix"],
+                PHASE_STATUS_HEALTHY,
+            )
+            self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+
+            runner.cancel()
+            with self.assertRaises(asyncio.exceptions.CancelledError):
+                await runner
 
     async def test_run_platform_clients_keeps_telnet_starting_until_started_callback(
         self,

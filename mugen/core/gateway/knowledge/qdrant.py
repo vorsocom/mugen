@@ -50,7 +50,10 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         self._warn_missing_timeout_in_production()
 
         if self._resolve_encoder_preload() is True:
-            self._encoder = self._build_encoder()
+            self._logging_gateway.warning(
+                "QdrantKnowledgeGateway: encoder preload is ignored; "
+                "using async lazy initialization."
+            )
 
     def _build_encoder(self) -> SentenceTransformer:
         return SentenceTransformer(

@@ -79,6 +79,7 @@ from mugen.core.utility.platforms import (
 
 _PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
 _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY = "phase_b_degrade_on_critical_exit"
+_WHATSAPP_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
 
 
 class BootstrapError(RuntimeError):
@@ -620,6 +621,9 @@ async def run_platform_clients(
     tasks: dict[str, asyncio.Task] = {}
 
     def _on_platform_started(platform_name: str) -> None:
+        _on_platform_healthy(platform_name)
+
+    def _on_platform_healthy(platform_name: str) -> None:
         shutdown_requested = _parse_bool(
             bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
             default=False,
@@ -638,6 +642,35 @@ async def run_platform_clients(
             degrade_on_critical_exit=degrade_on_critical_exit,
         )
 
+    def _on_platform_degraded(
+        platform_name: str,
+        reason: str | None = None,
+    ) -> None:
+        shutdown_requested = _parse_bool(
+            bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
+            default=False,
+        )
+        if shutdown_requested:
+            return
+
+        normalized_reason = reason
+        if isinstance(normalized_reason, str):
+            normalized_reason = normalized_reason.strip()
+        if normalized_reason in [None, ""]:
+            normalized_reason = "runtime health check failed"
+
+        _set_platform_status(
+            bootstrap_state,
+            platform=platform_name,
+            status=PHASE_STATUS_DEGRADED,
+            error=str(normalized_reason),
+        )
+        _refresh_phase_b_status(
+            bootstrap_state,
+            critical_platforms=critical_platforms,
+            degrade_on_critical_exit=degrade_on_critical_exit,
+        )
+
     def _invoke_platform_runner(platform_name: str, runner) -> object:
         started_signalled = False
 
@@ -648,10 +681,27 @@ async def run_platform_clients(
             started_signalled = True
             _on_platform_started(platform_name)
 
+        def _degraded_callback(reason: str | None = None) -> None:
+            _on_platform_degraded(platform_name, reason=reason)
+
+        def _healthy_callback() -> None:
+            _on_platform_healthy(platform_name)
+
         try:
-            return runner(started_callback=_started_callback)
+            return runner(
+                started_callback=_started_callback,
+                degraded_callback=_degraded_callback,
+                healthy_callback=_healthy_callback,
+            )
         except TypeError as exc:
-            if "started_callback" not in str(exc):
+            exc_text = str(exc)
+            if ("degraded_callback" in exc_text) or ("healthy_callback" in exc_text):
+                try:
+                    return runner(started_callback=_started_callback)
+                except TypeError as started_exc:
+                    if "started_callback" not in str(started_exc):
+                        raise
+            elif "started_callback" not in exc_text:
                 raise
 
         async def _legacy_runner() -> None:
@@ -1079,8 +1129,12 @@ async def run_telnet_client(
     logger_provider=_logger_provider,
     telnet_provider=_telnet_provider,
     started_callback=None,
+    degraded_callback=None,
+    healthy_callback=None,
 ) -> None:
     """Run assistant for Telnet server."""
+    _ = degraded_callback
+    _ = healthy_callback
     logger: ILoggingGateway = logger_provider()
     telnet_client: ITelnetClient = telnet_provider()
 
@@ -1098,6 +1152,8 @@ async def run_matrix_client(
     logger_provider=_logger_provider,
     matrix_provider=_matrix_provider,
     started_callback=None,
+    degraded_callback=None,
+    healthy_callback=None,
 ) -> None:
     """Run assistant for the Matrix platform."""
     config: SimpleNamespace = config_provider()
@@ -1131,6 +1187,8 @@ async def run_matrix_client(
 
             if callable(started_callback):
                 started_callback()
+            if callable(healthy_callback):
+                healthy_callback()
 
         retry_attempt = 0
         while True:
@@ -1169,6 +1227,9 @@ async def run_matrix_client(
                     logger.error("Matrix client sync failed after max retries.")
                     raise RuntimeError("Matrix client sync failed after max retries.") from exc
 
+                if callable(degraded_callback):
+                    degraded_callback(f"{type(exc).__name__}: {exc}")
+
                 delay_seconds = min(
                     backoff_max_seconds,
                     (backoff_base_seconds * (2**retry_attempt))
@@ -1188,6 +1249,8 @@ async def run_whatsapp_client(
     logger_provider=_logger_provider,
     whatsapp_provider=_whatsapp_provider,
     started_callback=None,
+    degraded_callback=None,
+    healthy_callback=None,
 ) -> None:
     """Run assistant for the whatsapp platform."""
     logger: ILoggingGateway = logger_provider()
@@ -1200,8 +1263,36 @@ async def run_whatsapp_client(
             raise RuntimeError("WhatsApp startup probe failed.")
         if callable(started_callback):
             started_callback()
+        if callable(healthy_callback):
+            healthy_callback()
         logger.debug("WhatsApp client started.")
-        await asyncio.Event().wait()
+        runtime_degraded = False
+        while True:
+            await asyncio.sleep(_WHATSAPP_RUNTIME_PROBE_INTERVAL_SECONDS)
+            try:
+                runtime_probe_ok = await whatsapp_client.verify_startup()
+            except asyncio.exceptions.CancelledError:
+                raise
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning(
+                    "WhatsApp runtime probe failed "
+                    f"(error_type={type(exc).__name__} error={exc})."
+                )
+                if runtime_degraded is not True and callable(degraded_callback):
+                    degraded_callback(f"{type(exc).__name__}: {exc}")
+                runtime_degraded = True
+                continue
+
+            if runtime_probe_ok is True:
+                if runtime_degraded is True and callable(healthy_callback):
+                    healthy_callback()
+                runtime_degraded = False
+                continue
+
+            logger.warning("WhatsApp runtime probe returned unhealthy status.")
+            if runtime_degraded is not True and callable(degraded_callback):
+                degraded_callback("WhatsApp runtime startup probe failed.")
+            runtime_degraded = True
     except asyncio.exceptions.CancelledError:
         logger.debug("WhatsApp client shutting down.")
         raise
@@ -1216,8 +1307,12 @@ async def run_web_client(
     logger_provider=_logger_provider,
     web_provider=_web_provider,
     started_callback=None,
+    degraded_callback=None,
+    healthy_callback=None,
 ) -> None:
     """Run assistant for the web platform."""
+    _ = degraded_callback
+    _ = healthy_callback
     logger: ILoggingGateway = logger_provider()
     web_client: IWebClient = web_provider()
 

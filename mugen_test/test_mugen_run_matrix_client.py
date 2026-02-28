@@ -252,6 +252,59 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("retrying." in line for line in logger.output))
         self.assertTrue(any("Matrix client started." in line for line in logger.output))
 
+    async def test_sync_transient_error_emits_runtime_health_callbacks(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            matrix=SimpleNamespace(
+                assistant=SimpleNamespace(
+                    name="Test Agent",
+                )
+            )
+        )
+        degraded = unittest.mock.Mock()
+        healthy = unittest.mock.Mock()
+
+        class DummyMatrixClient:
+            synced = SimpleNamespace(wait=unittest.mock.AsyncMock())
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(
+                side_effect=[RuntimeError("temporary sync error"), None]
+            )
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with (
+            unittest.mock.patch.object(mugen_mod.random, "uniform", return_value=0.0),
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "sleep",
+                new=unittest.mock.AsyncMock(),
+            ),
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+                degraded_callback=degraded,
+                healthy_callback=healthy,
+            )
+
+        degraded.assert_called_once_with("RuntimeError: temporary sync error")
+        self.assertGreaterEqual(healthy.call_count, 1)
+
     async def test_sync_authentication_failure_stops_without_retry(self) -> None:
         """Auth-like sync failures should shut down immediately."""
         app = Quart("test_app")
