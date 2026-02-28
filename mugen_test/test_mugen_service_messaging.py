@@ -388,6 +388,74 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
         invalid_ext.handle_message.assert_not_awaited()
         valid_ext.handle_message.assert_awaited_once()
 
+    async def test_collect_message_handler_responses_rejects_non_list_handler_response(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        invalid_response = _DummyMhExt(
+            platforms=["web"],
+            message_types=["text"],
+            response={"type": "ctx", "content": "bad-shape"},
+        )
+        valid_response = _DummyMhExt(
+            platforms=["web"],
+            message_types=["text"],
+            response=[{"type": "ctx", "content": "ok"}],
+        )
+        svc._mh_extensions = [invalid_response, valid_response]
+
+        responses = await svc._collect_message_handler_responses(  # pylint: disable=protected-access
+            platform="web",
+            room_id="conv-shape",
+            sender="user-shape",
+            message="hello",
+            message_types={"text"},
+        )
+        self.assertEqual(responses, [{"type": "ctx", "content": "ok"}])
+        self.assertTrue(
+            any(
+                "invalid response type" in str(call.args[0]).lower()
+                and "dict" in str(call.args[0]).lower()
+                for call in svc._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
+            )
+        )
+
+    async def test_collect_message_handler_responses_drops_non_dict_list_items(self) -> None:
+        svc = self._new_service()
+        mixed_response = _DummyMhExt(
+            platforms=["web"],
+            message_types=["text"],
+            response=[
+                {"type": "ctx", "content": "first"},
+                "bad-item",
+                99,
+                {"type": "ctx", "content": "second"},
+            ],
+        )
+        svc._mh_extensions = [mixed_response]
+
+        responses = await svc._collect_message_handler_responses(  # pylint: disable=protected-access
+            platform="web",
+            room_id="conv-items",
+            sender="user-items",
+            message="hello",
+            message_types={"text"},
+        )
+        self.assertEqual(
+            responses,
+            [
+                {"type": "ctx", "content": "first"},
+                {"type": "ctx", "content": "second"},
+            ],
+        )
+        self.assertTrue(
+            any(
+                "invalid response item" in str(call.args[0]).lower()
+                and "str" in str(call.args[0]).lower()
+                for call in svc._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
+            )
+        )
+
     async def test_handle_text_message_times_out_hung_extension_and_continues(
         self,
     ) -> None:

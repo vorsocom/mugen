@@ -96,7 +96,7 @@ class _CountObject:
 class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
     """Covers timeout parsing, retry behavior, and search flow branches."""
 
-    def test_constructor_preloads_encoder_when_enabled(self) -> None:
+    def test_constructor_ignores_encoder_preload_and_warns(self) -> None:
         config = _make_config(encoder_preload="yes")
         logging_gateway = Mock()
         fake_client = SimpleNamespace(count=AsyncMock(), search=AsyncMock())
@@ -110,8 +110,26 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         ):
             gateway = QdrantKnowledgeGateway(config, logging_gateway)
 
-        self.assertIsNotNone(gateway._encoder)  # pylint: disable=protected-access
-        transformer.assert_called_once()
+        self.assertIsNone(gateway._encoder)  # pylint: disable=protected-access
+        transformer.assert_not_called()
+        warnings = [str(call.args[0]) for call in logging_gateway.warning.call_args_list]
+        self.assertIn(
+            "QdrantKnowledgeGateway: encoder preload is ignored; using async lazy initialization.",
+            warnings,
+        )
+
+    def test_build_encoder_constructs_sentence_transformer(self) -> None:
+        config = _make_config(encoder_preload=False)
+        gateway, _, _, _ = _build_gateway(config=config)
+        with patch("mugen.core.gateway.knowledge.qdrant.SentenceTransformer") as transformer:
+            built = gateway._build_encoder()  # pylint: disable=protected-access
+
+            self.assertIs(built, transformer.return_value)
+            transformer.assert_called_with(
+                model_name_or_path="all-mpnet-base-v2",
+                tokenizer_kwargs={"clean_up_tokenization_spaces": False},
+                cache_folder="/tmp/hf",
+            )
 
     def test_parse_helpers_cover_invalid_and_edge_values(self) -> None:
         config = _make_config()
@@ -231,6 +249,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         self.assertIs(second, built_encoder)
         build_encoder.assert_called_once()
         to_thread.assert_awaited_once()
+        self.assertIs(to_thread.await_args.args[0], build_encoder)
 
     async def test_get_encoder_concurrent_first_calls_use_single_build(self) -> None:
         config = _make_config(encoder_preload=False)

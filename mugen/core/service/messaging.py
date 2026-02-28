@@ -385,6 +385,7 @@ class DefaultMessagingService(IMessagingService):
             if not mh_ext.platform_supported(platform):
                 continue
 
+            extension_name = f"{type(mh_ext).__module__}.{type(mh_ext).__qualname__}"
             supported_message_types = getattr(mh_ext, "message_types", [])
             if not isinstance(supported_message_types, list):
                 continue
@@ -401,8 +402,26 @@ class DefaultMessagingService(IMessagingService):
                 message_context=message_context,
             )
 
-            if resp:
-                handler_responses += resp
+            if resp is None:
+                continue
+            if not isinstance(resp, list):
+                self._logging_gateway.warning(
+                    "Messaging extension handler returned invalid response type "
+                    f"(extension={extension_name} "
+                    f"response_type={type(resp).__name__})."
+                )
+                continue
+
+            for item in resp:
+                if isinstance(item, dict):
+                    handler_responses.append(item)
+                    continue
+
+                self._logging_gateway.warning(
+                    "Messaging extension handler returned invalid response item "
+                    f"(extension={extension_name} "
+                    f"item_type={type(item).__name__})."
+                )
 
         return handler_responses
 
