@@ -21,6 +21,7 @@ from mugen.core.contract.gateway.completion import (
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
+    require_fields_in_production,
     resolve_optional_positive_float,
     to_timeout_milliseconds,
     warn_missing_in_production,
@@ -65,6 +66,14 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         self._read_timeout_seconds = self._resolve_optional_positive_float(
             getattr(self._config.sambanova.api, "read_timeout_seconds", None),
             "read_timeout_seconds",
+        )
+        require_fields_in_production(
+            config=self._config,
+            provider_label="SambaNovaCompletionGateway",
+            field_values={
+                "connect_timeout_seconds": self._connect_timeout_seconds,
+                "read_timeout_seconds": self._read_timeout_seconds,
+            },
         )
         self._warn_missing_timeout_controls_in_production()
 

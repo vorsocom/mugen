@@ -17,6 +17,7 @@ from mugen.core.contract.gateway.completion import (
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
+    require_fields_in_production,
     resolve_optional_positive_float,
     warn_missing_in_production,
 )
@@ -125,6 +126,11 @@ class OpenAICompletionGateway(ICompletionGateway):
             api_kwargs["base_url"] = base_url.strip()
 
         self._timeout_seconds = self._resolve_timeout_seconds()
+        require_fields_in_production(
+            config=self._config,
+            provider_label="OpenAICompletionGateway",
+            field_values={"timeout_seconds": self._timeout_seconds},
+        )
         if self._timeout_seconds is not None:
             api_kwargs["timeout"] = self._timeout_seconds
 

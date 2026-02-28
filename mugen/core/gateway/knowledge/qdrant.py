@@ -17,6 +17,7 @@ from mugen.core.contract.gateway.knowledge import (
     KnowledgeSearchResult,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.timeout_config import require_fields_in_production
 
 
 # pylint: disable=too-few-public-methods
@@ -47,6 +48,11 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         self._api_timeout_seconds = self._resolve_api_timeout_seconds()
         self._api_max_retries = self._resolve_api_max_retries()
         self._api_retry_backoff_seconds = self._resolve_api_retry_backoff_seconds()
+        require_fields_in_production(
+            config=self._config,
+            provider_label="QdrantKnowledgeGateway",
+            field_values={"timeout_seconds": self._api_timeout_seconds},
+        )
         self._warn_missing_timeout_in_production()
 
         if self._resolve_encoder_preload() is True:

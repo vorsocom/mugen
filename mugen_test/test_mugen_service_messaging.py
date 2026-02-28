@@ -650,6 +650,54 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(svc._resolve_extension_timeout_seconds())  # pylint: disable=protected-access
 
+    def test_extension_timeout_resolution_uses_default_in_production(self) -> None:
+        svc = self._new_service()
+        expected = svc._default_extension_timeout_seconds  # pylint: disable=protected-access
+
+        svc._config = SimpleNamespace(  # pylint: disable=protected-access
+            mugen=SimpleNamespace(
+                environment="production",
+                messaging=SimpleNamespace(extension_timeout_seconds=None),
+            )
+        )
+        self.assertEqual(
+            svc._resolve_extension_timeout_seconds(),  # pylint: disable=protected-access
+            expected,
+        )
+
+        svc._config = SimpleNamespace(  # pylint: disable=protected-access
+            mugen=SimpleNamespace(
+                environment="production",
+                messaging=SimpleNamespace(extension_timeout_seconds=object()),
+            )
+        )
+        self.assertEqual(
+            svc._resolve_extension_timeout_seconds(),  # pylint: disable=protected-access
+            expected,
+        )
+
+        svc._config = SimpleNamespace(  # pylint: disable=protected-access
+            mugen=SimpleNamespace(
+                environment="production",
+                messaging=SimpleNamespace(extension_timeout_seconds="bad"),
+            )
+        )
+        self.assertEqual(
+            svc._resolve_extension_timeout_seconds(),  # pylint: disable=protected-access
+            expected,
+        )
+
+        svc._config = SimpleNamespace(  # pylint: disable=protected-access
+            mugen=SimpleNamespace(
+                environment="production",
+                messaging=SimpleNamespace(extension_timeout_seconds=0),
+            )
+        )
+        self.assertEqual(
+            svc._resolve_extension_timeout_seconds(),  # pylint: disable=protected-access
+            expected,
+        )
+
     def test_composed_helpers_and_normalization_branches(self) -> None:
         svc = self._new_service()
 
