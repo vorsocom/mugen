@@ -106,6 +106,64 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(payload["ready"])
         self.assertEqual(payload["failed_platforms"], ["web"])
 
+    async def test_ready_endpoint_returns_200_when_starting_within_grace(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
+        state[PHASE_B_STARTED_AT_KEY] = perf_counter()
+        state["phase_b_readiness_grace_seconds"] = 30.0
+        state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_STARTING}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["failed_platforms"], [])
+        self.assertEqual(payload["reasons"], {})
+
+    async def test_ready_endpoint_uses_strict_starting_when_grace_is_invalid(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
+        state[PHASE_B_STARTED_AT_KEY] = perf_counter()
+        state["phase_b_readiness_grace_seconds"] = "invalid"
+        state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_STARTING}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["failed_platforms"], ["web"])
+
+    async def test_ready_endpoint_uses_strict_starting_when_grace_is_negative(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
+        state[PHASE_B_STARTED_AT_KEY] = perf_counter()
+        state["phase_b_readiness_grace_seconds"] = -1
+        state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_STARTING}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["failed_platforms"], ["web"])
+
     async def test_ready_endpoint_handles_invalid_started_at_value(self) -> None:
         state = self._bootstrap_state()
         state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY

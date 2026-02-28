@@ -51,18 +51,26 @@ class ObjectMediaStorageGateway(IMediaStorageGateway):
 
         object_id = uuid.uuid4().hex
         extension = self._infer_extension(filename_hint)
+        blob_key = self._blob_key(object_id)
 
         await self._keyval_storage_gateway.put_bytes(
-            self._blob_key(object_id),
+            blob_key,
             payload,
         )
-        await self._keyval_storage_gateway.put_json(
-            self._meta_key(object_id),
-            {
-                "created_at": self._epoch_now(),
-                "extension": extension,
-            },
-        )
+        try:
+            await self._keyval_storage_gateway.put_json(
+                self._meta_key(object_id),
+                {
+                    "created_at": self._epoch_now(),
+                    "extension": extension,
+                },
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            try:
+                await self._keyval_storage_gateway.delete(blob_key)
+            except Exception:  # pylint: disable=broad-exception-caught
+                ...
+            raise
 
         return self._make_ref(object_id)
 

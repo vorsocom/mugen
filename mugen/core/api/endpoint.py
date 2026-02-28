@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 from quart import current_app, jsonify
@@ -36,6 +37,34 @@ def _parse_bool(value: object, *, default: bool) -> bool:
         if normalized in {"0", "false", "no", "off"}:
             return False
     return default
+
+
+def _parse_nonnegative_float(value: object, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed < 0:
+        return default
+    return parsed
+
+
+def _phase_b_starting_within_grace(
+    *,
+    phase_b_status: str,
+    phase_b_started_at: object,
+    readiness_grace_seconds: float,
+) -> bool:
+    if phase_b_status != PHASE_STATUS_STARTING:
+        return False
+    if readiness_grace_seconds <= 0:
+        return False
+    try:
+        started_at = float(phase_b_started_at)
+    except (TypeError, ValueError):
+        return False
+    elapsed_seconds = perf_counter() - started_at
+    return elapsed_seconds < readiness_grace_seconds
 
 
 def _resolve_bootstrap_status() -> dict[str, Any]:
@@ -113,6 +142,15 @@ async def core_health_ready():
     phase_a_status = status["phase_a_status"]
     phase_b_status = status["phase_b_status"]
     phase_b_error = status["phase_b_error"]
+    readiness_grace_seconds = _parse_nonnegative_float(
+        status["phase_b_readiness_grace_seconds"],
+        default=0.0,
+    )
+    ignore_starting = _phase_b_starting_within_grace(
+        phase_b_status=phase_b_status,
+        phase_b_started_at=status["phase_b_started_at"],
+        readiness_grace_seconds=readiness_grace_seconds,
+    )
     degrade_on_critical_exit = _parse_bool(
         status["phase_b_degrade_on_critical_exit"],
         default=True,
@@ -148,7 +186,7 @@ async def core_health_ready():
         critical_platforms=critical_platforms,
         platform_statuses=platform_statuses,
         platform_errors=platform_errors,
-        ignore_starting=False,
+        ignore_starting=ignore_starting,
         degrade_on_critical_exit=degrade_on_critical_exit,
     )
     ready = (

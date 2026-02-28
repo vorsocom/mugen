@@ -489,6 +489,54 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
             mugen_mod._normalize_platform_list([" web ", "", "web", "matrix"]),  # pylint: disable=protected-access
             ["web", "matrix"],
         )
+        self.assertFalse(
+            mugen_mod._config_path_exists(  # pylint: disable=protected-access
+                {"mugen": None},
+                "mugen",
+                "modules",
+            )
+        )
+        self.assertFalse(
+            mugen_mod._config_path_exists(  # pylint: disable=protected-access
+                {"mugen": {}},
+                "mugen",
+                "modules",
+            )
+        )
+
+        class _SlotNode:
+            __slots__ = ("child",)
+
+        slot_root = _SlotNode()
+        slot_child = _SlotNode()
+        slot_root.child = slot_child
+        slot_child.child = None
+        self.assertTrue(
+            mugen_mod._config_path_exists(slot_root, "child")  # pylint: disable=protected-access
+        )
+        self.assertFalse(
+            mugen_mod._config_path_exists(slot_root, "missing")  # pylint: disable=protected-access
+        )
+
+        relational_config = {
+            "mugen": {
+                "modules": {
+                    "core": {
+                        "gateway": {
+                            "storage": {
+                                "relational": "configured",
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        with self.assertRaises(BootstrapConfigError):
+            mugen_mod.validate_web_relational_runtime_config(
+                config=relational_config,
+                active_platforms=["web"],
+                relational_storage_gateway_provider=lambda: None,
+            )
 
         config = SimpleNamespace(
             mugen=SimpleNamespace(
@@ -662,6 +710,29 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
+            )
+
+    async def test_run_platform_clients_raises_on_relational_web_miswire(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                platforms=["web"],
+                modules=SimpleNamespace(
+                    core=SimpleNamespace(
+                        gateway=SimpleNamespace(
+                            storage=SimpleNamespace(relational="configured"),
+                        )
+                    )
+                ),
+            )
+        )
+
+        with self.assertRaises(BootstrapConfigError):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                relational_storage_gateway_provider=lambda: object(),
             )
 
     async def test_run_platform_clients_marks_platform_degraded_on_exception(self) -> None:

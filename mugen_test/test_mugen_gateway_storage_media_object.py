@@ -137,6 +137,29 @@ class TestObjectMediaStorageGateway(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_store_bytes_rolls_back_blob_when_meta_write_fails(self) -> None:
+        original_put_bytes = self.keyval.put_bytes
+        original_delete = self.keyval.delete
+        self.keyval.put_bytes = AsyncMock(side_effect=original_put_bytes)
+        self.keyval.put_json = AsyncMock(side_effect=RuntimeError("meta write failed"))
+        self.keyval.delete = AsyncMock(side_effect=original_delete)
+
+        with self.assertRaisesRegex(RuntimeError, "meta write failed"):
+            await self.gateway.store_bytes(b"payload", filename_hint="x.bin")
+
+        blob_key = self.keyval.put_bytes.await_args.args[0]
+        self.keyval.delete.assert_awaited_once_with(blob_key)
+        self.assertNotIn(blob_key, self.keyval._store)
+
+    async def test_store_bytes_raises_primary_error_when_rollback_delete_fails(self) -> None:
+        self.keyval.put_json = AsyncMock(side_effect=RuntimeError("meta write failed"))
+        self.keyval.delete = AsyncMock(side_effect=RuntimeError("rollback failed"))
+
+        with self.assertRaisesRegex(RuntimeError, "meta write failed"):
+            await self.gateway.store_bytes(b"payload", filename_hint="x.bin")
+
+        self.keyval.delete.assert_awaited_once()
+
     async def test_store_file_and_cleanup(self) -> None:
         source = os.path.join(self.tmpdir.name, "src.bin")
         with open(source, "wb") as handle:

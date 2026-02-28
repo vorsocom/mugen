@@ -23,6 +23,7 @@ __all__ = [
     "run_clients",
     "run_platform_clients",
     "run_web_client",
+    "validate_web_relational_runtime_config",
     "validate_phase_b_runtime_config",
 ]
 
@@ -128,6 +129,10 @@ def _web_provider():
     return di.container.web_client
 
 
+def _relational_storage_gateway_provider():
+    return di.container.relational_storage_gateway
+
+
 def _extension_enabled(ext: SimpleNamespace) -> bool:
     """Resolve whether an extension is enabled by configuration."""
     raw_enabled = getattr(ext, "enabled", True)
@@ -171,6 +176,68 @@ def _parse_bool(value: object, *, default: bool) -> bool:
 
 def _normalize_platform_list(values: object) -> list[str]:
     return normalize_platforms(values)
+
+
+def _config_path_exists(config: object, *path: str) -> bool:
+    current = config
+    for key in path:
+        if current is None:
+            return False
+        if isinstance(current, dict):
+            if key not in current:
+                return False
+            current = current[key]
+            continue
+        current_dict = getattr(current, "__dict__", None)
+        if isinstance(current_dict, dict):
+            if key not in current_dict:
+                return False
+            current = current_dict[key]
+            continue
+        try:
+            current = getattr(current, key)
+        except AttributeError:
+            return False
+    return True
+
+
+def validate_web_relational_runtime_config(
+    *,
+    config: SimpleNamespace,
+    active_platforms: list[str],
+    relational_storage_gateway_provider=_relational_storage_gateway_provider,
+) -> None:
+    """Validate relational web runtime dependencies before task scheduling."""
+    if "web" not in active_platforms:
+        return
+
+    relational_configured = _config_path_exists(
+        config,
+        "mugen",
+        "modules",
+        "core",
+        "gateway",
+        "storage",
+        "relational",
+    )
+    if relational_configured is not True:
+        return
+
+    relational_storage_gateway = relational_storage_gateway_provider()
+    if relational_storage_gateway is None:
+        raise BootstrapConfigError(
+            "Relational web storage is configured but "
+            "relational_storage_gateway provider is unavailable."
+        )
+
+    raw_session = getattr(relational_storage_gateway, "raw_session", None)
+    if callable(raw_session):
+        return
+
+    raise BootstrapConfigError(
+        "Relational web storage is configured but "
+        "relational_storage_gateway.raw_session is unavailable."
+    )
 
 
 def _resolve_phase_b_critical_platforms(
@@ -521,6 +588,7 @@ async def run_platform_clients(
     logger_provider=_logger_provider,
     whatsapp_provider=_whatsapp_provider,
     web_provider=_web_provider,
+    relational_storage_gateway_provider=_relational_storage_gateway_provider,
 ) -> None:
     """Phase B bootstrap for long-running platform clients."""
     config: SimpleNamespace = config_provider()
@@ -536,6 +604,11 @@ async def run_platform_clients(
             bootstrap_state=bootstrap_state,
             logger=logger,
         )
+    )
+    validate_web_relational_runtime_config(
+        config=config,
+        active_platforms=active_platforms,
+        relational_storage_gateway_provider=relational_storage_gateway_provider,
     )
     bootstrap_state[_PHASE_B_CRITICAL_PLATFORMS_KEY] = critical_platforms
     bootstrap_state[_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = degrade_on_critical_exit
