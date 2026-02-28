@@ -161,7 +161,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "whatsapp": "nonexistent_module",
+                                    "whatsapp": "nonexistent_module:MissingClass",
                                 }
                             }
                         },
@@ -212,7 +212,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "whatsapp": "valid_whatsapp_module",
+                                    "whatsapp": "valid_whatsapp_module:MissingClass",
                                 }
                             }
                         },
@@ -282,7 +282,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "whatsapp": "valid_whatsapp_module",
+                                    "whatsapp": "valid_whatsapp_module:DummyWhatsAppClientClass",
                                 }
                             }
                         },
@@ -440,7 +440,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_whatsapp_module": unittest.mock.Mock(),
+                            "valid_whatsapp_module": unittest.mock.Mock(DummyWhatsAppClientClass=DummyWhatsAppClientClass),
                         },
                     ),
                     unittest.mock.patch(

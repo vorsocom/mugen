@@ -1,5 +1,6 @@
-"""Unit tests for provider class resolution in mugen.core.di."""
+"""Unit tests for deterministic provider class resolution in mugen.core.di."""
 
+from types import ModuleType
 import unittest
 import unittest.mock
 
@@ -9,108 +10,82 @@ from mugen.core.contract.gateway.completion import ICompletionGateway
 
 # pylint: disable=protected-access
 class TestDIProviderResolution(unittest.TestCase):
-    """Unit tests for module-aware provider class resolution."""
+    """Unit tests for module:Class provider resolution rules."""
 
-    def test_prefers_matching_module_when_multiple_subclasses(self):
-        """Pick the class whose __module__ matches configured module."""
+    def test_split_class_path_requires_module_class_syntax(self) -> None:
+        with self.assertRaises(RuntimeError):
+            di._split_class_path(None, provider_name="completion_gateway")
+        with self.assertRaises(RuntimeError):
+            di._split_class_path("module.only", provider_name="completion_gateway")
+        with self.assertRaises(RuntimeError):
+            di._split_class_path("module:", provider_name="completion_gateway")
 
-        class FirstCompletionGateway(ICompletionGateway):
-            async def get_completion(self, context, operation="completion"):
-                return None
+        module_name, class_name = di._split_class_path(
+            "module.path:ProviderClass",
+            provider_name="completion_gateway",
+        )
+        self.assertEqual(module_name, "module.path")
+        self.assertEqual(class_name, "ProviderClass")
 
-        class SecondCompletionGateway(ICompletionGateway):
-            async def get_completion(self, context, operation="completion"):
-                return None
+    def test_resolve_provider_class_requires_existing_subclass(self) -> None:
+        class NotACompletionGateway:  # pylint: disable=too-few-public-methods
+            pass
 
-        FirstCompletionGateway.__module__ = "module.one"
-        SecondCompletionGateway.__module__ = "module.two"
-
-        logger = unittest.mock.Mock()
-        with unittest.mock.patch(
-            "mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",
-            return_value=[FirstCompletionGateway, SecondCompletionGateway],
-        ):
-            resolved = di._get_provider_class(
-                interface=ICompletionGateway,
-                module_name="module.two",
-                provider_name="completion_gateway",
-                logger=logger,
-            )
-
-        self.assertIs(resolved, SecondCompletionGateway)
-
-    def test_single_subclass_without_module_match_returns_none(self):
-        """Return None when subclass module does not match config."""
-
-        class OnlyCompletionGateway(ICompletionGateway):
-            async def get_completion(self, context, operation="completion"):
-                return None
-
-        OnlyCompletionGateway.__module__ = "other.module"
-
-        logger = unittest.mock.Mock()
-        with unittest.mock.patch(
-            "mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",
-            return_value=[OnlyCompletionGateway],
-        ):
-            resolved = di._get_provider_class(
-                interface=ICompletionGateway,
-                module_name="configured.module",
-                provider_name="completion_gateway",
-                logger=logger,
-            )
-
-        self.assertIsNone(resolved)
-
-    def test_completion_provider_uses_configured_module_class(self):
-        """Build completion provider using configured module class."""
-
-        class WrongCompletionGateway(ICompletionGateway):
-            def __init__(
-                self, config, logging_gateway
-            ):  # pylint: disable=unused-argument
-                raise AssertionError("Wrong completion gateway selected.")
-
-            async def get_completion(self, context, operation="completion"):
-                return None
-
-        class RightCompletionGateway(ICompletionGateway):
-            def __init__(
-                self, config, logging_gateway
-            ):  # pylint: disable=unused-argument
-                pass
-
-            async def get_completion(self, context, operation="completion"):
-                return None
-
-        WrongCompletionGateway.__module__ = "module.wrong"
-        RightCompletionGateway.__module__ = "module.right"
+        fake_module = ModuleType("module.invalid")
+        fake_module.NotACompletionGateway = NotACompletionGateway
 
         config = {
             "mugen": {
                 "modules": {
                     "core": {
                         "gateway": {
-                            "completion": "module.right",
+                            "completion": "module.invalid:NotACompletionGateway",
                         }
                     }
                 }
             }
         }
-        injector = di.injector.DependencyInjector()
-
         with (
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "module.right": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                "mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",
-                return_value=[WrongCompletionGateway, RightCompletionGateway],
-            ),
+            unittest.mock.patch.dict("sys.modules", {"module.invalid": fake_module}),
+            self.assertRaises(RuntimeError),
         ):
+            di._resolve_provider_class(
+                config=config,
+                provider_name="completion_gateway",
+                module_path=("mugen", "modules", "core", "gateway", "completion"),
+                interface=ICompletionGateway,
+            )
+
+    def test_completion_provider_uses_configured_module_class(self) -> None:
+        """Build completion provider from explicit module:Class configuration."""
+
+        class RightCompletionGateway(ICompletionGateway):
+            def __init__(self, config, logging_gateway):  # noqa: ARG002
+                pass
+
+            async def get_completion(self, context, operation="completion"):
+                return None
+
+        fake_module = ModuleType("module.right")
+        fake_module.RightCompletionGateway = RightCompletionGateway
+
+        config = {
+            "mugen": {
+                "modules": {
+                    "core": {
+                        "gateway": {
+                            "completion": "module.right:RightCompletionGateway",
+                        }
+                    }
+                }
+            }
+        }
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=object(),
+        )
+
+        with unittest.mock.patch.dict("sys.modules", {"module.right": fake_module}):
             di._build_provider(config, injector, provider_name="completion_gateway")
 
         self.assertIsInstance(injector.completion_gateway, RightCompletionGateway)

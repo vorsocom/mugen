@@ -194,7 +194,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "matrix": "nonexistent_module",
+                                    "matrix": "nonexistent_module:MissingClass",
                                 }
                             }
                         },
@@ -245,7 +245,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "matrix": "valid_matrix_module",
+                                    "matrix": "valid_matrix_module:MissingClass",
                                 }
                             }
                         },
@@ -313,7 +313,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "matrix": "valid_matrix_module",
+                                    "matrix": "valid_matrix_module:DummyMatrixClientClass",
                                 }
                             }
                         },
@@ -365,7 +365,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_matrix_module": unittest.mock.Mock(),
+                            "valid_matrix_module": unittest.mock.Mock(DummyMatrixClientClass=DummyMatrixClientClass),
                         },
                     ),
                     unittest.mock.patch(

@@ -102,6 +102,61 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             mugen_mod._split_extension_path("module:")  # pylint: disable=protected-access
 
+    async def test_resolve_extension_class_rejects_module_only_path(self) -> None:
+        """Class resolver should fail fast for module-only paths."""
+        with self.assertRaises(ExtensionLoadError):
+            mugen_mod._resolve_extension_class(  # pylint: disable=protected-access
+                interface=ICTExtension,
+                module_name="ct_ext",
+                class_name=None,
+                ext_path="ct_ext",
+            )
+
+    async def test_register_extension_fails_for_incomplete_subclass(self) -> None:
+        """Extension bootstrap should fail when target class is abstract/incomplete."""
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions=[
+                        SimpleNamespace(
+                            type="ct",
+                            path="ct_ext:IncompleteCTExtension",
+                        )
+                    ],
+                )
+            )
+        )
+
+        class IncompleteCTExtension(ICTExtension):
+            __module__ = "ct_ext"
+
+            @property
+            def platforms(self) -> list[str]:
+                return []
+
+            @property
+            def triggers(self) -> list[str]:
+                return ["x"]
+
+        with (
+            self.assertLogs(logger="test_app"),
+            unittest.mock.patch.dict(
+                "sys.modules",
+                {
+                    "ct_ext": unittest.mock.Mock(
+                        IncompleteCTExtension=IncompleteCTExtension
+                    ),
+                },
+            ),
+            self.assertRaises(ExtensionLoadError),
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
     async def test_plugin_config_unavailable(self) -> None:
         """Test effects of missing plugins configuration."""
         # Create dummy app to get context.
@@ -343,7 +398,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="extension_type",
-                            path="extension.module",
+                            path="extension.module:AnyExtension",
                         )
                     ],
                 )
@@ -398,7 +453,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="ct",
-                            path="ct_ext",
+                            path="ct_ext:MissingCTExtension",
                         )
                     ],
                 )
@@ -438,7 +493,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="ct",
-                            path="ct_ext",
+                            path="ct_ext:DummyExtensionClass",
                         )
                     ],
                 )
@@ -622,7 +677,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_extension_without_class_path_fails_when_ambiguous(self) -> None:
-        """module-only extension path should fail when multiple classes match."""
+        """module-only extension paths should fail before class resolution."""
         app = Quart("test_app")
         config = SimpleNamespace(
             mugen=SimpleNamespace(
@@ -709,7 +764,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="ct",
-                            path="ct_ext",
+                            path="ct_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -746,7 +801,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "ct_ext": unittest.mock.Mock(),
+                    "ct_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -761,7 +816,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 logger.output[2],
-                "WARNING:test_app:Extension not supported by active platforms: ct_ext.",
+                "WARNING:test_app:Extension not supported by active platforms: ct_ext:DummyExtensionClass.",
             )
 
     async def test_register_supported_conversational_trigger_extension(self) -> None:
@@ -776,7 +831,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="ct",
-                            path="ct_ext",
+                            path="ct_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -811,7 +866,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "ct_ext": unittest.mock.Mock(),
+                    "ct_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -826,7 +881,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 logger.output[2],
-                "DEBUG:test_app:Registered CT extension: ct_ext.",
+                "DEBUG:test_app:Registered CT extension: ct_ext:DummyExtensionClass.",
             )
 
     async def test_register_unsupported_context_extension(self) -> None:
@@ -841,7 +896,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="ctx",
-                            path="ctx_ext",
+                            path="ctx_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -868,7 +923,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "ctx_ext": unittest.mock.Mock(),
+                    "ctx_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -884,7 +939,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms:"
-                " ctx_ext.",
+                " ctx_ext:DummyExtensionClass.",
             )
 
     async def test_register_supported_context_extension(self) -> None:
@@ -899,7 +954,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="ctx",
-                            path="ctx_ext",
+                            path="ctx_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -924,7 +979,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "ctx_ext": unittest.mock.Mock(),
+                    "ctx_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -939,7 +994,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 logger.output[2],
-                "DEBUG:test_app:Registered CTX extension: ctx_ext.",
+                "DEBUG:test_app:Registered CTX extension: ctx_ext:DummyExtensionClass.",
             )
 
     async def test_register_unsupported_framework_extension(self) -> None:
@@ -954,7 +1009,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="fw",
-                            path="fw_ext",
+                            path="fw_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -981,7 +1036,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "fw_ext": unittest.mock.Mock(),
+                    "fw_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -996,7 +1051,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 logger.output[2],
-                "WARNING:test_app:Extension not supported by active platforms: fw_ext.",
+                "WARNING:test_app:Extension not supported by active platforms: fw_ext:DummyExtensionClass.",
             )
 
     async def test_register_supported_framework_extension(self) -> None:
@@ -1011,7 +1066,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="fw",
-                            path="fw_ext",
+                            path="fw_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -1036,7 +1091,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "fw_ext": unittest.mock.Mock(),
+                    "fw_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -1051,7 +1106,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 logger.output[2],
-                "DEBUG:test_app:Registered FW extension: fw_ext.",
+                "DEBUG:test_app:Registered FW extension: fw_ext:DummyExtensionClass.",
             )
 
     async def test_register_unsupported_interprocess_communication_extension(
@@ -1068,7 +1123,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="ipc",
-                            path="ipc_ext",
+                            path="ipc_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -1106,7 +1161,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "ipc_ext": unittest.mock.Mock(),
+                    "ipc_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -1122,7 +1177,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms:"
-                " ipc_ext.",
+                " ipc_ext:DummyExtensionClass.",
             )
 
     async def test_register_supported_interprocess_communication_extension(
@@ -1139,7 +1194,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="ipc",
-                            path="ipc_ext",
+                            path="ipc_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -1175,7 +1230,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "ipc_ext": unittest.mock.Mock(),
+                    "ipc_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -1190,7 +1245,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 logger.output[2],
-                "DEBUG:test_app:Registered IPC extension: ipc_ext.",
+                "DEBUG:test_app:Registered IPC extension: ipc_ext:DummyExtensionClass.",
             )
 
     async def test_register_unsupported_message_handler_extension(self) -> None:
@@ -1205,7 +1260,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="mh",
-                            path="mh_ext",
+                            path="mh_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -1245,7 +1300,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "mh_ext": unittest.mock.Mock(),
+                    "mh_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -1260,7 +1315,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 logger.output[2],
-                "WARNING:test_app:Extension not supported by active platforms: mh_ext.",
+                "WARNING:test_app:Extension not supported by active platforms: mh_ext:DummyExtensionClass.",
             )
 
     async def test_register_supported_message_handler_extension(self) -> None:
@@ -1275,7 +1330,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="mh",
-                            path="mh_ext",
+                            path="mh_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -1313,7 +1368,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "mh_ext": unittest.mock.Mock(),
+                    "mh_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -1328,7 +1383,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 logger.output[2],
-                "DEBUG:test_app:Registered MH extension: mh_ext.",
+                "DEBUG:test_app:Registered MH extension: mh_ext:DummyExtensionClass.",
             )
 
     async def test_register_unsupported_retrieval_augnmented_generation_extension(
@@ -1345,7 +1400,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="rag",
-                            path="rag_ext",
+                            path="rag_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -1381,7 +1436,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "rag_ext": unittest.mock.Mock(),
+                    "rag_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -1397,7 +1452,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms:"
-                " rag_ext.",
+                " rag_ext:DummyExtensionClass.",
             )
 
     async def test_register_supported_retrieval_augnmented_generation_extension(
@@ -1414,7 +1469,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="rag",
-                            path="rag_ext",
+                            path="rag_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -1448,7 +1503,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "rag_ext": unittest.mock.Mock(),
+                    "rag_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -1463,7 +1518,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 logger.output[2],
-                "DEBUG:test_app:Registered RAG extension: rag_ext.",
+                "DEBUG:test_app:Registered RAG extension: rag_ext:DummyExtensionClass.",
             )
 
     async def test_register_unsupported_response_preprocessor_extension(self) -> None:
@@ -1478,7 +1533,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="rpp",
-                            path="rpp_ext",
+                            path="rpp_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -1510,7 +1565,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "rpp_ext": unittest.mock.Mock(),
+                    "rpp_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -1526,7 +1581,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 logger.output[2],
                 "WARNING:test_app:Extension not supported by active platforms:"
-                " rpp_ext.",
+                " rpp_ext:DummyExtensionClass.",
             )
 
     async def test_register_supported_response_preprocessor_extension(self) -> None:
@@ -1541,7 +1596,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="rpp",
-                            path="rpp_ext",
+                            path="rpp_ext:DummyExtensionClass",
                         )
                     ],
                 ),
@@ -1571,7 +1626,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             unittest.mock.patch.dict(
                 "sys.modules",
                 {
-                    "rpp_ext": unittest.mock.Mock(),
+                    "rpp_ext": unittest.mock.Mock(DummyExtensionClass=DummyExtensionClass),
                 },
             ),
             unittest.mock.patch(
@@ -1586,7 +1641,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 logger.output[2],
-                "DEBUG:test_app:Registered RPP extension: rpp_ext.",
+                "DEBUG:test_app:Registered RPP extension: rpp_ext:DummyExtensionClass.",
             )
 
     async def test_unknown_extension_type(self) -> None:
@@ -1601,7 +1656,7 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                     extensions=[
                         SimpleNamespace(
                             type="xxx",
-                            path="xxx_ext",
+                            path="xxx_ext:DummyExtensionClass",
                         )
                     ],
                 )

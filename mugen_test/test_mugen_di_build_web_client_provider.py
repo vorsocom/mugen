@@ -115,7 +115,7 @@ class TestDIBuildWebClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "web": "nonexistent_module",
+                                    "web": "nonexistent_module:MissingClass",
                                 }
                             }
                         },
@@ -152,7 +152,7 @@ class TestDIBuildWebClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "web": "valid_web_module",
+                                    "web": "valid_web_module:MissingClass",
                                 }
                             }
                         },
@@ -203,7 +203,7 @@ class TestDIBuildWebClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "web": "valid_web_module",
+                                    "web": "valid_web_module:DummyWebClientClass",
                                 }
                             }
                         },
@@ -274,7 +274,7 @@ class TestDIBuildWebClient(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_web_module": unittest.mock.Mock(),
+                            "valid_web_module": unittest.mock.Mock(DummyWebClientClass=DummyWebClientClass),
                         },
                     ),
                     unittest.mock.patch(

@@ -83,26 +83,32 @@ def _build_config_provider(
     injector.config = ns
 
 
-def _get_provider_class(
+def _split_class_path(
+    raw_value: object,
     *,
-    interface: type,
-    module_name: str,
     provider_name: str,
-    logger: ILoggingGateway | logging.Logger,
-) -> type | None:
-    """Resolve a provider implementation class for the configured module."""
-    subclasses = interface.__subclasses__()
-    module_matches = [x for x in subclasses if x.__module__ == module_name]
-
-    if len(module_matches) == 1:
-        return module_matches[0]
-
-    if len(module_matches) > 1:
-        logger.error(f"Multiple valid subclasses found ({provider_name}).")
-        return None
-
-    logger.error(f"Valid subclass not found ({provider_name}).")
-    return None
+) -> tuple[str, str]:
+    """Parse mandatory module:Class provider path."""
+    if not isinstance(raw_value, str):
+        raise RuntimeError(
+            "Invalid configuration "
+            f"({provider_name}): expected module:Class string."
+        )
+    normalized = raw_value.strip()
+    if ":" not in normalized:
+        raise RuntimeError(
+            "Invalid configuration "
+            f"({provider_name}): module-only paths are not supported; use module:Class."
+        )
+    module_name, class_name = normalized.split(":", 1)
+    module_name = module_name.strip()
+    class_name = class_name.strip()
+    if module_name == "" or class_name == "":
+        raise RuntimeError(
+            "Invalid configuration "
+            f"({provider_name}): expected non-empty module and class in module:Class."
+        )
+    return module_name, class_name
 
 
 def _config_path_exists(config: dict, *path: str) -> bool:
@@ -336,30 +342,38 @@ def _get_provider_logger(
     return logger
 
 
-def _import_provider_module(
+def _resolve_provider_class(
     *,
     config: dict,
     provider_name: str,
     module_path: tuple[str, ...],
-    logger: ILoggingGateway | logging.Logger,
+    interface: type,
     invalid_config_exceptions: tuple[type[Exception], ...] = (KeyError,),
-) -> str | None:
-    """Resolve and import provider module from configuration path."""
+) -> type:
+    """Resolve provider class from mandatory module:Class configuration."""
     try:
-        module_name = config
+        class_path_value = config
         for key in module_path:
-            module_name = module_name[key]
-    except invalid_config_exceptions:
-        logger.error(f"Invalid configuration ({provider_name}).")
-        return None
+            class_path_value = class_path_value[key]
+    except invalid_config_exceptions as exc:
+        raise RuntimeError(f"Invalid configuration ({provider_name}).") from exc
 
+    module_name, class_name = _split_class_path(
+        class_path_value,
+        provider_name=provider_name,
+    )
     try:
-        import_module(name=module_name)
-    except ModuleNotFoundError:
-        logger.error(f"Could not import module ({provider_name}).")
-        return None
+        module = import_module(name=module_name)
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(f"Could not import module ({provider_name}).") from exc
 
-    return module_name
+    provider_class = getattr(module, class_name, None)
+    if not isinstance(provider_class, type):
+        raise RuntimeError(f"Valid subclass not found ({provider_name}).")
+    if not issubclass(provider_class, interface):
+        raise RuntimeError(f"Valid subclass not found ({provider_name}).")
+
+    return provider_class
 
 
 @dataclass(frozen=True)
@@ -589,14 +603,16 @@ def _build_provider_from_spec(
                 logger.warning(spec.inactive_platform_warning)
             return
 
-    module_name = _import_provider_module(
-        config=config,
-        provider_name=spec.provider_name,
-        module_path=spec.module_path,
-        logger=logger,
-        invalid_config_exceptions=spec.invalid_config_exceptions,
-    )
-    if module_name is None:
+    try:
+        provider_class = _resolve_provider_class(
+            config=config,
+            provider_name=spec.provider_name,
+            module_path=spec.module_path,
+            interface=spec.interface,
+            invalid_config_exceptions=spec.invalid_config_exceptions,
+        )
+    except RuntimeError as exc:
+        logger.error(str(exc))
         return
 
     if validate_injector_config and (
@@ -605,23 +621,15 @@ def _build_provider_from_spec(
         logger.error(f"Invalid injector ({spec.provider_name}).")
         return
 
-    provider_class = _get_provider_class(
-        interface=spec.interface,
-        module_name=module_name,
-        provider_name=spec.provider_name,
-        logger=logger,
-    )
-    if provider_class is None:
-        return
-
     try:
         provider_kwargs = {
             arg_name: getattr(injector, injector_attr)
             for arg_name, injector_attr in spec.constructor_bindings
         }
         setattr(injector, spec.injector_attr, provider_class(**provider_kwargs))
-    except AttributeError:
+    except AttributeError as exc:
         logger.error(f"Invalid injector ({spec.provider_name}).")
+        logger.debug(str(exc))
 
 
 def _build_provider(
@@ -739,31 +747,40 @@ async def _shutdown_provider_async(
     if provider is None:
         return
 
-    maybe_awaitable = None
     close = getattr(provider, "close", None)
+    aclose = getattr(provider, "aclose", None)
+
+    hooks: list[tuple[str, object]] = []
     if callable(close):
-        try:
-            maybe_awaitable = close()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning(f"Failed to close provider ({provider_name}): {exc}")
-            return
-    else:
-        aclose = getattr(provider, "aclose", None)
-        if not callable(aclose):
-            return
-        try:
-            maybe_awaitable = aclose()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning(f"Failed to invoke provider aclose ({provider_name}): {exc}")
-            return
+        hooks.append(("close", close))
+    if callable(aclose) and aclose is not close:
+        hooks.append(("aclose", aclose))
 
-    if inspect.isawaitable(maybe_awaitable) is not True:
-        return
+    for hook_name, hook in hooks:
+        try:
+            maybe_awaitable = hook()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            if hook_name == "close":
+                logger.warning(f"Failed to close provider ({provider_name}): {exc}")
+            else:
+                logger.warning(
+                    f"Failed to invoke provider {hook_name} ({provider_name}): {exc}"
+                )
+            continue
 
-    try:
-        await maybe_awaitable
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning(f"Failed to await provider close ({provider_name}): {exc}")
+        if inspect.isawaitable(maybe_awaitable) is not True:
+            continue
+        try:
+            await maybe_awaitable
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            if hook_name == "close":
+                logger.warning(
+                    f"Failed to await provider close ({provider_name}): {exc}"
+                )
+            else:
+                logger.warning(
+                    f"Failed to await provider {hook_name} ({provider_name}): {exc}"
+                )
 
 
 def _provider_specs_for_shutdown() -> list[_ProviderSpec]:

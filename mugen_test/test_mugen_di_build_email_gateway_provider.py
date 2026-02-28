@@ -81,7 +81,7 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "email": "nonexistent_module",
+                                    "email": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -117,7 +117,7 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "email": "valid_email_module",
+                                    "email": "valid_email_module:MissingClass",
                                 }
                             }
                         }
@@ -165,7 +165,7 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "email": "valid_email_module",
+                                    "email": "valid_email_module:DummyEmailGatewayClass",
                                 }
                             }
                         }
@@ -189,7 +189,7 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_email_module": unittest.mock.Mock(),
+                            "valid_email_module": unittest.mock.Mock(DummyEmailGatewayClass=DummyEmailGatewayClass),
                         },
                     ),
                     unittest.mock.patch(

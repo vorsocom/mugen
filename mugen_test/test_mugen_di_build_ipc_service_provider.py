@@ -113,7 +113,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "ipc": "nonexistent_module",
+                                    "ipc": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -163,7 +163,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "ipc": "valid_ipc_module",
+                                    "ipc": "valid_ipc_module:MissingClass",
                                 }
                             }
                         }
@@ -230,7 +230,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "ipc": "valid_ipc_module",
+                                    "ipc": "valid_ipc_module:DummyIPCServiceClass",
                                 }
                             }
                         }
@@ -261,7 +261,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_ipc_module": unittest.mock.Mock(),
+                            "valid_ipc_module": unittest.mock.Mock(DummyIPCServiceClass=DummyIPCServiceClass),
                         },
                     ),
                     unittest.mock.patch(

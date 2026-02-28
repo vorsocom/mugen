@@ -54,6 +54,10 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
             expire_on_commit=False,
         )
 
+    async def aclose(self) -> None:
+        """Dispose SQLAlchemy engine resources."""
+        await self._engine.dispose()
+
     @asynccontextmanager
     async def unit_of_work(self) -> AsyncIterator[IRelationalUnitOfWork]:
         """Yield a SQLAlchemyRelationalUnitOfWork bound to a transaction.

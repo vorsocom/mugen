@@ -113,7 +113,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "completion": "nonexistent_module",
+                                    "completion": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -163,7 +163,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "completion": "valid_completion_module",
+                                    "completion": "valid_completion_module:MissingClass",
                                 }
                             }
                         }
@@ -230,7 +230,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "completion": "valid_completion_module",
+                                    "completion": "valid_completion_module:DummyCompletionGatewayClass",
                                 }
                             }
                         }
@@ -258,7 +258,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_completion_module": unittest.mock.Mock(),
+                            "valid_completion_module": unittest.mock.Mock(DummyCompletionGatewayClass=DummyCompletionGatewayClass),
                         },
                     ),
                     unittest.mock.patch(

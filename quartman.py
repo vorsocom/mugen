@@ -13,6 +13,7 @@ import logging
 from time import perf_counter
 
 from mugen import (
+    BootstrapConfigError,
     BootstrapError,
     bootstrap_app,
     create_quart_app,
@@ -36,19 +37,21 @@ from mugen.bootstrap_state import (
     SHUTDOWN_REQUESTED_KEY,
 )
 from mugen.core import di
-from mugen.core.domain.use_case.phase_b_health import (
-    PhaseBHealthInput,
-    evaluate_phase_b_health,
-)
 from mugen.core.runtime.phase_b_controls import (
     parse_bool,
+    resolve_phase_b_startup_timeout_seconds,
     resolve_phase_b_runtime_controls,
+)
+from mugen.core.runtime.phase_b_runtime import (
+    finalize_phase_b_task_completion,
+    wait_for_critical_startup,
 )
 
 _PLATFORM_CLIENTS_TASK_KEY = "platform_clients_task"
 _PHASE_B_READINESS_GRACE_KEY = "phase_b_readiness_grace_seconds"
 _PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
 _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY = "phase_b_degrade_on_critical_exit"
+_PHASE_B_STARTUP_TIMEOUT_KEY = "phase_b_startup_timeout_seconds"
 
 try:
     # Create Quart mugen.
@@ -73,6 +76,10 @@ def _resolve_phase_b_runtime_controls() -> tuple[float, list[str], bool]:
     return resolve_phase_b_runtime_controls(getattr(di.container, "config", None))
 
 
+def _resolve_phase_b_startup_timeout() -> float:
+    return resolve_phase_b_startup_timeout_seconds(getattr(di.container, "config", None))
+
+
 async def _shutdown_container() -> None:
     try:
         await di.shutdown_container_async()
@@ -83,48 +90,29 @@ async def _shutdown_container() -> None:
 def _on_platform_clients_done(task: asyncio.Task, started_at: float) -> None:
     elapsed_seconds = perf_counter() - started_at
     state = _bootstrap_state()
-    shutdown_requested = bool(state.get(SHUTDOWN_REQUESTED_KEY))
+    critical_platforms = state.get(_PHASE_B_CRITICAL_PLATFORMS_KEY, [])
+    if not isinstance(critical_platforms, list):
+        critical_platforms = []
+    degrade_on_critical_exit = _parse_bool(
+        state.get(_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY, True),
+        default=True,
+    )
+    finalize_phase_b_task_completion(
+        state,
+        task=task,
+        critical_platforms=critical_platforms,
+        degrade_on_critical_exit=degrade_on_critical_exit,
+    )
     try:
-        error = task.exception()
+        task_error = task.exception()
     except asyncio.CancelledError:
-        if shutdown_requested:
-            state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
-            state[PHASE_B_ERROR_KEY] = None
-        else:
-            state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
-            state[PHASE_B_ERROR_KEY] = "phase_b task cancelled unexpectedly"
         app.logger.info(
             "Bootstrap phase_b cancelled elapsed_seconds=%.3f",
             elapsed_seconds,
         )
         return
 
-    if error is None:
-        if shutdown_requested:
-            state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
-            state[PHASE_B_ERROR_KEY] = None
-        else:
-            critical_platforms = state.get(_PHASE_B_CRITICAL_PLATFORMS_KEY, [])
-            if not isinstance(critical_platforms, list):
-                critical_platforms = []
-            evaluation = evaluate_phase_b_health(
-                PhaseBHealthInput(
-                    platform_statuses=state.get(PHASE_B_PLATFORM_STATUSES_KEY, {}),
-                    platform_errors=state.get(PHASE_B_PLATFORM_ERRORS_KEY, {}),
-                    critical_platforms=critical_platforms,
-                    degrade_on_critical_exit=_parse_bool(
-                        state.get(_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY, True),
-                        default=True,
-                    ),
-                    shutdown_requested=bool(state.get(SHUTDOWN_REQUESTED_KEY)),
-                    phase_b_status=str(state.get(PHASE_B_STATUS_KEY, "") or ""),
-                    phase_b_error=state.get(PHASE_B_ERROR_KEY),
-                    phase_b_started_at=state.get(PHASE_B_STARTED_AT_KEY),
-                    readiness_grace_seconds=0.0,
-                )
-            )
-            state[PHASE_B_STATUS_KEY] = evaluation.phase_b_status
-            state[PHASE_B_ERROR_KEY] = evaluation.phase_b_error
+    if task_error is None:
         app.logger.info(
             "Bootstrap phase_b completed elapsed_seconds=%.3f status=%s",
             elapsed_seconds,
@@ -132,14 +120,12 @@ def _on_platform_clients_done(task: asyncio.Task, started_at: float) -> None:
         )
         return
 
-    state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
-    state[PHASE_B_ERROR_KEY] = f"{type(error).__name__}: {error}"
     app.logger.error(
         "Bootstrap phase_b failed elapsed_seconds=%.3f error_type=%s error=%s",
         elapsed_seconds,
-        type(error).__name__,
-        error,
-        exc_info=(type(error), error, error.__traceback__),
+        type(task_error).__name__,
+        task_error,
+        exc_info=(type(task_error), task_error, task_error.__traceback__),
     )
 
 
@@ -178,6 +164,10 @@ async def startup():
     readiness_grace_seconds, critical_platforms, degrade_on_critical_exit = (
         _resolve_phase_b_runtime_controls()
     )
+    try:
+        startup_timeout_seconds = _resolve_phase_b_startup_timeout()
+    except RuntimeError as exc:
+        raise BootstrapConfigError(str(exc)) from exc
     runtime_config = getattr(di.container, "config", None)
     if runtime_config is not None:
         active_platforms, critical_platforms, degrade_on_critical_exit = (
@@ -194,6 +184,7 @@ async def startup():
     state[_PHASE_B_READINESS_GRACE_KEY] = readiness_grace_seconds
     state[_PHASE_B_CRITICAL_PLATFORMS_KEY] = critical_platforms
     state[_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = degrade_on_critical_exit
+    state[_PHASE_B_STARTUP_TIMEOUT_KEY] = startup_timeout_seconds
     state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
     state[PHASE_B_STARTED_AT_KEY] = perf_counter()
     state[PHASE_B_ERROR_KEY] = None
@@ -208,6 +199,25 @@ async def startup():
         lambda done_task: _on_platform_clients_done(done_task, phase_b_started_at)
     )
     state[_PLATFORM_CLIENTS_TASK_KEY] = task
+    try:
+        await wait_for_critical_startup(
+            state,
+            critical_platforms=critical_platforms,
+            startup_timeout_seconds=startup_timeout_seconds,
+        )
+    except RuntimeError as exc:
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        state[PHASE_B_ERROR_KEY] = str(exc)
+        app.logger.error(
+            "Bootstrap phase_b startup check failed timeout_seconds=%.3f error=%s",
+            startup_timeout_seconds,
+            exc,
+        )
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
+        raise BootstrapConfigError(str(exc)) from exc
 
 
 @app.after_serving

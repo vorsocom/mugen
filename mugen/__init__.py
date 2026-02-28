@@ -71,11 +71,10 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
-from mugen.core.domain.use_case.phase_b_health import (
-    PhaseBHealthInput,
-    evaluate_phase_b_health,
+from mugen.core.runtime.phase_b_controls import (
+    parse_bool as _parse_bool,
 )
-from mugen.core.runtime.phase_b_controls import parse_bool as _parse_bool
+from mugen.core.runtime.phase_b_runtime import refresh_phase_b_health
 from mugen.core.utility.platforms import (
     SUPPORTED_CORE_PLATFORMS,
     normalize_platforms,
@@ -353,31 +352,11 @@ def _refresh_phase_b_status(
     critical_platforms: list[str],
     degrade_on_critical_exit: bool = True,
 ) -> None:
-    statuses = bootstrap_state.get(PHASE_B_PLATFORM_STATUSES_KEY)
-    if not isinstance(statuses, dict):
-        statuses = {}
-    errors = bootstrap_state.get(PHASE_B_PLATFORM_ERRORS_KEY)
-    if not isinstance(errors, dict):
-        errors = {}
-
-    evaluation = evaluate_phase_b_health(
-        PhaseBHealthInput(
-            platform_statuses=statuses,
-            platform_errors=errors,
-            critical_platforms=list(critical_platforms),
-            degrade_on_critical_exit=degrade_on_critical_exit,
-            shutdown_requested=_parse_bool(
-                bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
-                default=False,
-            ),
-            phase_b_status=str(bootstrap_state.get(PHASE_B_STATUS_KEY, "") or ""),
-            phase_b_error=bootstrap_state.get(PHASE_B_ERROR_KEY),
-            phase_b_started_at=bootstrap_state.get(PHASE_B_STARTED_AT_KEY),
-            readiness_grace_seconds=0.0,
-        )
+    refresh_phase_b_health(
+        bootstrap_state,
+        critical_platforms=list(critical_platforms),
+        degrade_on_critical_exit=degrade_on_critical_exit,
     )
-    bootstrap_state[PHASE_B_STATUS_KEY] = evaluation.phase_b_status
-    bootstrap_state[PHASE_B_ERROR_KEY] = evaluation.phase_b_error
 
 
 def _split_extension_path(path: str) -> tuple[str, str | None]:
@@ -387,7 +366,10 @@ def _split_extension_path(path: str) -> tuple[str, str | None]:
 
     normalized = path.strip()
     if ":" not in normalized:
-        return normalized, None
+        raise ValueError(
+            "Extension path must use module:ClassName. "
+            "Module-only paths are not supported."
+        )
 
     module_name, class_name = normalized.split(":", 1)
     if not module_name or not class_name:
@@ -404,34 +386,21 @@ def _resolve_extension_class(
     ext_path: str,
 ) -> type:
     """Resolve extension class deterministically for the configured path."""
-    if class_name is not None:
-        module = import_module(name=module_name)
-        ext_class = getattr(module, class_name, None)
-        if not isinstance(ext_class, type):
-            raise ExtensionLoadError(f"Extension class not found: {ext_path}.")
-        if not issubclass(ext_class, interface):
-            raise ExtensionLoadError(
-                f"Extension class is not a valid {interface.__name__}: {ext_path}."
-            )
-        return ext_class
-
-    module_matches = [x for x in interface.__subclasses__() if x.__module__ == module_name]
-    if not module_matches:
+    if class_name is None:
         raise ExtensionLoadError(
-            f"Extension is not a subclass of its intended type: {ext_path}."
+            "Extension path must use module:ClassName. "
+            f"Received module-only path: {ext_path}."
         )
 
-    if len(module_matches) > 1:
-        candidates = ", ".join(
-            sorted(x.__qualname__ for x in module_matches)
-        )
+    module = import_module(name=module_name)
+    ext_class = getattr(module, class_name, None)
+    if not isinstance(ext_class, type):
+        raise ExtensionLoadError(f"Extension class not found: {ext_path}.")
+    if not issubclass(ext_class, interface):
         raise ExtensionLoadError(
-            "Multiple extension classes found. "
-            f"Use module:ClassName for deterministic resolution ({ext_path}). "
-            f"Candidates: {candidates}."
+            f"Extension class is not a valid {interface.__name__}: {ext_path}."
         )
-
-    return module_matches[0]
+    return ext_class
 
 
 def create_quart_app(
@@ -523,7 +492,6 @@ async def run_platform_clients(
     bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
     bootstrap_state[PHASE_B_ERROR_KEY] = None
     bootstrap_state[SHUTDOWN_REQUESTED_KEY] = False
-
     active_platforms, critical_platforms, degrade_on_critical_exit = (
         validate_phase_b_runtime_config(
             config=config,
@@ -1239,20 +1207,33 @@ async def run_web_client(
     healthy_callback=None,
 ) -> None:
     """Run assistant for the web platform."""
-    _ = degraded_callback
-    _ = healthy_callback
     logger: ILoggingGateway = logger_provider()
     web_client: IWebClient = web_provider()
+    try:
+        await web_client.init()
+    except Exception as exc:
+        if callable(degraded_callback):
+            degraded_callback(f"{type(exc).__name__}: {exc}")
+        raise
 
-    await web_client.init()
     if callable(started_callback):
         started_callback()
+    if callable(healthy_callback):
+        healthy_callback()
     logger.debug("Web client started.")
+
     try:
         await web_client.wait_until_stopped()
     except asyncio.exceptions.CancelledError:
         logger.debug("Web client shutting down.")
         raise
+    except Exception as exc:
+        if callable(degraded_callback):
+            degraded_callback(f"{type(exc).__name__}: {exc}")
+        raise
+    else:
+        if callable(degraded_callback):
+            degraded_callback("Web client stopped.")
     finally:
         try:
             await web_client.close()

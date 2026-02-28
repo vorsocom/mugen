@@ -5,6 +5,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 
+_STARTUP_TIMEOUT_KEY = "mugen.runtime.phase_b.startup_timeout_seconds"
+
+
 def parse_bool(value: object, *, default: bool) -> bool:
     """Parse common truthy/falsy values with a default fallback."""
     if isinstance(value, bool):
@@ -66,3 +69,30 @@ def resolve_phase_b_runtime_controls(config: object) -> tuple[float, list[str], 
 
     active_platforms = normalize_platform_list(getattr(mugen_cfg, "platforms", []))
     return readiness_grace, active_platforms, degrade_on_critical_exit
+
+
+def resolve_phase_b_startup_timeout_seconds(config: object) -> float:
+    """Resolve required phase-B startup timeout as a positive float."""
+    mugen_cfg = getattr(config, "mugen", None)
+    runtime_cfg = getattr(mugen_cfg, "runtime", None)
+    phase_b_cfg = getattr(runtime_cfg, "phase_b", None)
+    if phase_b_cfg is None or not hasattr(phase_b_cfg, "startup_timeout_seconds"):
+        raise RuntimeError(
+            f"Invalid runtime configuration: {_STARTUP_TIMEOUT_KEY} is required."
+        )
+
+    raw_timeout = getattr(phase_b_cfg, "startup_timeout_seconds")
+    try:
+        timeout_seconds = float(raw_timeout)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Invalid runtime configuration: "
+            f"{_STARTUP_TIMEOUT_KEY} must be a positive number."
+        ) from exc
+
+    if timeout_seconds <= 0:
+        raise RuntimeError(
+            "Invalid runtime configuration: "
+            f"{_STARTUP_TIMEOUT_KEY} must be greater than 0."
+        )
+    return timeout_seconds

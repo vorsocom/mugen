@@ -50,7 +50,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "logging": "nonexistent_module",
+                                    "logging": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -89,7 +89,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "logging": "valid_logging_module",
+                                    "logging": "valid_logging_module:DummyLoggingGatewayClass",
                                 }
                             }
                         }
@@ -99,10 +99,31 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 # New injector
                 injector = None
 
+                class DummyLoggingGatewayClass(ILoggingGateway):
+                    """Dummy logging class."""
+
+                    def __init__(self, config: dict):
+                        pass
+
+                    def critical(self, message):
+                        pass
+
+                    def debug(self, message):
+                        pass
+
+                    def error(self, message):
+                        pass
+
+                    def info(self, message):
+                        pass
+
+                    def warning(self, message):
+                        pass
+
                 with unittest.mock.patch.dict(
                     "sys.modules",
                     {
-                        "valid_logging_module": unittest.mock.Mock(),
+                        "valid_logging_module": unittest.mock.Mock(DummyLoggingGatewayClass=DummyLoggingGatewayClass),
                     },
                 ):
                     # Attempt to build the logging gateway.
@@ -137,7 +158,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "logging": "valid_logging_module",
+                                    "logging": "valid_logging_module:MissingClass",
                                 }
                             }
                         }
@@ -193,7 +214,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "logging": "valid_logging_module",
+                                    "logging": "valid_logging_module:DummyLoggingGatewayClass",
                                 }
                             }
                         }
@@ -232,7 +253,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_logging_module": unittest.mock.Mock(),
+                            "valid_logging_module": unittest.mock.Mock(DummyLoggingGatewayClass=DummyLoggingGatewayClass),
                         },
                     ),
                     unittest.mock.patch(

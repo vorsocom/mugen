@@ -4,13 +4,12 @@ __all__ = ["IMatrixClient"]
 
 from abc import ABC, abstractmethod
 from types import TracebackType
+from typing import Any
 from typing import Type
 
-from nio import AsyncClient
 
-
-class IMatrixClient(ABC, AsyncClient):
-    """An ABC for MAtrix clients."""
+class IMatrixClient(ABC):
+    """A core Matrix client port without vendor SDK inheritance."""
 
     @abstractmethod
     async def __aenter__(self) -> "IMatrixClient":
@@ -29,6 +28,21 @@ class IMatrixClient(ABC, AsyncClient):
     @abstractmethod
     def sync_token(self) -> str:
         """Get the next_batch token."""
+
+    synced: Any
+    """Sync-ready signal/event populated by concrete adapters."""
+
+    async def sync_forever(self, *args, **kwargs) -> Any:
+        """Run long-polling sync loop."""
+        raise NotImplementedError
+
+    async def get_profile(self, *args, **kwargs) -> Any:
+        """Fetch current profile."""
+        raise NotImplementedError
+
+    async def set_displayname(self, *args, **kwargs) -> Any:
+        """Set profile display name."""
+        raise NotImplementedError
 
     @abstractmethod
     async def cleanup_known_user_devices_list(self) -> None:

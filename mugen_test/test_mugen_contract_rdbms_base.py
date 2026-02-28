@@ -16,6 +16,9 @@ class _GatewayUnderTest(IRelationalStorageGateway):
     async def unit_of_work(self):
         yield self._uow
 
+    async def aclose(self) -> None:
+        return None
+
 
 class _Entity:
     pass

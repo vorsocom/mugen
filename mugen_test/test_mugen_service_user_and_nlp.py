@@ -2,6 +2,7 @@
 
 import unittest
 from unittest.mock import AsyncMock, Mock
+from unittest.mock import patch
 
 from mugen.core.contract.gateway.storage.keyval_model import (
     KeyValConflictError,
@@ -109,7 +110,7 @@ class TestMugenServiceUserAndNlp(unittest.IsolatedAsyncioTestCase):
         keyval.put_json.assert_awaited_once()
         self.assertEqual(keyval.put_json.call_args.kwargs["expected_row_version"], 3)
 
-    async def test_add_known_user_conflict_retries_then_last_write_wins(self) -> None:
+    async def test_add_known_user_conflict_retries_then_raises_conflict(self) -> None:
         keyval = Mock()
         existing_entry = KeyValEntry(
             namespace="default",
@@ -152,7 +153,6 @@ class TestMugenServiceUserAndNlp(unittest.IsolatedAsyncioTestCase):
                     expected_row_version=1,
                     current_row_version=2,
                 ),
-                None,
             ]
         )
         svc = DefaultUserService(
@@ -160,13 +160,23 @@ class TestMugenServiceUserAndNlp(unittest.IsolatedAsyncioTestCase):
             logging_gateway=Mock(),
         )
 
-        await svc.add_known_user(user_id="@alice", displayname="Alice", room_id="!dm")
+        with self.assertRaises(KeyValConflictError):
+            await svc.add_known_user(user_id="@alice", displayname="Alice", room_id="!dm")
+        self.assertEqual(keyval.put_json.await_count, 5)
 
-        self.assertEqual(keyval.put_json.await_count, 6)
-        final_call = keyval.put_json.await_args_list[-1]
-        self.assertEqual(final_call.args[0], "known_users_list")
-        self.assertNotIn("expected_row_version", final_call.kwargs)
-        self.assertIn("@alice", final_call.args[1])
+    async def test_add_known_user_raises_runtime_error_when_retries_are_zero(self) -> None:
+        keyval = Mock()
+        svc = DefaultUserService(
+            keyval_storage_gateway=keyval,
+            logging_gateway=Mock(),
+        )
+        with patch.object(svc, "_default_cas_retries", 0):
+            with self.assertRaises(RuntimeError):
+                await svc.add_known_user(
+                    user_id="@alice",
+                    displayname="Alice",
+                    room_id="!dm",
+                )
 
     async def test_default_nlp_service_returns_empty_keywords(self) -> None:
         svc = DefaultNLPService(logging_gateway=Mock())

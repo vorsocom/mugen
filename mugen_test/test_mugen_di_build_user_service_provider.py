@@ -113,7 +113,7 @@ class TestDIBuildUserService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "user": "nonexistent_module",
+                                    "user": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -163,7 +163,7 @@ class TestDIBuildUserService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "user": "valid_user_module",
+                                    "user": "valid_user_module:MissingClass",
                                 }
                             }
                         }
@@ -230,7 +230,7 @@ class TestDIBuildUserService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "user": "valid_user_module",
+                                    "user": "valid_user_module:DummyUserServiceClass",
                                 }
                             }
                         }
@@ -266,7 +266,7 @@ class TestDIBuildUserService(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_user_module": unittest.mock.Mock(),
+                            "valid_user_module": unittest.mock.Mock(DummyUserServiceClass=DummyUserServiceClass),
                         },
                     ),
                     unittest.mock.patch(

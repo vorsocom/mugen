@@ -16,13 +16,12 @@ from types import SimpleNamespace
 from typing import Any
 import uuid
 
-from sqlalchemy import text as sa_text
-
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
+from mugen.core.gateway.storage.web_runtime.sql import text as web_sql_text
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
@@ -415,7 +414,7 @@ class DefaultWebClient(IWebClient):
 
             async with self._relational_session() as session:
                 pending_result = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "SELECT count(*) "
                         "FROM mugen.web_queue_job "
                         "WHERE status = 'pending'"
@@ -433,7 +432,7 @@ class DefaultWebClient(IWebClient):
                     "original_filename": job["original_filename"],
                 }
                 await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "INSERT INTO mugen.web_queue_job "
                         "("
                         "job_id, conversation_id, sender, message_type, payload, "
@@ -656,7 +655,7 @@ class DefaultWebClient(IWebClient):
         async with self._storage_lock:
             async with self._relational_session() as session:
                 result = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "SELECT token, owner_user_id, file_path, mime_type, filename, "
                         "expires_at "
                         "FROM mugen.web_media_token "
@@ -671,7 +670,7 @@ class DefaultWebClient(IWebClient):
                 expires_at = self._datetime_to_epoch(row.get("expires_at"))
                 if expires_at is None or expires_at <= self._epoch_now():
                     await session.execute(
-                        sa_text(
+                        web_sql_text(
                             "DELETE FROM mugen.web_media_token "
                             "WHERE token = :token"
                         ),
@@ -690,7 +689,7 @@ class DefaultWebClient(IWebClient):
                 resolved_path = await self._media_storage_gateway.materialize(media_ref)
                 if resolved_path is None:
                     await session.execute(
-                        sa_text(
+                        web_sql_text(
                             "DELETE FROM mugen.web_media_token "
                             "WHERE token = :token"
                         ),
@@ -760,7 +759,7 @@ class DefaultWebClient(IWebClient):
         async with self._storage_lock:
             async with self._relational_session() as session:
                 recovered_result = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "UPDATE mugen.web_queue_job "
                         "SET status = 'pending', lease_expires_at = NULL, updated_at = now() "
                         "WHERE status = 'processing' "
@@ -775,7 +774,7 @@ class DefaultWebClient(IWebClient):
                     )
 
                 selected = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "SELECT job_id, conversation_id, sender, message_type, payload, "
                         "status, attempts, created_at, updated_at, lease_expires_at, "
                         "error_message, completed_at, client_message_id "
@@ -797,7 +796,7 @@ class DefaultWebClient(IWebClient):
                     lease_expires_at=(now_epoch + self._queue_processing_lease_seconds),
                 )
                 updated = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "UPDATE mugen.web_queue_job "
                         "SET status = CAST(:status AS mugen.citext), "
                         "attempts = :attempts, "
@@ -858,7 +857,7 @@ class DefaultWebClient(IWebClient):
         async with self._storage_lock:
             async with self._relational_session() as session:
                 result = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "SELECT status, attempts "
                         "FROM mugen.web_queue_job "
                         "WHERE job_id = :job_id"
@@ -885,7 +884,7 @@ class DefaultWebClient(IWebClient):
         async with self._storage_lock:
             async with self._relational_session() as session:
                 result = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "UPDATE mugen.web_queue_job "
                         "SET lease_expires_at = :lease_expires_at, "
                         "updated_at = :updated_at "
@@ -1420,7 +1419,7 @@ class DefaultWebClient(IWebClient):
         async with self._storage_lock:
             async with self._relational_session() as session:
                 await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "INSERT INTO mugen.web_media_token "
                         "("
                         "token, owner_user_id, conversation_id, file_path, mime_type, "
@@ -1665,7 +1664,7 @@ class DefaultWebClient(IWebClient):
 
             async with self._relational_session() as session:
                 state_result = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "SELECT owner_user_id, stream_generation, next_event_id "
                         "FROM mugen.web_conversation_state "
                         "WHERE conversation_id = :conversation_id "
@@ -1676,7 +1675,7 @@ class DefaultWebClient(IWebClient):
                 state = state_result.mappings().one_or_none()
                 if state is None:
                     await session.execute(
-                        sa_text(
+                        web_sql_text(
                             "INSERT INTO mugen.web_conversation_state "
                             "("
                             "conversation_id, owner_user_id, stream_generation, "
@@ -1695,7 +1694,7 @@ class DefaultWebClient(IWebClient):
                         },
                     )
                     state_result = await session.execute(
-                        sa_text(
+                        web_sql_text(
                             "SELECT owner_user_id, stream_generation, next_event_id "
                             "FROM mugen.web_conversation_state "
                             "WHERE conversation_id = :conversation_id "
@@ -1721,7 +1720,7 @@ class DefaultWebClient(IWebClient):
                     event_id = 1
 
                 await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "INSERT INTO mugen.web_conversation_event "
                         "("
                         "conversation_id, event_id, event_type, payload, "
@@ -1746,7 +1745,7 @@ class DefaultWebClient(IWebClient):
                 )
 
                 await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "UPDATE mugen.web_conversation_state "
                         "SET next_event_id = :next_event_id, "
                         "stream_generation = :stream_generation, "
@@ -1767,7 +1766,7 @@ class DefaultWebClient(IWebClient):
                     1,
                 )
                 await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "DELETE FROM mugen.web_conversation_event "
                         "WHERE conversation_id = :conversation_id "
                         "AND event_id < :min_keep_event_id"
@@ -1879,7 +1878,7 @@ class DefaultWebClient(IWebClient):
         async with self._storage_lock:
             async with self._relational_session() as session:
                 result = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "SELECT token, file_path, expires_at "
                         "FROM mugen.web_media_token"
                     )
@@ -1889,7 +1888,7 @@ class DefaultWebClient(IWebClient):
                     expires_at = self._datetime_to_epoch(row.get("expires_at"))
                     if expires_at is None or expires_at <= now_epoch:
                         await session.execute(
-                            sa_text(
+                            web_sql_text(
                                 "DELETE FROM mugen.web_media_token "
                                 "WHERE token = :token"
                             ),
@@ -1902,7 +1901,7 @@ class DefaultWebClient(IWebClient):
                         active_refs.add(file_path)
 
                 queue_result = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "SELECT payload "
                         "FROM mugen.web_queue_job "
                         "WHERE status IN ('pending', 'processing')"
@@ -2068,7 +2067,7 @@ class DefaultWebClient(IWebClient):
         async with self._storage_lock:
             async with self._relational_session() as session:
                 result = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "SELECT job_id, conversation_id, sender, message_type, payload, "
                         "status, attempts, created_at, updated_at, lease_expires_at, "
                         "error_message, completed_at, client_message_id "
@@ -2135,7 +2134,7 @@ class DefaultWebClient(IWebClient):
                     update_sql += "WHERE job_id = :job_id"
 
                 update_result = await session.execute(
-                    sa_text(update_sql),
+                    web_sql_text(update_sql),
                     update_params,
                 )
                 if (
@@ -2153,7 +2152,7 @@ class DefaultWebClient(IWebClient):
         now_epoch = self._epoch_now()
         async with self._relational_session() as session:
             recovered_result = await session.execute(
-                sa_text(
+                web_sql_text(
                     "UPDATE mugen.web_queue_job "
                     "SET status = 'pending', lease_expires_at = NULL, updated_at = now() "
                     "WHERE status = 'processing' "
@@ -2177,7 +2176,7 @@ class DefaultWebClient(IWebClient):
     ) -> None:
         async with self._relational_session() as session:
             result = await session.execute(
-                sa_text(
+                web_sql_text(
                     "SELECT owner_user_id "
                     "FROM mugen.web_conversation_state "
                     "WHERE conversation_id = :conversation_id"
@@ -2190,7 +2189,7 @@ class DefaultWebClient(IWebClient):
                     raise KeyError("conversation not found")
 
                 await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "INSERT INTO mugen.web_conversation_state "
                         "("
                         "conversation_id, owner_user_id, stream_generation, "
@@ -2211,7 +2210,7 @@ class DefaultWebClient(IWebClient):
                 )
 
                 result = await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "SELECT owner_user_id "
                         "FROM mugen.web_conversation_state "
                         "WHERE conversation_id = :conversation_id"
@@ -2250,7 +2249,7 @@ class DefaultWebClient(IWebClient):
     async def _read_queue_state_unlocked(self) -> dict[str, Any]:
         async with self._relational_session() as session:
             result = await session.execute(
-                sa_text(
+                web_sql_text(
                     "SELECT job_id, conversation_id, sender, message_type, payload, "
                     "status, attempts, created_at, updated_at, lease_expires_at, "
                     "error_message, completed_at, client_message_id "
@@ -2273,7 +2272,7 @@ class DefaultWebClient(IWebClient):
             jobs = []
 
         async with self._relational_session() as session:
-            await session.execute(sa_text("DELETE FROM mugen.web_queue_job"))
+            await session.execute(web_sql_text("DELETE FROM mugen.web_queue_job"))
             for job in jobs:
                 if not isinstance(job, dict):
                     continue
@@ -2289,7 +2288,7 @@ class DefaultWebClient(IWebClient):
                     "original_filename": job.get("original_filename"),
                 }
                 await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "INSERT INTO mugen.web_queue_job "
                         "("
                         "job_id, conversation_id, sender, message_type, payload, "
@@ -2344,7 +2343,7 @@ class DefaultWebClient(IWebClient):
     async def _read_event_log_unlocked(self, conversation_id: str) -> dict[str, Any]:
         async with self._relational_session() as session:
             state_result = await session.execute(
-                sa_text(
+                web_sql_text(
                     "SELECT stream_generation, stream_version, next_event_id "
                     "FROM mugen.web_conversation_state "
                     "WHERE conversation_id = :conversation_id"
@@ -2370,7 +2369,7 @@ class DefaultWebClient(IWebClient):
                 return self._new_event_log_state()
 
             events_result = await session.execute(
-                sa_text(
+                web_sql_text(
                     "SELECT event_id, event_type, payload, created_at, stream_generation, "
                     "stream_version "
                     "FROM mugen.web_conversation_event "
@@ -2448,7 +2447,7 @@ class DefaultWebClient(IWebClient):
 
         async with self._relational_session() as session:
             owner_result = await session.execute(
-                sa_text(
+                web_sql_text(
                     "SELECT owner_user_id "
                     "FROM mugen.web_conversation_state "
                     "WHERE conversation_id = :conversation_id"
@@ -2463,7 +2462,7 @@ class DefaultWebClient(IWebClient):
             )
 
             await session.execute(
-                sa_text(
+                web_sql_text(
                     "INSERT INTO mugen.web_conversation_state "
                     "("
                     "conversation_id, owner_user_id, stream_generation, "
@@ -2489,7 +2488,7 @@ class DefaultWebClient(IWebClient):
             )
 
             await session.execute(
-                sa_text(
+                web_sql_text(
                     "DELETE FROM mugen.web_conversation_event "
                     "WHERE conversation_id = :conversation_id"
                 ),
@@ -2506,7 +2505,7 @@ class DefaultWebClient(IWebClient):
                 if not isinstance(event_payload, dict):
                     event_payload = {}
                 await session.execute(
-                    sa_text(
+                    web_sql_text(
                         "INSERT INTO mugen.web_conversation_event "
                         "("
                         "conversation_id, event_id, event_type, payload, "

@@ -113,7 +113,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "nlp": "nonexistent_module",
+                                    "nlp": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -163,7 +163,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "nlp": "valid_nlp_module",
+                                    "nlp": "valid_nlp_module:MissingClass",
                                 }
                             }
                         }
@@ -230,7 +230,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "nlp": "valid_nlp_module",
+                                    "nlp": "valid_nlp_module:DummyNLPServiceClass",
                                 }
                             }
                         }
@@ -258,7 +258,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_nlp_module": unittest.mock.Mock(),
+                            "valid_nlp_module": unittest.mock.Mock(DummyNLPServiceClass=DummyNLPServiceClass),
                         },
                     ),
                     unittest.mock.patch(
