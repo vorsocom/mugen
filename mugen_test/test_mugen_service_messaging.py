@@ -426,6 +426,121 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_handle_text_message_logs_and_continues_when_handler_raises(self) -> None:
+        svc = self._new_service()
+
+        async def _raise(**_kwargs):
+            raise RuntimeError("extension blew up")
+
+        broken = _DummyMhExt(
+            platforms=["web"],
+            message_types=["text"],
+            callback=_raise,
+        )
+        healthy = _DummyMhExt(
+            platforms=["web"],
+            message_types=["text"],
+            response=[{"type": "text", "content": "ok"}],
+        )
+        svc._mh_extensions = [broken, healthy]
+
+        responses = await svc.handle_text_message(
+            platform="web",
+            room_id="conv-err",
+            sender="user-err",
+            message="hello",
+        )
+
+        self.assertEqual(responses, [{"type": "text", "content": "ok"}])
+        self.assertTrue(
+            any(
+                "handler failed" in str(call.args[0]).lower()
+                and "RuntimeError" in str(call.args[0])
+                for call in svc._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
+            )
+        )
+
+    async def test_handle_text_message_without_timeout_logs_and_continues_on_handler_error(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        svc._extension_timeout_seconds = None  # pylint: disable=protected-access
+
+        async def _raise(**_kwargs):
+            raise RuntimeError("extension blew up")
+
+        broken = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            callback=_raise,
+        )
+        healthy = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response=[{"type": "text", "content": "ok"}],
+        )
+        svc._mh_extensions = [broken, healthy]
+
+        responses = await svc.handle_text_message(
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+        )
+
+        self.assertEqual(responses, [{"type": "text", "content": "ok"}])
+        self.assertTrue(
+            any(
+                "handler failed" in str(call.args[0]).lower()
+                and "RuntimeError" in str(call.args[0])
+                for call in svc._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
+            )
+        )
+
+    async def test_invoke_message_handler_propagates_cancellation_without_timeout(self) -> None:
+        svc = self._new_service()
+        svc._extension_timeout_seconds = None  # pylint: disable=protected-access
+
+        async def _cancel(**_kwargs):
+            raise asyncio.CancelledError()
+
+        ext = _DummyMhExt(
+            platforms=["web"],
+            message_types=["text"],
+            callback=_cancel,
+        )
+
+        with self.assertRaises(asyncio.CancelledError):
+            await svc._invoke_message_handler(  # pylint: disable=protected-access
+                extension=ext,
+                platform="web",
+                room_id="conv-cancel",
+                sender="user-cancel",
+                message="hello",
+            )
+
+    async def test_invoke_message_handler_propagates_cancellation_with_timeout(self) -> None:
+        svc = self._new_service()
+        svc._extension_timeout_seconds = 10.0  # pylint: disable=protected-access
+
+        async def _cancel(**_kwargs):
+            raise asyncio.CancelledError()
+
+        ext = _DummyMhExt(
+            platforms=["web"],
+            message_types=["text"],
+            callback=_cancel,
+        )
+
+        with self.assertRaises(asyncio.CancelledError):
+            await svc._invoke_message_handler(  # pylint: disable=protected-access
+                extension=ext,
+                platform="web",
+                room_id="conv-cancel",
+                sender="user-cancel",
+                message="hello",
+            )
+
     async def test_handle_text_message_without_timeout_awaits_handler_directly(self) -> None:
         svc = self._new_service()
         svc._extension_timeout_seconds = None  # pylint: disable=protected-access

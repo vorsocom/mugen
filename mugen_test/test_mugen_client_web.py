@@ -3589,12 +3589,27 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             user_service=Mock(),
         )
 
-        self.assertIsNone(non_rel_client._raw_relational_session_provider())  # pylint: disable=protected-access
-        self.assertIsNone(non_rel_client._raw_relational_session_provider())  # pylint: disable=protected-access
-        self.logger.warning.assert_called_once()
+        self.assertTrue(non_rel_client._using_relational_web_storage())  # pylint: disable=protected-access
+        with self.assertRaises(RuntimeError):
+            non_rel_client._raw_relational_session_provider()  # pylint: disable=protected-access
+        self.logger.warning.assert_not_called()
 
         with self.assertRaises(RuntimeError):
             async with non_rel_client._relational_session():  # pylint: disable=protected-access
+                pass
+
+        no_gateway_client = DefaultWebClient(
+            config=_build_config(basedir=self.tmpdir.name),
+            ipc_service=Mock(),
+            keyval_storage_gateway=self.keyval,
+            relational_storage_gateway=None,
+            logging_gateway=self.logger,
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        self.assertIsNone(no_gateway_client._raw_relational_session_provider())  # pylint: disable=protected-access
+        with self.assertRaises(RuntimeError):
+            async with no_gateway_client._relational_session():  # pylint: disable=protected-access
                 pass
 
         dt = non_rel_client._to_utc_datetime(non_rel_client._epoch_now())  # pylint: disable=protected-access

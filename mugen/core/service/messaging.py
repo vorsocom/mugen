@@ -100,18 +100,38 @@ class DefaultMessagingService(IMessagingService):
             message=message,
             message_context=message_context,
         )
+        extension_name = f"{type(extension).__module__}.{type(extension).__qualname__}"
 
         timeout_seconds = self._extension_timeout_seconds
         if timeout_seconds is None:
-            return await coroutine
+            try:
+                return await coroutine
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self._logging_gateway.warning(
+                    "Messaging extension handler failed "
+                    f"(extension={extension_name} "
+                    f"error_type={type(exc).__name__} error={exc})."
+                )
+                return None
 
         try:
             return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
         except asyncio.TimeoutError:
             self._logging_gateway.warning(
                 "Messaging extension handler timed out "
-                f"(extension={type(extension).__module__}.{type(extension).__qualname__} "
+                f"(extension={extension_name} "
                 f"timeout_seconds={timeout_seconds})."
+            )
+            return None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Messaging extension handler failed "
+                f"(extension={extension_name} "
+                f"error_type={type(exc).__name__} error={exc})."
             )
             return None
 

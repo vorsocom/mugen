@@ -122,7 +122,6 @@ class DefaultWebClient(IWebClient):
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._user_service = user_service
-        self._relational_path_warning_emitted = False
 
         self._storage_lock = asyncio.Lock()
         self._subscriber_lock = asyncio.Lock()
@@ -270,16 +269,13 @@ class DefaultWebClient(IWebClient):
         if callable(raw_session):
             return raw_session
 
-        if self._relational_path_warning_emitted is not True:
-            self._relational_path_warning_emitted = True
-            self._logging_gateway.warning(
-                "Web client relational storage gateway does not expose raw_session; "
-                "falling back to keyval blob persistence."
-            )
-        return None
+        raise RuntimeError(
+            "Relational web storage is configured but "
+            "relational_storage_gateway.raw_session is unavailable."
+        )
 
     def _using_relational_web_storage(self) -> bool:
-        return self._raw_relational_session_provider() is not None
+        return self._relational_storage_gateway is not None
 
     @asynccontextmanager
     async def _relational_session(self):
