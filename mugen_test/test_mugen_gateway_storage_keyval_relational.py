@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-import threading
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -269,37 +268,6 @@ class _MemoryRelationalConnection:
         raise AssertionError(f"Unhandled SQL in test fake engine: {sql}")
 
 
-class _FakeLoop:
-    def __init__(self, *, running: bool):
-        self._running = running
-        self.stop_called = False
-
-    def is_running(self):
-        return self._running
-
-    def call_soon_threadsafe(self, fn):
-        self.stop_called = True
-        fn()
-
-    def stop(self):
-        self.stop_called = True
-
-
-class _FakeThread:
-    def __init__(self, *, alive: bool):
-        self._alive = alive
-        self.join_called = False
-
-    def is_alive(self):
-        return self._alive
-
-    def join(self, timeout=None):  # noqa: ARG002
-        self.join_called = True
-
-    def start(self):
-        return None
-
-
 def _make_config(
     *,
     namespace_default="core",
@@ -329,10 +297,9 @@ def _new_gateway(*, engine=None, config=None, logger=None):
     gateway._namespace_default = "core"
     gateway._list_limit_default = 2
     gateway._closed = False
+    gateway._backend_ready = True
+    gateway._backend_ready_lock = None
     gateway._engine = engine or _MemoryRelationalEngine()
-    gateway._sync_loop = _FakeLoop(running=False)
-    gateway._sync_loop_ready = threading.Event()
-    gateway._sync_thread = _FakeThread(alive=False)
     return gateway
 
 
@@ -483,91 +450,60 @@ class TestMugenGatewayStorageKeyvalRelational(unittest.IsolatedAsyncioTestCase):
 
     async def test_aclose_and_close_idempotency(self) -> None:
         gateway = _new_gateway()
-        gateway._stop_sync_loop = Mock()  # pylint: disable=protected-access
 
         await gateway.aclose()
         self.assertTrue(gateway._closed)  # pylint: disable=protected-access
-        gateway._stop_sync_loop.assert_called_once()  # pylint: disable=protected-access
+        self.assertTrue(gateway._engine.disposed)  # pylint: disable=protected-access
 
-        gateway._stop_sync_loop.reset_mock()  # pylint: disable=protected-access
+        gateway._engine.disposed = False  # pylint: disable=protected-access
         await gateway.aclose()
-        gateway._stop_sync_loop.assert_not_called()  # pylint: disable=protected-access
+        self.assertFalse(gateway._engine.disposed)  # pylint: disable=protected-access
 
-class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
-    """Covers sync compatibility wrappers and init helper branches."""
+class TestMugenGatewayStorageKeyvalRelationalInit(unittest.IsolatedAsyncioTestCase):
+    """Covers initialization and readiness helper behavior."""
 
-    def test_init_success_and_sync_loop_not_ready(self) -> None:
-        config = _make_config()
-        logger = Mock()
+    async def test_ensure_backend_ready_runs_once(self) -> None:
+        gateway = _new_gateway()
+        gateway._backend_ready = False  # pylint: disable=protected-access
+        gateway._verify_backend_ready = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
 
-        class _ReadyEvent:
-            def wait(self, timeout=None):  # noqa: ARG002
-                return True
+        await gateway._ensure_backend_ready()  # pylint: disable=protected-access
+        await gateway._ensure_backend_ready()  # pylint: disable=protected-access
 
-            def set(self):
-                return None
+        gateway._verify_backend_ready.assert_awaited_once()  # type: ignore[attr-defined]  # pylint: disable=protected-access
 
-        class _NotReadyEvent(_ReadyEvent):
-            def wait(self, timeout=None):  # noqa: ARG002
-                return False
+    async def test_ensure_backend_ready_returns_if_marked_ready_while_waiting(self) -> None:
+        gateway = _new_gateway()
+        gateway._backend_ready = False  # pylint: disable=protected-access
+        gateway._verify_backend_ready = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+        lock = asyncio.Lock()
+        await lock.acquire()
+        gateway._backend_ready_lock = lock  # pylint: disable=protected-access
 
-        def _consume_awaitable(awaitable):
-            close = getattr(awaitable, "close", None)
-            if callable(close):
-                close()
-            return None
+        waiter = asyncio.create_task(gateway._ensure_backend_ready())  # pylint: disable=protected-access
+        await asyncio.sleep(0)
+        gateway._backend_ready = True  # pylint: disable=protected-access
+        lock.release()
+        await waiter
 
-        with (
-            patch("mugen.core.gateway.storage.keyval.relational.create_async_engine", return_value=Mock()),
-            patch("mugen.core.gateway.storage.keyval.relational.threading.Event", _ReadyEvent),
-            patch("mugen.core.gateway.storage.keyval.relational.threading.Thread", return_value=_FakeThread(alive=False)),
-            patch.object(RelationalKeyValStorageGateway, "_run_sync_loop", lambda self: self._sync_loop_ready.set()),
-            patch.object(RelationalKeyValStorageGateway, "_run_sync", side_effect=_consume_awaitable),
-        ):
-            gateway = RelationalKeyValStorageGateway(config, logger)
-            self.assertFalse(gateway._closed)  # pylint: disable=protected-access
+        gateway._verify_backend_ready.assert_not_awaited()  # type: ignore[attr-defined]  # pylint: disable=protected-access
 
-        with (
-            patch("mugen.core.gateway.storage.keyval.relational.create_async_engine", return_value=Mock()),
-            patch("mugen.core.gateway.storage.keyval.relational.threading.Event", _NotReadyEvent),
-            patch("mugen.core.gateway.storage.keyval.relational.threading.Thread", return_value=_FakeThread(alive=False)),
-            patch.object(RelationalKeyValStorageGateway, "_run_sync_loop", lambda self: None),
-            self.assertRaises(RuntimeError),
-        ):
-            RelationalKeyValStorageGateway(config, logger)
-
-    def test_run_sync_and_stop_sync_loop_branches(self) -> None:
+    async def test_ensure_backend_ready_rejects_closed_gateway(self) -> None:
         gateway = _new_gateway()
         gateway._closed = True  # pylint: disable=protected-access
         with self.assertRaises(RuntimeError):
-            gateway._run_sync(None)  # pylint: disable=protected-access
+            await gateway._ensure_backend_ready()  # pylint: disable=protected-access
 
-        gateway._closed = False  # pylint: disable=protected-access
+    def test_init_builds_engine_and_runtime_flags(self) -> None:
+        config = _make_config()
+        logger = Mock()
         with patch(
-            "mugen.core.gateway.storage.keyval.relational.asyncio.run_coroutine_threadsafe",
-            return_value=SimpleNamespace(result=lambda: "ok"),
+            "mugen.core.gateway.storage.keyval.relational.create_async_engine",
+            return_value=Mock(),
         ):
-            self.assertEqual(gateway._run_sync(object()), "ok")  # pylint: disable=protected-access
-
-        running_gateway = _new_gateway()
-        running_gateway._sync_loop = _FakeLoop(running=True)  # pylint: disable=protected-access
-        running_gateway._sync_thread = _FakeThread(alive=True)  # pylint: disable=protected-access
-        running_gateway._stop_sync_loop()  # pylint: disable=protected-access
-        self.assertTrue(running_gateway._sync_loop.stop_called)  # pylint: disable=protected-access
-        self.assertTrue(running_gateway._sync_thread.join_called)  # pylint: disable=protected-access
-
-        non_running_gateway = _new_gateway()
-        non_running_gateway._sync_loop = _FakeLoop(running=False)  # pylint: disable=protected-access
-        non_running_gateway._sync_thread = _FakeThread(alive=True)  # pylint: disable=protected-access
-        non_running_gateway._stop_sync_loop()  # pylint: disable=protected-access
-        self.assertFalse(non_running_gateway._sync_loop.stop_called)  # pylint: disable=protected-access
-        self.assertTrue(non_running_gateway._sync_thread.join_called)  # pylint: disable=protected-access
-
-        no_thread_gateway = _new_gateway()
-        no_thread_gateway._sync_loop = _FakeLoop(running=False)  # pylint: disable=protected-access
-        no_thread_gateway._sync_thread = _FakeThread(alive=False)  # pylint: disable=protected-access
-        no_thread_gateway._stop_sync_loop()  # pylint: disable=protected-access
-        self.assertFalse(no_thread_gateway._sync_thread.join_called)  # pylint: disable=protected-access
+            gateway = RelationalKeyValStorageGateway(config, logger)
+        self.assertFalse(gateway._closed)  # pylint: disable=protected-access
+        self.assertFalse(gateway._backend_ready)  # pylint: disable=protected-access
 
     def test_config_resolvers_and_helpers(self) -> None:
         logger = Mock()
@@ -585,8 +521,6 @@ class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
         self.assertEqual(gateway._normalize_namespace(None), "core")  # pylint: disable=protected-access
         self.assertEqual(gateway._normalize_namespace(""), "core")  # pylint: disable=protected-access
         self.assertEqual(gateway._normalize_key(" k "), "k")  # pylint: disable=protected-access
-        self.assertEqual(gateway._coerce_payload("x"), (b"x", "text/utf-8"))  # pylint: disable=protected-access
-        self.assertEqual(gateway._coerce_payload(b"x"), (b"x", "bytes"))  # pylint: disable=protected-access
         self.assertIsNone(gateway._resolve_expires_at(None))  # pylint: disable=protected-access
         self.assertIsNone(gateway._resolve_expires_at("bad"))  # pylint: disable=protected-access
         self.assertIsNone(gateway._resolve_expires_at(-1))  # pylint: disable=protected-access
@@ -600,8 +534,6 @@ class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
             gateway._normalize_key("")  # pylint: disable=protected-access
         with self.assertRaises(ValueError):
             gateway._normalize_key(1)  # type: ignore[arg-type]  # pylint: disable=protected-access
-        with self.assertRaises(ValueError):
-            gateway._coerce_payload(1)  # type: ignore[arg-type]  # pylint: disable=protected-access
 
     def test_list_limit_and_namespace_default_boundaries(self) -> None:
         logger = Mock()
@@ -652,45 +584,3 @@ class TestMugenGatewayStorageKeyvalRelationalSync(unittest.TestCase):
             }
         )
         self.assertEqual(entry_from_non_bytes.payload, b"\x00\x00\x00\x00\x00")
-
-    def test_sync_compatibility_methods(self) -> None:
-        gateway = _new_gateway()
-        gateway._run_sync = lambda awaitable: asyncio.run(awaitable)  # pylint: disable=protected-access
-        gateway._list_limit_default = 1  # pylint: disable=protected-access
-
-        gateway.put("k1", "v1")
-        gateway.put("k2", b"v2")
-
-        self.assertEqual(gateway.get("k1"), "v1")
-        self.assertEqual(gateway.get("k2", decode=False), b"v2")
-        self.assertIsNone(gateway.get("missing"))
-        self.assertTrue(gateway.has_key("k1"))
-        self.assertIn("k1", gateway.keys())
-        self.assertIn("k2", gateway.keys())
-        self.assertEqual(gateway.remove("k1"), b"v1")
-        self.assertIsNone(gateway.remove("missing"))
-
-        page_a = KeyValListPage(keys=["a"], next_cursor="a")
-        page_b = KeyValListPage(keys=["b"], next_cursor="a")
-        pages = iter([page_a, page_b])
-
-        def _consume(awaitable):
-            close = getattr(awaitable, "close", None)
-            if callable(close):
-                close()
-            return next(pages)
-
-        gateway._run_sync = _consume  # pylint: disable=protected-access
-        self.assertEqual(gateway.keys(), ["a", "b"])
-
-    def test_close_sync_path(self) -> None:
-        gateway = _new_gateway()
-        gateway._stop_sync_loop = Mock()  # pylint: disable=protected-access
-        gateway._run_sync = Mock(  # pylint: disable=protected-access
-            side_effect=lambda awaitable: asyncio.run(awaitable)
-        )
-        gateway.close()
-        gateway.close()
-        self.assertTrue(gateway._closed)  # pylint: disable=protected-access
-        gateway._run_sync.assert_called_once()  # pylint: disable=protected-access
-        gateway._stop_sync_loop.assert_called_once()  # pylint: disable=protected-access

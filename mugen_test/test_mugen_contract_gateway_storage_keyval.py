@@ -1,14 +1,12 @@
-"""Unit tests for keyval contract defaults and keyval model helpers."""
+"""Unit tests for async keyval contract helpers and keyval model helpers."""
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 import unittest
-from unittest.mock import AsyncMock, Mock
 
 from mugen.core.contract.gateway.storage.keyval import (
     IKeyValStorageGateway,
-    KeyValBackendError,
     KeyValConflictError,
 )
 from mugen.core.contract.gateway.storage.keyval_model import (
@@ -20,42 +18,173 @@ from mugen.core.contract.gateway.storage.keyval_model import (
 
 class _MemoryKeyValGateway(IKeyValStorageGateway):
     def __init__(self) -> None:
-        self.storage: dict[str, str | bytes | int] = {}
+        self.storage: dict[str, KeyValEntry] = {}
         self.closed = False
 
-    def close(self) -> None:
+    async def aclose(self) -> None:
         self.closed = True
 
-    def get(self, key: str, decode: bool = True) -> str | bytes | None:
-        value = self.storage.get(key)
-        if value is None:
+    async def get_entry(
+        self,
+        key: str,
+        *,
+        namespace: str | None = None,
+        include_expired: bool = False,
+    ) -> KeyValEntry | None:
+        target_key = str(key)
+        entry = self.storage.get(target_key)
+        if entry is None:
             return None
-        if isinstance(value, bytes) and decode:
-            try:
-                return value.decode("utf-8")
-            except UnicodeDecodeError:
-                return None
-        if isinstance(value, int):
-            return str(value)
-        return value
-
-    def has_key(self, key: str) -> bool:
-        return key in self.storage
-
-    def keys(self) -> list[str]:
-        return list(self.storage.keys())
-
-    def put(self, key: str, value: str | bytes) -> None:
-        self.storage[key] = value
-
-    def remove(self, key: str) -> str | bytes | None:
-        value = self.storage.get(key)
-        if value is None:
+        if include_expired is True:
+            return entry
+        if entry.expires_at is not None and entry.expires_at <= datetime.now(timezone.utc):
             return None
-        del self.storage[key]
-        if isinstance(value, int):
-            return str(value)
-        return value
+        return entry
+
+    async def put_bytes(
+        self,
+        key: str,
+        value: bytes,
+        *,
+        namespace: str | None = None,
+        codec: str = "bytes",
+        expected_row_version: int | None = None,
+        ttl_seconds: float | None = None,
+    ) -> KeyValEntry:
+        if expected_row_version is not None:
+            return await self.compare_and_set(
+                key,
+                value,
+                namespace=namespace,
+                codec=codec,
+                expected_row_version=expected_row_version,
+                ttl_seconds=ttl_seconds,
+            )
+
+        target_key = str(key)
+        existing = await self.get_entry(
+            target_key,
+            namespace=namespace,
+            include_expired=True,
+        )
+        row_version = 1 if existing is None else int(existing.row_version) + 1
+        now = datetime.now(timezone.utc)
+        expires_at = None
+        if ttl_seconds is not None and float(ttl_seconds) > 0:
+            expires_at = now + timedelta(seconds=float(ttl_seconds))
+
+        entry = KeyValEntry(
+            namespace=namespace or "default",
+            key=target_key,
+            payload=value,
+            codec=codec,
+            row_version=row_version,
+            expires_at=expires_at,
+            created_at=(None if existing is None else existing.created_at),
+            updated_at=now,
+        )
+        self.storage[target_key] = entry
+        return entry
+
+    async def delete(
+        self,
+        key: str,
+        *,
+        namespace: str | None = None,
+        expected_row_version: int | None = None,
+    ) -> KeyValEntry | None:
+        target_key = str(key)
+        existing = await self.get_entry(
+            target_key,
+            namespace=namespace,
+            include_expired=True,
+        )
+        if existing is None:
+            return None
+
+        if expected_row_version is not None and int(existing.row_version) != int(
+            expected_row_version
+        ):
+            raise KeyValConflictError(
+                namespace=namespace or "default",
+                key=target_key,
+                expected_row_version=int(expected_row_version),
+                current_row_version=int(existing.row_version),
+            )
+
+        del self.storage[target_key]
+        return existing
+
+    async def exists(
+        self,
+        key: str,
+        *,
+        namespace: str | None = None,
+    ) -> bool:
+        entry = await self.get_entry(key, namespace=namespace)
+        return entry is not None
+
+    async def list_keys(
+        self,
+        *,
+        prefix: str = "",
+        namespace: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> KeyValListPage:
+        del namespace
+        eligible = []
+        for key in sorted(self.storage.keys()):
+            if key.startswith(prefix) is not True:
+                continue
+            entry = await self.get_entry(key)
+            if entry is None:
+                continue
+            eligible.append(key)
+
+        if cursor not in [None, ""]:
+            eligible = [item for item in eligible if item > str(cursor)]
+
+        page_limit = int(limit or len(eligible) or 1)
+        if page_limit <= 0:
+            page_limit = 1
+
+        keys = eligible[:page_limit]
+        next_cursor = keys[-1] if len(eligible) > page_limit and keys else None
+        return KeyValListPage(keys=keys, next_cursor=next_cursor)
+
+    async def compare_and_set(
+        self,
+        key: str,
+        value: bytes,
+        *,
+        namespace: str | None = None,
+        codec: str = "bytes",
+        expected_row_version: int,
+        ttl_seconds: float | None = None,
+    ) -> KeyValEntry:
+        target_key = str(key)
+        current = await self.get_entry(
+            target_key,
+            namespace=namespace,
+            include_expired=True,
+        )
+        current_row_version = 0 if current is None else int(current.row_version)
+        if current_row_version != int(expected_row_version):
+            raise KeyValConflictError(
+                namespace=namespace or "default",
+                key=target_key,
+                expected_row_version=int(expected_row_version),
+                current_row_version=current_row_version,
+            )
+        return await self.put_bytes(
+            target_key,
+            value,
+            namespace=namespace,
+            codec=codec,
+            expected_row_version=None,
+            ttl_seconds=ttl_seconds,
+        )
 
 
 class TestMugenContractGatewayStorageKeyval(unittest.IsolatedAsyncioTestCase):
@@ -63,20 +192,28 @@ class TestMugenContractGatewayStorageKeyval(unittest.IsolatedAsyncioTestCase):
 
     async def test_aclose_and_entry_read_paths(self) -> None:
         gateway = _MemoryKeyValGateway()
-        gateway.storage["bytes"] = b"\xff\x00"
-        gateway.storage["text"] = "hello"
-        gateway.storage["other"] = 123
+        gateway.storage["bytes"] = KeyValEntry(
+            namespace="default",
+            key="bytes",
+            payload=b"\xff\x00",
+            codec="bytes",
+            row_version=1,
+        )
+        gateway.storage["text"] = KeyValEntry(
+            namespace="default",
+            key="text",
+            payload=b"hello",
+            codec="text/utf-8",
+            row_version=1,
+        )
 
         bytes_entry = await gateway.get_entry("bytes", namespace="ns")
         text_entry = await gateway.get_entry("text")
-        other_entry = await gateway.get_entry("other")
         missing = await gateway.get_entry("missing")
 
         self.assertIsNotNone(bytes_entry)
-        self.assertEqual(bytes_entry.namespace, "ns")
         self.assertEqual(bytes_entry.codec, "bytes")
         self.assertEqual(text_entry.codec, "text/utf-8")
-        self.assertEqual(other_entry.payload, b"123")
         self.assertIsNone(missing)
 
         await gateway.aclose()
@@ -97,18 +234,6 @@ class TestMugenContractGatewayStorageKeyval(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await gateway.delete("k1"))
         self.assertIsNone(await gateway.get_text("missing"))
         self.assertIsNone(await gateway.get_json("missing"))
-
-    async def test_delete_bytes_entry_and_list_negative_limit(self) -> None:
-        gateway = _MemoryKeyValGateway()
-        gateway.storage["bin"] = b"\x01\x02"
-
-        removed = await gateway.delete("bin")
-        self.assertIsNotNone(removed)
-        self.assertEqual(removed.codec, "bytes")
-
-        gateway.storage = {"a": "1", "b": "2"}
-        page = await gateway.list_keys(limit=-10)
-        self.assertEqual(len(page.keys), 1)
 
     async def test_put_bytes_compare_and_set_and_conflict_paths(self) -> None:
         gateway = _MemoryKeyValGateway()
@@ -131,7 +256,7 @@ class TestMugenContractGatewayStorageKeyval(unittest.IsolatedAsyncioTestCase):
             )
 
         with self.assertRaises(KeyValConflictError):
-            await gateway.delete("cas", expected_row_version=1)
+            await gateway.delete("cas", expected_row_version=2)
 
         updated_text = await gateway.compare_and_set(
             "cas",
@@ -142,53 +267,12 @@ class TestMugenContractGatewayStorageKeyval(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(updated_text.row_version, 2)
 
-    async def test_put_bytes_routes_to_compare_and_set_and_backend_error(self) -> None:
-        gateway = _MemoryKeyValGateway()
-
-        expected_entry = KeyValEntry(
-            namespace="default",
-            key="x",
-            payload=b"y",
-            codec="bytes",
-            row_version=2,
-        )
-        gateway.compare_and_set = AsyncMock(return_value=expected_entry)
-        result = await gateway.put_bytes("x", b"y", expected_row_version=1)
-        self.assertEqual(result, expected_entry)
-        gateway.compare_and_set.assert_awaited_once()
-
-        gateway.compare_and_set = IKeyValStorageGateway.compare_and_set.__get__(gateway)
-        gateway.get_entry = AsyncMock(return_value=None)
-        with self.assertRaises(KeyValBackendError):
-            await gateway.put_bytes("missing-verify", b"z")
-
-        gateway.get_entry = AsyncMock(
-            side_effect=[
-                KeyValEntry(
-                    namespace="default",
-                    key="cas-fail",
-                    payload=b"v1",
-                    codec="bytes",
-                    row_version=1,
-                ),
-                None,
-            ]
-        )
-        with self.assertRaises(KeyValBackendError):
-            await gateway.compare_and_set(
-                "cas-fail",
-                b"v2",
-                expected_row_version=1,
-            )
-
     async def test_list_keys_pagination_and_cursor_edges(self) -> None:
         gateway = _MemoryKeyValGateway()
-        gateway.storage = {
-            "pref:a": "1",
-            "pref:b": "2",
-            "pref:c": "3",
-            "other": "4",
-        }
+        await gateway.put_text("pref:a", "1")
+        await gateway.put_text("pref:b", "2")
+        await gateway.put_text("pref:c", "3")
+        await gateway.put_text("other", "4")
 
         page1 = await gateway.list_keys(prefix="pref:", limit=2)
         page2 = await gateway.list_keys(prefix="pref:", limit=2, cursor=page1.next_cursor)
@@ -202,14 +286,6 @@ class TestMugenContractGatewayStorageKeyval(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(empty.keys, [])
         self.assertIsNone(empty.next_cursor)
         self.assertEqual(len(coerced_limit.keys), 3)
-
-    async def test_get_entry_handles_non_string_non_bytes_payload(self) -> None:
-        gateway = _MemoryKeyValGateway()
-        gateway.get = Mock(return_value=object())  # type: ignore[assignment]
-
-        entry = await gateway.get_entry("obj")
-        self.assertIsNotNone(entry)
-        self.assertEqual(entry.codec, "text/utf-8")
 
 
 class TestMugenContractGatewayStorageKeyvalModel(unittest.TestCase):

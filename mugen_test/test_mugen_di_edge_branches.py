@@ -51,10 +51,14 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         self.assertEqual(di._get_active_platforms({"mugen": {"platforms": ["matrix"]}}), ["matrix"])
 
     def test_infer_runtime_profile(self) -> None:
-        self.assertEqual(di._infer_runtime_profile({"mugen": {"platforms": []}}), "api_only")
-        self.assertEqual(di._infer_runtime_profile({"mugen": {"platforms": ["web"]}}), "web_only")
         self.assertEqual(
-            di._infer_runtime_profile({"mugen": {"platforms": ["matrix", "web"]}}),
+            di._infer_runtime_profile({"mugen": {"runtime": {"profile": "api_only"}}}),
+            "api_only",
+        )
+        self.assertEqual(
+            di._infer_runtime_profile(
+                {"mugen": {"runtime": {"profile": "platform_full"}, "platforms": ["matrix", "web"]}}
+            ),
             "platform_full",
         )
         self.assertEqual(
@@ -63,10 +67,18 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             ),
             "api_only",
         )
+        self.assertEqual(
+            di._infer_runtime_profile(
+                {"mugen": {"runtime": {"profile": "platform_full"}, "platforms": []}}
+            ),
+            "platform_full",
+        )
 
     def test_infer_runtime_profile_rejects_invalid_override(self) -> None:
         with self.assertRaises(RuntimeError):
             di._infer_runtime_profile({"mugen": {"runtime": {"profile": "invalid"}}})
+        with self.assertRaises(RuntimeError):
+            di._infer_runtime_profile({"mugen": {"platforms": []}})
 
     def test_normalize_platforms_filters_empty_and_duplicates(self) -> None:
         self.assertEqual(di._normalize_platforms(None), [])
@@ -76,24 +88,32 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
 
     def test_runtime_profile_override_edge_cases(self) -> None:
-        self.assertEqual(
+        with self.assertRaises(RuntimeError):
             di._resolve_runtime_profile_override(  # pylint: disable=protected-access
                 {"mugen": {"runtime": {"profile": None}}}
-            ),
-            "auto",
-        )
-        self.assertEqual(
+            )
+        with self.assertRaises(RuntimeError):
             di._resolve_runtime_profile_override(  # pylint: disable=protected-access
                 {"mugen": {"runtime": {"profile": "   "}}}
-            ),
-            "auto",
-        )
+            )
+        with self.assertRaises(RuntimeError):
+            di._resolve_runtime_profile_override(  # pylint: disable=protected-access
+                {"mugen": {"runtime": {"profile": "auto"}}}
+            )
         with self.assertRaises(RuntimeError):
             di._resolve_runtime_profile_override(  # pylint: disable=protected-access
                 {"mugen": {"runtime": {"profile": 1}}}
             )
+        with self.assertRaises(RuntimeError):
+            di._resolve_runtime_profile_override(  # pylint: disable=protected-access
+                {"mugen": {"runtime": {}}}
+            )
+        with self.assertRaises(RuntimeError):
+            di._resolve_runtime_profile_override(  # pylint: disable=protected-access
+                {"mugen": {}}
+            )
 
-    def test_validate_container_does_not_require_relational_without_config_path(self) -> None:
+    def test_validate_container_requires_relational_when_web_platform_is_enabled(self) -> None:
         injector = di.injector.DependencyInjector(
             config=object(),
             logging_gateway=Mock(),
@@ -107,9 +127,14 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             messaging_service=object(),
             web_client=object(),
         )
-        config = {"mugen": {"platforms": ["web"]}}
-
-        di._validate_container(config, injector)
+        config = {
+            "mugen": {
+                "runtime": {"profile": "web_only"},
+                "platforms": ["web"],
+            }
+        }
+        with self.assertRaises(RuntimeError):
+            di._validate_container(config, injector)
 
     def test_validate_container_logs_all_missing_optional_providers(self) -> None:
         injector = di.injector.DependencyInjector(
@@ -134,6 +159,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                         }
                     }
                 },
+                "runtime": {"profile": "platform_full"},
                 "platforms": ["matrix", "whatsapp", "web"],
             }
         }
@@ -164,6 +190,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._validate_container(
                 {
                     "mugen": {
+                        "runtime": {"profile": "api_only"},
                         "platforms": [],
                         "storage": {"keyval": {"legacy_import": {"enabled": False}}},
                     }
@@ -175,6 +202,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._validate_container(
                 {
                     "mugen": {
+                        "runtime": {"profile": "api_only"},
                         "platforms": [],
                         "modules": {
                             "core": {
@@ -192,6 +220,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._validate_container(
                 {
                     "mugen": {
+                        "runtime": {"profile": "api_only"},
                         "platforms": [],
                         "modules": {
                             "core": {
@@ -222,7 +251,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             user_service=object(),
             messaging_service=object(),
         )
-        config = {"mugen": {"platforms": ["matrix"]}}
+        config = {"mugen": {"runtime": {"profile": "platform_full"}, "platforms": ["matrix"]}}
 
         with self.assertLogs("root", level="ERROR") as logs:
             with self.assertRaises(RuntimeError):
@@ -249,6 +278,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         config = {
             "mugen": {
                 "modules": {"core": {"gateway": {"knowledge": "knowledge.module"}}},
+                "runtime": {"profile": "api_only"},
                 "platforms": [],
             }
         }
@@ -272,6 +302,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         config = {
             "mugen": {
                 "modules": {"core": {"gateway": {"email": "email.module"}}},
+                "runtime": {"profile": "api_only"},
                 "platforms": [],
             }
         }
@@ -385,6 +416,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         config = {
             "mugen": {
+                "runtime": {"profile": "platform_full"},
                 "platforms": [" web ", "unknown"],
             }
         }

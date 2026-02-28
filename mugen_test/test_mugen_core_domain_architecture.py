@@ -23,6 +23,7 @@ class TestCoreDomainArchitecture(unittest.TestCase):
             "mugen.core.plugin",
             "mugen.core.service",
             "mugen.core.di",
+            "mugen.core.runtime",
             "quart",
             "sqlalchemy",
         )
@@ -108,6 +109,16 @@ class TestCoreDomainArchitecture(unittest.TestCase):
                     violations.append(module_name)
 
         self.assertEqual(violations, [])
+
+    def test_removed_clean_contract_files_stay_deleted(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        removed_paths = [
+            repo_root / "mugen" / "core" / "contract" / "clean" / "request.py",
+            repo_root / "mugen" / "core" / "contract" / "clean" / "request_handler.py",
+            repo_root / "mugen" / "core" / "contract" / "clean" / "response.py",
+        ]
+        for removed_path in removed_paths:
+            self.assertFalse(removed_path.exists(), str(removed_path))
 
 
 if __name__ == "__main__":

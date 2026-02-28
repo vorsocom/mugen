@@ -23,44 +23,15 @@ from mugen.core.domain.use_case.phase_b_health import (
     PhaseBHealthInput,
     evaluate_phase_b_health,
 )
+from mugen.core.runtime.phase_b_controls import (
+    normalize_platform_list,
+    parse_bool,
+    parse_nonnegative_float,
+)
 
 _PHASE_B_READINESS_GRACE_KEY = "phase_b_readiness_grace_seconds"
 _PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
 _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY = "phase_b_degrade_on_critical_exit"
-
-
-def _parse_bool(value: object, *, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return default
-
-
-def _parse_nonnegative_float(value: object, *, default: float) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return default
-    if parsed < 0:
-        return default
-    return parsed
-
-
-def _normalize_platform_list(values: object) -> list[str]:
-    if not isinstance(values, list):
-        return []
-    normalized: list[str] = []
-    for item in values:
-        platform = str(item).strip().lower()
-        if platform == "" or platform in normalized:
-            continue
-        normalized.append(platform)
-    return normalized
 
 
 def _resolve_bootstrap_status() -> dict[str, Any]:
@@ -102,15 +73,15 @@ async def core_health_ready():
     """Readiness health probe."""
     status = _resolve_bootstrap_status()
     phase_a_status = status["phase_a_status"]
-    readiness_grace_seconds = _parse_nonnegative_float(
+    readiness_grace_seconds = parse_nonnegative_float(
         status["phase_b_readiness_grace_seconds"],
         default=0.0,
     )
-    degrade_on_critical_exit = _parse_bool(
+    degrade_on_critical_exit = parse_bool(
         status["phase_b_degrade_on_critical_exit"],
         default=True,
     )
-    critical_platforms = _normalize_platform_list(status["phase_b_critical_platforms"])
+    critical_platforms = normalize_platform_list(status["phase_b_critical_platforms"])
 
     health = evaluate_phase_b_health(
         PhaseBHealthInput(

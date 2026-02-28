@@ -189,40 +189,42 @@ def _normalize_platforms(values: list[str] | None) -> list[str]:
 
 
 def _resolve_runtime_profile_override(config: dict) -> str:
-    runtime_cfg = config.get("mugen", {}).get("runtime", {})
-    raw_profile = runtime_cfg.get("profile", "auto")
-    if raw_profile is None:
-        return "auto"
+    runtime_cfg = config.get("mugen", {}).get("runtime")
+    if not isinstance(runtime_cfg, dict):
+        raise RuntimeError(
+            "Invalid runtime profile configuration: "
+            "mugen.runtime.profile is required and must be a string."
+        )
+    if "profile" not in runtime_cfg:
+        raise RuntimeError(
+            "Invalid runtime profile configuration: "
+            "mugen.runtime.profile is required and must be one of "
+            "api_only|web_only|platform_full."
+        )
+    raw_profile = runtime_cfg.get("profile")
     if not isinstance(raw_profile, str):
         raise RuntimeError(
             "Invalid runtime profile configuration: mugen.runtime.profile must be a string."
         )
 
     normalized = raw_profile.strip().lower()
-    if normalized == "":
-        normalized = "auto"
+    if normalized in {"", "auto"}:
+        raise RuntimeError(
+            "Invalid runtime profile configuration: mugen.runtime.profile must be "
+            "explicitly set to one of api_only|web_only|platform_full."
+        )
 
-    if normalized not in {"auto", "api_only", "web_only", "platform_full"}:
+    if normalized not in {"api_only", "web_only", "platform_full"}:
         raise RuntimeError(
             "Invalid runtime profile configuration: "
-            "mugen.runtime.profile must be one of auto|api_only|web_only|platform_full."
+            "mugen.runtime.profile must be one of api_only|web_only|platform_full."
         )
     return normalized
 
 
 def _infer_runtime_profile(config: dict) -> str:
-    """Infer DI validation profile from enabled platforms."""
-    override = _resolve_runtime_profile_override(config)
-    if override != "auto":
-        return override
-
-    platforms = _normalize_platforms(_get_active_platforms(config))
-    normalized = set(platforms)
-    if not normalized:
-        return "api_only"
-    if normalized == {"web"}:
-        return "web_only"
-    return "platform_full"
+    """Resolve explicit DI runtime validation profile."""
+    return _resolve_runtime_profile_override(config)
 
 
 def _validate_container(config: dict, injector: DependencyInjector) -> None:
@@ -283,17 +285,8 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         "user_service",
         "messaging_service",
     ]
-    if profile in {"web_only", "platform_full"} and "web" in active_platform_set:
-        if _config_path_exists(
-            config,
-            "mugen",
-            "modules",
-            "core",
-            "gateway",
-            "storage",
-            "relational",
-        ):
-            required.append("relational_storage_gateway")
+    if "web" in active_platform_set:
+        required.append("relational_storage_gateway")
 
     missing = [name for name in required if getattr(injector, name) is None]
 
@@ -731,10 +724,9 @@ def _shutdown_provider(
             logger.warning(f"Failed to shutdown provider ({provider_name}): {exc}")
         return
 
-    logger.warning(
-        "Synchronous provider shutdown skipped in running loop (%s); "
-        "use shutdown_container_async().",
-        provider_name,
+    raise RuntimeError(
+        "Synchronous provider shutdown is not allowed in a running event loop "
+        f"({provider_name}); use shutdown_container_async()."
     )
 
 
@@ -788,9 +780,9 @@ def _shutdown_injector(injector: DependencyInjector | None) -> None:
         asyncio.run(_shutdown_injector_async(injector))
         return
 
-    logger = getattr(injector, "logging_gateway", logging.getLogger()) if injector else logging.getLogger()
-    logger.warning(
-        "Synchronous injector shutdown skipped in running loop; use shutdown_container_async()."
+    raise RuntimeError(
+        "Synchronous injector shutdown is not allowed in a running event loop; "
+        "use shutdown_container_async()."
     )
 
 

@@ -80,28 +80,24 @@ class TestMugenDIShutdownLifecycleSync(unittest.TestCase):
             )
         self.assertIn("Failed to shutdown provider", logger.warning.call_args.args[0])
 
-    def test_shutdown_provider_sync_warns_when_running_loop(self) -> None:
+    def test_shutdown_provider_sync_raises_when_running_loop(self) -> None:
         logger = Mock()
         with patch("mugen.core.di.asyncio.get_running_loop", return_value=object()):
-            di._shutdown_provider(  # pylint: disable=protected-access
-                "running-loop",
-                _ProviderWithClose(awaitable=_AwaitableNoop()),
-                logger,
-            )
-        self.assertIn(
-            "Synchronous provider shutdown skipped in running loop",
-            logger.warning.call_args.args[0],
-        )
+            with self.assertRaises(RuntimeError):
+                di._shutdown_provider(  # pylint: disable=protected-access
+                    "running-loop",
+                    _ProviderWithClose(awaitable=_AwaitableNoop()),
+                    logger,
+                )
+        logger.warning.assert_not_called()
 
-    def test_shutdown_injector_sync_warns_when_running_loop(self) -> None:
+    def test_shutdown_injector_sync_raises_when_running_loop(self) -> None:
         logger = Mock()
         injector = SimpleNamespace(logging_gateway=logger)
         with patch("mugen.core.di.asyncio.get_running_loop", return_value=object()):
-            di._shutdown_injector(injector)  # pylint: disable=protected-access
-        self.assertIn(
-            "Synchronous injector shutdown skipped in running loop",
-            logger.warning.call_args.args[0],
-        )
+            with self.assertRaises(RuntimeError):
+                di._shutdown_injector(injector)  # pylint: disable=protected-access
+        logger.warning.assert_not_called()
 
     def test_shutdown_container_delegates_to_proxy(self) -> None:
         with patch.object(di._ContainerProxy, "shutdown") as shutdown_mock:  # pylint: disable=protected-access

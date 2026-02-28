@@ -18,7 +18,7 @@ from mugen import (
     PHASE_STATUS_STOPPED,
 )
 from mugen.core.api import api
-from mugen.core.api.endpoint import _parse_bool  # pylint: disable=protected-access
+from mugen.core.runtime.phase_b_controls import parse_bool
 from mugen.core.domain.use_case.phase_b_health import (
     PhaseBHealthInput,
     evaluate_phase_b_health,
@@ -413,7 +413,7 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stopped_ok.reasons, {})
 
     def test_parse_bool_supports_string_values_and_default(self) -> None:
-        self.assertTrue(_parse_bool("yes", default=False))
-        self.assertFalse(_parse_bool("off", default=True))
-        self.assertTrue(_parse_bool("invalid", default=True))
-        self.assertFalse(_parse_bool(object(), default=False))
+        self.assertTrue(parse_bool("yes", default=False))
+        self.assertFalse(parse_bool("off", default=True))
+        self.assertTrue(parse_bool("invalid", default=True))
+        self.assertFalse(parse_bool(object(), default=False))

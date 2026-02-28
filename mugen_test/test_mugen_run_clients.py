@@ -25,6 +25,19 @@ from mugen import (
 )
 
 
+def _test_config(*, platforms: list[str]) -> SimpleNamespace:
+    mugen_cfg = SimpleNamespace(platforms=list(platforms))
+    if "web" in platforms:
+        mugen_cfg.modules = SimpleNamespace(
+            core=SimpleNamespace(
+                gateway=SimpleNamespace(
+                    storage=SimpleNamespace(relational="configured"),
+                )
+            )
+        )
+    return SimpleNamespace(mugen=mugen_cfg)
+
+
 class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
     """Unit tests for mugen.run_clients."""
 
@@ -121,11 +134,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
     async def test_web_platform_enabled(self) -> None:
         """Test running web platform."""
         app = Quart("test_app")
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                platforms=["web"],
-            )
-        )
+        config = _test_config(platforms=["web"])
 
         _run_web_client = unittest.mock.AsyncMock()
 
@@ -259,7 +268,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_platform_clients_keeps_platform_starting_until_started_callback(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
         allow_start = asyncio.Event()
         keep_running = asyncio.Event()
 
@@ -307,7 +316,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
         allow_start = asyncio.Event()
 
         async def _run_web_client(
@@ -345,7 +354,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
         state["phase_b_degrade_on_critical_exit"] = False
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
 
         async def _run_web_client(
             *,
@@ -373,7 +382,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
 
         def _bad_runner(
             *,
@@ -398,7 +407,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
 
         def _bad_runner(**_kwargs):  # noqa: ANN001
             raise TypeError("boom")
@@ -415,7 +424,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
 
         class _LegacyRunner:
             def __call__(self, **kwargs):  # noqa: ANN003
@@ -451,7 +460,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
         hold = asyncio.Event()
         degraded = asyncio.Event()
 
@@ -491,7 +500,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
         trigger = asyncio.Event()
 
         async def _run_web_client(
@@ -609,6 +618,10 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             mugen_mod._config_path_exists(slot_root, "missing")  # pylint: disable=protected-access
         )
+        dict_backed = SimpleNamespace(existing=SimpleNamespace())
+        self.assertFalse(
+            mugen_mod._config_path_exists(dict_backed, "missing")  # pylint: disable=protected-access
+        )
 
         relational_config = {
             "mugen": {
@@ -628,6 +641,12 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 config=relational_config,
                 active_platforms=["web"],
                 relational_storage_gateway_provider=lambda: None,
+            )
+        with self.assertRaises(BootstrapConfigError):
+            mugen_mod.validate_web_relational_runtime_config(
+                config={"mugen": {"modules": {"core": {"gateway": {"storage": {}}}}}},
+                active_platforms=["web"],
+                relational_storage_gateway_provider=lambda: object(),
             )
 
         config = SimpleNamespace(
@@ -758,7 +777,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
         state["phase_b_critical_platforms"] = ["web"]
         state["phase_b_degrade_on_critical_exit"] = False
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
 
         with unittest.mock.patch(
             target="mugen.run_web_client",
@@ -778,7 +797,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
         state["phase_b_critical_platforms"] = ["not-enabled"]
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
 
         with self.assertRaises(BootstrapConfigError):
             await run_platform_clients(
@@ -804,7 +823,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
         state["phase_b_critical_platforms"] = ["matrix"]
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
 
         with self.assertRaises(BootstrapConfigError):
             await run_platform_clients(
@@ -838,7 +857,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_platform_clients_marks_platform_degraded_on_exception(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
 
         async def _boom(
             *,
@@ -1049,7 +1068,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
         allow_start = asyncio.Event()
         keep_running = asyncio.Event()
 
@@ -1097,7 +1116,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_platform_clients_marks_web_degraded_on_bind_failure(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
+        config = _test_config(platforms=["web"])
 
         async def _fail_web(
             *,
@@ -1158,7 +1177,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_platform_clients_cancellation_skips_done_tasks(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix", "web"]))
+        config = _test_config(platforms=["matrix", "web"])
 
         async def _fast_matrix(
             *,
@@ -1200,7 +1219,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_platform_clients_removes_multiple_finished_tasks(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix", "web"]))
+        config = _test_config(platforms=["matrix", "web"])
 
         async def _fast_matrix(
             *,

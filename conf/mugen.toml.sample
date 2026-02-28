@@ -16,7 +16,7 @@ storage.keyval.relational.list_limit_default = 200
 runtime.phase_b.readiness_grace_seconds = 0.0
 runtime.phase_b.critical_platforms = ["web"]
 runtime.phase_b.degrade_on_critical_exit = true
-runtime.profile = "auto"   # auto|api_only|web_only|platform_full
+runtime.profile = "platform_full"   # api_only|web_only|platform_full
 
 [mugen.commands]
 clear = "..."

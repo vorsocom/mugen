@@ -75,6 +75,7 @@ from mugen.core.domain.use_case.phase_b_health import (
     PhaseBHealthInput,
     evaluate_phase_b_health,
 )
+from mugen.core.runtime.phase_b_controls import parse_bool as _parse_bool
 from mugen.core.utility.platforms import (
     SUPPORTED_CORE_PLATFORMS,
     normalize_platforms,
@@ -146,18 +147,6 @@ def _extension_enabled(ext: SimpleNamespace) -> bool:
     return bool(raw_enabled)
 
 
-def _parse_bool(value: object, *, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return default
-
-
 def _normalize_platform_list(values: object) -> list[str]:
     return normalize_platforms(values)
 
@@ -205,7 +194,10 @@ def validate_web_relational_runtime_config(
         "relational",
     )
     if relational_configured is not True:
-        return
+        raise BootstrapConfigError(
+            "Web platform requires relational storage gateway configuration at "
+            "mugen.modules.core.gateway.storage.relational."
+        )
 
     relational_storage_gateway = relational_storage_gateway_provider()
     if relational_storage_gateway is None:
@@ -1013,7 +1005,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
                     messaging_service.register_rpp_extension(rpp_ext)
                     registered = True
             else:
-                logger.warning(f"Unknown extension type: {ext_type}.")
+                raise ExtensionLoadError(f"Unknown extension type: {ext_type}.")
         except TypeError as exc:
             logger.exception(
                 "Incomplete subclass implementation for extension: %s.",

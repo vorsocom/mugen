@@ -70,20 +70,15 @@ class DefaultWebClient(IWebClient):
         PROCESSING_SIGNAL_THINKING,
     }
 
-    _queue_state_key = "web:queue"
     _queue_state_version = 1
 
-    _conversation_key_prefix = "web:conversation:"
-
-    _event_log_key_prefix = "web:events:"
     _event_log_version = 3
 
     _stream_reset_signal = "stream_reset"
 
-    _media_token_key_prefix = "web:media_token:"
-
     _default_sse_keepalive_seconds: float = 15.0
     _default_sse_replay_max_events: int = 200
+    _default_sse_enqueue_timeout_seconds: float = 0.5
     _default_queue_poll_interval_seconds: float = 0.25
     _default_queue_processing_lease_seconds: float = 30.0
     _default_queue_max_pending_jobs: int = 2000
@@ -143,6 +138,12 @@ class DefaultWebClient(IWebClient):
             self._default_sse_replay_max_events,
             minimum=1,
         )
+        self._sse_enqueue_timeout_seconds = self._resolve_float_config(
+            ("web", "sse", "enqueue_timeout_seconds"),
+            self._default_sse_enqueue_timeout_seconds,
+            minimum=0.01,
+        )
+        self._sse_disconnect_sentinel = object()
         self._queue_poll_interval_seconds = self._resolve_float_config(
             ("web", "queue", "poll_interval_seconds"),
             self._default_queue_poll_interval_seconds,
@@ -412,63 +413,50 @@ class DefaultWebClient(IWebClient):
                 create_if_missing=True,
             )
 
-            if self._using_relational_web_storage():
-                async with self._relational_session() as session:
-                    pending_result = await session.execute(
-                        sa_text(
-                            "SELECT count(*) "
-                            "FROM mugen.web_queue_job "
-                            "WHERE status = 'pending'"
-                        )
+            async with self._relational_session() as session:
+                pending_result = await session.execute(
+                    sa_text(
+                        "SELECT count(*) "
+                        "FROM mugen.web_queue_job "
+                        "WHERE status = 'pending'"
                     )
-                    pending_count = int(pending_result.scalar() or 0)
-                    if pending_count >= self._queue_max_pending_jobs:
-                        raise OverflowError("queue is full")
-
-                    payload = {
-                        "text": job["text"],
-                        "metadata": job["metadata"],
-                        "file_path": job["file_path"],
-                        "mime_type": job["mime_type"],
-                        "original_filename": job["original_filename"],
-                    }
-                    await session.execute(
-                        sa_text(
-                            "INSERT INTO mugen.web_queue_job "
-                            "("
-                            "job_id, conversation_id, sender, message_type, payload, "
-                            "status, attempts, lease_expires_at, error_message, "
-                            "completed_at, client_message_id, created_at, updated_at"
-                            ") "
-                            "VALUES ("
-                            ":job_id, :conversation_id, :sender, :message_type, "
-                            "CAST(:payload AS jsonb), 'pending', 0, NULL, NULL, NULL, "
-                            ":client_message_id, now(), now()"
-                            ")"
-                        ),
-                        {
-                            "job_id": job_id,
-                            "conversation_id": conversation,
-                            "sender": auth_user_id,
-                            "message_type": job["message_type"],
-                            "payload": json.dumps(
-                                payload, ensure_ascii=True, separators=(",", ":")
-                            ),
-                            "client_message_id": normalized_client_message_id,
-                        },
-                    )
-            else:
-                queue_state = await self._read_queue_state_unlocked()
-                pending_count = sum(
-                    1
-                    for queue_job in queue_state["jobs"]
-                    if queue_job.get("status") == "pending"
                 )
+                pending_count = int(pending_result.scalar() or 0)
                 if pending_count >= self._queue_max_pending_jobs:
                     raise OverflowError("queue is full")
 
-                queue_state["jobs"].append(job)
-                await self._write_queue_state_unlocked(queue_state)
+                payload = {
+                    "text": job["text"],
+                    "metadata": job["metadata"],
+                    "file_path": job["file_path"],
+                    "mime_type": job["mime_type"],
+                    "original_filename": job["original_filename"],
+                }
+                await session.execute(
+                    sa_text(
+                        "INSERT INTO mugen.web_queue_job "
+                        "("
+                        "job_id, conversation_id, sender, message_type, payload, "
+                        "status, attempts, lease_expires_at, error_message, "
+                        "completed_at, client_message_id, created_at, updated_at"
+                        ") "
+                        "VALUES ("
+                        ":job_id, :conversation_id, :sender, :message_type, "
+                        "CAST(:payload AS jsonb), 'pending', 0, NULL, NULL, NULL, "
+                        ":client_message_id, now(), now()"
+                        ")"
+                    ),
+                    {
+                        "job_id": job_id,
+                        "conversation_id": conversation,
+                        "sender": auth_user_id,
+                        "message_type": job["message_type"],
+                        "payload": json.dumps(
+                            payload, ensure_ascii=True, separators=(",", ":")
+                        ),
+                        "client_message_id": normalized_client_message_id,
+                    },
+                )
 
         ack_payload = {
             "job_id": job_id,
@@ -592,6 +580,25 @@ class DefaultWebClient(IWebClient):
                         yield ": ping\n\n"
                         continue
 
+                    if event is self._sse_disconnect_sentinel:
+                        self._log_sse_diagnostic(
+                            conversation_id=conversation,
+                            incoming_event_id=None,
+                            last_event_id=highest_event_id,
+                            reason="subscriber_disconnected_for_backpressure",
+                            warning=True,
+                        )
+                        break
+
+                    if not isinstance(event, dict):
+                        self._log_sse_diagnostic(
+                            conversation_id=conversation,
+                            incoming_event_id=event,
+                            last_event_id=highest_event_id,
+                            reason="live_event_invalid_payload",
+                        )
+                        continue
+
                     event_generation = self._normalize_stream_generation(
                         event.get("stream_generation"),
                         fallback=active_generation,
@@ -645,89 +652,57 @@ class DefaultWebClient(IWebClient):
     ) -> dict[str, Any] | None:
         """Resolve a media token to an authorized media file payload."""
         auth_user_id = self._require_non_empty(auth_user, "auth_user")
-        token_key = self._media_token_key(token)
 
         async with self._storage_lock:
-            if self._using_relational_web_storage():
-                async with self._relational_session() as session:
-                    result = await session.execute(
+            async with self._relational_session() as session:
+                result = await session.execute(
+                    sa_text(
+                        "SELECT token, owner_user_id, file_path, mime_type, filename, "
+                        "expires_at "
+                        "FROM mugen.web_media_token "
+                        "WHERE token = :token"
+                    ),
+                    {"token": token},
+                )
+                row = result.mappings().one_or_none()
+                if row is None:
+                    return None
+
+                expires_at = self._datetime_to_epoch(row.get("expires_at"))
+                if expires_at is None or expires_at <= self._epoch_now():
+                    await session.execute(
                         sa_text(
-                            "SELECT token, owner_user_id, file_path, mime_type, filename, "
-                            "expires_at "
-                            "FROM mugen.web_media_token "
+                            "DELETE FROM mugen.web_media_token "
                             "WHERE token = :token"
                         ),
                         {"token": token},
                     )
-                    row = result.mappings().one_or_none()
-                    if row is None:
-                        return None
+                    return None
 
-                    expires_at = self._datetime_to_epoch(row.get("expires_at"))
-                    if expires_at is None or expires_at <= self._epoch_now():
-                        await session.execute(
-                            sa_text(
-                                "DELETE FROM mugen.web_media_token "
-                                "WHERE token = :token"
-                            ),
-                            {"token": token},
-                        )
-                        return None
+                owner_user_id = row.get("owner_user_id")
+                if owner_user_id != auth_user_id:
+                    return None
 
-                    owner_user_id = row.get("owner_user_id")
-                    if owner_user_id != auth_user_id:
-                        return None
+                media_ref = row.get("file_path")
+                if not isinstance(media_ref, str) or media_ref == "":
+                    return None
 
-                    media_ref = row.get("file_path")
-                    if not isinstance(media_ref, str) or media_ref == "":
-                        return None
-
-                    resolved_path = await self._media_storage_gateway.materialize(
-                        media_ref
+                resolved_path = await self._media_storage_gateway.materialize(media_ref)
+                if resolved_path is None:
+                    await session.execute(
+                        sa_text(
+                            "DELETE FROM mugen.web_media_token "
+                            "WHERE token = :token"
+                        ),
+                        {"token": token},
                     )
-                    if resolved_path is None:
-                        await session.execute(
-                            sa_text(
-                                "DELETE FROM mugen.web_media_token "
-                                "WHERE token = :token"
-                            ),
-                            {"token": token},
-                        )
-                        return None
+                    return None
 
-                    return {
-                        "file_path": resolved_path,
-                        "mime_type": row.get("mime_type"),
-                        "filename": row.get("filename"),
-                    }
-
-            token_data = await self._read_json_unlocked(token_key)
-            if not isinstance(token_data, dict):
-                return None
-
-            expires_at = self._coerce_float(token_data.get("expires_at"))
-            if expires_at is None or expires_at <= self._epoch_now():
-                await self._keyval_storage_gateway.delete(token_key)
-                return None
-
-            owner_user_id = token_data.get("owner_user_id")
-            if owner_user_id != auth_user_id:
-                return None
-
-            media_ref = token_data.get("media_ref") or token_data.get("file_path")
-            if not isinstance(media_ref, str) or media_ref == "":
-                return None
-
-            resolved_path = await self._media_storage_gateway.materialize(media_ref)
-            if resolved_path is None:
-                await self._keyval_storage_gateway.delete(token_key)
-                return None
-
-            return {
-                "file_path": resolved_path,
-                "mime_type": token_data.get("mime_type"),
-                "filename": token_data.get("filename"),
-            }
+                return {
+                    "file_path": resolved_path,
+                    "mime_type": row.get("mime_type"),
+                    "filename": row.get("filename"),
+                }
 
     @property
     def media_max_upload_bytes(self) -> int:
@@ -783,126 +758,88 @@ class DefaultWebClient(IWebClient):
         now_iso = self._utc_now_iso()
 
         async with self._storage_lock:
-            if self._using_relational_web_storage():
-                async with self._relational_session() as session:
-                    recovered_result = await session.execute(
-                        sa_text(
-                            "UPDATE mugen.web_queue_job "
-                            "SET status = 'pending', lease_expires_at = NULL, updated_at = now() "
-                            "WHERE status = 'processing' "
-                            "AND (lease_expires_at IS NULL OR lease_expires_at <= now())"
-                        )
+            async with self._relational_session() as session:
+                recovered_result = await session.execute(
+                    sa_text(
+                        "UPDATE mugen.web_queue_job "
+                        "SET status = 'pending', lease_expires_at = NULL, updated_at = now() "
+                        "WHERE status = 'processing' "
+                        "AND (lease_expires_at IS NULL OR lease_expires_at <= now())"
                     )
-                    recovered_count = int(getattr(recovered_result, "rowcount", 0) or 0)
-                    if recovered_count > 0:
-                        self._logging_gateway.warning(
-                            "Web worker lease recovery reset stale jobs "
-                            f"(count={recovered_count})."
-                        )
-
-                    selected = await session.execute(
-                        sa_text(
-                            "SELECT job_id, conversation_id, sender, message_type, payload, "
-                            "status, attempts, created_at, updated_at, lease_expires_at, "
-                            "error_message, completed_at, client_message_id "
-                            "FROM mugen.web_queue_job "
-                            "WHERE status = 'pending' "
-                            "ORDER BY created_at ASC "
-                            "FOR UPDATE SKIP LOCKED "
-                            "LIMIT 1"
-                        )
-                    )
-                    selected_row = selected.mappings().one_or_none()
-                    if selected_row is None:
-                        return None
-
-                    selected_job = self._queue_job_record_to_payload(selected_row)
-                    claimed_view = self._queue_job_lifecycle_use_case.claim(
-                        job=selected_job,
-                        now_iso=now_iso,
-                        lease_expires_at=(
-                            now_epoch + self._queue_processing_lease_seconds
-                        ),
-                    )
-                    updated = await session.execute(
-                        sa_text(
-                            "UPDATE mugen.web_queue_job "
-                            "SET status = CAST(:status AS mugen.citext), "
-                            "attempts = :attempts, "
-                            "updated_at = :updated_at, "
-                            "lease_expires_at = :lease_expires_at, "
-                            "error_message = :error_message, "
-                            "completed_at = :completed_at "
-                            "WHERE job_id = :job_id "
-                            "RETURNING job_id, conversation_id, sender, message_type, payload, "
-                            "status, attempts, created_at, updated_at, lease_expires_at, "
-                            "error_message, completed_at, client_message_id"
-                        ),
-                        {
-                            "status": claimed_view.get("status"),
-                            "attempts": int(claimed_view.get("attempts") or 0),
-                            "updated_at": (
-                                self._iso_to_utc_datetime(claimed_view.get("updated_at"))
-                                or self._to_utc_datetime(now_epoch)
-                            ),
-                            "lease_expires_at": (
-                                self._to_utc_datetime(float(claimed_view.get("lease_expires_at")))
-                                if self._coerce_float(claimed_view.get("lease_expires_at"))
-                                is not None
-                                else None
-                            ),
-                            "error_message": (
-                                str(claimed_view.get("error"))
-                                if claimed_view.get("error") not in [None, ""]
-                                else None
-                            ),
-                            "completed_at": self._iso_to_utc_datetime(
-                                claimed_view.get("completed_at")
-                            ),
-                            "job_id": str(selected_row.get("job_id")),
-                        },
-                    )
-                    row = updated.mappings().one_or_none()
-                    if row is None:
-                        return None
-                    return self._queue_job_record_to_payload(row)
-
-            queue_state = await self._read_queue_state_unlocked()
-            jobs = queue_state["jobs"]
-            changed = False
-
-            for queue_job in jobs:
-                if queue_job.get("status") != "processing":
-                    continue
-
-                lease_expires_at = self._coerce_float(queue_job.get("lease_expires_at"))
-                if lease_expires_at is None or lease_expires_at <= now_epoch:
-                    queue_job["status"] = "pending"
-                    queue_job["lease_expires_at"] = None
-                    queue_job["updated_at"] = now_iso
-                    changed = True
-
-            claimed_job: dict[str, Any] | None = None
-            for queue_job in jobs:
-                if queue_job.get("status") != "pending":
-                    continue
-
-                claimed_view = self._queue_job_lifecycle_use_case.claim(
-                    job=queue_job,
-                    now_iso=now_iso,
-                    lease_expires_at=(
-                        now_epoch + self._queue_processing_lease_seconds
-                    ),
                 )
-                queue_job.update(claimed_view)
-                claimed_job = copy.deepcopy(queue_job)
-                changed = True
-                break
+                recovered_count = int(getattr(recovered_result, "rowcount", 0) or 0)
+                if recovered_count > 0:
+                    self._logging_gateway.warning(
+                        "Web worker lease recovery reset stale jobs "
+                        f"(count={recovered_count})."
+                    )
 
-            if changed:
-                await self._write_queue_state_unlocked(queue_state)
+                selected = await session.execute(
+                    sa_text(
+                        "SELECT job_id, conversation_id, sender, message_type, payload, "
+                        "status, attempts, created_at, updated_at, lease_expires_at, "
+                        "error_message, completed_at, client_message_id "
+                        "FROM mugen.web_queue_job "
+                        "WHERE status = 'pending' "
+                        "ORDER BY created_at ASC "
+                        "FOR UPDATE SKIP LOCKED "
+                        "LIMIT 1"
+                    )
+                )
+                selected_row = selected.mappings().one_or_none()
+                if selected_row is None:
+                    return None
 
-            return claimed_job
+                selected_job = self._queue_job_record_to_payload(selected_row)
+                claimed_view = self._queue_job_lifecycle_use_case.claim(
+                    job=selected_job,
+                    now_iso=now_iso,
+                    lease_expires_at=(now_epoch + self._queue_processing_lease_seconds),
+                )
+                updated = await session.execute(
+                    sa_text(
+                        "UPDATE mugen.web_queue_job "
+                        "SET status = CAST(:status AS mugen.citext), "
+                        "attempts = :attempts, "
+                        "updated_at = :updated_at, "
+                        "lease_expires_at = :lease_expires_at, "
+                        "error_message = :error_message, "
+                        "completed_at = :completed_at "
+                        "WHERE job_id = :job_id "
+                        "RETURNING job_id, conversation_id, sender, message_type, payload, "
+                        "status, attempts, created_at, updated_at, lease_expires_at, "
+                        "error_message, completed_at, client_message_id"
+                    ),
+                    {
+                        "status": claimed_view.get("status"),
+                        "attempts": int(claimed_view.get("attempts") or 0),
+                        "updated_at": (
+                            self._iso_to_utc_datetime(claimed_view.get("updated_at"))
+                            or self._to_utc_datetime(now_epoch)
+                        ),
+                        "lease_expires_at": (
+                            self._to_utc_datetime(
+                                float(claimed_view.get("lease_expires_at"))
+                            )
+                            if self._coerce_float(claimed_view.get("lease_expires_at"))
+                            is not None
+                            else None
+                        ),
+                        "error_message": (
+                            str(claimed_view.get("error"))
+                            if claimed_view.get("error") not in [None, ""]
+                            else None
+                        ),
+                        "completed_at": self._iso_to_utc_datetime(
+                            claimed_view.get("completed_at")
+                        ),
+                        "job_id": str(selected_row.get("job_id")),
+                    },
+                )
+                row = updated.mappings().one_or_none()
+                if row is None:
+                    return None
+                return self._queue_job_record_to_payload(row)
 
     @staticmethod
     def _derive_queue_lease_heartbeat_seconds(lease_seconds: float) -> float:
@@ -919,33 +856,22 @@ class DefaultWebClient(IWebClient):
         expected_attempt: int,
     ) -> bool:
         async with self._storage_lock:
-            if self._using_relational_web_storage():
-                async with self._relational_session() as session:
-                    result = await session.execute(
-                        sa_text(
-                            "SELECT status, attempts "
-                            "FROM mugen.web_queue_job "
-                            "WHERE job_id = :job_id"
-                        ),
-                        {"job_id": job_id},
-                    )
-                    row = result.mappings().one_or_none()
-                if row is None:
-                    return False
-                return (
-                    str(row.get("status", "")).strip().lower() == "processing"
-                    and int(row.get("attempts") or 0) == int(expected_attempt)
+            async with self._relational_session() as session:
+                result = await session.execute(
+                    sa_text(
+                        "SELECT status, attempts "
+                        "FROM mugen.web_queue_job "
+                        "WHERE job_id = :job_id"
+                    ),
+                    {"job_id": job_id},
                 )
-
-            queue_state = await self._read_queue_state_unlocked()
-            for queue_job in queue_state["jobs"]:
-                if str(queue_job.get("id")) != job_id:
-                    continue
-                return (
-                    str(queue_job.get("status", "")).strip().lower() == "processing"
-                    and int(queue_job.get("attempts") or 0) == int(expected_attempt)
-                )
-            return False
+                row = result.mappings().one_or_none()
+            if row is None:
+                return False
+            return (
+                str(row.get("status", "")).strip().lower() == "processing"
+                and int(row.get("attempts") or 0) == int(expected_attempt)
+            )
 
     async def _renew_processing_lease(
         self,
@@ -957,50 +883,32 @@ class DefaultWebClient(IWebClient):
         now_iso = self._utc_now_iso()
         next_lease_expires_at = now_epoch + self._queue_processing_lease_seconds
         async with self._storage_lock:
-            if self._using_relational_web_storage():
-                async with self._relational_session() as session:
-                    result = await session.execute(
-                        sa_text(
-                            "UPDATE mugen.web_queue_job "
-                            "SET lease_expires_at = :lease_expires_at, "
-                            "updated_at = :updated_at "
-                            "WHERE job_id = :job_id "
-                            "AND status = CAST(:current_status AS mugen.citext)"
-                            "AND (:expected_attempt IS NULL OR attempts = :expected_attempt)"
+            async with self._relational_session() as session:
+                result = await session.execute(
+                    sa_text(
+                        "UPDATE mugen.web_queue_job "
+                        "SET lease_expires_at = :lease_expires_at, "
+                        "updated_at = :updated_at "
+                        "WHERE job_id = :job_id "
+                        "AND status = CAST(:current_status AS mugen.citext)"
+                        "AND (:expected_attempt IS NULL OR attempts = :expected_attempt)"
+                    ),
+                    {
+                        "lease_expires_at": self._to_utc_datetime(next_lease_expires_at),
+                        "updated_at": (
+                            self._iso_to_utc_datetime(now_iso)
+                            or self._to_utc_datetime(now_epoch)
                         ),
-                        {
-                            "lease_expires_at": self._to_utc_datetime(next_lease_expires_at),
-                            "updated_at": (
-                                self._iso_to_utc_datetime(now_iso)
-                                or self._to_utc_datetime(now_epoch)
-                            ),
-                            "job_id": job_id,
-                            "current_status": "processing",
-                            "expected_attempt": (
-                                int(expected_attempt)
-                                if expected_attempt is not None
-                                else None
-                            ),
-                        },
-                    )
-                return int(getattr(result, "rowcount", 0) or 0) > 0
-
-            queue_state = await self._read_queue_state_unlocked()
-            for queue_job in queue_state["jobs"]:
-                if str(queue_job.get("id")) != job_id:
-                    continue
-                if str(queue_job.get("status", "")).strip().lower() != "processing":
-                    return False
-                if (
-                    expected_attempt is not None
-                    and int(queue_job.get("attempts") or 0) != int(expected_attempt)
-                ):
-                    return False
-                queue_job["lease_expires_at"] = next_lease_expires_at
-                queue_job["updated_at"] = now_iso
-                await self._write_queue_state_unlocked(queue_state)
-                return True
-            return False
+                        "job_id": job_id,
+                        "current_status": "processing",
+                        "expected_attempt": (
+                            int(expected_attempt)
+                            if expected_attempt is not None
+                            else None
+                        ),
+                    },
+                )
+            return int(getattr(result, "rowcount", 0) or 0) > 0
 
     async def _run_processing_lease_heartbeat(
         self,
@@ -1510,32 +1418,29 @@ class DefaultWebClient(IWebClient):
         }
 
         async with self._storage_lock:
-            if self._using_relational_web_storage():
-                async with self._relational_session() as session:
-                    await session.execute(
-                        sa_text(
-                            "INSERT INTO mugen.web_media_token "
-                            "("
-                            "token, owner_user_id, conversation_id, file_path, mime_type, "
-                            "filename, expires_at, created_at, updated_at"
-                            ") "
-                            "VALUES ("
-                            ":token, :owner_user_id, :conversation_id, :file_path, "
-                            ":mime_type, :filename, :expires_at, now(), now()"
-                            ")"
-                        ),
-                        {
-                            "token": token,
-                            "owner_user_id": owner_user_id,
-                            "conversation_id": conversation_id,
-                            "file_path": media_ref,
-                            "mime_type": normalized_mime_type,
-                            "filename": normalized_filename,
-                            "expires_at": self._to_utc_datetime(expires_at),
-                        },
-                    )
-            else:
-                await self._write_json_unlocked(self._media_token_key(token), token_payload)
+            async with self._relational_session() as session:
+                await session.execute(
+                    sa_text(
+                        "INSERT INTO mugen.web_media_token "
+                        "("
+                        "token, owner_user_id, conversation_id, file_path, mime_type, "
+                        "filename, expires_at, created_at, updated_at"
+                        ") "
+                        "VALUES ("
+                        ":token, :owner_user_id, :conversation_id, :file_path, "
+                        ":mime_type, :filename, :expires_at, now(), now()"
+                        ")"
+                    ),
+                    {
+                        "token": token,
+                        "owner_user_id": owner_user_id,
+                        "conversation_id": conversation_id,
+                        "file_path": media_ref,
+                        "mime_type": normalized_mime_type,
+                        "filename": normalized_filename,
+                        "expires_at": self._to_utc_datetime(expires_at),
+                    },
+                )
 
         return {
             "url": f"/api/core/web/v1/media/{token}",
@@ -1748,18 +1653,47 @@ class DefaultWebClient(IWebClient):
         event_entry: dict[str, Any]
 
         async with self._storage_lock:
-            if self._using_relational_web_storage():
-                normalized_data = self._normalize_event_payload_with_correlation(
-                    conversation_id=conversation_id,
-                    event_type=event_type,
-                    data=data,
-                )
-                created_at_iso = self._utc_now_iso()
-                created_at_dt = self._iso_to_utc_datetime(created_at_iso) or self._to_utc_datetime(
-                    self._epoch_now()
-                )
+            normalized_data = self._normalize_event_payload_with_correlation(
+                conversation_id=conversation_id,
+                event_type=event_type,
+                data=data,
+            )
+            created_at_iso = self._utc_now_iso()
+            created_at_dt = self._iso_to_utc_datetime(created_at_iso) or self._to_utc_datetime(
+                self._epoch_now()
+            )
 
-                async with self._relational_session() as session:
+            async with self._relational_session() as session:
+                state_result = await session.execute(
+                    sa_text(
+                        "SELECT owner_user_id, stream_generation, next_event_id "
+                        "FROM mugen.web_conversation_state "
+                        "WHERE conversation_id = :conversation_id "
+                        "FOR UPDATE"
+                    ),
+                    {"conversation_id": conversation_id},
+                )
+                state = state_result.mappings().one_or_none()
+                if state is None:
+                    await session.execute(
+                        sa_text(
+                            "INSERT INTO mugen.web_conversation_state "
+                            "("
+                            "conversation_id, owner_user_id, stream_generation, "
+                            "stream_version, next_event_id, created_at, updated_at"
+                            ") "
+                            "VALUES ("
+                            ":conversation_id, 'system', :stream_generation, "
+                            ":stream_version, 1, now(), now()"
+                            ") "
+                            "ON CONFLICT (conversation_id) DO NOTHING"
+                        ),
+                        {
+                            "conversation_id": conversation_id,
+                            "stream_generation": self._new_stream_generation(),
+                            "stream_version": self._event_log_version,
+                        },
+                    )
                     state_result = await session.execute(
                         sa_text(
                             "SELECT owner_user_id, stream_generation, next_event_id "
@@ -1771,146 +1705,87 @@ class DefaultWebClient(IWebClient):
                     )
                     state = state_result.mappings().one_or_none()
                     if state is None:
-                        await session.execute(
-                            sa_text(
-                                "INSERT INTO mugen.web_conversation_state "
-                                "("
-                                "conversation_id, owner_user_id, stream_generation, "
-                                "stream_version, next_event_id, created_at, updated_at"
-                                ") "
-                                "VALUES ("
-                                ":conversation_id, 'system', :stream_generation, "
-                                ":stream_version, 1, now(), now()"
-                                ") "
-                                "ON CONFLICT (conversation_id) DO NOTHING"
-                            ),
-                            {
-                                "conversation_id": conversation_id,
-                                "stream_generation": self._new_stream_generation(),
-                                "stream_version": self._event_log_version,
-                            },
+                        raise RuntimeError(
+                            f"Unable to initialize web conversation state ({conversation_id})."
                         )
-                        state_result = await session.execute(
-                            sa_text(
-                                "SELECT owner_user_id, stream_generation, next_event_id "
-                                "FROM mugen.web_conversation_state "
-                                "WHERE conversation_id = :conversation_id "
-                                "FOR UPDATE"
-                            ),
-                            {"conversation_id": conversation_id},
-                        )
-                        state = state_result.mappings().one_or_none()
-                        if state is None:
-                            raise RuntimeError(
-                                f"Unable to initialize web conversation state ({conversation_id})."
-                            )
 
-                    stream_generation = self._normalize_stream_generation(
-                        state.get("stream_generation"),
-                        fallback=self._new_stream_generation(),
-                    )
-                    try:
-                        event_id = int(state.get("next_event_id"))
-                    except (TypeError, ValueError):
-                        event_id = 1
-                    if event_id <= 0:
-                        event_id = 1
-
-                    await session.execute(
-                        sa_text(
-                            "INSERT INTO mugen.web_conversation_event "
-                            "("
-                            "conversation_id, event_id, event_type, payload, "
-                            "stream_generation, stream_version, created_at, updated_at"
-                            ") "
-                            "VALUES ("
-                            ":conversation_id, :event_id, :event_type, CAST(:payload AS jsonb), "
-                            ":stream_generation, :stream_version, :created_at, now()"
-                            ")"
-                        ),
-                        {
-                            "conversation_id": conversation_id,
-                            "event_id": event_id,
-                            "event_type": event_type,
-                            "payload": json.dumps(
-                                normalized_data, ensure_ascii=True, separators=(",", ":")
-                            ),
-                            "stream_generation": stream_generation,
-                            "stream_version": self._event_log_version,
-                            "created_at": created_at_dt,
-                        },
-                    )
-
-                    await session.execute(
-                        sa_text(
-                            "UPDATE mugen.web_conversation_state "
-                            "SET next_event_id = :next_event_id, "
-                            "stream_generation = :stream_generation, "
-                            "stream_version = :stream_version, "
-                            "updated_at = now() "
-                            "WHERE conversation_id = :conversation_id"
-                        ),
-                        {
-                            "next_event_id": event_id + 1,
-                            "stream_generation": stream_generation,
-                            "stream_version": self._event_log_version,
-                            "conversation_id": conversation_id,
-                        },
-                    )
-
-                    min_keep_event_id = max(
-                        event_id - self._sse_replay_max_events + 1,
-                        1,
-                    )
-                    await session.execute(
-                        sa_text(
-                            "DELETE FROM mugen.web_conversation_event "
-                            "WHERE conversation_id = :conversation_id "
-                            "AND event_id < :min_keep_event_id"
-                        ),
-                        {
-                            "conversation_id": conversation_id,
-                            "min_keep_event_id": min_keep_event_id,
-                        },
-                    )
-
-                event_entry = {
-                    "id": str(event_id),
-                    "event": event_type,
-                    "data": normalized_data,
-                    "created_at": created_at_iso,
-                    "stream_generation": stream_generation,
-                    "stream_version": self._event_log_version,
-                }
-            else:
-                log = await self._read_event_log_unlocked(conversation_id)
                 stream_generation = self._normalize_stream_generation(
-                    log.get("generation"),
+                    state.get("stream_generation"),
                     fallback=self._new_stream_generation(),
                 )
-                event_id = int(log["next_event_id"])
-                normalized_data = self._normalize_event_payload_with_correlation(
-                    conversation_id=conversation_id,
-                    event_type=event_type,
-                    data=data,
-                )
-                event_entry = {
-                    "id": str(event_id),
-                    "event": event_type,
-                    "data": normalized_data,
-                    "created_at": self._utc_now_iso(),
-                    "stream_generation": stream_generation,
-                    "stream_version": self._event_log_version,
-                }
+                try:
+                    event_id = int(state.get("next_event_id"))
+                except (TypeError, ValueError):
+                    event_id = 1
+                if event_id <= 0:
+                    event_id = 1
 
-                log["next_event_id"] = event_id + 1
-                log["generation"] = stream_generation
-                events = list(log["events"])
-                events.append(event_entry)
-                if len(events) > self._sse_replay_max_events:
-                    events = events[-self._sse_replay_max_events :]
-                log["events"] = events
-                await self._write_event_log_unlocked(conversation_id, log)
+                await session.execute(
+                    sa_text(
+                        "INSERT INTO mugen.web_conversation_event "
+                        "("
+                        "conversation_id, event_id, event_type, payload, "
+                        "stream_generation, stream_version, created_at, updated_at"
+                        ") "
+                        "VALUES ("
+                        ":conversation_id, :event_id, :event_type, CAST(:payload AS jsonb), "
+                        ":stream_generation, :stream_version, :created_at, now()"
+                        ")"
+                    ),
+                    {
+                        "conversation_id": conversation_id,
+                        "event_id": event_id,
+                        "event_type": event_type,
+                        "payload": json.dumps(
+                            normalized_data, ensure_ascii=True, separators=(",", ":")
+                        ),
+                        "stream_generation": stream_generation,
+                        "stream_version": self._event_log_version,
+                        "created_at": created_at_dt,
+                    },
+                )
+
+                await session.execute(
+                    sa_text(
+                        "UPDATE mugen.web_conversation_state "
+                        "SET next_event_id = :next_event_id, "
+                        "stream_generation = :stream_generation, "
+                        "stream_version = :stream_version, "
+                        "updated_at = now() "
+                        "WHERE conversation_id = :conversation_id"
+                    ),
+                    {
+                        "next_event_id": event_id + 1,
+                        "stream_generation": stream_generation,
+                        "stream_version": self._event_log_version,
+                        "conversation_id": conversation_id,
+                    },
+                )
+
+                min_keep_event_id = max(
+                    event_id - self._sse_replay_max_events + 1,
+                    1,
+                )
+                await session.execute(
+                    sa_text(
+                        "DELETE FROM mugen.web_conversation_event "
+                        "WHERE conversation_id = :conversation_id "
+                        "AND event_id < :min_keep_event_id"
+                    ),
+                    {
+                        "conversation_id": conversation_id,
+                        "min_keep_event_id": min_keep_event_id,
+                    },
+                )
+
+            event_entry = {
+                "id": str(event_id),
+                "event": event_type,
+                "data": normalized_data,
+                "created_at": created_at_iso,
+                "stream_generation": stream_generation,
+                "stream_version": self._event_log_version,
+            }
 
         await self._publish_event(conversation_id, event_entry)
         return event_entry
@@ -1925,33 +1800,53 @@ class DefaultWebClient(IWebClient):
 
         for subscriber in subscribers:
             try:
-                subscriber.put_nowait(event_entry)
-            except asyncio.QueueFull:
-                dropped_event: Any = None
-                try:
-                    dropped_event = subscriber.get_nowait()
-                except asyncio.QueueEmpty:
-                    ...
+                await asyncio.wait_for(
+                    subscriber.put(event_entry),
+                    timeout=self._sse_enqueue_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
                 self._log_sse_diagnostic(
                     conversation_id=conversation_id,
                     incoming_event_id=event_entry.get("id"),
-                    last_event_id=(
-                        dropped_event.get("id")
-                        if isinstance(dropped_event, dict)
-                        else dropped_event
-                    ),
-                    reason="subscriber_queue_full_drop_oldest",
+                    last_event_id=None,
+                    reason="subscriber_enqueue_timeout_disconnect",
+                    warning=True,
                 )
-                try:
-                    subscriber.put_nowait(event_entry)
-                except asyncio.QueueFull:
-                    self._log_sse_diagnostic(
-                        conversation_id=conversation_id,
-                        incoming_event_id=event_entry.get("id"),
-                        last_event_id=None,
-                        reason="subscriber_queue_full_drop_new",
-                        warning=True,
-                    )
+                await self._disconnect_subscriber_for_backpressure(
+                    conversation_id=conversation_id,
+                    subscriber=subscriber,
+                )
+
+    async def _disconnect_subscriber_for_backpressure(
+        self,
+        *,
+        conversation_id: str,
+        subscriber: asyncio.Queue,
+    ) -> None:
+        await self._unregister_subscriber(conversation_id, subscriber)
+
+        # Force the streaming loop to exit so the client reconnects and replays
+        # from durable event storage.
+        try:
+            subscriber.put_nowait(self._sse_disconnect_sentinel)
+            return
+        except asyncio.QueueFull:
+            ...
+
+        while True:
+            try:
+                subscriber.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            try:
+                subscriber.put_nowait(self._sse_disconnect_sentinel)
+                return
+            except asyncio.QueueFull:
+                ...
+
+        self._logging_gateway.warning(
+            "Failed to enqueue SSE disconnect sentinel for lagging subscriber."
+        )
 
     async def _register_subscriber(
         self,
@@ -1982,85 +1877,40 @@ class DefaultWebClient(IWebClient):
         now_epoch = self._epoch_now()
 
         async with self._storage_lock:
-            if self._using_relational_web_storage():
-                async with self._relational_session() as session:
-                    result = await session.execute(
-                        sa_text(
-                            "SELECT token, file_path, expires_at "
-                            "FROM mugen.web_media_token"
-                        )
+            async with self._relational_session() as session:
+                result = await session.execute(
+                    sa_text(
+                        "SELECT token, file_path, expires_at "
+                        "FROM mugen.web_media_token"
                     )
-                    for row in result.mappings().all():
-                        token = row.get("token")
-                        expires_at = self._datetime_to_epoch(row.get("expires_at"))
-                        if expires_at is None or expires_at <= now_epoch:
-                            await session.execute(
-                                sa_text(
-                                    "DELETE FROM mugen.web_media_token "
-                                    "WHERE token = :token"
-                                ),
-                                {"token": token},
-                            )
-                            continue
-
-                        file_path = row.get("file_path")
-                        if isinstance(file_path, str) and file_path != "":
-                            active_refs.add(file_path)
-
-                    queue_result = await session.execute(
-                        sa_text(
-                            "SELECT payload "
-                            "FROM mugen.web_queue_job "
-                            "WHERE status IN ('pending', 'processing')"
-                        )
-                    )
-                    for row in queue_result.mappings().all():
-                        active_refs.update(
-                            self._collect_media_refs_from_queue_payload(row.get("payload"))
-                        )
-            else:
-                cursor: str | None = None
-                media_keys: list[str] = []
-                while True:
-                    page = await self._keyval_storage_gateway.list_keys(
-                        prefix=self._media_token_key_prefix,
-                        limit=500,
-                        cursor=cursor,
-                    )
-                    media_keys += page.keys
-                    if page.next_cursor in [None, ""]:
-                        break
-                    if page.next_cursor == cursor:
-                        break
-                    cursor = page.next_cursor
-
-                for key in media_keys:
-                    if not key.startswith(self._media_token_key_prefix):
-                        continue
-
-                    token_payload = await self._read_json_unlocked(key)
-                    if not isinstance(token_payload, dict):
-                        await self._keyval_storage_gateway.delete(key)
-                        continue
-
-                    expires_at = self._coerce_float(token_payload.get("expires_at"))
+                )
+                for row in result.mappings().all():
+                    token = row.get("token")
+                    expires_at = self._datetime_to_epoch(row.get("expires_at"))
                     if expires_at is None or expires_at <= now_epoch:
-                        await self._keyval_storage_gateway.delete(key)
+                        await session.execute(
+                            sa_text(
+                                "DELETE FROM mugen.web_media_token "
+                                "WHERE token = :token"
+                            ),
+                            {"token": token},
+                        )
                         continue
 
-                    media_ref = token_payload.get("media_ref") or token_payload.get("file_path")
-                    if isinstance(media_ref, str) and media_ref != "":
-                        active_refs.add(media_ref)
+                    file_path = row.get("file_path")
+                    if isinstance(file_path, str) and file_path != "":
+                        active_refs.add(file_path)
 
-                queue_state = await self._read_queue_state_unlocked()
-                for queue_job in queue_state["jobs"]:
-                    if (
-                        str(queue_job.get("status", "")).strip().lower()
-                        not in {"pending", "processing"}
-                    ):
-                        continue
+                queue_result = await session.execute(
+                    sa_text(
+                        "SELECT payload "
+                        "FROM mugen.web_queue_job "
+                        "WHERE status IN ('pending', 'processing')"
+                    )
+                )
+                for row in queue_result.mappings().all():
                     active_refs.update(
-                        self._collect_media_refs_from_queued_job(queue_job)
+                        self._collect_media_refs_from_queue_payload(row.get("payload"))
                     )
 
         await self._media_storage_gateway.cleanup(
@@ -2216,163 +2066,103 @@ class DefaultWebClient(IWebClient):
         normalized_status = str(status).strip().lower()
         now_iso = self._utc_now_iso()
         async with self._storage_lock:
-            if self._using_relational_web_storage():
-                async with self._relational_session() as session:
-                    result = await session.execute(
-                        sa_text(
-                            "SELECT job_id, conversation_id, sender, message_type, payload, "
-                            "status, attempts, created_at, updated_at, lease_expires_at, "
-                            "error_message, completed_at, client_message_id "
-                            "FROM mugen.web_queue_job "
-                            "WHERE job_id = :job_id"
-                        ),
-                        {"job_id": job_id},
-                    )
-                    row = result.mappings().one_or_none()
-                    if row is None:
-                        return
+            async with self._relational_session() as session:
+                result = await session.execute(
+                    sa_text(
+                        "SELECT job_id, conversation_id, sender, message_type, payload, "
+                        "status, attempts, created_at, updated_at, lease_expires_at, "
+                        "error_message, completed_at, client_message_id "
+                        "FROM mugen.web_queue_job "
+                        "WHERE job_id = :job_id"
+                    ),
+                    {"job_id": job_id},
+                )
+                row = result.mappings().one_or_none()
+                if row is None:
+                    return
 
-                    current_job = self._queue_job_record_to_payload(row)
-                    if not self._can_apply_terminal_queue_transition(
-                        job_id=job_id,
-                        current_status=current_job.get("status"),
-                        next_status=normalized_status,
-                    ):
-                        return
-
-                    transitioned = self._apply_queue_job_status_transition(
-                        job=current_job,
-                        status=normalized_status,
-                        error=error,
-                        now_iso=now_iso,
-                    )
-                    update_sql = (
-                        "UPDATE mugen.web_queue_job "
-                        "SET status = CAST(:status AS mugen.citext), "
-                        "lease_expires_at = NULL, "
-                        "updated_at = :updated_at, "
-                        "error_message = :error_message, "
-                        "completed_at = :completed_at "
-                    )
-                    update_params = {
-                        "status": str(transitioned.get("status", normalized_status)),
-                        "updated_at": (
-                            self._iso_to_utc_datetime(transitioned.get("updated_at"))
-                            or self._to_utc_datetime(self._epoch_now())
-                        ),
-                        "error_message": (
-                            str(transitioned.get("error"))
-                            if transitioned.get("error") not in [None, ""]
-                            else None
-                        ),
-                        "completed_at": self._iso_to_utc_datetime(
-                            transitioned.get("completed_at")
-                        ),
-                        "job_id": job_id,
-                    }
-                    if normalized_status in {"done", "failed"}:
-                        update_sql += (
-                            "WHERE job_id = :job_id "
-                            "AND status = CAST(:current_status AS mugen.citext) "
-                            "AND attempts = :expected_attempt"
-                        )
-                        update_params["current_status"] = "processing"
-                        update_params["expected_attempt"] = (
-                            int(expected_attempt)
-                            if expected_attempt is not None
-                            else int(current_job.get("attempts") or 0)
-                        )
-                    else:
-                        update_sql += "WHERE job_id = :job_id"
-
-                    update_result = await session.execute(
-                        sa_text(update_sql),
-                        update_params,
-                    )
-                    if (
-                        normalized_status in {"done", "failed"}
-                        and getattr(update_result, "rowcount", None) == 0
-                    ):
-                        self._logging_gateway.warning(
-                            "Skipped queue terminal transition due to relational "
-                            f"precondition mismatch job_id={job_id} "
-                            f"next_status={normalized_status!r}."
-                        )
-                return
-
-            queue_state = await self._read_queue_state_unlocked()
-            for queue_job in queue_state["jobs"]:
-                if str(queue_job.get("id")) != job_id:
-                    continue
-
+                current_job = self._queue_job_record_to_payload(row)
                 if not self._can_apply_terminal_queue_transition(
                     job_id=job_id,
-                    current_status=queue_job.get("status"),
+                    current_status=current_job.get("status"),
                     next_status=normalized_status,
                 ):
                     return
+
+                transitioned = self._apply_queue_job_status_transition(
+                    job=current_job,
+                    status=normalized_status,
+                    error=error,
+                    now_iso=now_iso,
+                )
+                update_sql = (
+                    "UPDATE mugen.web_queue_job "
+                    "SET status = CAST(:status AS mugen.citext), "
+                    "lease_expires_at = NULL, "
+                    "updated_at = :updated_at, "
+                    "error_message = :error_message, "
+                    "completed_at = :completed_at "
+                )
+                update_params = {
+                    "status": str(transitioned.get("status", normalized_status)),
+                    "updated_at": (
+                        self._iso_to_utc_datetime(transitioned.get("updated_at"))
+                        or self._to_utc_datetime(self._epoch_now())
+                    ),
+                    "error_message": (
+                        str(transitioned.get("error"))
+                        if transitioned.get("error") not in [None, ""]
+                        else None
+                    ),
+                    "completed_at": self._iso_to_utc_datetime(
+                        transitioned.get("completed_at")
+                    ),
+                    "job_id": job_id,
+                }
+                if normalized_status in {"done", "failed"}:
+                    update_sql += (
+                        "WHERE job_id = :job_id "
+                        "AND status = CAST(:current_status AS mugen.citext) "
+                        "AND attempts = :expected_attempt"
+                    )
+                    update_params["current_status"] = "processing"
+                    update_params["expected_attempt"] = (
+                        int(expected_attempt)
+                        if expected_attempt is not None
+                        else int(current_job.get("attempts") or 0)
+                    )
+                else:
+                    update_sql += "WHERE job_id = :job_id"
+
+                update_result = await session.execute(
+                    sa_text(update_sql),
+                    update_params,
+                )
                 if (
                     normalized_status in {"done", "failed"}
-                    and expected_attempt is not None
-                    and int(queue_job.get("attempts") or 0) != int(expected_attempt)
+                    and getattr(update_result, "rowcount", None) == 0
                 ):
                     self._logging_gateway.warning(
-                        "Skipped queue terminal transition due to keyval "
+                        "Skipped queue terminal transition due to relational "
                         f"precondition mismatch job_id={job_id} "
                         f"next_status={normalized_status!r}."
                     )
-                    return
-
-                queue_job.update(
-                    self._apply_queue_job_status_transition(
-                        job=queue_job,
-                        status=normalized_status,
-                        error=error,
-                        now_iso=now_iso,
-                    )
-                )
-                await self._write_queue_state_unlocked(queue_state)
-                return
+            return
 
     async def _recover_stale_processing_jobs_unlocked(self) -> None:
         now_epoch = self._epoch_now()
-        now_iso = self._utc_now_iso()
-        if self._using_relational_web_storage():
-            async with self._relational_session() as session:
-                recovered_result = await session.execute(
-                    sa_text(
-                        "UPDATE mugen.web_queue_job "
-                        "SET status = 'pending', lease_expires_at = NULL, updated_at = now() "
-                        "WHERE status = 'processing' "
-                        "AND (lease_expires_at IS NULL OR lease_expires_at <= :now_ts)"
-                    ),
-                    {"now_ts": self._to_utc_datetime(now_epoch)},
-                )
-            recovered_count = int(getattr(recovered_result, "rowcount", 0) or 0)
-            if recovered_count > 0:
-                self._logging_gateway.warning(
-                    "Web client recovered stale processing jobs on startup "
-                    f"(count={recovered_count})."
-                )
-            return
-
-        queue_state = await self._read_queue_state_unlocked()
-        changed = False
-        recovered_count = 0
-        for queue_job in queue_state["jobs"]:
-            if queue_job.get("status") != "processing":
-                continue
-
-            lease_expires_at = self._coerce_float(queue_job.get("lease_expires_at"))
-            if lease_expires_at is None or lease_expires_at <= now_epoch:
-                queue_job["status"] = "pending"
-                queue_job["lease_expires_at"] = None
-                queue_job["updated_at"] = now_iso
-                changed = True
-                recovered_count += 1
-
-        if changed:
-            await self._write_queue_state_unlocked(queue_state)
+        async with self._relational_session() as session:
+            recovered_result = await session.execute(
+                sa_text(
+                    "UPDATE mugen.web_queue_job "
+                    "SET status = 'pending', lease_expires_at = NULL, updated_at = now() "
+                    "WHERE status = 'processing' "
+                    "AND (lease_expires_at IS NULL OR lease_expires_at <= :now_ts)"
+                ),
+                {"now_ts": self._to_utc_datetime(now_epoch)},
+            )
+        recovered_count = int(getattr(recovered_result, "rowcount", 0) or 0)
+        if recovered_count > 0:
             self._logging_gateway.warning(
                 "Web client recovered stale processing jobs on startup "
                 f"(count={recovered_count})."
@@ -2385,8 +2175,41 @@ class DefaultWebClient(IWebClient):
         auth_user: str,
         create_if_missing: bool,
     ) -> None:
-        if self._using_relational_web_storage():
-            async with self._relational_session() as session:
+        async with self._relational_session() as session:
+            result = await session.execute(
+                sa_text(
+                    "SELECT owner_user_id "
+                    "FROM mugen.web_conversation_state "
+                    "WHERE conversation_id = :conversation_id"
+                ),
+                {"conversation_id": conversation_id},
+            )
+            row = result.mappings().one_or_none()
+            if row is None:
+                if not create_if_missing:
+                    raise KeyError("conversation not found")
+
+                await session.execute(
+                    sa_text(
+                        "INSERT INTO mugen.web_conversation_state "
+                        "("
+                        "conversation_id, owner_user_id, stream_generation, "
+                        "stream_version, next_event_id, created_at, updated_at"
+                        ") "
+                        "VALUES ("
+                        ":conversation_id, :owner_user_id, :stream_generation, "
+                        ":stream_version, 1, now(), now()"
+                        ") "
+                        "ON CONFLICT (conversation_id) DO NOTHING"
+                    ),
+                    {
+                        "conversation_id": conversation_id,
+                        "owner_user_id": auth_user,
+                        "stream_generation": self._new_stream_generation(),
+                        "stream_version": self._event_log_version,
+                    },
+                )
+
                 result = await session.execute(
                     sa_text(
                         "SELECT owner_user_id "
@@ -2396,70 +2219,14 @@ class DefaultWebClient(IWebClient):
                     {"conversation_id": conversation_id},
                 )
                 row = result.mappings().one_or_none()
-                if row is None:
-                    if not create_if_missing:
-                        raise KeyError("conversation not found")
 
-                    await session.execute(
-                        sa_text(
-                            "INSERT INTO mugen.web_conversation_state "
-                            "("
-                            "conversation_id, owner_user_id, stream_generation, "
-                            "stream_version, next_event_id, created_at, updated_at"
-                            ") "
-                            "VALUES ("
-                            ":conversation_id, :owner_user_id, :stream_generation, "
-                            ":stream_version, 1, now(), now()"
-                            ") "
-                            "ON CONFLICT (conversation_id) DO NOTHING"
-                        ),
-                        {
-                            "conversation_id": conversation_id,
-                            "owner_user_id": auth_user,
-                            "stream_generation": self._new_stream_generation(),
-                            "stream_version": self._event_log_version,
-                        },
-                    )
+            if row is None:
+                raise RuntimeError(
+                    f"Failed to ensure web conversation ownership ({conversation_id})."
+                )
 
-                    result = await session.execute(
-                        sa_text(
-                            "SELECT owner_user_id "
-                            "FROM mugen.web_conversation_state "
-                            "WHERE conversation_id = :conversation_id"
-                        ),
-                        {"conversation_id": conversation_id},
-                    )
-                    row = result.mappings().one_or_none()
-
-                if row is None:
-                    raise RuntimeError(
-                        f"Failed to ensure web conversation ownership ({conversation_id})."
-                    )
-
-                if row.get("owner_user_id") != auth_user:
-                    raise PermissionError("conversation owner mismatch")
-            return
-
-        key = self._conversation_key(conversation_id)
-        payload = await self._read_json_unlocked(key)
-
-        if not isinstance(payload, dict):
-            if not create_if_missing:
-                raise KeyError("conversation not found")
-
-            await self._write_json_unlocked(
-                key,
-                {
-                    "owner_user_id": auth_user,
-                    "created_at": self._utc_now_iso(),
-                    "updated_at": self._utc_now_iso(),
-                },
-            )
-            return
-
-        owner_user_id = payload.get("owner_user_id")
-        if owner_user_id != auth_user:
-            raise PermissionError("conversation owner mismatch")
+            if row.get("owner_user_id") != auth_user:
+                raise PermissionError("conversation owner mismatch")
 
     async def _read_replay_events_unlocked(
         self,
@@ -2481,396 +2248,301 @@ class DefaultWebClient(IWebClient):
         ]
 
     async def _read_queue_state_unlocked(self) -> dict[str, Any]:
-        if self._using_relational_web_storage():
-            async with self._relational_session() as session:
-                result = await session.execute(
-                    sa_text(
-                        "SELECT job_id, conversation_id, sender, message_type, payload, "
-                        "status, attempts, created_at, updated_at, lease_expires_at, "
-                        "error_message, completed_at, client_message_id "
-                        "FROM mugen.web_queue_job "
-                        "ORDER BY created_at ASC"
-                    )
+        async with self._relational_session() as session:
+            result = await session.execute(
+                sa_text(
+                    "SELECT job_id, conversation_id, sender, message_type, payload, "
+                    "status, attempts, created_at, updated_at, lease_expires_at, "
+                    "error_message, completed_at, client_message_id "
+                    "FROM mugen.web_queue_job "
+                    "ORDER BY created_at ASC"
                 )
-                jobs = [
-                    self._queue_job_record_to_payload(row)
-                    for row in result.mappings().all()
-                ]
-            return {
-                "version": self._queue_state_version,
-                "jobs": jobs,
-            }
-
-        payload = await self._read_json_unlocked(self._queue_state_key)
-        if not isinstance(payload, dict):
-            return self._new_queue_state()
-
-        jobs = payload.get("jobs")
-        if not isinstance(jobs, list):
-            jobs = []
-
+            )
+            jobs = [
+                self._queue_job_record_to_payload(row)
+                for row in result.mappings().all()
+            ]
         return {
             "version": self._queue_state_version,
             "jobs": jobs,
         }
 
     async def _write_queue_state_unlocked(self, queue_state: dict[str, Any]) -> None:
-        if self._using_relational_web_storage():
-            jobs = queue_state.get("jobs", []) if isinstance(queue_state, dict) else []
-            if not isinstance(jobs, list):
-                jobs = []
+        jobs = queue_state.get("jobs", []) if isinstance(queue_state, dict) else []
+        if not isinstance(jobs, list):
+            jobs = []
 
-            async with self._relational_session() as session:
-                await session.execute(sa_text("DELETE FROM mugen.web_queue_job"))
-                for job in jobs:
-                    if not isinstance(job, dict):
-                        continue
-                    payload = {
-                        "text": job.get("text"),
-                        "metadata": (
-                            dict(job.get("metadata"))
-                            if isinstance(job.get("metadata"), dict)
-                            else {}
-                        ),
-                        "file_path": job.get("file_path"),
-                        "mime_type": job.get("mime_type"),
-                        "original_filename": job.get("original_filename"),
-                    }
-                    await session.execute(
-                        sa_text(
-                            "INSERT INTO mugen.web_queue_job "
-                            "("
-                            "job_id, conversation_id, sender, message_type, payload, "
-                            "status, attempts, lease_expires_at, error_message, "
-                            "completed_at, client_message_id, created_at, updated_at"
-                            ") "
-                            "VALUES ("
-                            ":job_id, :conversation_id, :sender, :message_type, "
-                            "CAST(:payload AS jsonb), :status, :attempts, "
-                            ":lease_expires_at, :error_message, :completed_at, "
-                            ":client_message_id, :created_at, :updated_at"
-                            ")"
-                        ),
-                        {
-                            "job_id": str(job.get("id", "")),
-                            "conversation_id": str(job.get("conversation_id", "")),
-                            "sender": str(job.get("sender", "")),
-                            "message_type": str(job.get("message_type", "")),
-                            "payload": json.dumps(
-                                payload, ensure_ascii=True, separators=(",", ":")
-                            ),
-                            "status": str(job.get("status", "pending")),
-                            "attempts": int(job.get("attempts") or 0),
-                            "lease_expires_at": (
-                                self._to_utc_datetime(
-                                    float(job.get("lease_expires_at"))
-                                )
-                                if self._coerce_float(job.get("lease_expires_at"))
-                                is not None
-                                else None
-                            ),
-                            "error_message": (
-                                str(job.get("error"))
-                                if job.get("error") not in [None, ""]
-                                else None
-                            ),
-                            "completed_at": self._iso_to_utc_datetime(
-                                job.get("completed_at")
-                            ),
-                            "client_message_id": (
-                                str(job.get("client_message_id"))
-                                if job.get("client_message_id") not in [None, ""]
-                                else None
-                            ),
-                            "created_at": self._iso_to_utc_datetime(job.get("created_at"))
-                            or self._to_utc_datetime(self._epoch_now()),
-                            "updated_at": self._iso_to_utc_datetime(job.get("updated_at"))
-                            or self._to_utc_datetime(self._epoch_now()),
-                        },
-                    )
-            return
-
-        await self._write_json_unlocked(self._queue_state_key, queue_state)
-
-    async def _read_event_log_unlocked(self, conversation_id: str) -> dict[str, Any]:
-        if self._using_relational_web_storage():
-            async with self._relational_session() as session:
-                state_result = await session.execute(
-                    sa_text(
-                        "SELECT stream_generation, stream_version, next_event_id "
-                        "FROM mugen.web_conversation_state "
-                        "WHERE conversation_id = :conversation_id"
+        async with self._relational_session() as session:
+            await session.execute(sa_text("DELETE FROM mugen.web_queue_job"))
+            for job in jobs:
+                if not isinstance(job, dict):
+                    continue
+                payload = {
+                    "text": job.get("text"),
+                    "metadata": (
+                        dict(job.get("metadata"))
+                        if isinstance(job.get("metadata"), dict)
+                        else {}
                     ),
-                    {"conversation_id": conversation_id},
-                )
-                state = state_result.mappings().one_or_none()
-                if state is None:
-                    return self._new_event_log_state()
-
-                raw_version = state.get("stream_version")
-                try:
-                    parsed_version = int(raw_version)
-                except (TypeError, ValueError):
-                    parsed_version = None
-
-                if parsed_version != self._event_log_version:
-                    self._logging_gateway.warning(
-                        "Web event log version mismatch; resetting conversation stream log "
-                        f"(conversation_id={conversation_id} stored_version={raw_version!r} "
-                        f"expected_version={self._event_log_version})."
-                    )
-                    return self._new_event_log_state()
-
-                events_result = await session.execute(
+                    "file_path": job.get("file_path"),
+                    "mime_type": job.get("mime_type"),
+                    "original_filename": job.get("original_filename"),
+                }
+                await session.execute(
                     sa_text(
-                        "SELECT event_id, event_type, payload, created_at, stream_generation, "
-                        "stream_version "
-                        "FROM mugen.web_conversation_event "
-                        "WHERE conversation_id = :conversation_id "
-                        "ORDER BY event_id DESC "
-                        "LIMIT :event_limit"
+                        "INSERT INTO mugen.web_queue_job "
+                        "("
+                        "job_id, conversation_id, sender, message_type, payload, "
+                        "status, attempts, lease_expires_at, error_message, "
+                        "completed_at, client_message_id, created_at, updated_at"
+                        ") "
+                        "VALUES ("
+                        ":job_id, :conversation_id, :sender, :message_type, "
+                        "CAST(:payload AS jsonb), :status, :attempts, "
+                        ":lease_expires_at, :error_message, :completed_at, "
+                        ":client_message_id, :created_at, :updated_at"
+                        ")"
                     ),
                     {
-                        "conversation_id": conversation_id,
-                        "event_limit": self._sse_replay_max_events,
+                        "job_id": str(job.get("id", "")),
+                        "conversation_id": str(job.get("conversation_id", "")),
+                        "sender": str(job.get("sender", "")),
+                        "message_type": str(job.get("message_type", "")),
+                        "payload": json.dumps(
+                            payload, ensure_ascii=True, separators=(",", ":")
+                        ),
+                        "status": str(job.get("status", "pending")),
+                        "attempts": int(job.get("attempts") or 0),
+                        "lease_expires_at": (
+                            self._to_utc_datetime(
+                                float(job.get("lease_expires_at"))
+                            )
+                            if self._coerce_float(job.get("lease_expires_at"))
+                            is not None
+                            else None
+                        ),
+                        "error_message": (
+                            str(job.get("error"))
+                            if job.get("error") not in [None, ""]
+                            else None
+                        ),
+                        "completed_at": self._iso_to_utc_datetime(
+                            job.get("completed_at")
+                        ),
+                        "client_message_id": (
+                            str(job.get("client_message_id"))
+                            if job.get("client_message_id") not in [None, ""]
+                            else None
+                        ),
+                        "created_at": self._iso_to_utc_datetime(job.get("created_at"))
+                        or self._to_utc_datetime(self._epoch_now()),
+                        "updated_at": self._iso_to_utc_datetime(job.get("updated_at"))
+                        or self._to_utc_datetime(self._epoch_now()),
                     },
                 )
-                rows = list(reversed(events_result.mappings().all()))
-                events: list[dict[str, Any]] = []
-                for row in rows:
-                    payload = row.get("payload")
-                    if not isinstance(payload, dict):
-                        payload = {}
-                    events.append(
-                        {
-                            "id": str(row.get("event_id")),
-                            "event": str(row.get("event_type")),
-                            "data": payload,
-                            "created_at": self._datetime_to_iso(row.get("created_at")),
-                            "stream_generation": self._normalize_stream_generation(
-                                row.get("stream_generation"),
-                                fallback=self._normalize_stream_generation(
-                                    state.get("stream_generation"),
-                                    fallback=self._new_stream_generation(),
-                                ),
-                            ),
-                            "stream_version": int(
-                                row.get("stream_version") or self._event_log_version
-                            ),
-                        }
-                    )
 
-                next_event_id = state.get("next_event_id")
-                try:
-                    next_id = int(next_event_id)
-                except (TypeError, ValueError):
-                    next_id = 1
-                if next_id <= 0:
-                    next_id = 1
-
-                return {
-                    "version": self._event_log_version,
-                    "generation": self._normalize_stream_generation(
-                        state.get("stream_generation"),
-                        fallback=self._new_stream_generation(),
-                    ),
-                    "next_event_id": next_id,
-                    "events": events,
-                }
-
-        key = self._event_log_key(conversation_id)
-        payload = await self._read_json_unlocked(key)
-        if not isinstance(payload, dict):
-            return self._new_event_log_state()
-
-        raw_version = payload.get("version")
-        try:
-            parsed_version = int(raw_version)
-        except (TypeError, ValueError):
-            parsed_version = None
-
-        if parsed_version != self._event_log_version:
-            self._logging_gateway.warning(
-                "Web event log version mismatch; resetting conversation stream log "
-                f"(conversation_id={conversation_id} stored_version={raw_version!r} "
-                f"expected_version={self._event_log_version})."
+    async def _read_event_log_unlocked(self, conversation_id: str) -> dict[str, Any]:
+        async with self._relational_session() as session:
+            state_result = await session.execute(
+                sa_text(
+                    "SELECT stream_generation, stream_version, next_event_id "
+                    "FROM mugen.web_conversation_state "
+                    "WHERE conversation_id = :conversation_id"
+                ),
+                {"conversation_id": conversation_id},
             )
-            return self._new_event_log_state()
+            state = state_result.mappings().one_or_none()
+            if state is None:
+                return self._new_event_log_state()
 
-        events = payload.get("events")
-        if not isinstance(events, list):
-            events = []
+            raw_version = state.get("stream_version")
+            try:
+                parsed_version = int(raw_version)
+            except (TypeError, ValueError):
+                parsed_version = None
 
-        next_event_id = payload.get("next_event_id")
-        try:
-            next_id = int(next_event_id)
-        except (TypeError, ValueError):
-            next_id = 1
+            if parsed_version != self._event_log_version:
+                self._logging_gateway.warning(
+                    "Web event log version mismatch; resetting conversation stream log "
+                    f"(conversation_id={conversation_id} stored_version={raw_version!r} "
+                    f"expected_version={self._event_log_version})."
+                )
+                return self._new_event_log_state()
 
-        if next_id <= 0:
-            next_id = 1
+            events_result = await session.execute(
+                sa_text(
+                    "SELECT event_id, event_type, payload, created_at, stream_generation, "
+                    "stream_version "
+                    "FROM mugen.web_conversation_event "
+                    "WHERE conversation_id = :conversation_id "
+                    "ORDER BY event_id DESC "
+                    "LIMIT :event_limit"
+                ),
+                {
+                    "conversation_id": conversation_id,
+                    "event_limit": self._sse_replay_max_events,
+                },
+            )
+            rows = list(reversed(events_result.mappings().all()))
+            events: list[dict[str, Any]] = []
+            for row in rows:
+                payload = row.get("payload")
+                if not isinstance(payload, dict):
+                    payload = {}
+                events.append(
+                    {
+                        "id": str(row.get("event_id")),
+                        "event": str(row.get("event_type")),
+                        "data": payload,
+                        "created_at": self._datetime_to_iso(row.get("created_at")),
+                        "stream_generation": self._normalize_stream_generation(
+                            row.get("stream_generation"),
+                            fallback=self._normalize_stream_generation(
+                                state.get("stream_generation"),
+                                fallback=self._new_stream_generation(),
+                            ),
+                        ),
+                        "stream_version": int(
+                            row.get("stream_version") or self._event_log_version
+                        ),
+                    }
+                )
 
-        generation = self._normalize_stream_generation(
-            payload.get("generation"),
-            fallback=self._new_stream_generation(),
-        )
+            next_event_id = state.get("next_event_id")
+            try:
+                next_id = int(next_event_id)
+            except (TypeError, ValueError):
+                next_id = 1
+            if next_id <= 0:
+                next_id = 1
 
-        return {
-            "version": self._event_log_version,
-            "generation": generation,
-            "next_event_id": next_id,
-            "events": events,
-        }
+            return {
+                "version": self._event_log_version,
+                "generation": self._normalize_stream_generation(
+                    state.get("stream_generation"),
+                    fallback=self._new_stream_generation(),
+                ),
+                "next_event_id": next_id,
+                "events": events,
+            }
 
     async def _write_event_log_unlocked(
         self,
         conversation_id: str,
         payload: dict[str, Any],
     ) -> None:
-        if self._using_relational_web_storage():
-            generation = self._normalize_stream_generation(
-                payload.get("generation"),
-                fallback=self._new_stream_generation(),
+        generation = self._normalize_stream_generation(
+            payload.get("generation"),
+            fallback=self._new_stream_generation(),
+        )
+        try:
+            next_event_id = int(payload.get("next_event_id"))
+        except (TypeError, ValueError):
+            next_event_id = 1
+        if next_event_id <= 0:
+            next_event_id = 1
+
+        events = payload.get("events", [])
+        if not isinstance(events, list):
+            events = []
+
+        async with self._relational_session() as session:
+            owner_result = await session.execute(
+                sa_text(
+                    "SELECT owner_user_id "
+                    "FROM mugen.web_conversation_state "
+                    "WHERE conversation_id = :conversation_id"
+                ),
+                {"conversation_id": conversation_id},
             )
-            try:
-                next_event_id = int(payload.get("next_event_id"))
-            except (TypeError, ValueError):
-                next_event_id = 1
-            if next_event_id <= 0:
-                next_event_id = 1
+            owner_row = owner_result.mappings().one_or_none()
+            owner_user_id = (
+                owner_row.get("owner_user_id")
+                if owner_row is not None
+                else "system"
+            )
 
-            events = payload.get("events", [])
-            if not isinstance(events, list):
-                events = []
+            await session.execute(
+                sa_text(
+                    "INSERT INTO mugen.web_conversation_state "
+                    "("
+                    "conversation_id, owner_user_id, stream_generation, "
+                    "stream_version, next_event_id, created_at, updated_at"
+                    ") "
+                    "VALUES ("
+                    ":conversation_id, :owner_user_id, :stream_generation, "
+                    ":stream_version, :next_event_id, now(), now()"
+                    ") "
+                    "ON CONFLICT (conversation_id) DO UPDATE "
+                    "SET stream_generation = EXCLUDED.stream_generation, "
+                    "stream_version = EXCLUDED.stream_version, "
+                    "next_event_id = EXCLUDED.next_event_id, "
+                    "updated_at = now()"
+                ),
+                {
+                    "conversation_id": conversation_id,
+                    "owner_user_id": owner_user_id,
+                    "stream_generation": generation,
+                    "stream_version": self._event_log_version,
+                    "next_event_id": next_event_id,
+                },
+            )
 
-            async with self._relational_session() as session:
-                owner_result = await session.execute(
-                    sa_text(
-                        "SELECT owner_user_id "
-                        "FROM mugen.web_conversation_state "
-                        "WHERE conversation_id = :conversation_id"
-                    ),
-                    {"conversation_id": conversation_id},
-                )
-                owner_row = owner_result.mappings().one_or_none()
-                owner_user_id = (
-                    owner_row.get("owner_user_id")
-                    if owner_row is not None
-                    else "system"
-                )
+            await session.execute(
+                sa_text(
+                    "DELETE FROM mugen.web_conversation_event "
+                    "WHERE conversation_id = :conversation_id"
+                ),
+                {"conversation_id": conversation_id},
+            )
 
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                parsed_event_id = self._parse_event_id(event.get("id"))
+                if parsed_event_id is None:
+                    continue
+                event_payload = event.get("data")
+                if not isinstance(event_payload, dict):
+                    event_payload = {}
                 await session.execute(
                     sa_text(
-                        "INSERT INTO mugen.web_conversation_state "
+                        "INSERT INTO mugen.web_conversation_event "
                         "("
-                        "conversation_id, owner_user_id, stream_generation, "
-                        "stream_version, next_event_id, created_at, updated_at"
+                        "conversation_id, event_id, event_type, payload, "
+                        "stream_generation, stream_version, created_at, updated_at"
                         ") "
                         "VALUES ("
-                        ":conversation_id, :owner_user_id, :stream_generation, "
-                        ":stream_version, :next_event_id, now(), now()"
+                        ":conversation_id, :event_id, :event_type, CAST(:payload AS jsonb), "
+                        ":stream_generation, :stream_version, :created_at, now()"
                         ") "
-                        "ON CONFLICT (conversation_id) DO UPDATE "
-                        "SET stream_generation = EXCLUDED.stream_generation, "
+                        "ON CONFLICT (conversation_id, event_id) DO UPDATE "
+                        "SET event_type = EXCLUDED.event_type, "
+                        "payload = EXCLUDED.payload, "
+                        "stream_generation = EXCLUDED.stream_generation, "
                         "stream_version = EXCLUDED.stream_version, "
-                        "next_event_id = EXCLUDED.next_event_id, "
                         "updated_at = now()"
                     ),
                     {
                         "conversation_id": conversation_id,
-                        "owner_user_id": owner_user_id,
-                        "stream_generation": generation,
-                        "stream_version": self._event_log_version,
-                        "next_event_id": next_event_id,
+                        "event_id": parsed_event_id,
+                        "event_type": str(event.get("event", "system")),
+                        "payload": json.dumps(
+                            event_payload, ensure_ascii=True, separators=(",", ":")
+                        ),
+                        "stream_generation": self._normalize_stream_generation(
+                            event.get("stream_generation"),
+                            fallback=generation,
+                        ),
+                        "stream_version": int(
+                            event.get("stream_version") or self._event_log_version
+                        ),
+                        "created_at": self._iso_to_utc_datetime(
+                            event.get("created_at")
+                        )
+                        or self._to_utc_datetime(self._epoch_now()),
                     },
                 )
-
-                await session.execute(
-                    sa_text(
-                        "DELETE FROM mugen.web_conversation_event "
-                        "WHERE conversation_id = :conversation_id"
-                    ),
-                    {"conversation_id": conversation_id},
-                )
-
-                for event in events:
-                    if not isinstance(event, dict):
-                        continue
-                    parsed_event_id = self._parse_event_id(event.get("id"))
-                    if parsed_event_id is None:
-                        continue
-                    event_payload = event.get("data")
-                    if not isinstance(event_payload, dict):
-                        event_payload = {}
-                    await session.execute(
-                        sa_text(
-                            "INSERT INTO mugen.web_conversation_event "
-                            "("
-                            "conversation_id, event_id, event_type, payload, "
-                            "stream_generation, stream_version, created_at, updated_at"
-                            ") "
-                            "VALUES ("
-                            ":conversation_id, :event_id, :event_type, CAST(:payload AS jsonb), "
-                            ":stream_generation, :stream_version, :created_at, now()"
-                            ") "
-                            "ON CONFLICT (conversation_id, event_id) DO UPDATE "
-                            "SET event_type = EXCLUDED.event_type, "
-                            "payload = EXCLUDED.payload, "
-                            "stream_generation = EXCLUDED.stream_generation, "
-                            "stream_version = EXCLUDED.stream_version, "
-                            "updated_at = now()"
-                        ),
-                        {
-                            "conversation_id": conversation_id,
-                            "event_id": parsed_event_id,
-                            "event_type": str(event.get("event", "system")),
-                            "payload": json.dumps(
-                                event_payload, ensure_ascii=True, separators=(",", ":")
-                            ),
-                            "stream_generation": self._normalize_stream_generation(
-                                event.get("stream_generation"),
-                                fallback=generation,
-                            ),
-                            "stream_version": int(
-                                event.get("stream_version") or self._event_log_version
-                            ),
-                            "created_at": self._iso_to_utc_datetime(
-                                event.get("created_at")
-                            )
-                            or self._to_utc_datetime(self._epoch_now()),
-                        },
-                    )
-            return
-
-        await self._write_json_unlocked(self._event_log_key(conversation_id), payload)
-
-    async def _read_json_unlocked(self, key: str) -> dict[str, Any] | list[Any] | None:
-        entry = await self._keyval_storage_gateway.get_entry(key)
-        if entry is None:
-            return None
-
-        raw = entry.as_text()
-        if raw in [None, ""]:
-            self._logging_gateway.warning(
-                f"Web client state is not utf-8 decodable for key {key!r}."
-            )
-            return None
-
-        try:
-            payload = json.loads(raw)
-        except (TypeError, json.JSONDecodeError):
-            self._logging_gateway.warning(
-                f"Web client state is invalid for key {key!r}."
-            )
-            return None
-
-        if isinstance(payload, (dict, list)):
-            return payload
-
-        return None
-
-    async def _write_json_unlocked(self, key: str, payload: dict[str, Any]) -> None:
-        await self._keyval_storage_gateway.put_json(key, payload)
 
     def _resolve_allowed_mimetypes(self) -> list[str]:
         raw_mimetypes = self._resolve_config_path(("web", "media", "allowed_mimetypes"))
@@ -3348,25 +3020,6 @@ class DefaultWebClient(IWebClient):
     @staticmethod
     def _new_stream_generation() -> str:
         return uuid.uuid4().hex
-
-    @classmethod
-    def _conversation_key(cls, conversation_id: str) -> str:
-        return f"{cls._conversation_key_prefix}{conversation_id}"
-
-    @classmethod
-    def _event_log_key(cls, conversation_id: str) -> str:
-        return f"{cls._event_log_key_prefix}{conversation_id}"
-
-    @classmethod
-    def _media_token_key(cls, token: str) -> str:
-        return f"{cls._media_token_key_prefix}{token}"
-
-    @classmethod
-    def _new_queue_state(cls) -> dict[str, Any]:
-        return {
-            "version": cls._queue_state_version,
-            "jobs": [],
-        }
 
     @classmethod
     def _new_event_log_state(cls) -> dict[str, Any]:
