@@ -152,13 +152,27 @@ class TestObjectMediaStorageGateway(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(blob_key, self.keyval._store)
 
     async def test_store_bytes_raises_primary_error_when_rollback_delete_fails(self) -> None:
-        self.keyval.put_json = AsyncMock(side_effect=RuntimeError("meta write failed"))
+        original_put_json = self.keyval.put_json
+
+        async def _put_json_once_then_write(key: str, value, **kwargs):
+            _put_json_once_then_write.calls += 1
+            if _put_json_once_then_write.calls == 1:
+                raise RuntimeError("meta write failed")
+            return await original_put_json(key, value, **kwargs)
+
+        _put_json_once_then_write.calls = 0
+        self.keyval.put_json = AsyncMock(side_effect=_put_json_once_then_write)
+        self.keyval.put_bytes = AsyncMock(side_effect=self.keyval.put_bytes)
         self.keyval.delete = AsyncMock(side_effect=RuntimeError("rollback failed"))
 
         with self.assertRaisesRegex(RuntimeError, "meta write failed"):
             await self.gateway.store_bytes(b"payload", filename_hint="x.bin")
 
         self.keyval.delete.assert_awaited_once()
+        blob_key = self.keyval.put_bytes.await_args.args[0]
+        object_id = blob_key.rsplit(":", 1)[1]
+        orphan_key = self.gateway._orphan_key(object_id)  # pylint: disable=protected-access
+        self.assertIn(orphan_key, self.keyval._store)
 
     async def test_store_file_and_cleanup(self) -> None:
         source = os.path.join(self.tmpdir.name, "src.bin")
@@ -243,6 +257,7 @@ class TestObjectMediaStorageGateway(unittest.IsolatedAsyncioTestCase):
 
         self.keyval.list_keys = AsyncMock(
             side_effect=[
+                KeyValListPage(keys=[], next_cursor=None),
                 KeyValListPage(
                     keys=[
                         "web:media:object:meta:",
@@ -259,6 +274,107 @@ class TestObjectMediaStorageGateway(unittest.IsolatedAsyncioTestCase):
                 retention_seconds=0,
                 now_epoch=100.0,
             )
+
+    async def test_cleanup_retries_orphan_markers_until_delete_succeeds(self) -> None:
+        orphan_key = self.gateway._orphan_key("orphan-1")  # pylint: disable=protected-access
+        await self.keyval.put_json(
+            orphan_key,
+            {
+                "object_id": "orphan-1",
+                "created_at": 1.0,
+                "reason": "metadata_write_failed:RuntimeError",
+            },
+        )
+
+        with patch.object(
+            self.gateway,
+            "_delete_object",
+            new=AsyncMock(side_effect=[RuntimeError("backend down"), None]),
+        ):
+            await self.gateway.cleanup(
+                active_refs=set(),
+                retention_seconds=0,
+                now_epoch=100.0,
+            )
+            self.assertIn(orphan_key, self.keyval._store)
+
+            await self.gateway.cleanup(
+                active_refs=set(),
+                retention_seconds=0,
+                now_epoch=100.0,
+            )
+            self.assertNotIn(orphan_key, self.keyval._store)
+
+    async def test_cleanup_orphan_markers_handles_invalid_keys_and_cursor_cycles(self) -> None:
+        self.keyval.list_keys = AsyncMock(
+            side_effect=[
+                KeyValListPage(
+                    keys=[
+                        "not-an-orphan-key",
+                        self.gateway._orphan_key_prefix,  # pylint: disable=protected-access
+                    ],
+                    next_cursor="same",
+                ),
+                KeyValListPage(keys=[], next_cursor="same"),
+                KeyValListPage(keys=[], next_cursor=None),
+            ]
+        )
+        await self.gateway.cleanup(
+            active_refs=set(),
+            retention_seconds=0,
+            now_epoch=100.0,
+        )
+
+    async def test_cleanup_orphan_marker_delete_failure_is_logged_and_marker_is_retained(
+        self,
+    ) -> None:
+        orphan_key = self.gateway._orphan_key("orphan-delete-fail")  # pylint: disable=protected-access
+        await self.keyval.put_json(
+            orphan_key,
+            {
+                "object_id": "orphan-delete-fail",
+                "created_at": 1.0,
+                "reason": "metadata_write_failed:RuntimeError",
+            },
+        )
+        self.keyval.delete = AsyncMock(side_effect=RuntimeError("marker delete failed"))
+
+        with patch.object(
+            self.gateway,
+            "_delete_object",
+            new=AsyncMock(return_value=None),
+        ):
+            await self.gateway.cleanup(
+                active_refs=set(),
+                retention_seconds=0,
+                now_epoch=100.0,
+            )
+
+        self.assertIn(orphan_key, self.keyval._store)
+
+    async def test_orphan_key_parser_rejects_invalid_and_empty_values(self) -> None:
+        self.assertIsNone(
+            self.gateway._orphan_key_to_object_id("bad")  # pylint: disable=protected-access
+        )
+        self.assertIsNone(
+            self.gateway._orphan_key_to_object_id(  # pylint: disable=protected-access
+                self.gateway._orphan_key_prefix  # pylint: disable=protected-access
+            )
+        )
+
+    async def test_record_orphan_marker_logs_when_write_fails(self) -> None:
+        self.keyval.put_json = AsyncMock(side_effect=RuntimeError("marker write failed"))
+
+        with self.assertLogs(
+            "mugen.core.gateway.storage.media.object",
+            level="WARNING",
+        ) as logs:
+            await self.gateway._record_orphan_marker(  # pylint: disable=protected-access
+                object_id="orphan-write-fail",
+                reason="metadata_write_failed:RuntimeError",
+            )
+
+        self.assertTrue(any("orphan marker write failed" in msg for msg in logs.output))
 
 
 if __name__ == "__main__":

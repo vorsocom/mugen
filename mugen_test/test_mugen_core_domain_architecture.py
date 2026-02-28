@@ -43,6 +43,42 @@ class TestCoreDomainArchitecture(unittest.TestCase):
 
         self.assertEqual(violations, [])
 
+    def test_runtime_adapters_use_shared_phase_b_health_use_case(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        adapter_files = [
+            repo_root / "mugen" / "__init__.py",
+            repo_root / "quartman.py",
+            repo_root / "mugen" / "core" / "api" / "endpoint.py",
+        ]
+
+        missing_imports: list[str] = []
+        for file_path in adapter_files:
+            module_tree = ast.parse(file_path.read_text(encoding="utf-8"))
+            imported = False
+            for node in ast.walk(module_tree):
+                if isinstance(node, ast.ImportFrom) and node.module == (
+                    "mugen.core.domain.use_case.phase_b_health"
+                ):
+                    imported = True
+                    break
+            if imported is not True:
+                missing_imports.append(str(file_path))
+
+        self.assertEqual(missing_imports, [])
+
+    def test_endpoint_does_not_redeclare_phase_b_failure_helpers(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        endpoint_path = repo_root / "mugen" / "core" / "api" / "endpoint.py"
+        module_tree = ast.parse(endpoint_path.read_text(encoding="utf-8"))
+        function_names = {
+            node.name
+            for node in module_tree.body
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        }
+
+        self.assertNotIn("_resolve_failed_platforms", function_names)
+        self.assertNotIn("_phase_b_starting_within_grace", function_names)
+
 
 if __name__ == "__main__":
     unittest.main()

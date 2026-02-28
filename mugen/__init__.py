@@ -72,6 +72,10 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
+from mugen.core.domain.use_case.phase_b_health import (
+    PhaseBHealthInput,
+    evaluate_phase_b_health,
+)
 from mugen.core.utility.platforms import (
     SUPPORTED_CORE_PLATFORMS,
     normalize_platforms,
@@ -396,64 +400,24 @@ def _refresh_phase_b_status(
     if not isinstance(errors, dict):
         errors = {}
 
-    shutdown_requested = _parse_bool(
-        bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
-        default=False,
+    evaluation = evaluate_phase_b_health(
+        PhaseBHealthInput(
+            platform_statuses=statuses,
+            platform_errors=errors,
+            critical_platforms=list(critical_platforms),
+            degrade_on_critical_exit=degrade_on_critical_exit,
+            shutdown_requested=_parse_bool(
+                bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
+                default=False,
+            ),
+            phase_b_status=str(bootstrap_state.get(PHASE_B_STATUS_KEY, "") or ""),
+            phase_b_error=bootstrap_state.get(PHASE_B_ERROR_KEY),
+            phase_b_started_at=bootstrap_state.get(PHASE_B_STARTED_AT_KEY),
+            readiness_grace_seconds=0.0,
+        )
     )
-    if shutdown_requested:
-        bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
-        bootstrap_state[PHASE_B_ERROR_KEY] = None
-        return
-
-    if not critical_platforms:
-        critical_platforms = list(statuses.keys())
-
-    degraded: list[str] = []
-    starting: list[str] = []
-    unexpected: list[str] = []
-    for platform in critical_platforms:
-        platform_status = str(statuses.get(platform, PHASE_STATUS_STARTING) or "")
-        if platform_status == PHASE_STATUS_DEGRADED:
-            degraded.append(platform)
-            continue
-        if platform_status == PHASE_STATUS_STARTING:
-            starting.append(platform)
-            continue
-        if (
-            platform_status == PHASE_STATUS_STOPPED
-            and degrade_on_critical_exit is not True
-        ):
-            continue
-        if platform_status not in {PHASE_STATUS_HEALTHY}:
-            unexpected.append(platform)
-
-    if degraded:
-        first_platform = degraded[0]
-        details = errors.get(first_platform)
-        bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
-        bootstrap_state[PHASE_B_ERROR_KEY] = (
-            f"{first_platform}: {details}" if details else f"{first_platform}: degraded"
-        )
-        return
-
-    if unexpected:
-        first_platform = unexpected[0]
-        details = errors.get(first_platform)
-        bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
-        bootstrap_state[PHASE_B_ERROR_KEY] = (
-            f"{first_platform}: {details}"
-            if details
-            else f"{first_platform}: stopped unexpectedly"
-        )
-        return
-
-    if starting:
-        bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
-        bootstrap_state[PHASE_B_ERROR_KEY] = None
-        return
-
-    bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
-    bootstrap_state[PHASE_B_ERROR_KEY] = None
+    bootstrap_state[PHASE_B_STATUS_KEY] = evaluation.phase_b_status
+    bootstrap_state[PHASE_B_ERROR_KEY] = evaluation.phase_b_error
 
 
 def _split_extension_path(path: str) -> tuple[str, str | None]:
@@ -696,20 +660,31 @@ async def run_platform_clients(
             )
         except TypeError as exc:
             exc_text = str(exc)
-            if ("degraded_callback" in exc_text) or ("healthy_callback" in exc_text):
-                try:
-                    return runner(started_callback=_started_callback)
-                except TypeError as started_exc:
-                    if "started_callback" not in str(started_exc):
-                        raise
-            elif "started_callback" not in exc_text:
+            callback_name = next(
+                (
+                    callback
+                    for callback in (
+                        "started_callback",
+                        "degraded_callback",
+                        "healthy_callback",
+                    )
+                    if callback in exc_text
+                ),
+                None,
+            )
+            if callback_name is None:
                 raise
 
-        async def _legacy_runner() -> None:
-            _started_callback()
-            await runner()
+            async def _signature_mismatch_runner(
+                captured_exc: TypeError = exc,
+                mismatched_callback: str = callback_name,
+            ) -> None:
+                raise RuntimeError(
+                    f"{platform_name} runner does not accept required callback "
+                    f"parameter '{mismatched_callback}'."
+                ) from captured_exc
 
-        return _legacy_runner()
+            return _signature_mismatch_runner()
 
     def _on_platform_task_done(platform_name: str, task: asyncio.Task) -> None:
         shutdown_requested = _parse_bool(
@@ -1280,8 +1255,8 @@ async def run_whatsapp_client(
     logger: ILoggingGateway = logger_provider()
     whatsapp_client: IWhatsAppClient = whatsapp_provider()
 
-    await whatsapp_client.init()
     try:
+        await whatsapp_client.init()
         startup_verified = await whatsapp_client.verify_startup()
         if startup_verified is not True:
             raise RuntimeError("WhatsApp startup probe failed.")
@@ -1319,6 +1294,10 @@ async def run_whatsapp_client(
             runtime_degraded = True
     except asyncio.exceptions.CancelledError:
         logger.debug("WhatsApp client shutting down.")
+        raise
+    except Exception as exc:
+        if callable(degraded_callback):
+            degraded_callback(f"{type(exc).__name__}: {exc}")
         raise
     finally:
         try:

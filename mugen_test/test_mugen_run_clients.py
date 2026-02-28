@@ -21,6 +21,7 @@ from mugen import (
     BootstrapConfigError,
     run_clients,
     run_platform_clients,
+    run_whatsapp_client,
 )
 
 
@@ -280,7 +281,14 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         allow_start = asyncio.Event()
         keep_running = asyncio.Event()
 
-        async def _run_web_client(*, started_callback=None) -> None:
+        async def _run_web_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = degraded_callback
+            _ = healthy_callback
             await allow_start.wait()
             if callable(started_callback):
                 started_callback()
@@ -320,7 +328,14 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
         allow_start = asyncio.Event()
 
-        async def _run_web_client(*, started_callback=None) -> None:
+        async def _run_web_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = degraded_callback
+            _ = healthy_callback
             await allow_start.wait()
             if callable(started_callback):
                 started_callback()
@@ -350,7 +365,14 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         state["phase_b_degrade_on_critical_exit"] = False
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
 
-        async def _run_web_client(*, started_callback=None) -> None:
+        async def _run_web_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = degraded_callback
+            _ = healthy_callback
             if callable(started_callback):
                 started_callback()
                 started_callback()
@@ -371,7 +393,15 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
 
-        def _bad_runner(*, started_callback=None):  # noqa: ARG001
+        def _bad_runner(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ):  # noqa: ARG001
+            _ = started_callback
+            _ = degraded_callback
+            _ = healthy_callback
             raise TypeError("boom")
 
         with unittest.mock.patch("mugen.run_web_client", new=_bad_runner):
@@ -399,12 +429,10 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                     logger_provider=lambda: app.logger,
                 )
 
-    async def test_run_platform_clients_falls_back_to_legacy_runner_when_started_kw_still_rejected(
+    async def test_run_platform_clients_marks_degraded_when_runner_rejects_callbacks(
         self,
     ) -> None:
         app = Quart("test_app")
-        state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
-        state["phase_b_degrade_on_critical_exit"] = False
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
 
         class _LegacyRunner:
@@ -427,7 +455,15 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
             )
 
         state = app.extensions["mugen"]["bootstrap"]
-        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["web"],
+            PHASE_STATUS_DEGRADED,
+        )
+        self.assertIn(
+            "runner does not accept required callback parameter",
+            str(state[PHASE_B_PLATFORM_ERRORS_KEY]["web"]),
+        )
 
     async def test_run_platform_clients_runtime_degraded_defaults_reason_when_blank(
         self,
@@ -754,7 +790,16 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         started = asyncio.Event()
         release = asyncio.Event()
 
-        async def _run_matrix() -> None:
+        async def _run_matrix(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = degraded_callback
+            _ = healthy_callback
+            if callable(started_callback):
+                started_callback()
             started.set()
             await release.wait()
 
@@ -863,7 +908,15 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))
 
-        async def _boom() -> None:
+        async def _boom(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = started_callback
+            _ = degraded_callback
+            _ = healthy_callback
             raise RuntimeError("worker failure")
 
         with unittest.mock.patch(target="mugen.run_web_client", new=_boom):
@@ -883,8 +936,15 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["whatsapp"]))
 
-        async def _probe_fail(*, started_callback=None) -> None:
+        async def _probe_fail(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
             _ = started_callback
+            _ = degraded_callback
+            _ = healthy_callback
             raise RuntimeError("WhatsApp startup probe failed.")
 
         with unittest.mock.patch("mugen.run_whatsapp_client", new=_probe_fail):
@@ -904,6 +964,46 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
             "WhatsApp startup probe failed.",
             str(state[PHASE_B_PLATFORM_ERRORS_KEY]["whatsapp"]),
         )
+
+    async def test_run_whatsapp_client_attempts_cleanup_when_init_fails(self) -> None:
+        logger = unittest.mock.Mock()
+        whatsapp_client = unittest.mock.Mock()
+        whatsapp_client.init = unittest.mock.AsyncMock(
+            side_effect=RuntimeError("init failed")
+        )
+        whatsapp_client.verify_startup = unittest.mock.AsyncMock()
+        whatsapp_client.close = unittest.mock.AsyncMock()
+        degraded_callback = unittest.mock.Mock()
+
+        with self.assertRaisesRegex(RuntimeError, "init failed"):
+            await run_whatsapp_client(
+                logger_provider=lambda: logger,
+                whatsapp_provider=lambda: whatsapp_client,
+                degraded_callback=degraded_callback,
+            )
+
+        whatsapp_client.close.assert_awaited_once()
+        degraded_callback.assert_called_once()
+
+    async def test_run_whatsapp_client_attempts_cleanup_when_startup_probe_fails(
+        self,
+    ) -> None:
+        logger = unittest.mock.Mock()
+        whatsapp_client = unittest.mock.Mock()
+        whatsapp_client.init = unittest.mock.AsyncMock(return_value=None)
+        whatsapp_client.verify_startup = unittest.mock.AsyncMock(return_value=False)
+        whatsapp_client.close = unittest.mock.AsyncMock()
+        degraded_callback = unittest.mock.Mock()
+
+        with self.assertRaisesRegex(RuntimeError, "WhatsApp startup probe failed"):
+            await run_whatsapp_client(
+                logger_provider=lambda: logger,
+                whatsapp_provider=lambda: whatsapp_client,
+                degraded_callback=degraded_callback,
+            )
+
+        whatsapp_client.close.assert_awaited_once()
+        degraded_callback.assert_called_once()
 
     async def test_run_platform_clients_tracks_whatsapp_runtime_degrade_and_recover(
         self,
@@ -1021,7 +1121,14 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         allow_start = asyncio.Event()
         keep_running = asyncio.Event()
 
-        async def _run_telnet_client(*, started_callback=None) -> None:
+        async def _run_telnet_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = degraded_callback
+            _ = healthy_callback
             await allow_start.wait()
             if callable(started_callback):
                 started_callback()
@@ -1060,8 +1167,15 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["telnet"]))
 
-        async def _fail_telnet(*, started_callback=None) -> None:
+        async def _fail_telnet(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
             _ = started_callback
+            _ = degraded_callback
+            _ = healthy_callback
             raise OSError("address already in use")
 
         with unittest.mock.patch("mugen.run_telnet_client", new=_fail_telnet):
@@ -1114,10 +1228,26 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix", "web"]))
 
-        async def _fast_matrix() -> None:
+        async def _fast_matrix(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = started_callback
+            _ = degraded_callback
+            _ = healthy_callback
             return
 
-        async def _slow_web() -> None:
+        async def _slow_web(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = started_callback
+            _ = degraded_callback
+            _ = healthy_callback
             await asyncio.Event().wait()
 
         async def _cancel_wait(*_args, **_kwargs):
@@ -1140,10 +1270,26 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix", "web"]))
 
-        async def _fast_matrix() -> None:
+        async def _fast_matrix(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = started_callback
+            _ = degraded_callback
+            _ = healthy_callback
             return
 
-        async def _fast_web() -> None:
+        async def _fast_web(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = started_callback
+            _ = degraded_callback
+            _ = healthy_callback
             return
 
         async def _wait_all(tasks, **_kwargs):
@@ -1168,7 +1314,15 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         call_count = 0
         foreign_task = asyncio.create_task(asyncio.sleep(0))
 
-        async def _fast_matrix() -> None:
+        async def _fast_matrix(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = started_callback
+            _ = degraded_callback
+            _ = healthy_callback
             return
 
         async def _wait_with_foreign(_tasks, **_kwargs):

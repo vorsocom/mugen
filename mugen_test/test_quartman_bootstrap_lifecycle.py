@@ -239,7 +239,15 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         config.mugen = unittest.mock.Mock(platforms=["whatsapp"])
         whatsapp_started = asyncio.Event()
 
-        async def _blocking_whatsapp() -> None:
+        async def _blocking_whatsapp(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = started_callback
+            _ = degraded_callback
+            _ = healthy_callback
             whatsapp_started.set()
             await asyncio.Event().wait()
 

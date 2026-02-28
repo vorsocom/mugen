@@ -18,9 +18,10 @@ from mugen import (
     PHASE_STATUS_STOPPED,
 )
 from mugen.core.api import api
-from mugen.core.api.endpoint import (  # pylint: disable=protected-access
-    _parse_bool,
-    _resolve_failed_platforms,
+from mugen.core.api.endpoint import _parse_bool  # pylint: disable=protected-access
+from mugen.core.domain.use_case.phase_b_health import (
+    PhaseBHealthInput,
+    evaluate_phase_b_health,
 )
 
 
@@ -330,48 +331,86 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(payload["ready"])
 
-    def test_resolve_failed_platforms_reason_defaults(self) -> None:
-        failed, reasons = _resolve_failed_platforms(
-            critical_platforms=["starting", "stopped", "degraded", "weird"],
-            platform_statuses={
-                "starting": PHASE_STATUS_STARTING,
-                "stopped": "stopped",
-                "degraded": PHASE_STATUS_DEGRADED,
-                "weird": "unknown",
-            },
-            platform_errors={},
-            ignore_starting=False,
-            degrade_on_critical_exit=True,
+    async def test_ready_endpoint_normalizes_duplicate_critical_platforms(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state["phase_b_critical_platforms"] = ["web", " WEB ", ""]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_HEALTHY}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["critical_platforms"], ["web"])
+
+    def test_phase_b_health_evaluator_reason_defaults(self) -> None:
+        evaluated = evaluate_phase_b_health(
+            PhaseBHealthInput(
+                platform_statuses={
+                    "starting": PHASE_STATUS_STARTING,
+                    "stopped": PHASE_STATUS_STOPPED,
+                    "degraded": PHASE_STATUS_DEGRADED,
+                    "weird": "unknown",
+                },
+                platform_errors={},
+                critical_platforms=["starting", "stopped", "degraded", "weird"],
+                degrade_on_critical_exit=True,
+                shutdown_requested=False,
+                phase_b_status=PHASE_STATUS_STARTING,
+                phase_b_error=None,
+                phase_b_started_at=0.0,
+                readiness_grace_seconds=0.0,
+                include_starting_failures=True,
+            )
         )
 
         self.assertEqual(
-            failed,
+            evaluated.failed_critical_platforms,
             ["starting", "stopped", "degraded", "weird"],
         )
-        self.assertEqual(reasons["starting"], "platform still starting")
-        self.assertEqual(reasons["stopped"], "platform stopped")
-        self.assertEqual(reasons["degraded"], "platform degraded")
-        self.assertEqual(reasons["weird"], "platform status=unknown")
+        self.assertEqual(evaluated.reasons["starting"], "platform still starting")
+        self.assertEqual(evaluated.reasons["stopped"], "platform stopped")
+        self.assertEqual(evaluated.reasons["degraded"], "platform degraded")
+        self.assertEqual(evaluated.reasons["weird"], "platform status=unknown")
 
-        failed_ignore, reasons_ignore = _resolve_failed_platforms(
-            critical_platforms=["starting"],
-            platform_statuses={"starting": PHASE_STATUS_STARTING},
-            platform_errors={"starting": ""},
-            ignore_starting=True,
-            degrade_on_critical_exit=True,
+        ignored = evaluate_phase_b_health(
+            PhaseBHealthInput(
+                platform_statuses={"starting": PHASE_STATUS_STARTING},
+                platform_errors={"starting": ""},
+                critical_platforms=["starting"],
+                degrade_on_critical_exit=True,
+                shutdown_requested=False,
+                phase_b_status=PHASE_STATUS_STARTING,
+                phase_b_error=None,
+                phase_b_started_at=perf_counter(),
+                readiness_grace_seconds=30.0,
+                include_starting_failures=True,
+                now_monotonic=perf_counter(),
+            )
         )
-        self.assertEqual(failed_ignore, [])
-        self.assertEqual(reasons_ignore, {})
+        self.assertEqual(ignored.failed_critical_platforms, [])
+        self.assertEqual(ignored.reasons, {})
 
-        failed_stopped_ok, reasons_stopped_ok = _resolve_failed_platforms(
-            critical_platforms=["stopped"],
-            platform_statuses={"stopped": PHASE_STATUS_STOPPED},
-            platform_errors={},
-            ignore_starting=False,
-            degrade_on_critical_exit=False,
+        stopped_ok = evaluate_phase_b_health(
+            PhaseBHealthInput(
+                platform_statuses={"stopped": PHASE_STATUS_STOPPED},
+                platform_errors={},
+                critical_platforms=["stopped"],
+                degrade_on_critical_exit=False,
+                shutdown_requested=False,
+                phase_b_status=PHASE_STATUS_HEALTHY,
+                phase_b_error=None,
+                phase_b_started_at=0.0,
+                readiness_grace_seconds=0.0,
+                include_starting_failures=True,
+            )
         )
-        self.assertEqual(failed_stopped_ok, [])
-        self.assertEqual(reasons_stopped_ok, {})
+        self.assertEqual(stopped_ok.failed_critical_platforms, [])
+        self.assertEqual(stopped_ok.reasons, {})
 
     def test_parse_bool_supports_string_values_and_default(self) -> None:
         self.assertTrue(_parse_bool("yes", default=False))

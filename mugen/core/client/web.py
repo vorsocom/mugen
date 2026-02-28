@@ -1046,6 +1046,7 @@ class DefaultWebClient(IWebClient):
             ),
             name=f"mugen.web.lease_heartbeat.{job_id}",
         )
+        ownership_lost = False
 
         def _lease_loss_reason() -> str | None:
             if lease_heartbeat_task.done() is not True:
@@ -1058,8 +1059,10 @@ class DefaultWebClient(IWebClient):
                 return "lease_renew_failed"
 
         async def _should_skip_side_effects(stage: str) -> bool:
+            nonlocal ownership_lost
             reason = _lease_loss_reason()
             if reason is not None:
+                ownership_lost = True
                 self._logging_gateway.warning(
                     "Skipping web queue job side effects after lease loss "
                     f"(job_id={job_id} conversation_id={conversation_id} "
@@ -1073,6 +1076,7 @@ class DefaultWebClient(IWebClient):
                     expected_attempt=expected_attempt,
                 )
             except Exception:  # pylint: disable=broad-exception-caught
+                ownership_lost = True
                 self._logging_gateway.warning(
                     "Skipping web queue job side effects after lease loss "
                     f"(job_id={job_id} conversation_id={conversation_id} "
@@ -1083,6 +1087,7 @@ class DefaultWebClient(IWebClient):
             if owns_job is True:
                 return False
 
+            ownership_lost = True
             self._logging_gateway.warning(
                 "Skipping web queue job side effects after lease loss "
                 f"(job_id={job_id} conversation_id={conversation_id} "
@@ -1186,13 +1191,22 @@ class DefaultWebClient(IWebClient):
                 await lease_heartbeat_task
             except asyncio.CancelledError:
                 ...
-            await self._emit_thinking_signal(
-                conversation_id=conversation_id,
-                job_id=job_id,
-                client_message_id=client_message_id,
-                sender=sender,
-                state=PROCESSING_STATE_STOP,
-            )
+            final_reason = _lease_loss_reason()
+            if final_reason is not None and ownership_lost is not True:
+                ownership_lost = True
+                self._logging_gateway.warning(
+                    "Skipping web queue job side effects after lease loss "
+                    f"(job_id={job_id} conversation_id={conversation_id} "
+                    f"stage=emit_processing_stop reason={final_reason})."
+                )
+            if ownership_lost is not True:
+                await self._emit_thinking_signal(
+                    conversation_id=conversation_id,
+                    job_id=job_id,
+                    client_message_id=client_message_id,
+                    sender=sender,
+                    state=PROCESSING_STATE_STOP,
+                )
 
     @staticmethod
     def _is_blank_text_response(response: Any) -> bool:

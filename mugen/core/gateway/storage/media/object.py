@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import logging
 import os
 from pathlib import Path
 from time import time
@@ -12,6 +13,8 @@ import uuid
 
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ObjectMediaStorageGateway(IMediaStorageGateway):
@@ -65,11 +68,28 @@ class ObjectMediaStorageGateway(IMediaStorageGateway):
                     "extension": extension,
                 },
             )
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            _LOGGER.warning(
+                "Object media metadata write failed "
+                "(object_id=%s error_type=%s error=%s).",
+                object_id,
+                type(exc).__name__,
+                exc,
+            )
             try:
                 await self._keyval_storage_gateway.delete(blob_key)
-            except Exception:  # pylint: disable=broad-exception-caught
-                ...
+            except Exception as rollback_exc:  # pylint: disable=broad-exception-caught
+                _LOGGER.warning(
+                    "Object media rollback delete failed "
+                    "(object_id=%s error_type=%s error=%s).",
+                    object_id,
+                    type(rollback_exc).__name__,
+                    rollback_exc,
+                )
+                await self._record_orphan_marker(
+                    object_id=object_id,
+                    reason=f"metadata_write_failed:{type(exc).__name__}",
+                )
             raise
 
         return self._make_ref(object_id)
@@ -137,6 +157,8 @@ class ObjectMediaStorageGateway(IMediaStorageGateway):
         retention_seconds: int,
         now_epoch: float,
     ) -> None:
+        await self._cleanup_orphan_markers()
+
         active_ids = {
             object_id
             for object_id in (self._parse_ref(value) for value in active_refs)
@@ -177,6 +199,48 @@ class ObjectMediaStorageGateway(IMediaStorageGateway):
                 break
             cursor = page.next_cursor
 
+    async def _cleanup_orphan_markers(self) -> None:
+        cursor: str | None = None
+        while True:
+            page = await self._keyval_storage_gateway.list_keys(
+                prefix=self._orphan_key_prefix,
+                limit=500,
+                cursor=cursor,
+            )
+            for key in page.keys:
+                object_id = self._orphan_key_to_object_id(key)
+                if object_id is None:
+                    continue
+
+                try:
+                    await self._delete_object(object_id)
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    _LOGGER.warning(
+                        "Object media orphan remediation failed "
+                        "(object_id=%s error_type=%s error=%s).",
+                        object_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    continue
+
+                try:
+                    await self._keyval_storage_gateway.delete(key)
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    _LOGGER.warning(
+                        "Object media orphan marker delete failed "
+                        "(object_id=%s error_type=%s error=%s).",
+                        object_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+
+            if page.next_cursor in [None, ""]:
+                break
+            if page.next_cursor == cursor:
+                break
+            cursor = page.next_cursor
+
     async def _delete_object(self, object_id: str) -> None:
         await self._keyval_storage_gateway.delete(self._blob_key(object_id))
         await self._keyval_storage_gateway.delete(self._meta_key(object_id))
@@ -197,6 +261,13 @@ class ObjectMediaStorageGateway(IMediaStorageGateway):
 
     def _meta_key(self, object_id: str) -> str:
         return f"{self._key_prefix}:meta:{object_id}"
+
+    @property
+    def _orphan_key_prefix(self) -> str:
+        return f"{self._key_prefix}:orphan:"
+
+    def _orphan_key(self, object_id: str) -> str:
+        return f"{self._orphan_key_prefix}{object_id}"
 
     def _make_ref(self, object_id: str) -> str:
         return f"{self._ref_prefix}{object_id}"
@@ -219,6 +290,38 @@ class ObjectMediaStorageGateway(IMediaStorageGateway):
         if object_id == "":
             return None
         return object_id
+
+    def _orphan_key_to_object_id(self, key: str) -> str | None:
+        if not isinstance(key, str) or not key.startswith(self._orphan_key_prefix):
+            return None
+        object_id = key[len(self._orphan_key_prefix) :]
+        if object_id == "":
+            return None
+        return object_id
+
+    async def _record_orphan_marker(
+        self,
+        *,
+        object_id: str,
+        reason: str,
+    ) -> None:
+        try:
+            await self._keyval_storage_gateway.put_json(
+                self._orphan_key(object_id),
+                {
+                    "object_id": object_id,
+                    "created_at": self._epoch_now(),
+                    "reason": str(reason),
+                },
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            _LOGGER.warning(
+                "Object media orphan marker write failed "
+                "(object_id=%s error_type=%s error=%s).",
+                object_id,
+                type(exc).__name__,
+                exc,
+            )
 
     @staticmethod
     def _infer_extension(value: Any) -> str:

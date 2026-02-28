@@ -37,6 +37,10 @@ from mugen.bootstrap_state import (
     SHUTDOWN_REQUESTED_KEY,
 )
 from mugen.core import di
+from mugen.core.domain.use_case.phase_b_health import (
+    PhaseBHealthInput,
+    evaluate_phase_b_health,
+)
 
 _PLATFORM_CLIENTS_TASK_KEY = "platform_clients_task"
 _PHASE_B_READINESS_GRACE_KEY = "phase_b_readiness_grace_seconds"
@@ -108,6 +112,18 @@ def _resolve_phase_b_runtime_controls() -> tuple[float, list[str], bool]:
     return readiness_grace, [], degrade_on_critical_exit
 
 
+def _parse_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
 def _shutdown_container() -> None:
     try:
         di.shutdown_container()
@@ -139,46 +155,27 @@ def _on_platform_clients_done(task: asyncio.Task, started_at: float) -> None:
             state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
             state[PHASE_B_ERROR_KEY] = None
         else:
-            platform_statuses = state.get(PHASE_B_PLATFORM_STATUSES_KEY)
-            if not isinstance(platform_statuses, dict):
-                platform_statuses = {}
-            platform_errors = state.get(PHASE_B_PLATFORM_ERRORS_KEY)
-            if not isinstance(platform_errors, dict):
-                platform_errors = {}
             critical_platforms = state.get(_PHASE_B_CRITICAL_PLATFORMS_KEY, [])
             if not isinstance(critical_platforms, list):
                 critical_platforms = []
-            degrade_on_critical_exit = state.get(_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY, True)
-            if isinstance(degrade_on_critical_exit, str):
-                normalized = degrade_on_critical_exit.strip().lower()
-                if normalized in {"1", "true", "yes", "on"}:
-                    degrade_on_critical_exit = True
-                elif normalized in {"0", "false", "no", "off"}:
-                    degrade_on_critical_exit = False
-                else:
-                    degrade_on_critical_exit = True
-            elif not isinstance(degrade_on_critical_exit, bool):
-                degrade_on_critical_exit = True
-            failed_critical: list[str] = []
-            for platform in critical_platforms:
-                platform_status = str(
-                    platform_statuses.get(platform, "")
-                ).strip().lower()
-                if platform_status == PHASE_STATUS_HEALTHY:
-                    continue
-                if (
-                    platform_status == PHASE_STATUS_STOPPED
-                    and degrade_on_critical_exit is not True
-                ):
-                    continue
-                failed_critical.append(platform)
-            if failed_critical:
-                failed = str(failed_critical[0])
-                state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
-                state[PHASE_B_ERROR_KEY] = (
-                    str(platform_errors.get(failed))
-                    or f"critical platform stopped: {failed}"
+            evaluation = evaluate_phase_b_health(
+                PhaseBHealthInput(
+                    platform_statuses=state.get(PHASE_B_PLATFORM_STATUSES_KEY, {}),
+                    platform_errors=state.get(PHASE_B_PLATFORM_ERRORS_KEY, {}),
+                    critical_platforms=critical_platforms,
+                    degrade_on_critical_exit=_parse_bool(
+                        state.get(_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY, True),
+                        default=True,
+                    ),
+                    shutdown_requested=bool(state.get(SHUTDOWN_REQUESTED_KEY)),
+                    phase_b_status=str(state.get(PHASE_B_STATUS_KEY, "") or ""),
+                    phase_b_error=state.get(PHASE_B_ERROR_KEY),
+                    phase_b_started_at=state.get(PHASE_B_STARTED_AT_KEY),
+                    readiness_grace_seconds=0.0,
                 )
+            )
+            state[PHASE_B_STATUS_KEY] = evaluation.phase_b_status
+            state[PHASE_B_ERROR_KEY] = evaluation.phase_b_error
         app.logger.info(
             "Bootstrap phase_b completed elapsed_seconds=%.3f status=%s",
             elapsed_seconds,
