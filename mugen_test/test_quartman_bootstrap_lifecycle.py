@@ -138,6 +138,45 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(phase_b_runner.await_count, 0)
         self.assertIsNone(state.get(quartman._PLATFORM_CLIENTS_TASK_KEY))
 
+    async def test_startup_fails_fast_on_production_telnet_policy_before_phase_b_task(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        container = unittest.mock.Mock()
+        container.config = unittest.mock.Mock(
+            mugen=unittest.mock.Mock(
+                platforms=["telnet"],
+                environment="production",
+                runtime=unittest.mock.Mock(phase_b=unittest.mock.Mock()),
+            ),
+            telnet=unittest.mock.Mock(allow_in_production=False),
+        )
+
+        with (
+            unittest.mock.patch.object(
+                quartman.di,
+                "container",
+                container,
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "bootstrap_app",
+                new=unittest.mock.AsyncMock(return_value=None),
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "run_platform_clients",
+                new=unittest.mock.AsyncMock(),
+            ) as phase_b_runner,
+            self.assertRaises(BootstrapConfigError),
+        ):
+            await quartman.app.startup()
+
+        state = quartman._bootstrap_state()
+        self.assertEqual(phase_b_runner.await_count, 0)
+        self.assertIsNone(state.get(quartman._PLATFORM_CLIENTS_TASK_KEY))
+
     async def test_shutdown_cancels_whatsapp_phase_b_task(self) -> None:
         app = Quart("quartman_test")
         quartman = _import_quartman_with_app(app)

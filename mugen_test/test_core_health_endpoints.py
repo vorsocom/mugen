@@ -142,7 +142,9 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 503)
         self.assertFalse(payload["ready"])
 
-    async def test_ready_endpoint_with_grace_ignores_starting_critical_platforms(self) -> None:
+    async def test_ready_endpoint_with_grace_still_requires_critical_platform_health(
+        self,
+    ) -> None:
         state = self._bootstrap_state()
         state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
         state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
@@ -157,10 +159,10 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
             response = await client.get("/api/core/health/ready")
             payload = await response.get_json()
 
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(payload["ready"])
-        self.assertEqual(payload["failed_platforms"], [])
-        self.assertEqual(payload["reasons"], {})
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["failed_platforms"], ["web"])
+        self.assertEqual(payload["reasons"], {"web": "platform still starting"})
 
     async def test_ready_endpoint_ignores_invalid_platform_maps(self) -> None:
         state = self._bootstrap_state()
