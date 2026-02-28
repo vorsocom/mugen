@@ -346,6 +346,29 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             di._validate_container(config, injector)
 
+    def test_validate_container_platform_full_without_matrix_platform(self) -> None:
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=Mock(),
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            relational_storage_gateway=object(),
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+            whatsapp_client=object(),
+        )
+        config = {
+            "mugen": {
+                "runtime": {"profile": "platform_full"},
+                "platforms": ["whatsapp"],
+            }
+        }
+
+        di._validate_container(config, injector)
+
     def test_validate_container_rejects_unknown_platforms(self) -> None:
         logger = Mock()
         injector = di.injector.DependencyInjector(
