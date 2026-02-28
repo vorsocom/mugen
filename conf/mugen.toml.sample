@@ -49,6 +49,7 @@ gateway.completion = "mugen.core.gateway.completion.bedrock:BedrockCompletionGat
 gateway.logging = "mugen.core.gateway.logging.standard:StandardLoggingGateway"
 gateway.storage.keyval = "mugen.core.gateway.storage.keyval.relational:RelationalKeyValStorageGateway"
 gateway.storage.relational = "mugen.core.gateway.storage.rdbms.sqla.sqla_gateway:SQLAlchemyRelationalStorageGateway"
+gateway.storage.web_runtime = "mugen.core.gateway.storage.web_runtime.relational_store:RelationalWebRuntimeStore"
 
 service.ipc = "mugen.core.service.ipc:DefaultIPCService"
 service.messaging = "mugen.core.service.messaging:DefaultMessagingService"

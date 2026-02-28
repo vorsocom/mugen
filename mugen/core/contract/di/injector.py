@@ -15,6 +15,7 @@ from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
+from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.nlp import INLPService
@@ -59,6 +60,11 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def relational_storage_gateway(self) -> IRelationalStorageGateway:
         """Get the global relational database storage gateway."""
+
+    @property
+    @abstractmethod
+    def web_runtime_store(self) -> IWebRuntimeStore:
+        """Get the global web-runtime storage gateway."""
 
     @property
     @abstractmethod

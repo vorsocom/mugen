@@ -61,7 +61,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
             _load_config.return_value = {}
 
             with (
-                self.assertLogs("root", level="ERROR") as logger,
+                self.assertLogs("root", level="WARNING") as logger,
                 unittest.mock.patch(
                     target="mugen.core.di._load_config",
                     new_callable=_load_config,
@@ -76,16 +76,10 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                 # Attempt to build the knowledge gateway.
                 di._build_provider(config, injector, provider_name="knowledge_gateway")
 
-                # The root logger should be used since the name
-                # of the muGen logger is not available from the
-                # config.
                 self.assertEqual(logger.records[0].name, "root")
-
-                # The knowledge gateway cannot be configured since
-                # there is no configuration specifying the module.
-                self.assertEqual(
-                    logger.output[0],
-                    "ERROR:root:Invalid configuration (knowledge_gateway).",
+                self.assertIn(
+                    "WARNING:root:Using root logger (knowledge_gateway).",
+                    logger.output,
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -101,7 +95,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
             _load_config.return_value = {}
 
             with (
-                self.assertLogs("root", level="ERROR") as logger,
+                self.assertLogs("root", level="WARNING") as logger,
                 unittest.mock.patch(
                     target="mugen.core.di._load_config",
                     new_callable=_load_config,
@@ -130,12 +124,16 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                 # of the muGen logger is not available from the
                 # config.
                 self.assertEqual(logger.records[0].name, "root")
+                self.assertIn(
+                    "WARNING:root:Using root logger (knowledge_gateway).",
+                    logger.output,
+                )
 
                 # The knowledge gateway module cannot be imported
                 # since a nonexistent module was supplied.
-                self.assertEqual(
-                    logger.output[0],
-                    "ERROR:root:Could not import module (knowledge_gateway).",
+                self.assertIn(
+                    "WARNING:root:Could not import module (knowledge_gateway).",
+                    logger.output,
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -151,7 +149,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
             _load_config.return_value = {}
 
             with (
-                self.assertLogs("root", level="ERROR") as logger,
+                self.assertLogs("root", level="WARNING") as logger,
                 unittest.mock.patch(
                     target="mugen.core.di._load_config",
                     new_callable=_load_config,
@@ -196,12 +194,16 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                     # of the muGen logger is not available from the
                     # config.
                     self.assertEqual(logger.records[0].name, "root")
+                    self.assertIn(
+                        "WARNING:root:Using root logger (knowledge_gateway).",
+                        logger.output,
+                    )
 
                     # The operation cannot be completed since a valid
                     # subclass would not be found.
-                    self.assertEqual(
-                        logger.output[0],
-                        "ERROR:root:Valid subclass not found (knowledge_gateway).",
+                    self.assertIn(
+                        "WARNING:root:Valid subclass not found (knowledge_gateway).",
+                        logger.output,
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions

@@ -14,6 +14,9 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from mugen.core.client.web import DefaultWebClient
+from mugen.core.gateway.storage.web_runtime.relational_store import (
+    RelationalWebRuntimeStore,
+)
 from mugen.core.contract.gateway.storage.keyval_model import KeyValEntry, KeyValListPage
 
 
@@ -402,6 +405,18 @@ class _InMemoryWebRelationalSession:
             ]
             return _MemoryResult(rows=rows)
 
+        if sql.startswith("select to_regclass('mugen.web_queue_job') as web_queue_job,"):
+            return _MemoryResult(
+                rows=[
+                    {
+                        "web_queue_job": "mugen.web_queue_job",
+                        "web_conversation_state": "mugen.web_conversation_state",
+                        "web_conversation_event": "mugen.web_conversation_event",
+                        "web_media_token": "mugen.web_media_token",
+                    }
+                ]
+            )
+
         if sql.startswith(
             "select token, owner_user_id, file_path, mime_type, filename, expires_at from mugen.web_media_token where token = :token"
         ):
@@ -667,8 +682,9 @@ def _force_relational_session(client: DefaultWebClient, session: _SequenceSessio
     async def _session_cm():
         yield session
 
-    client._using_relational_web_storage = lambda: True  # type: ignore[assignment]  # pylint: disable=protected-access
-    client._relational_session = _session_cm  # type: ignore[assignment]  # pylint: disable=protected-access
+    runtime_store = client._web_runtime_store  # pylint: disable=protected-access
+    if runtime_store is not None:
+        runtime_store._relational_session = _session_cm  # type: ignore[attr-defined]  # pylint: disable=protected-access
 
 
 def _build_config(*, basedir: str, replay_max_events: int = 5) -> SimpleNamespace:
@@ -702,6 +718,19 @@ def _build_config(*, basedir: str, replay_max_events: int = 5) -> SimpleNamespac
     )
 
 
+def _build_runtime_store(
+    *,
+    config: SimpleNamespace,
+    relational_storage_gateway,
+    logging_gateway,
+) -> RelationalWebRuntimeStore:
+    return RelationalWebRuntimeStore(
+        config=config,
+        relational_storage_gateway=relational_storage_gateway,
+        logging_gateway=logging_gateway,
+    )
+
+
 class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
     """Covers durable queue, replay, and media token behavior."""
 
@@ -710,6 +739,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.keyval = _InMemoryKeyVal()
         self.relational = _InMemoryWebRelationalGateway()
         self.logger = Mock()
+        self.config = _build_config(basedir=self.tmpdir.name)
         self.messaging = SimpleNamespace(
             handle_text_message=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
             handle_audio_message=AsyncMock(return_value=[]),
@@ -720,9 +750,14 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
         self.client = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name),
+            config=self.config,
             ipc_service=Mock(),
             keyval_storage_gateway=self.keyval,
+            web_runtime_store=_build_runtime_store(
+                config=self.config,
+                relational_storage_gateway=self.relational,
+                logging_gateway=self.logger,
+            ),
             relational_storage_gateway=self.relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
@@ -772,12 +807,19 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
     async def test_object_media_backend_roundtrip(self) -> None:
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "object"
+        relational = _InMemoryWebRelationalGateway()
+        logger = Mock()
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
-            logging_gateway=Mock(),
+            web_runtime_store=_build_runtime_store(
+                config=cfg,
+                relational_storage_gateway=relational,
+                logging_gateway=logger,
+            ),
+            relational_storage_gateway=relational,
+            logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
         )
@@ -793,12 +835,19 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
     async def test_object_backend_persists_composed_attachment_refs(self) -> None:
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "object"
+        relational = _InMemoryWebRelationalGateway()
+        logger = Mock()
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
-            logging_gateway=Mock(),
+            web_runtime_store=_build_runtime_store(
+                config=cfg,
+                relational_storage_gateway=relational,
+                logging_gateway=logger,
+            ),
+            relational_storage_gateway=relational,
+            logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
         )
@@ -833,12 +882,19 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_media_source_path_keeps_existing_object_refs(self) -> None:
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "object"
+        relational = _InMemoryWebRelationalGateway()
+        logger = Mock()
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
-            logging_gateway=Mock(),
+            web_runtime_store=_build_runtime_store(
+                config=cfg,
+                relational_storage_gateway=relational,
+                logging_gateway=logger,
+            ),
+            relational_storage_gateway=relational,
+            logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
         )
@@ -863,12 +919,19 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "bad-backend"
         with self.assertRaises(ValueError):
+            relational = _InMemoryWebRelationalGateway()
+            logger = Mock()
             DefaultWebClient(
                 config=cfg,
                 ipc_service=Mock(),
                 keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
-                logging_gateway=Mock(),
+                web_runtime_store=_build_runtime_store(
+                    config=cfg,
+                    relational_storage_gateway=relational,
+                    logging_gateway=logger,
+                ),
+                relational_storage_gateway=relational,
+                logging_gateway=logger,
                 messaging_service=self.messaging,
                 user_service=Mock(),
             )
@@ -968,12 +1031,19 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
     async def test_persist_media_reference_does_not_delete_external_source_file(self) -> None:
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "object"
+        relational = _InMemoryWebRelationalGateway()
+        logger = Mock()
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
-            logging_gateway=Mock(),
+            web_runtime_store=_build_runtime_store(
+                config=cfg,
+                relational_storage_gateway=relational,
+                logging_gateway=logger,
+            ),
+            relational_storage_gateway=relational,
+            logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
         )
@@ -993,12 +1063,19 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
     async def test_persist_media_reference_cleans_up_managed_upload_path(self) -> None:
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "object"
+        relational = _InMemoryWebRelationalGateway()
+        logger = Mock()
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
-            logging_gateway=Mock(),
+            web_runtime_store=_build_runtime_store(
+                config=cfg,
+                relational_storage_gateway=relational,
+                logging_gateway=logger,
+            ),
+            relational_storage_gateway=relational,
+            logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
         )
@@ -1035,11 +1112,17 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "object"
         client_logger = Mock()
+        relational = _InMemoryWebRelationalGateway()
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
+            web_runtime_store=_build_runtime_store(
+                config=cfg,
+                relational_storage_gateway=relational,
+                logging_gateway=client_logger,
+            ),
+            relational_storage_gateway=relational,
             logging_gateway=client_logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -1159,12 +1242,19 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "object"
         cfg.web.media.storage.path = "object-media-ignored"
+        relational = _InMemoryWebRelationalGateway()
+        logger = Mock()
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
-            logging_gateway=Mock(),
+            web_runtime_store=_build_runtime_store(
+                config=cfg,
+                relational_storage_gateway=relational,
+                logging_gateway=logger,
+            ),
+            relational_storage_gateway=relational,
+            logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
         )
@@ -1412,11 +1502,18 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_replay_ordering_and_truncation(self) -> None:
+        cfg = _build_config(basedir=self.tmpdir.name, replay_max_events=2)
+        relational = _InMemoryWebRelationalGateway()
         small_client = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name, replay_max_events=2),
+            config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
+            web_runtime_store=_build_runtime_store(
+                config=cfg,
+                relational_storage_gateway=relational,
+                logging_gateway=self.logger,
+            ),
+            relational_storage_gateway=relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -2411,11 +2508,18 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.client._worker_task)  # pylint: disable=protected-access
 
         # Cover worker loop branches including maintenance hook.
+        loop_cfg = _build_config(basedir=self.tmpdir.name)
+        loop_relational = _InMemoryWebRelationalGateway()
         loop_client = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name),
+            config=loop_cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
+            web_runtime_store=_build_runtime_store(
+                config=loop_cfg,
+                relational_storage_gateway=loop_relational,
+                logging_gateway=self.logger,
+            ),
+            relational_storage_gateway=loop_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -2442,11 +2546,18 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         loop_client._cleanup_media_tokens_and_files.assert_awaited_once()  # pylint: disable=protected-access
 
         # Cover _sleep_until_poll timeout branch.
+        sleeper_cfg = _build_config(basedir=self.tmpdir.name)
+        sleeper_relational = _InMemoryWebRelationalGateway()
         sleeper = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name),
+            config=sleeper_cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
+            web_runtime_store=_build_runtime_store(
+                config=sleeper_cfg,
+                relational_storage_gateway=sleeper_relational,
+                logging_gateway=self.logger,
+            ),
+            relational_storage_gateway=sleeper_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3316,11 +3427,18 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
         # process_claimed_job exception branch.
+        failing_cfg = _build_config(basedir=self.tmpdir.name)
+        failing_relational = _InMemoryWebRelationalGateway()
         failing = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name),
+            config=failing_cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
+            web_runtime_store=_build_runtime_store(
+                config=failing_cfg,
+                relational_storage_gateway=failing_relational,
+                logging_gateway=self.logger,
+            ),
+            relational_storage_gateway=failing_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3782,11 +3900,18 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
 
         # listdir exception branch.
+        no_dir_cfg = _build_config(basedir=self.tmpdir.name)
+        no_dir_relational = _InMemoryWebRelationalGateway()
         no_dir_client = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name),
+            config=no_dir_cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
+            web_runtime_store=_build_runtime_store(
+                config=no_dir_cfg,
+                relational_storage_gateway=no_dir_relational,
+                logging_gateway=self.logger,
+            ),
+            relational_storage_gateway=no_dir_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3795,11 +3920,18 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         await no_dir_client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
 
         # age < retention branch.
+        young_cfg = _build_config(basedir=self.tmpdir.name)
+        young_relational = _InMemoryWebRelationalGateway()
         young_client = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name),
+            config=young_cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
+            web_runtime_store=_build_runtime_store(
+                config=young_cfg,
+                relational_storage_gateway=young_relational,
+                logging_gateway=self.logger,
+            ),
+            relational_storage_gateway=young_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3886,22 +4018,34 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         # resolve_allowed_mimetypes branches.
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.allowed_mimetypes = "bad"
+        helper_relational = _InMemoryWebRelationalGateway()
         helper_client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
+            web_runtime_store=_build_runtime_store(
+                config=cfg,
+                relational_storage_gateway=helper_relational,
+                logging_gateway=self.logger,
+            ),
+            relational_storage_gateway=helper_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
         )
         self.assertTrue(helper_client.media_allowed_mimetypes)
         cfg.web.media.allowed_mimetypes = [123, ""]
+        helper_relational_2 = _InMemoryWebRelationalGateway()
         helper_client_2 = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
+            web_runtime_store=_build_runtime_store(
+                config=cfg,
+                relational_storage_gateway=helper_relational_2,
+                logging_gateway=self.logger,
+            ),
+            relational_storage_gateway=helper_relational_2,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3915,11 +4059,17 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         abs_path = self.client._resolve_storage_path("/tmp/x")  # pylint: disable=protected-access
         self.assertEqual(abs_path, "/tmp/x")
         no_base_cfg = SimpleNamespace(web=SimpleNamespace(media=SimpleNamespace()))
+        no_base_relational = _InMemoryWebRelationalGateway()
         no_base_client = DefaultWebClient(
             config=no_base_cfg,
             ipc_service=Mock(),
             keyval_storage_gateway=_InMemoryKeyVal(),
-            relational_storage_gateway=_InMemoryWebRelationalGateway(),
+            web_runtime_store=_build_runtime_store(
+                config=no_base_cfg,
+                relational_storage_gateway=no_base_relational,
+                logging_gateway=self.logger,
+            ),
+            relational_storage_gateway=no_base_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3954,7 +4104,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.client._parse_event_id(-1))  # pylint: disable=protected-access
         formatted = self.client._format_sse_event({"id": "1", "event": "ack", "data": {"a": 1}})  # pylint: disable=protected-access
         self.assertIn("event: ack", formatted)
-        self.assertIsNone(self.client._coerce_float("x"))  # pylint: disable=protected-access
 
         self.assertIsNone(self.client._coerce_media_mime("no-slash"))  # pylint: disable=protected-access
         self.assertEqual(
@@ -4089,6 +4238,31 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
 
         self.keyval.list_keys.assert_not_called()
 
+    async def test_runtime_store_helper_raises_when_store_missing(self) -> None:
+        self.client._web_runtime_store = None  # pylint: disable=protected-access
+        with self.assertRaises(RuntimeError):
+            self.client._runtime_store()  # pylint: disable=protected-access
+
+    async def test_cleanup_media_tokens_skips_delete_when_expired_token_is_not_string(
+        self,
+    ) -> None:
+        runtime_store = SimpleNamespace(
+            list_media_tokens=AsyncMock(
+                return_value=[
+                    {
+                        "token": None,
+                        "expires_at": self.client._to_utc_datetime(0),  # pylint: disable=protected-access
+                        "file_path": "ignored",
+                    }
+                ]
+            ),
+            delete_media_token=AsyncMock(),
+            list_active_queue_payloads=AsyncMock(return_value=[]),
+        )
+        self.client._web_runtime_store = runtime_store  # pylint: disable=protected-access
+        await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
+        runtime_store.delete_media_token.assert_not_awaited()
+
 
 class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
     """Covers relational web persistence branches with a stub SQL session."""
@@ -4106,13 +4280,20 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             handle_composed_message=AsyncMock(return_value=[{"type": "text", "content": "ok"}]),
             mh_extensions=[],
         )
+        self.config = _build_config(basedir=self.tmpdir.name)
+        self.relational = SimpleNamespace(
+            raw_session=lambda: None,  # replaced per test
+        )
         self.client = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name),
+            config=self.config,
             ipc_service=Mock(),
             keyval_storage_gateway=self.keyval,
-            relational_storage_gateway=SimpleNamespace(
-                raw_session=lambda: None,  # replaced per test
+            web_runtime_store=_build_runtime_store(
+                config=self.config,
+                relational_storage_gateway=self.relational,
+                logging_gateway=self.logger,
             ),
+            relational_storage_gateway=self.relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -4122,113 +4303,33 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
         self.tmpdir.cleanup()
 
-    async def test_relational_provider_helpers_and_datetime_coercion(self) -> None:
-        @asynccontextmanager
-        async def _raw_session():
-            yield object()
+    async def test_runtime_store_requirement_and_datetime_helpers(self) -> None:
+        with self.assertRaisesRegex(ValueError, "web_runtime_store is required"):
+            DefaultWebClient(
+                config=self.config,
+                ipc_service=Mock(),
+                keyval_storage_gateway=self.keyval,
+                web_runtime_store=None,
+                relational_storage_gateway=self.relational,
+                logging_gateway=self.logger,
+                messaging_service=self.messaging,
+                user_service=Mock(),
+            )
 
-        rel_client = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name),
-            ipc_service=Mock(),
-            keyval_storage_gateway=self.keyval,
-            relational_storage_gateway=SimpleNamespace(raw_session=lambda: _raw_session()),
-            logging_gateway=Mock(),
-            messaging_service=self.messaging,
-            user_service=Mock(),
-        )
-        provider = rel_client._raw_relational_session_provider()  # pylint: disable=protected-access
-        self.assertTrue(callable(provider))
-        async with rel_client._relational_session():  # pylint: disable=protected-access
-            pass
-
-        non_rel_client = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name),
-            ipc_service=Mock(),
-            keyval_storage_gateway=self.keyval,
-            relational_storage_gateway=object(),
-            logging_gateway=self.logger,
-            messaging_service=self.messaging,
-            user_service=Mock(),
-        )
-
-        self.assertTrue(non_rel_client._using_relational_web_storage())  # pylint: disable=protected-access
-        with self.assertRaises(RuntimeError):
-            non_rel_client._raw_relational_session_provider()  # pylint: disable=protected-access
-        self.logger.warning.assert_not_called()
-
-        with self.assertRaises(RuntimeError):
-            async with non_rel_client._relational_session():  # pylint: disable=protected-access
-                pass
-
-        no_gateway_client = DefaultWebClient(
-            config=_build_config(basedir=self.tmpdir.name),
-            ipc_service=Mock(),
-            keyval_storage_gateway=self.keyval,
-            relational_storage_gateway=None,
-            logging_gateway=self.logger,
-            messaging_service=self.messaging,
-            user_service=Mock(),
-        )
-        self.assertIsNone(no_gateway_client._raw_relational_session_provider())  # pylint: disable=protected-access
-        with self.assertRaises(RuntimeError):
-            async with no_gateway_client._relational_session():  # pylint: disable=protected-access
-                pass
-
-        dt = non_rel_client._to_utc_datetime(non_rel_client._epoch_now())  # pylint: disable=protected-access
-        self.assertIsNotNone(non_rel_client._datetime_to_epoch(dt))  # pylint: disable=protected-access
-        self.assertIsNotNone(non_rel_client._datetime_to_iso(dt))  # pylint: disable=protected-access
-        naive_dt = non_rel_client._iso_to_utc_datetime("2025-01-01T00:00:00")  # pylint: disable=protected-access
+        dt = self.client._to_utc_datetime(self.client._epoch_now())  # pylint: disable=protected-access
+        self.assertIsNotNone(self.client._datetime_to_epoch(dt))  # pylint: disable=protected-access
+        naive_dt = self.client._iso_to_utc_datetime("2025-01-01T00:00:00")  # pylint: disable=protected-access
         self.assertIsNotNone(naive_dt)
-        self.assertIsNotNone(non_rel_client._datetime_to_epoch(naive_dt.replace(tzinfo=None)))  # pylint: disable=protected-access
-        self.assertIsNotNone(non_rel_client._datetime_to_iso(naive_dt.replace(tzinfo=None)))  # pylint: disable=protected-access
-        self.assertIsNone(non_rel_client._datetime_to_epoch(None))  # pylint: disable=protected-access
-        self.assertIsNone(non_rel_client._datetime_to_iso(None))  # pylint: disable=protected-access
-        self.assertIsNone(non_rel_client._iso_to_utc_datetime(None))  # pylint: disable=protected-access
-        self.assertIsNone(non_rel_client._iso_to_utc_datetime(""))  # pylint: disable=protected-access
-        self.assertIsNone(non_rel_client._iso_to_utc_datetime("not-a-date"))  # pylint: disable=protected-access
         self.assertIsNotNone(
-            non_rel_client._iso_to_utc_datetime("2025-01-01T00:00:00Z")  # pylint: disable=protected-access
+            self.client._datetime_to_epoch(naive_dt.replace(tzinfo=None))  # pylint: disable=protected-access
         )
-
-        as_dict = non_rel_client._queue_job_record_to_payload(  # pylint: disable=protected-access
-            {
-                "job_id": "j1",
-                "conversation_id": "c1",
-                "sender": "u1",
-                "message_type": "text",
-                "payload": {"text": "hi"},
-                "status": "pending",
-                "attempts": 0,
-                "created_at": dt,
-                "updated_at": dt,
-                "lease_expires_at": dt,
-                "error_message": None,
-                "completed_at": None,
-                "client_message_id": "cid",
-            }
+        self.assertIsNone(self.client._datetime_to_epoch(None))  # pylint: disable=protected-access
+        self.assertIsNone(self.client._iso_to_utc_datetime(None))  # pylint: disable=protected-access
+        self.assertIsNone(self.client._iso_to_utc_datetime(""))  # pylint: disable=protected-access
+        self.assertIsNone(self.client._iso_to_utc_datetime("not-a-date"))  # pylint: disable=protected-access
+        self.assertIsNotNone(
+            self.client._iso_to_utc_datetime("2025-01-01T00:00:00Z")  # pylint: disable=protected-access
         )
-        self.assertEqual(as_dict["id"], "j1")
-        self.assertEqual(as_dict["text"], "hi")
-
-        class _AttrRow:
-            def __init__(self):
-                self.job_id = "j2"
-                self.conversation_id = "c2"
-                self.sender = "u2"
-                self.message_type = "text"
-                self.payload = None
-                self.status = "pending"
-                self.attempts = 1
-                self.created_at = None
-                self.updated_at = None
-                self.lease_expires_at = None
-                self.error_message = None
-                self.completed_at = None
-                self.client_message_id = None
-
-        as_attr = non_rel_client._queue_job_record_to_payload(_AttrRow())  # pylint: disable=protected-access
-        self.assertEqual(as_attr["id"], "j2")
-        self.assertIsNone(as_attr["text"])
 
     async def test_enqueue_message_relational_overflow_and_success(self) -> None:
         self.client._queue_max_pending_jobs = 1  # pylint: disable=protected-access

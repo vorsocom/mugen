@@ -5,6 +5,7 @@ __all__ = ["IMatrixClient"]
 from abc import ABC, abstractmethod
 from types import TracebackType
 from typing import Any
+from typing import Literal
 from typing import Type
 
 
@@ -32,17 +33,24 @@ class IMatrixClient(ABC):
     synced: Any
     """Sync-ready signal/event populated by concrete adapters."""
 
-    async def sync_forever(self, *args, **kwargs) -> Any:
+    @abstractmethod
+    async def sync_forever(
+        self,
+        *,
+        since: str | None = None,
+        timeout: int = 100,
+        full_state: bool = True,
+        set_presence: Literal["online", "offline", "unavailable"] = "online",
+    ) -> Any:
         """Run long-polling sync loop."""
-        raise NotImplementedError
 
-    async def get_profile(self, *args, **kwargs) -> Any:
+    @abstractmethod
+    async def get_profile(self, user_id: str | None = None) -> Any:
         """Fetch current profile."""
-        raise NotImplementedError
 
-    async def set_displayname(self, *args, **kwargs) -> Any:
+    @abstractmethod
+    async def set_displayname(self, displayname: str) -> Any:
         """Set profile display name."""
-        raise NotImplementedError
 
     @abstractmethod
     async def cleanup_known_user_devices_list(self) -> None:

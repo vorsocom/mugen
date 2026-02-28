@@ -19,6 +19,9 @@ class _GatewayUnderTest(IRelationalStorageGateway):
     async def aclose(self) -> None:
         return None
 
+    async def check_readiness(self) -> None:
+        return None
+
 
 class _Entity:
     pass

@@ -37,6 +37,15 @@ from mugen.bootstrap_state import (
     SHUTDOWN_REQUESTED_KEY,
 )
 from mugen.core import di
+from mugen.core.runtime.phase_b_bootstrap import (
+    PHASE_B_CRITICAL_PLATFORMS_KEY as _PHASE_B_CRITICAL_PLATFORMS_KEY,
+    PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY as _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY,
+    PHASE_B_READINESS_GRACE_KEY as _PHASE_B_READINESS_GRACE_KEY,
+    PHASE_B_STARTUP_PLAN_KEY as _PHASE_B_STARTUP_PLAN_KEY,
+    PHASE_B_STARTUP_TIMEOUT_KEY as _PHASE_B_STARTUP_TIMEOUT_KEY,
+    apply_phase_b_startup_state,
+    build_phase_b_startup_plan,
+)
 from mugen.core.runtime.phase_b_controls import (
     parse_bool,
     resolve_phase_b_startup_timeout_seconds,
@@ -48,10 +57,6 @@ from mugen.core.runtime.phase_b_runtime import (
 )
 
 _PLATFORM_CLIENTS_TASK_KEY = "platform_clients_task"
-_PHASE_B_READINESS_GRACE_KEY = "phase_b_readiness_grace_seconds"
-_PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
-_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY = "phase_b_degrade_on_critical_exit"
-_PHASE_B_STARTUP_TIMEOUT_KEY = "phase_b_startup_timeout_seconds"
 
 try:
     # Create Quart mugen.
@@ -161,33 +166,33 @@ async def startup():
         app.logger.warning("Platform client runner task is already active.")
         return
 
-    readiness_grace_seconds, critical_platforms, degrade_on_critical_exit = (
-        _resolve_phase_b_runtime_controls()
-    )
+    runtime_config = getattr(di.container, "config", None)
+    if runtime_config is None:
+        raise BootstrapConfigError("Configuration unavailable.")
+
     try:
-        startup_timeout_seconds = _resolve_phase_b_startup_timeout()
+        phase_b_plan = build_phase_b_startup_plan(
+            config=runtime_config,
+            bootstrap_state=state,
+            logger=app.logger,
+            validate_phase_b_runtime_config=validate_phase_b_runtime_config,
+            validate_web_relational_runtime_config=validate_web_relational_runtime_config,
+            include_startup_timeout=True,
+        )
     except RuntimeError as exc:
         raise BootstrapConfigError(str(exc)) from exc
-    runtime_config = getattr(di.container, "config", None)
-    if runtime_config is not None:
-        active_platforms, critical_platforms, degrade_on_critical_exit = (
-            validate_phase_b_runtime_config(
-                config=runtime_config,
-                bootstrap_state=state,
-                logger=app.logger,
-            )
-        )
-        validate_web_relational_runtime_config(
-            config=runtime_config,
-            active_platforms=active_platforms,
-        )
-    state[_PHASE_B_READINESS_GRACE_KEY] = readiness_grace_seconds
-    state[_PHASE_B_CRITICAL_PLATFORMS_KEY] = critical_platforms
-    state[_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY] = degrade_on_critical_exit
-    state[_PHASE_B_STARTUP_TIMEOUT_KEY] = startup_timeout_seconds
-    state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STARTING
-    state[PHASE_B_STARTED_AT_KEY] = perf_counter()
-    state[PHASE_B_ERROR_KEY] = None
+
+    startup_timeout_seconds = phase_b_plan.startup_timeout_seconds
+    if startup_timeout_seconds is None:
+        raise BootstrapConfigError("Invalid runtime configuration: startup timeout is required.")
+
+    apply_phase_b_startup_state(
+        state,
+        plan=phase_b_plan,
+        reset_started_at=True,
+    )
+    state[_PHASE_B_STARTUP_PLAN_KEY] = phase_b_plan
+
     phase_b_started_at = perf_counter()
     app.logger.info("Bootstrap phase_b starting.")
     loop = asyncio.get_running_loop()
@@ -202,7 +207,7 @@ async def startup():
     try:
         await wait_for_critical_startup(
             state,
-            critical_platforms=critical_platforms,
+            critical_platforms=phase_b_plan.critical_platforms,
             startup_timeout_seconds=startup_timeout_seconds,
         )
     except RuntimeError as exc:
@@ -217,6 +222,7 @@ async def startup():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
+        state.pop(_PHASE_B_STARTUP_PLAN_KEY, None)
         raise BootstrapConfigError(str(exc)) from exc
 
 
