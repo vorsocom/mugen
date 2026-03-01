@@ -248,6 +248,9 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     def __init__(self, config, logging_gateway):
                         pass
 
+                    async def check_readiness(self):
+                        pass
+
                     async def get_completion(self, context, operation="completion"):
                         pass
 

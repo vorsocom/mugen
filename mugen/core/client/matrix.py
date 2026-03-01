@@ -174,21 +174,114 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # Responses.
         self.add_response_callback(self._cb_sync_response, SyncResponse)
 
-    def __getattr__(self, name: str):
-        vendor_client = self.__dict__.get("_vendor_client")
-        if vendor_client is not None:
-            return getattr(vendor_client, name)
-        raise AttributeError(name)
+    @property
+    def access_token(self) -> str | None:
+        return getattr(self._vendor_client, "access_token", None)
 
-    def __setattr__(self, name: str, value) -> None:
-        if name.startswith("_") or name == "synced":
-            object.__setattr__(self, name, value)
-            return
-        vendor_client = self.__dict__.get("_vendor_client")
-        if vendor_client is not None and hasattr(vendor_client, name):
-            setattr(vendor_client, name, value)
-            return
-        object.__setattr__(self, name, value)
+    @access_token.setter
+    def access_token(self, value: str | None) -> None:
+        self._vendor_client.access_token = value
+
+    @property
+    def device_id(self) -> str | None:
+        return getattr(self._vendor_client, "device_id", None)
+
+    @device_id.setter
+    def device_id(self, value: str | None) -> None:
+        self._vendor_client.device_id = value
+
+    @property
+    def user_id(self) -> str | None:
+        return getattr(self._vendor_client, "user_id", None)
+
+    @user_id.setter
+    def user_id(self, value: str | None) -> None:
+        self._vendor_client.user_id = value
+
+    @property
+    def current_user_id(self) -> str:
+        value = self.user_id
+        return value if isinstance(value, str) else ""
+
+    @property
+    def device_store(self):
+        return getattr(self._vendor_client, "device_store", {})
+
+    @device_store.setter
+    def device_store(self, value) -> None:
+        self._vendor_client.device_store = value
+
+    @property
+    def client_session(self):
+        return getattr(self._vendor_client, "client_session", None)
+
+    @client_session.setter
+    def client_session(self, value) -> None:
+        self._vendor_client.client_session = value
+
+    @client_session.deleter
+    def client_session(self) -> None:
+        if hasattr(self._vendor_client, "client_session"):
+            del self._vendor_client.client_session
+
+    @property
+    def olm(self):
+        return getattr(self._vendor_client, "olm", None)
+
+    @olm.setter
+    def olm(self, value) -> None:
+        self._vendor_client.olm = value
+
+    def verify_device(self, olm_device) -> None:
+        self._vendor_client.verify_device(olm_device)
+
+    async def login(self, password: str, device_name: str):
+        return await self._vendor_client.login(password, device_name)
+
+    def load_store(self) -> None:
+        self._vendor_client.load_store()
+
+    async def join(self, room_id: str):
+        return await self._vendor_client.join(room_id)
+
+    async def list_direct_rooms(self):
+        return await self._vendor_client.list_direct_rooms()
+
+    async def joined_rooms(self):
+        return await self._vendor_client.joined_rooms()
+
+    async def joined_members(self, room_id: str):
+        return await self._vendor_client.joined_members(room_id)
+
+    async def room_get_state(self, room_id: str):
+        return await self._vendor_client.room_get_state(room_id)
+
+    async def room_kick(self, room_id: str, user_id: str):
+        return await self._vendor_client.room_kick(room_id, user_id)
+
+    async def room_leave(self, room_id: str):
+        return await self._vendor_client.room_leave(room_id)
+
+    async def room_send(self, *args, **kwargs):
+        return await self._vendor_client.room_send(*args, **kwargs)
+
+    async def room_typing(self, *args, **kwargs):
+        return await self._vendor_client.room_typing(*args, **kwargs)
+
+    async def room_read_markers(self, *args, **kwargs):
+        return await self._vendor_client.room_read_markers(*args, **kwargs)
+
+    async def upload(self, *args, **kwargs):
+        return await self._vendor_client.upload(*args, **kwargs)
+
+    async def download(self, *args, **kwargs):
+        return await self._vendor_client.download(*args, **kwargs)
+
+    async def _send(self, *args, **kwargs):
+        send_fn = getattr(self._vendor_client, "_send", None)
+        if callable(send_fn) is not True:
+            raise RuntimeError("Matrix vendor client does not expose _send().")
+        return await send_fn(*args, **kwargs)
 
     async def __aenter__(self) -> "DefaultMatrixClient":
         """Initialisation."""
@@ -309,12 +402,86 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             user_id=user_id,
             displayname=getattr(response, "displayname", None),
             avatar_url=getattr(response, "avatar_url", None),
-            raw=response,
+            metadata={
+                "vendor_response_type": type(response).__name__,
+            },
         )
 
     async def set_displayname(self, displayname: str) -> None:
         """Set profile display name."""
         await self._vendor_client.set_displayname(displayname)
+
+    async def joined_room_ids(self) -> list[str]:
+        """List joined room ids as plain strings."""
+        response = await self.joined_rooms()
+        rooms = getattr(response, "rooms", None)
+        if not isinstance(rooms, list):
+            return []
+        return [room_id for room_id in rooms if isinstance(room_id, str) and room_id]
+
+    async def joined_member_ids(self, room_id: str) -> list[str]:
+        """List room member ids as plain strings."""
+        response = await self.joined_members(room_id)
+        members = getattr(response, "members", None)
+        if not isinstance(members, list):
+            return []
+        member_ids: list[str] = []
+        for member in members:
+            user_id = getattr(member, "user_id", None)
+            if not isinstance(user_id, str) or user_id == "":
+                continue
+            member_ids.append(user_id)
+        return member_ids
+
+    async def room_state_events(self, room_id: str) -> list[dict[str, object]]:
+        """List room state events using plain dictionaries."""
+        response = await self.room_get_state(room_id)
+        events = getattr(response, "events", None)
+        if not isinstance(events, list):
+            return []
+
+        normalized_events: list[dict[str, object]] = []
+        for event in events:
+            if isinstance(event, dict):
+                normalized_events.append(dict(event))
+                continue
+            normalized_events.append(
+                {
+                    "type": getattr(event, "type", None),
+                    "content": getattr(event, "content", None),
+                }
+            )
+        return normalized_events
+
+    async def direct_room_ids(self) -> set[str]:
+        """List direct-message room ids from account data."""
+        response = await self.list_direct_rooms()
+        rooms = getattr(response, "rooms", None)
+        if not isinstance(rooms, dict):
+            return set()
+
+        direct_ids: set[str] = set()
+        for room_ids in rooms.values():
+            if not isinstance(room_ids, list):
+                continue
+            for room_id in room_ids:
+                if isinstance(room_id, str) and room_id != "":
+                    direct_ids.add(room_id)
+        return direct_ids
+
+    def device_ed25519_key(self) -> str:
+        """Return current device ED25519 verification key."""
+        identity_keys = getattr(
+            getattr(self.olm, "account", None),
+            "identity_keys",
+            None,
+        )
+        if not isinstance(identity_keys, dict):
+            return ""
+        raw_key = identity_keys.get("ed25519")
+        if not isinstance(raw_key, str) or raw_key == "":
+            return ""
+        return raw_key
 
     def _matrix_secrets_encryption_required(self) -> bool:
         environment = str(

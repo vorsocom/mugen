@@ -219,7 +219,7 @@ class TestDIBuildWebClient(unittest.TestCase):
                         self,
                         config,
                         ipc_service,
-                        keyval_storage_gateway,
+                        media_storage_gateway,
                         web_runtime_store,
                         logging_gateway,
                         messaging_service,

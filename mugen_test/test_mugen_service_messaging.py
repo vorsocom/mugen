@@ -48,7 +48,6 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
                     messaging=SimpleNamespace(extension_timeout_seconds=10.0)
                 )
             ),
-            completion_gateway=Mock(),
             keyval_storage_gateway=Mock(),
             logging_gateway=Mock(),
             user_service=Mock(),

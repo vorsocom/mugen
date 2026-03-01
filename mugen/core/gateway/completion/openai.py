@@ -152,6 +152,11 @@ class OpenAICompletionGateway(ICompletionGateway):
             field_values={"timeout_seconds": self._timeout_seconds},
         )
 
+    async def check_readiness(self) -> None:
+        _ = self._api
+        self._resolve_operation_config("classification")
+        self._resolve_operation_config("completion")
+
     async def get_completion(
         self,
         request: CompletionRequest,

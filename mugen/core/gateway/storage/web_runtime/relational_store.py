@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import inspect
 import json
 from types import SimpleNamespace
 from typing import Any
 import uuid
 
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
+from mugen.core.contract.gateway.storage.web_runtime import (
+    IWebRuntimeStore,
+    WebRuntimeTailBatch,
+    WebRuntimeTailEvent,
+)
 from mugen.core.domain.use_case.queue_job_lifecycle import QueueJobLifecycleUseCase
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.gateway.storage.web_runtime.sql import text as web_sql_text
@@ -27,19 +30,12 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         config: SimpleNamespace,
         logging_gateway: ILoggingGateway,
         relational_runtime: SharedSQLAlchemyRuntime,
-        session_provider=None,
-        readiness_probe=None,
     ) -> None:
         self._config = config
         self._logging_gateway = logging_gateway
         self._runtime = relational_runtime
         self._queue_job_lifecycle_use_case = QueueJobLifecycleUseCase()
         self._engine = self._runtime.engine
-        self._readiness_probe = readiness_probe
-
-        if callable(session_provider):
-            self._session_provider = session_provider
-            return
 
         session_maker: async_sessionmaker = self._runtime.session_maker
 
@@ -60,11 +56,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         return None
 
     async def check_readiness(self) -> None:
-        if callable(self._readiness_probe):
-            maybe_awaitable = self._readiness_probe()
-            if inspect.isawaitable(maybe_awaitable):
-                await maybe_awaitable
-        elif self._engine is not None:
+        if self._engine is not None:
             async with self._engine.connect() as conn:
                 await conn.execute(sa_text("SELECT 1"))
 
@@ -595,6 +587,99 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                 )
             )
             return [dict(row) for row in result.mappings().all()]
+
+    async def tail_events_since(
+        self,
+        *,
+        conversation_id: str,
+        stream_generation: str | None,
+        after_event_id: int,
+        limit: int,
+    ) -> WebRuntimeTailBatch:
+        normalized_limit = max(1, min(int(limit), 500))
+        normalized_after_event_id = max(int(after_event_id), 0)
+        fallback_generation = self._normalize_stream_generation(
+            stream_generation,
+            fallback=self._new_stream_generation(),
+        )
+
+        async with self._relational_session() as session:
+            state_result = await session.execute(
+                web_sql_text(
+                    "SELECT stream_generation "
+                    "FROM mugen.web_conversation_state "
+                    "WHERE conversation_id = :conversation_id"
+                ),
+                {"conversation_id": conversation_id},
+            )
+            state_row = state_result.mappings().one_or_none()
+            active_generation = self._normalize_stream_generation(
+                None if state_row is None else state_row.get("stream_generation"),
+                fallback=fallback_generation,
+            )
+
+            effective_after_event_id = normalized_after_event_id
+            if (
+                isinstance(stream_generation, str)
+                and stream_generation.strip() != ""
+                and active_generation != stream_generation.strip()
+            ):
+                # Generation changed across instances; force replay from stream head.
+                effective_after_event_id = 0
+
+            events_result = await session.execute(
+                web_sql_text(
+                    "SELECT event_id, event_type, payload, created_at, stream_generation, "
+                    "stream_version "
+                    "FROM mugen.web_conversation_event "
+                    "WHERE conversation_id = :conversation_id "
+                    "AND stream_generation = :stream_generation "
+                    "AND event_id > :after_event_id "
+                    "ORDER BY event_id ASC "
+                    "LIMIT :limit"
+                ),
+                {
+                    "conversation_id": conversation_id,
+                    "stream_generation": active_generation,
+                    "after_event_id": effective_after_event_id,
+                    "limit": normalized_limit,
+                },
+            )
+            rows = list(events_result.mappings().all())
+
+        events: list[WebRuntimeTailEvent] = []
+        max_event_id = effective_after_event_id
+        for row in rows:
+            event_id = self._parse_event_id(row.get("event_id"))
+            if event_id is None:
+                continue
+            max_event_id = max(max_event_id, event_id)
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
+            try:
+                stream_version = int(row.get("stream_version") or 1)
+            except (TypeError, ValueError):
+                stream_version = 1
+            events.append(
+                WebRuntimeTailEvent(
+                    id=event_id,
+                    event=str(row.get("event_type") or ""),
+                    data=payload,
+                    created_at=self._datetime_to_iso(row.get("created_at")),
+                    stream_generation=self._normalize_stream_generation(
+                        row.get("stream_generation"),
+                        fallback=active_generation,
+                    ),
+                    stream_version=stream_version,
+                )
+            )
+
+        return WebRuntimeTailBatch(
+            stream_generation=active_generation,
+            max_event_id=max_event_id,
+            events=events,
+        )
 
     async def delete_media_token(self, *, token: str) -> None:
         async with self._relational_session() as session:

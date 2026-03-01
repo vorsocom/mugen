@@ -17,7 +17,6 @@ import uuid
 
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
 from mugen.core.contract.service.ipc import IIPCService
@@ -26,10 +25,6 @@ from mugen.core.contract.service.user import IUserService
 from mugen.core.domain.use_case.enqueue_web_message import BuildQueuedMessageJobUseCase
 from mugen.core.domain.use_case.normalize_composed_message import (
     NormalizeComposedMessageUseCase,
-)
-from mugen.core.gateway.storage.media import (
-    FilesystemMediaStorageGateway,
-    ObjectMediaStorageGateway,
 )
 from mugen.core.utility.processing_signal import (
     PROCESSING_SIGNAL_THINKING,
@@ -138,12 +133,11 @@ class DefaultWebClient(IWebClient):
     _default_sse_enqueue_timeout_seconds: float = 0.5
     _default_sse_fanout_parallelism: int = 16
     _default_sse_max_subscribers_per_conversation: int = 256
+    _default_sse_cross_instance_poll_seconds: float = 1.0
     _default_queue_poll_interval_seconds: float = 0.25
     _default_queue_processing_lease_seconds: float = 30.0
     _default_queue_max_pending_jobs: int = 2000
-    _default_media_backend: str = "filesystem"
     _default_media_storage_path: str = "data/web_media"
-    _default_media_object_cache_path: str = "data/web_media_object_cache"
     _default_media_max_upload_bytes: int = 20 * 1024 * 1024
     _default_media_max_attachments_per_message: int = 10
     _default_media_allowed_mimetypes: list[str] = [
@@ -163,7 +157,7 @@ class DefaultWebClient(IWebClient):
         self,
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
-        keyval_storage_gateway: IKeyValStorageGateway = None,
+        media_storage_gateway: IMediaStorageGateway = None,
         web_runtime_store: IWebRuntimeStore = None,
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
@@ -171,13 +165,26 @@ class DefaultWebClient(IWebClient):
     ) -> None:
         self._config = config
         self._ipc_service = ipc_service
-        self._keyval_storage_gateway = keyval_storage_gateway
+        self._media_storage_gateway = media_storage_gateway
         self._web_runtime_store = web_runtime_store
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._user_service = user_service
         if self._web_runtime_store is None:
             raise ValueError("web_runtime_store is required.")
+        if self._media_storage_gateway is None:
+            raise ValueError("media_storage_gateway is required.")
+
+        self._media_backend = self._resolve_str_config(
+            ("web", "media", "backend"),
+            "filesystem",
+        ).strip().lower()
+        self._media_storage_path = self._resolve_storage_path(
+            self._resolve_str_config(
+                ("web", "media", "storage", "path"),
+                self._default_media_storage_path,
+            )
+        )
 
         self._storage_lock = asyncio.Lock()
         self._subscriber_lock = asyncio.Lock()
@@ -214,6 +221,11 @@ class DefaultWebClient(IWebClient):
             self._default_sse_max_subscribers_per_conversation,
             minimum=1,
         )
+        self._sse_cross_instance_poll_seconds = self._resolve_float_config(
+            ("web", "sse", "cross_instance_poll_seconds"),
+            self._default_sse_cross_instance_poll_seconds,
+            minimum=0.1,
+        )
         self._sse_disconnect_sentinel = object()
         self._sse_fanout_dispatcher = _SSEFanoutDispatcher(
             enqueue_timeout_seconds=self._sse_enqueue_timeout_seconds,
@@ -239,17 +251,6 @@ class DefaultWebClient(IWebClient):
             self._default_queue_max_pending_jobs,
             minimum=1,
         )
-
-        storage_path = self._resolve_str_config(
-            ("web", "media", "storage", "path"),
-            self._default_media_storage_path,
-        )
-        self._media_storage_path = self._resolve_storage_path(storage_path)
-        self._media_backend = self._resolve_str_config(
-            ("web", "media", "backend"),
-            self._default_media_backend,
-        ).strip().lower()
-        self._media_storage_gateway = self._build_media_storage_gateway()
 
         self._media_max_upload_bytes = self._resolve_int_config(
             ("web", "media", "max_upload_bytes"),
@@ -277,6 +278,7 @@ class DefaultWebClient(IWebClient):
         """Start the background worker loop."""
         self._logging_gateway.debug("DefaultWebClient.init")
         self._ensure_media_directory()
+        await self._media_storage_gateway.check_readiness()
         await self._media_storage_gateway.init()
         await self._runtime_store().check_readiness()
 
@@ -520,6 +522,11 @@ class DefaultWebClient(IWebClient):
         async def _event_stream() -> AsyncIterator[str]:
             highest_event_id = int(cursor["effective_last_event_id"])
             active_generation = stream_generation
+            next_ping_at = asyncio.get_running_loop().time() + self._sse_keepalive_seconds
+            next_poll_at = (
+                asyncio.get_running_loop().time()
+                + self._sse_cross_instance_poll_seconds
+            )
             try:
                 reset_event = cursor.get("reset_event")
                 if isinstance(reset_event, dict):
@@ -568,13 +575,77 @@ class DefaultWebClient(IWebClient):
                     )
 
                 while True:
+                    loop_now = asyncio.get_running_loop().time()
+                    wait_timeout = min(
+                        max(next_ping_at - loop_now, 0.0),
+                        max(next_poll_at - loop_now, 0.0),
+                    )
                     try:
                         event = await asyncio.wait_for(
                             subscriber_queue.get(),
-                            timeout=self._sse_keepalive_seconds,
+                            timeout=wait_timeout,
                         )
                     except asyncio.TimeoutError:
-                        yield ": ping\n\n"
+                        now = asyncio.get_running_loop().time()
+                        if now >= next_poll_at:
+                            self._increment_web_metric("web.sse.poll.cycles")
+                            try:
+                                tail_batch = await self._tail_events_since(
+                                    conversation_id=conversation,
+                                    stream_generation=active_generation,
+                                    after_event_id=highest_event_id,
+                                )
+                            except Exception as exc:  # pylint: disable=broad-exception-caught
+                                self._increment_web_metric("web.sse.poll.errors")
+                                self._logging_gateway.warning(
+                                    "Web SSE cross-instance tail poll failed "
+                                    f"conversation_id={conversation} "
+                                    f"error_type={type(exc).__name__} error={exc}"
+                                )
+                                tail_batch = None
+
+                            if tail_batch is not None:
+                                batch_generation = self._normalize_stream_generation(
+                                    tail_batch.get("stream_generation"),
+                                    fallback=active_generation,
+                                )
+                                if batch_generation != active_generation:
+                                    self._log_sse_diagnostic(
+                                        conversation_id=conversation,
+                                        incoming_event_id=None,
+                                        last_event_id=highest_event_id,
+                                        reason="poll_generation_changed",
+                                    )
+                                    active_generation = batch_generation
+                                    highest_event_id = 0
+                                    yield self._format_sse_event(
+                                        self._build_stream_reset_event(
+                                            conversation_id=conversation,
+                                            reason="poll_generation_changed",
+                                            incoming_last_event_id=last_event_id,
+                                            incoming_event_id=None,
+                                            stream_generation=active_generation,
+                                        )
+                                    )
+
+                                for polled_event in tail_batch.get("events", []):
+                                    event_id = self._parse_event_id(polled_event.get("id"))
+                                    if event_id is not None and event_id <= highest_event_id:
+                                        continue
+                                    if event_id is not None:
+                                        highest_event_id = event_id
+                                    self._increment_web_metric("web.sse.poll.events")
+                                    yield self._format_sse_event(
+                                        self._build_stream_sse_event(
+                                            event=polled_event,
+                                            stream_generation=active_generation,
+                                        )
+                                    )
+
+                        if now >= next_ping_at:
+                            yield ": ping\n\n"
+                            next_ping_at = now + self._sse_keepalive_seconds
+                        next_poll_at = now + self._sse_cross_instance_poll_seconds
                         continue
 
                     if event is self._sse_disconnect_sentinel:
@@ -636,10 +707,42 @@ class DefaultWebClient(IWebClient):
                             stream_generation=event_generation,
                         )
                     )
+                    now = asyncio.get_running_loop().time()
+                    next_ping_at = now + self._sse_keepalive_seconds
             finally:
                 await self._unregister_subscriber(conversation, subscriber_queue)
 
         return _event_stream()
+
+    async def _tail_events_since(
+        self,
+        *,
+        conversation_id: str,
+        stream_generation: str,
+        after_event_id: int,
+    ) -> dict[str, Any]:
+        async with self._storage_lock:
+            batch = await self._runtime_store().tail_events_since(
+                conversation_id=conversation_id,
+                stream_generation=stream_generation,
+                after_event_id=after_event_id,
+                limit=self._sse_replay_max_events,
+            )
+        return {
+            "stream_generation": batch.stream_generation,
+            "max_event_id": batch.max_event_id,
+            "events": [
+                {
+                    "id": str(event.id),
+                    "event": event.event,
+                    "data": event.data,
+                    "created_at": event.created_at,
+                    "stream_generation": event.stream_generation,
+                    "stream_version": event.stream_version,
+                }
+                for event in batch.events
+            ],
+        }
 
     async def resolve_media_download(
         self,
@@ -1889,32 +1992,9 @@ class DefaultWebClient(IWebClient):
 
         return os.path.abspath(configured_path)
 
-    def _build_media_storage_gateway(self) -> IMediaStorageGateway:
-        if self._media_backend in {"filesystem", "fs", "local"}:
-            return FilesystemMediaStorageGateway(base_path=self._media_storage_path)
-
-        if self._media_backend in {"object", "object_storage", "keyval"}:
-            raw_cache_path = self._resolve_str_config(
-                ("web", "media", "object", "cache_path"),
-                self._default_media_object_cache_path,
-            )
-            raw_key_prefix = self._resolve_str_config(
-                ("web", "media", "object", "key_prefix"),
-                "web:media:object",
-            )
-            return ObjectMediaStorageGateway(
-                keyval_storage_gateway=self._keyval_storage_gateway,
-                cache_path=self._resolve_storage_path(raw_cache_path),
-                key_prefix=raw_key_prefix,
-            )
-
-        raise ValueError(
-            "web.media.backend must be one of: filesystem, object."
-        )
-
     def _ensure_media_directory(self) -> None:
         if self._media_backend in {"filesystem", "fs", "local"}:
-            Path(self._media_storage_path).mkdir(parents=True, exist_ok=True)
+            os.makedirs(self._media_storage_path, exist_ok=True)
 
     def _resolve_float_config(
         self,

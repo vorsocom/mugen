@@ -15,9 +15,14 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import mugen.core.client.web as web_mod
 from mugen.core.client.web import DefaultWebClient
+from mugen.core.contract.gateway.storage.web_runtime import (
+    WebRuntimeTailBatch,
+    WebRuntimeTailEvent,
+)
 from mugen.core.gateway.storage.web_runtime.relational_store import (
     RelationalWebRuntimeStore,
 )
+from mugen.core.gateway.storage.media.provider import DefaultMediaStorageGateway
 from mugen.core.contract.gateway.storage.keyval_model import KeyValEntry, KeyValListPage
 
 
@@ -221,6 +226,10 @@ class _InMemoryWebRelationalState:
 class _InMemoryWebRelationalSession:
     def __init__(self, state: _InMemoryWebRelationalState) -> None:
         self._state = state
+
+    @asynccontextmanager
+    async def begin(self):
+        yield self
 
     @staticmethod
     def _norm_sql(stmt: object) -> str:
@@ -480,6 +489,17 @@ class _InMemoryWebRelationalSession:
                 ]
             )
 
+        if sql.startswith(
+            "select stream_generation from mugen.web_conversation_state where conversation_id = :conversation_id"
+        ):
+            conversation_id = str(args.get("conversation_id", ""))
+            row = self._state.conversation_states.get(conversation_id)
+            if row is None:
+                return _MemoryResult(rows=[])
+            return _MemoryResult(
+                rows=[{"stream_generation": row.get("stream_generation")}]
+            )
+
         if sql.startswith("insert into mugen.web_conversation_state "):
             conversation_id = str(args.get("conversation_id", ""))
             owner_user_id = args.get("owner_user_id")
@@ -565,6 +585,26 @@ class _InMemoryWebRelationalSession:
                 dict(events[event_id])
                 for event_id in sorted(events, reverse=True)[:limit]
             ]
+            return _MemoryResult(rows=rows)
+
+        if sql.startswith(
+            "select event_id, event_type, payload, created_at, stream_generation, stream_version from mugen.web_conversation_event where conversation_id = :conversation_id and stream_generation = :stream_generation and event_id > :after_event_id order by event_id asc limit :limit"
+        ):
+            conversation_id = str(args.get("conversation_id", ""))
+            stream_generation = args.get("stream_generation")
+            after_event_id = int(args.get("after_event_id") or 0)
+            limit = int(args.get("limit") or 100)
+            events = self._state.conversation_events.get(conversation_id, {})
+            rows = []
+            for event_id in sorted(events):
+                row = events[event_id]
+                if row.get("stream_generation") != stream_generation:
+                    continue
+                if int(event_id) <= after_event_id:
+                    continue
+                rows.append(dict(row))
+                if len(rows) >= limit:
+                    break
             return _MemoryResult(rows=rows)
 
         raise AssertionError(f"Unhandled SQL in in-memory relational session: {sql}")
@@ -699,6 +739,7 @@ def _build_config(*, basedir: str, replay_max_events: int = 5) -> SimpleNamespac
                 keepalive_seconds=1,
                 replay_max_events=replay_max_events,
                 enqueue_timeout_seconds=0.01,
+                cross_instance_poll_seconds=0.1,
             ),
             queue=SimpleNamespace(
                 poll_interval_seconds=0.05,
@@ -728,14 +769,28 @@ def _build_runtime_store(
     relational_storage_gateway,
     logging_gateway,
 ) -> RelationalWebRuntimeStore:
-    runtime = SimpleNamespace(engine=None, session_maker=Mock())
+    class _SessionMaker:
+        def __call__(self):
+            return relational_storage_gateway.raw_session()
+
+    runtime = SimpleNamespace(engine=None, session_maker=_SessionMaker())
     return RelationalWebRuntimeStore(
         config=config,
         logging_gateway=logging_gateway,
         relational_runtime=runtime,
-        session_provider=relational_storage_gateway.raw_session,
-        readiness_probe=getattr(relational_storage_gateway, "check_readiness", None)
-        or (lambda: None),
+    )
+
+
+def _build_media_gateway(
+    *,
+    config: SimpleNamespace,
+    keyval_storage_gateway,
+    logging_gateway,
+):
+    return DefaultMediaStorageGateway(
+        config=config,
+        keyval_storage_gateway=keyval_storage_gateway,
+        logging_gateway=logging_gateway,
     )
 
 
@@ -760,7 +815,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.client = DefaultWebClient(
             config=self.config,
             ipc_service=Mock(),
-            keyval_storage_gateway=self.keyval,
+            media_storage_gateway=_build_media_gateway(
+                config=self.config,
+                keyval_storage_gateway=self.keyval,
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=self.config,
                 relational_storage_gateway=self.relational,
@@ -774,6 +833,13 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.client.close()
         self.tmpdir.cleanup()
+
+    async def _next_non_ping(self, stream, *, attempts: int = 10) -> str:
+        for _ in range(attempts):
+            chunk = await stream.__anext__()
+            if chunk != ": ping\n\n":
+                return chunk
+        self.fail("Timed out waiting for non-ping SSE chunk.")
 
     async def test_queue_enqueue_and_process_text_message(self) -> None:
         payload = await self.client.enqueue_message(
@@ -819,7 +885,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=cfg,
                 relational_storage_gateway=relational,
@@ -846,7 +916,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=cfg,
                 relational_storage_gateway=relational,
@@ -892,7 +966,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=cfg,
                 relational_storage_gateway=relational,
@@ -928,7 +1006,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             DefaultWebClient(
                 config=cfg,
                 ipc_service=Mock(),
-                keyval_storage_gateway=_InMemoryKeyVal(),
+                media_storage_gateway=_build_media_gateway(
+                    config=cfg,
+                    keyval_storage_gateway=_InMemoryKeyVal(),
+                    logging_gateway=logger,
+                ),
                 web_runtime_store=_build_runtime_store(
                     config=cfg,
                     relational_storage_gateway=relational,
@@ -1039,7 +1121,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=cfg,
                 relational_storage_gateway=relational,
@@ -1070,7 +1156,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=cfg,
                 relational_storage_gateway=relational,
@@ -1117,7 +1207,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=client_logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=cfg,
                 relational_storage_gateway=relational,
@@ -1247,7 +1341,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=cfg,
                 relational_storage_gateway=relational,
@@ -1506,7 +1604,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         small_client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=cfg,
                 relational_storage_gateway=relational,
@@ -2511,7 +2613,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         loop_client = DefaultWebClient(
             config=loop_cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=loop_cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=loop_cfg,
                 relational_storage_gateway=loop_relational,
@@ -2548,7 +2654,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         sleeper = DefaultWebClient(
             config=sleeper_cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=sleeper_cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=sleeper_cfg,
                 relational_storage_gateway=sleeper_relational,
@@ -2667,7 +2777,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             "conv-stream",
             {"id": "bad-live", "event": "system", "data": {}},
         )
-        second_none_id = await none_id_stream.__anext__()
+        second_none_id = await self._next_non_ping(none_id_stream)
         self.assertIn("id: bad-live", second_none_id)
         await none_id_stream.aclose()
 
@@ -2677,6 +2787,243 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 auth_user="user-1",
                 conversation_id="conv-missing",
             )
+
+    async def test_stream_events_cross_instance_poll_paths(self) -> None:
+        self.client._sse_keepalive_seconds = 0.001  # pylint: disable=protected-access
+        self.client._sse_cross_instance_poll_seconds = 0.001  # pylint: disable=protected-access
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-poll",
+            message_type="text",
+            text="seed",
+        )
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+                "conv-poll",
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "poll-base",
+                    "next_event_id": 1,
+                    "events": [],
+                },
+            )
+        self.client._tail_events_since = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            side_effect=[
+                RuntimeError("poll-failed"),
+                {
+                    "stream_generation": "poll-gen",
+                    "events": [
+                        {
+                            "id": "1",
+                            "event": "system",
+                            "data": {"message": "polled"},
+                            "created_at": None,
+                            "stream_generation": "poll-gen",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        }
+                    ],
+                },
+                {
+                    "stream_generation": "poll-gen",
+                    "events": [],
+                },
+            ]
+        )
+
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-poll",
+            last_event_id=None,
+        )
+
+        reset_chunk = await self._next_non_ping(stream)
+        self.assertIn('"reason":"poll_generation_changed"', reset_chunk)
+        polled_chunk = await self._next_non_ping(stream)
+        self.assertIn(":poll-gen:1", polled_chunk)
+        keepalive_chunk = await stream.__anext__()
+        self.assertEqual(keepalive_chunk, ": ping\n\n")
+
+        await self.client._publish_event(  # pylint: disable=protected-access
+            "conv-poll",
+            {
+                "id": "2",
+                "event": "system",
+                "data": {"message": "live"},
+                "stream_generation": "poll-gen",
+                "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+            },
+        )
+        live_chunk = await self._next_non_ping(stream)
+        self.assertIn(":poll-gen:2", live_chunk)
+        await stream.aclose()
+
+        self.assertGreater(
+            self.client._web_metrics.get("web.sse.poll.cycles", 0), 0  # pylint: disable=protected-access
+        )
+        self.assertGreater(
+            self.client._web_metrics.get("web.sse.poll.events", 0), 0  # pylint: disable=protected-access
+        )
+        self.assertGreater(
+            self.client._web_metrics.get("web.sse.poll.errors", 0), 0  # pylint: disable=protected-access
+        )
+
+    async def test_stream_events_poll_stable_generation_and_live_event_paths(self) -> None:
+        self.client._sse_keepalive_seconds = 60.0  # pylint: disable=protected-access
+        self.client._sse_cross_instance_poll_seconds = 0.001  # pylint: disable=protected-access
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-poll-stable",
+            message_type="text",
+            text="seed",
+        )
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+                "conv-poll-stable",
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "stable-gen",
+                    "next_event_id": 1,
+                    "events": [],
+                },
+            )
+        self.client._tail_events_since = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            side_effect=[
+                {
+                    "stream_generation": "stable-gen",
+                    "events": [
+                        {
+                            "id": "bad-id",
+                            "event": "system",
+                            "data": {"message": "non-numeric"},
+                            "created_at": None,
+                            "stream_generation": "stable-gen",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        }
+                    ],
+                },
+                {
+                    "stream_generation": "stable-gen",
+                    "events": [
+                        {
+                            "id": "1",
+                            "event": "system",
+                            "data": {"message": "numeric"},
+                            "created_at": None,
+                            "stream_generation": "stable-gen",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        }
+                    ],
+                },
+            ]
+        )
+
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-poll-stable",
+            last_event_id=None,
+        )
+
+        first_polled = await stream.__anext__()
+        self.assertIn("id: bad-id", first_polled)
+        second_polled = await stream.__anext__()
+        self.assertIn(":stable-gen:1", second_polled)
+
+        await self.client._publish_event(  # pylint: disable=protected-access
+            "conv-poll-stable",
+            {
+                "id": "2",
+                "event": "system",
+                "data": {"message": "live"},
+                "stream_generation": "stable-gen",
+                "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+            },
+        )
+        live_chunk = await self._next_non_ping(stream)
+        self.assertIn(":stable-gen:2", live_chunk)
+
+        await self.client._publish_event(  # pylint: disable=protected-access
+            "conv-poll-stable",
+            {
+                "id": "3",
+                "event": "system",
+                "data": {"message": "live-2"},
+                "stream_generation": "stable-gen",
+                "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+            },
+        )
+        second_live_chunk = await self._next_non_ping(stream)
+        self.assertIn(":stable-gen:3", second_live_chunk)
+        await stream.aclose()
+
+    async def test_stream_events_poll_skips_duplicate_ids_by_cursor(self) -> None:
+        self.client._sse_keepalive_seconds = 60.0  # pylint: disable=protected-access
+        self.client._sse_cross_instance_poll_seconds = 0.001  # pylint: disable=protected-access
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-poll-duplicate",
+            message_type="text",
+            text="seed",
+        )
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+                "conv-poll-duplicate",
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "dup-gen",
+                    "next_event_id": 1,
+                    "events": [],
+                },
+            )
+        self.client._tail_events_since = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            side_effect=[
+                {
+                    "stream_generation": "dup-gen",
+                    "events": [
+                        {
+                            "id": "1",
+                            "event": "system",
+                            "data": {"message": "first"},
+                            "created_at": None,
+                            "stream_generation": "dup-gen",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        }
+                    ],
+                },
+                {
+                    "stream_generation": "dup-gen",
+                    "events": [
+                        {
+                            "id": "1",
+                            "event": "system",
+                            "data": {"message": "duplicate"},
+                            "created_at": None,
+                            "stream_generation": "dup-gen",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        },
+                        {
+                            "id": "2",
+                            "event": "system",
+                            "data": {"message": "second"},
+                            "created_at": None,
+                            "stream_generation": "dup-gen",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        },
+                    ],
+                },
+            ]
+        )
+
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-poll-duplicate",
+            last_event_id=None,
+        )
+        first_chunk = await self._next_non_ping(stream)
+        self.assertIn(":dup-gen:1", first_chunk)
+        second_chunk = await self._next_non_ping(stream)
+        self.assertIn(":dup-gen:2", second_chunk)
+        self.assertNotIn("duplicate", second_chunk)
+        await stream.aclose()
 
     async def test_stream_events_resets_stale_cursor_and_emits_low_live_ids(self) -> None:
         await self.client.enqueue_message(
@@ -2967,9 +3314,9 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
             },
         )
-        live_reset_chunk = await stream.__anext__()
+        live_reset_chunk = await self._next_non_ping(stream)
         self.assertIn('"reason":"live_generation_changed"', live_reset_chunk)
-        live_event_chunk = await stream.__anext__()
+        live_event_chunk = await self._next_non_ping(stream)
         self.assertIn(":gen-c:1", live_event_chunk)
         await stream.aclose()
 
@@ -3479,7 +3826,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         failing = DefaultWebClient(
             config=failing_cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=failing_cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=failing_cfg,
                 relational_storage_gateway=failing_relational,
@@ -3967,7 +4318,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         no_dir_client = DefaultWebClient(
             config=no_dir_cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=no_dir_cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=no_dir_cfg,
                 relational_storage_gateway=no_dir_relational,
@@ -3986,7 +4341,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         young_client = DefaultWebClient(
             config=young_cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=young_cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=young_cfg,
                 relational_storage_gateway=young_relational,
@@ -4082,7 +4441,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         helper_client = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=cfg,
                 relational_storage_gateway=helper_relational,
@@ -4098,7 +4461,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         helper_client_2 = DefaultWebClient(
             config=cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=cfg,
                 relational_storage_gateway=helper_relational_2,
@@ -4121,7 +4488,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         no_base_client = DefaultWebClient(
             config=no_base_cfg,
             ipc_service=Mock(),
-            keyval_storage_gateway=_InMemoryKeyVal(),
+            media_storage_gateway=_build_media_gateway(
+                config=no_base_cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=no_base_cfg,
                 relational_storage_gateway=no_base_relational,
@@ -4345,7 +4716,11 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         self.client = DefaultWebClient(
             config=self.config,
             ipc_service=Mock(),
-            keyval_storage_gateway=self.keyval,
+            media_storage_gateway=_build_media_gateway(
+                config=self.config,
+                keyval_storage_gateway=self.keyval,
+                logging_gateway=self.logger,
+            ),
             web_runtime_store=_build_runtime_store(
                 config=self.config,
                 relational_storage_gateway=self.relational,
@@ -4365,8 +4740,26 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             DefaultWebClient(
                 config=self.config,
                 ipc_service=Mock(),
-                keyval_storage_gateway=self.keyval,
+                media_storage_gateway=_build_media_gateway(
+                    config=self.config,
+                    keyval_storage_gateway=self.keyval,
+                    logging_gateway=self.logger,
+                ),
                 web_runtime_store=None,
+                logging_gateway=self.logger,
+                messaging_service=self.messaging,
+                user_service=Mock(),
+            )
+        with self.assertRaisesRegex(ValueError, "media_storage_gateway is required"):
+            DefaultWebClient(
+                config=self.config,
+                ipc_service=Mock(),
+                media_storage_gateway=None,
+                web_runtime_store=_build_runtime_store(
+                    config=self.config,
+                    relational_storage_gateway=self.relational,
+                    logging_gateway=self.logger,
+                ),
                 logging_gateway=self.logger,
                 messaging_service=self.messaging,
                 user_service=Mock(),
@@ -4386,6 +4779,37 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(
             self.client._iso_to_utc_datetime("2025-01-01T00:00:00Z")  # pylint: disable=protected-access
         )
+
+    async def test_tail_events_since_formats_tail_batch(self) -> None:
+        tail_batch = WebRuntimeTailBatch(
+            stream_generation="gen-x",
+            max_event_id=9,
+            events=[
+                WebRuntimeTailEvent(
+                    id=7,
+                    event="system",
+                    data={"ok": True},
+                    created_at="2025-01-01T00:00:00+00:00",
+                    stream_generation="gen-x",
+                    stream_version=2,
+                )
+            ],
+        )
+        self.client._web_runtime_store.tail_events_since = AsyncMock(  # type: ignore[attr-defined]  # pylint: disable=protected-access
+            return_value=tail_batch
+        )
+
+        payload = await self.client._tail_events_since(  # pylint: disable=protected-access
+            conversation_id="conv-tail",
+            stream_generation="gen-a",
+            after_event_id=1,
+        )
+
+        self.assertEqual(payload["stream_generation"], "gen-x")
+        self.assertEqual(payload["max_event_id"], 9)
+        self.assertEqual(payload["events"][0]["id"], "7")
+        self.assertEqual(payload["events"][0]["event"], "system")
+        self.assertEqual(payload["events"][0]["stream_version"], 2)
 
     async def test_enqueue_message_relational_overflow_and_success(self) -> None:
         self.client._queue_max_pending_jobs = 1  # pylint: disable=protected-access

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
@@ -14,37 +13,71 @@ from mugen.core.gateway.storage.web_runtime.relational_store import (
 
 
 class _ResultMappings:
-    def __init__(self, row):
-        self._row = row
+    def __init__(self, rows):
+        self._rows = list(rows)
 
     def one_or_none(self):
-        return self._row
+        return self._rows[0] if self._rows else None
+
+    def all(self):
+        return list(self._rows)
 
 
 class _Result:
-    def __init__(self, row):
-        self._row = row
+    def __init__(self, rows):
+        if rows is None:
+            self._rows = []
+        elif isinstance(rows, list):
+            self._rows = list(rows)
+        else:
+            self._rows = [rows]
 
     def mappings(self):
-        return _ResultMappings(self._row)
+        return _ResultMappings(self._rows)
 
 
 class _Session:
     def __init__(self, row):
         self._row = row
         self.execute = AsyncMock(side_effect=self._execute)
+        self.begin = Mock(return_value=_NoopTransaction())
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):  # noqa: ARG002
+        return False
 
     async def _execute(self, stmt, params=None):  # noqa: ARG002
         _ = stmt
         return _Result(self._row)
 
 
-def _session_provider(session):
-    @asynccontextmanager
-    async def _cm():
-        yield session
+class _SequenceSession:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.execute = AsyncMock(side_effect=self._execute)
+        self.begin = Mock(return_value=_NoopTransaction())
 
-    return _cm
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):  # noqa: ARG002
+        return False
+
+    async def _execute(self, stmt, params=None):  # noqa: ARG002
+        _ = stmt
+        if not self._responses:
+            return _Result(None)
+        return _Result(self._responses.pop(0))
+
+
+class _NoopTransaction:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):  # noqa: ARG002
+        return False
 
 
 class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
@@ -54,17 +87,18 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
         self,
         *,
         row,
-        readiness_probe=None,
         session=None,
+        engine=None,
     ) -> tuple[RelationalWebRuntimeStore, _Session]:
         active_session = session or _Session(row)
-        runtime = SimpleNamespace(engine=None, session_maker=Mock())
+        runtime = SimpleNamespace(
+            engine=engine,
+            session_maker=Mock(return_value=active_session),
+        )
         store = RelationalWebRuntimeStore(
             config=SimpleNamespace(),
             logging_gateway=Mock(),
             relational_runtime=runtime,
-            session_provider=_session_provider(active_session),
-            readiness_probe=readiness_probe,
         )
         return store, active_session
 
@@ -75,13 +109,12 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
                 logging_gateway=Mock(),
             )
 
-    async def test_check_readiness_awaits_probe(self) -> None:
-        readiness_called = False
-
-        async def _ready():
-            nonlocal readiness_called
-            readiness_called = True
-
+    async def test_check_readiness_executes_engine_probe_when_engine_present(self) -> None:
+        connection = AsyncMock()
+        connection.__aenter__.return_value = connection
+        connection.__aexit__.return_value = False
+        connection.execute = AsyncMock(return_value=None)
+        engine = Mock(connect=Mock(return_value=connection))
         store, _ = self._build_store(
             row={
                 "web_queue_job": "mugen.web_queue_job",
@@ -89,22 +122,10 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
                 "web_conversation_event": "mugen.web_conversation_event",
                 "web_media_token": "mugen.web_media_token",
             },
-            readiness_probe=_ready,
+            engine=engine,
         )
         await store.check_readiness()
-        self.assertTrue(readiness_called)
-
-    async def test_check_readiness_handles_non_awaitable_probe(self) -> None:
-        store, _ = self._build_store(
-            row={
-                "web_queue_job": "mugen.web_queue_job",
-                "web_conversation_state": "mugen.web_conversation_state",
-                "web_conversation_event": "mugen.web_conversation_event",
-                "web_media_token": "mugen.web_media_token",
-            },
-            readiness_probe=lambda: "ok",
-        )
-        await store.check_readiness()
+        connection.execute.assert_awaited()
 
     async def test_check_readiness_raises_when_query_returns_no_row(self) -> None:
         store, _ = self._build_store(row=None)
@@ -140,8 +161,10 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
         await store.aclose()
 
     async def test_aclose_disposes_engine_when_present(self) -> None:
-        store, _ = self._build_store(row={})
+        engine = SimpleNamespace(dispose=AsyncMock())
+        store, _ = self._build_store(row={}, engine=engine)
         await store.aclose()
+        engine.dispose.assert_not_awaited()
 
     def test_datetime_and_iso_helpers_cover_naive_and_blank_paths(self) -> None:
         naive = datetime(2025, 1, 1, 0, 0, 0)
@@ -178,3 +201,73 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
         payload = RelationalWebRuntimeStore._queue_job_record_to_payload(_AttrRow())
         self.assertEqual(payload["id"], "job-1")
         self.assertIsNone(payload["text"])
+
+    async def test_tail_events_since_handles_generation_reset_and_row_normalization(
+        self,
+    ) -> None:
+        session = _SequenceSession(
+            responses=[
+                {"stream_generation": "gen-b"},
+                [
+                    {
+                        "event_id": "1",
+                        "event_type": "system",
+                        "payload": {"ok": True},
+                        "created_at": None,
+                        "stream_generation": "gen-b",
+                        "stream_version": "2",
+                    },
+                    {
+                        "event_id": "bad",
+                        "event_type": "skip",
+                        "payload": {"skip": True},
+                        "created_at": None,
+                        "stream_generation": "gen-b",
+                        "stream_version": "3",
+                    },
+                    {
+                        "event_id": "3",
+                        "event_type": None,
+                        "payload": "not-a-dict",
+                        "created_at": None,
+                        "stream_generation": None,
+                        "stream_version": "bad",
+                    },
+                ],
+            ],
+        )
+        store, _ = self._build_store(row=None, session=session)
+
+        batch = await store.tail_events_since(
+            conversation_id="conv-1",
+            stream_generation="gen-a",
+            after_event_id=99,
+            limit=1000,
+        )
+
+        self.assertEqual(batch.stream_generation, "gen-b")
+        self.assertEqual(batch.max_event_id, 3)
+        self.assertEqual(len(batch.events), 2)
+        self.assertEqual(batch.events[0].id, 1)
+        self.assertEqual(batch.events[0].stream_version, 2)
+        self.assertEqual(batch.events[1].id, 3)
+        self.assertEqual(batch.events[1].event, "")
+        self.assertEqual(batch.events[1].data, {})
+        self.assertEqual(batch.events[1].stream_generation, "gen-b")
+        self.assertEqual(batch.events[1].stream_version, 1)
+
+    async def test_tail_events_since_uses_fallbacks_when_state_missing(self) -> None:
+        session = _SequenceSession(responses=[None, []])
+        store, _ = self._build_store(row=None, session=session)
+
+        batch = await store.tail_events_since(
+            conversation_id="conv-2",
+            stream_generation=None,
+            after_event_id=-5,
+            limit=0,
+        )
+
+        self.assertIsInstance(batch.stream_generation, str)
+        self.assertNotEqual(batch.stream_generation, "")
+        self.assertEqual(batch.max_event_id, 0)
+        self.assertEqual(batch.events, [])

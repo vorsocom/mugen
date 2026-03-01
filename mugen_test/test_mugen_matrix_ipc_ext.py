@@ -55,9 +55,7 @@ class TestDeviceManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
             ),
             matrix_client=SimpleNamespace(
                 device_id="DEV-1234",
-                olm=SimpleNamespace(
-                    account=SimpleNamespace(identity_keys={"ed25519": "ABCD1234EFGH5678"})
-                ),
+                device_ed25519_key=Mock(return_value="ABCD1234EFGH5678"),
             ),
             logging_gateway=Mock(),
         )
@@ -90,7 +88,10 @@ class TestDeviceManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         ext = DeviceManagementIPCExtension(
             config=SimpleNamespace(matrix=SimpleNamespace(client=SimpleNamespace(device=""))),
-            matrix_client=SimpleNamespace(device_id="", olm=SimpleNamespace(account=None)),
+            matrix_client=SimpleNamespace(
+                device_id="",
+                device_ed25519_key=Mock(return_value=""),
+            ),
             logging_gateway=Mock(),
         )
 
@@ -111,7 +112,7 @@ class TestDeviceManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
             config=SimpleNamespace(matrix=SimpleNamespace(client=SimpleNamespace(device=""))),
             matrix_client=SimpleNamespace(
                 device_id="",
-                olm=SimpleNamespace(account=SimpleNamespace(identity_keys={})),
+                device_ed25519_key=Mock(return_value=""),
             ),
             logging_gateway=Mock(),
         )
@@ -122,12 +123,12 @@ class TestDeviceManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ext.platforms, ["matrix"])
 
         ext._client = SimpleNamespace(  # pylint: disable=protected-access
-            olm=SimpleNamespace(account=SimpleNamespace(identity_keys=[]))
+            device_ed25519_key=Mock(return_value=[])
         )
         self.assertEqual(ext._resolve_session_key(), "")  # pylint: disable=protected-access
 
         ext._client = SimpleNamespace(  # pylint: disable=protected-access
-            olm=SimpleNamespace(account=SimpleNamespace(identity_keys={"ed25519": 1234}))
+            device_ed25519_key=Mock(return_value=1234)
         )
         self.assertEqual(ext._resolve_session_key(), "")  # pylint: disable=protected-access
 
@@ -147,55 +148,35 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
 
         matrix_client = SimpleNamespace(
-            user_id="@assistant:example.com",
-            list_direct_rooms=AsyncMock(
-                return_value=SimpleNamespace(
-                    rooms={"@alice:example.com": ["!room-a:example.com"]},
-                )
+            current_user_id="@assistant:example.com",
+            direct_room_ids=AsyncMock(return_value={"!room-a:example.com"}),
+            joined_room_ids=AsyncMock(
+                return_value=["!room-a:example.com", "!room-b:example.com"]
             ),
-            joined_rooms=AsyncMock(
-                return_value=SimpleNamespace(
-                    rooms=["!room-a:example.com", "!room-b:example.com"]
-                )
-            ),
-            room_get_state=AsyncMock(
+            room_state_events=AsyncMock(
                 side_effect=[
-                    SimpleNamespace(
-                        events=[
-                            {
-                                "type": "m.room.encryption",
-                                "content": {"algorithm": "m.megolm.v1.aes-sha2"},
-                            },
-                            {
-                                "type": "m.room.name",
-                                "content": {"name": "Room A"},
-                            },
-                        ]
-                    ),
-                    SimpleNamespace(
-                        events=[
-                            SimpleNamespace(
-                                type="m.room.name",
-                                content={"name": "Room B"},
-                            )
-                        ]
-                    ),
+                    [
+                        {
+                            "type": "m.room.encryption",
+                            "content": {"algorithm": "m.megolm.v1.aes-sha2"},
+                        },
+                        {
+                            "type": "m.room.name",
+                            "content": {"name": "Room A"},
+                        },
+                    ],
+                    [
+                        {
+                            "type": "m.room.name",
+                            "content": {"name": "Room B"},
+                        }
+                    ],
                 ]
             ),
-            joined_members=AsyncMock(
+            joined_member_ids=AsyncMock(
                 side_effect=[
-                    SimpleNamespace(
-                        members=[
-                            SimpleNamespace(user_id="@assistant:example.com"),
-                            SimpleNamespace(user_id="@alice:example.com"),
-                        ]
-                    ),
-                    SimpleNamespace(
-                        members=[
-                            SimpleNamespace(user_id="@assistant:example.com"),
-                            SimpleNamespace(user_id="@bob:example.com"),
-                        ]
-                    ),
+                    ["@assistant:example.com", "@alice:example.com"],
+                    ["@assistant:example.com", "@bob:example.com"],
                 ]
             ),
             room_leave=AsyncMock(),
@@ -252,23 +233,14 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
             }
         )
         matrix_client = SimpleNamespace(
-            user_id="@assistant:example.com",
-            joined_rooms=AsyncMock(
-                return_value=SimpleNamespace(
-                    rooms=["!room-a:example.com", "!room-b:example.com"]
-                )
+            current_user_id="@assistant:example.com",
+            joined_room_ids=AsyncMock(
+                return_value=["!room-a:example.com", "!room-b:example.com"]
             ),
-            joined_members=AsyncMock(
+            joined_member_ids=AsyncMock(
                 side_effect=[
-                    SimpleNamespace(
-                        members=[
-                            SimpleNamespace(user_id="@assistant:example.com"),
-                            SimpleNamespace(user_id="@alice:example.com"),
-                        ]
-                    ),
-                    SimpleNamespace(
-                        members=[SimpleNamespace(user_id="@assistant:example.com")]
-                    ),
+                    ["@assistant:example.com", "@alice:example.com"],
+                    ["@assistant:example.com"],
                 ]
             ),
             room_kick=AsyncMock(),
@@ -314,23 +286,14 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
             }
         )
         matrix_client = SimpleNamespace(
-            user_id="@assistant:example.com",
-            joined_rooms=AsyncMock(
-                return_value=SimpleNamespace(
-                    rooms=["!room-a:example.com", "!room-b:example.com"]
-                )
+            current_user_id="@assistant:example.com",
+            joined_room_ids=AsyncMock(
+                return_value=["!room-a:example.com", "!room-b:example.com"]
             ),
-            joined_members=AsyncMock(
+            joined_member_ids=AsyncMock(
                 side_effect=[
-                    SimpleNamespace(
-                        members=[SimpleNamespace(user_id="@assistant:example.com")]
-                    ),
-                    SimpleNamespace(
-                        members=[
-                            SimpleNamespace(user_id="@assistant:example.com"),
-                            SimpleNamespace(user_id="@bob:example.com"),
-                        ]
-                    ),
+                    ["@assistant:example.com"],
+                    ["@assistant:example.com", "@bob:example.com"],
                 ]
             ),
             room_kick=AsyncMock(),
@@ -361,12 +324,13 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_command_returns_not_found(self) -> None:
         matrix_client = SimpleNamespace(
-            user_id="@assistant:example.com",
-            joined_rooms=AsyncMock(return_value=SimpleNamespace(rooms=[])),
-            joined_members=AsyncMock(return_value=SimpleNamespace(members=[])),
+            current_user_id="@assistant:example.com",
+            joined_room_ids=AsyncMock(return_value=[]),
+            joined_member_ids=AsyncMock(return_value=[]),
             room_kick=AsyncMock(),
             room_leave=AsyncMock(),
-            room_get_state=AsyncMock(return_value=SimpleNamespace(events=[])),
+            room_state_events=AsyncMock(return_value=[]),
+            direct_room_ids=AsyncMock(return_value=set()),
         )
         ext = RoomManagementIPCExtension(
             matrix_client=matrix_client,
@@ -389,12 +353,13 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
     async def test_constructor_fallback_and_helper_guard_paths(self) -> None:
         keyval_storage_gateway = _InMemoryKeyValStorageGateway()
         matrix_client = SimpleNamespace(
-            user_id="@assistant:example.com",
-            joined_rooms=AsyncMock(return_value=SimpleNamespace(rooms="invalid")),
-            joined_members=AsyncMock(return_value=SimpleNamespace(members=[])),
+            current_user_id="@assistant:example.com",
+            joined_room_ids=AsyncMock(return_value=[]),
+            joined_member_ids=AsyncMock(return_value=[]),
             room_kick=AsyncMock(),
             room_leave=AsyncMock(),
-            room_get_state=AsyncMock(return_value=SimpleNamespace(events=[])),
+            room_state_events=AsyncMock(return_value=[]),
+            direct_room_ids=AsyncMock(return_value=set()),
         )
         logging_gateway = Mock()
 
@@ -419,31 +384,18 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(ext.platforms, ["matrix"])
         self.assertEqual(await ext._joined_room_ids(), [])  # pylint: disable=protected-access
-        self.assertEqual(  # pylint: disable=protected-access
-            ext._collect_member_ids(SimpleNamespace(members="invalid")),
-            [],
-        )
-        self.assertEqual(  # pylint: disable=protected-access
-            ext._collect_member_ids(
-                SimpleNamespace(
-                    members=[
-                        SimpleNamespace(user_id=123),
-                        SimpleNamespace(user_id="@assistant:example.com"),
-                        SimpleNamespace(user_id="@valid:example.com"),
-                    ]
-                )
-            ),
-            ["@valid:example.com"],
-        )
-        self.assertEqual(  # pylint: disable=protected-access
-            ext._state_events(SimpleNamespace(events="invalid")),
-            [],
-        )
         self.assertIsNone(  # pylint: disable=protected-access
             ext._state_event_content(
                 [{"type": "m.room.name", "content": "invalid"}],
                 "m.room.name",
             )
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            ext._state_event_content(
+                [SimpleNamespace(type="m.room.name", content={"name": "Room C"})],
+                "m.room.name",
+            ),
+            {"name": "Room C"},
         )
 
         self.assertEqual(  # pylint: disable=protected-access
@@ -489,16 +441,14 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         matrix_client = SimpleNamespace(
-            user_id="@assistant:example.com",
-            joined_rooms=AsyncMock(
-                return_value=SimpleNamespace(
-                    rooms=["!invalid-members:example.com", "!other-user:example.com"]
-                )
+            current_user_id="@assistant:example.com",
+            joined_room_ids=AsyncMock(
+                return_value=["!invalid-members:example.com", "!other-user:example.com"]
             ),
-            joined_members=AsyncMock(
+            joined_member_ids=AsyncMock(
                 side_effect=[
-                    SimpleNamespace(members="invalid"),
-                    SimpleNamespace(members=[SimpleNamespace(user_id="@other:example.com")]),
+                    [],
+                    ["@other:example.com"],
                 ]
             ),
             room_kick=AsyncMock(),
@@ -523,34 +473,23 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
 
     async def test_matrix_list_rooms_ignores_non_string_state_fields(self) -> None:
         matrix_client = SimpleNamespace(
-            user_id="@assistant:example.com",
-            list_direct_rooms=AsyncMock(
-                return_value=SimpleNamespace(
-                    rooms={"@alice:example.com": ["!room:example.com"]},
-                )
+            current_user_id="@assistant:example.com",
+            direct_room_ids=AsyncMock(return_value={"!room:example.com"}),
+            joined_room_ids=AsyncMock(return_value=["!room:example.com"]),
+            room_state_events=AsyncMock(
+                return_value=[
+                    {
+                        "type": "m.room.encryption",
+                        "content": {"algorithm": 123},
+                    },
+                    {
+                        "type": "m.room.name",
+                        "content": {"name": 123},
+                    },
+                ]
             ),
-            joined_rooms=AsyncMock(return_value=SimpleNamespace(rooms=["!room:example.com"])),
-            room_get_state=AsyncMock(
-                return_value=SimpleNamespace(
-                    events=[
-                        {
-                            "type": "m.room.encryption",
-                            "content": {"algorithm": 123},
-                        },
-                        {
-                            "type": "m.room.name",
-                            "content": {"name": 123},
-                        },
-                    ]
-                )
-            ),
-            joined_members=AsyncMock(
-                return_value=SimpleNamespace(
-                    members=[
-                        SimpleNamespace(user_id="@assistant:example.com"),
-                        SimpleNamespace(user_id="@alice:example.com"),
-                    ]
-                )
+            joined_member_ids=AsyncMock(
+                return_value=["@assistant:example.com", "@alice:example.com"]
             ),
             room_kick=AsyncMock(),
             room_leave=AsyncMock(),
@@ -580,27 +519,19 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
 
     async def test_matrix_list_rooms_allows_missing_room_name_event(self) -> None:
         matrix_client = SimpleNamespace(
-            user_id="@assistant:example.com",
-            joined_rooms=AsyncMock(
-                return_value=SimpleNamespace(rooms=["!room-no-name:example.com"])
+            current_user_id="@assistant:example.com",
+            direct_room_ids=AsyncMock(return_value=set()),
+            joined_room_ids=AsyncMock(return_value=["!room-no-name:example.com"]),
+            room_state_events=AsyncMock(
+                return_value=[
+                    {
+                        "type": "m.room.encryption",
+                        "content": {"algorithm": "m.megolm.v1.aes-sha2"},
+                    }
+                ]
             ),
-            room_get_state=AsyncMock(
-                return_value=SimpleNamespace(
-                    events=[
-                        {
-                            "type": "m.room.encryption",
-                            "content": {"algorithm": "m.megolm.v1.aes-sha2"},
-                        }
-                    ]
-                )
-            ),
-            joined_members=AsyncMock(
-                return_value=SimpleNamespace(
-                    members=[
-                        SimpleNamespace(user_id="@assistant:example.com"),
-                        SimpleNamespace(user_id="@alice:example.com"),
-                    ]
-                )
+            joined_member_ids=AsyncMock(
+                return_value=["@assistant:example.com", "@alice:example.com"]
             ),
             room_kick=AsyncMock(),
             room_leave=AsyncMock(),
@@ -627,7 +558,7 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
     async def test_direct_room_ids_returns_empty_for_non_dict_payload(self) -> None:
         ext = RoomManagementIPCExtension(
             matrix_client=SimpleNamespace(
-                list_direct_rooms=AsyncMock(return_value=SimpleNamespace(rooms=["!room:example.com"])),
+                direct_room_ids=AsyncMock(return_value=set()),
             ),
             keyval_storage_gateway=_InMemoryKeyValStorageGateway(),
             logging_gateway=Mock(),
@@ -635,17 +566,23 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(await ext._direct_room_ids(), set())  # pylint: disable=protected-access
 
+    async def test_direct_room_ids_returns_empty_when_lookup_raises(self) -> None:
+        logging_gateway = Mock()
+        ext = RoomManagementIPCExtension(
+            matrix_client=SimpleNamespace(
+                direct_room_ids=AsyncMock(side_effect=RuntimeError("lookup-failed")),
+            ),
+            keyval_storage_gateway=_InMemoryKeyValStorageGateway(),
+            logging_gateway=logging_gateway,
+        )
+
+        self.assertEqual(await ext._direct_room_ids(), set())  # pylint: disable=protected-access
+        logging_gateway.warning.assert_called_once()
+
     async def test_direct_room_ids_filters_non_list_and_invalid_room_ids(self) -> None:
         ext = RoomManagementIPCExtension(
             matrix_client=SimpleNamespace(
-                list_direct_rooms=AsyncMock(
-                    return_value=SimpleNamespace(
-                        rooms={
-                            "@alice:example.com": ["!room-a:example.com", "", 123],
-                            "@bob:example.com": "!room-b:example.com",
-                        }
-                    )
-                ),
+                direct_room_ids=AsyncMock(return_value={"!room-a:example.com"}),
             ),
             keyval_storage_gateway=_InMemoryKeyValStorageGateway(),
             logging_gateway=Mock(),

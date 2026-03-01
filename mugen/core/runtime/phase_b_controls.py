@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from mugen.core.utility.platforms import normalize_platforms
+
 
 _STARTUP_TIMEOUT_KEY = "mugen.runtime.phase_b.startup_timeout_seconds"
 
@@ -34,16 +36,7 @@ def parse_nonnegative_float(value: object, *, default: float) -> float:
 
 def normalize_platform_list(values: object) -> list[str]:
     """Normalize platform names to lower-case unique values."""
-    if not isinstance(values, list):
-        return []
-
-    normalized: list[str] = []
-    for item in values:
-        platform = str(item).strip().lower()
-        if platform == "" or platform in normalized:
-            continue
-        normalized.append(platform)
-    return normalized
+    return normalize_platforms(values)
 
 
 def resolve_phase_b_runtime_controls(config: object) -> tuple[float, list[str], bool]:

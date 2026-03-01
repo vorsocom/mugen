@@ -14,6 +14,7 @@ from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
 from mugen.core.contract.service.ipc import IIPCService
@@ -55,6 +56,11 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def keyval_storage_gateway(self) -> IKeyValStorageGateway:
         """Get the global key-value storage gateway."""
+
+    @property
+    @abstractmethod
+    def media_storage_gateway(self) -> IMediaStorageGateway:
+        """Get the global media storage gateway."""
 
     @property
     @abstractmethod

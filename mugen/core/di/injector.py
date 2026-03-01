@@ -14,6 +14,7 @@ from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
 from mugen.core.contract.service.ipc import IIPCService
@@ -39,6 +40,7 @@ class DependencyInjector(IDependencyInjector):
         email_gateway: IEmailGateway = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        media_storage_gateway: IMediaStorageGateway = None,
         relational_runtime=None,
         relational_storage_gateway: IRelationalStorageGateway = None,
         web_runtime_store: IWebRuntimeStore = None,
@@ -57,6 +59,7 @@ class DependencyInjector(IDependencyInjector):
         self.__email_gateway = email_gateway
         self.__ipc_service = ipc_service
         self.__keyval_storage_gateway = keyval_storage_gateway
+        self.__media_storage_gateway = media_storage_gateway
         self.__relational_runtime = relational_runtime
         self.__relational_storage_gateway = relational_storage_gateway
         self.__web_runtime_store = web_runtime_store
@@ -118,6 +121,14 @@ class DependencyInjector(IDependencyInjector):
     @keyval_storage_gateway.setter
     def keyval_storage_gateway(self, value: IKeyValStorageGateway) -> None:
         self.__keyval_storage_gateway = value
+
+    @property
+    def media_storage_gateway(self) -> IMediaStorageGateway:
+        return self.__media_storage_gateway
+
+    @media_storage_gateway.setter
+    def media_storage_gateway(self, value: IMediaStorageGateway) -> None:
+        self.__media_storage_gateway = value
 
     @property
     def relational_storage_gateway(self) -> IRelationalStorageGateway:

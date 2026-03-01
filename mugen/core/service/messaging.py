@@ -12,7 +12,6 @@ from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
-from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.messaging import IMessagingService
@@ -37,13 +36,11 @@ class DefaultMessagingService(IMessagingService):
     def __init__(
         self,
         config: SimpleNamespace,
-        completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
         logging_gateway: ILoggingGateway,
         user_service: IUserService,
     ) -> None:
         self._config = config
-        self._completion_gateway = completion_gateway
         self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway
         self._user_service = user_service
@@ -63,6 +60,12 @@ class DefaultMessagingService(IMessagingService):
         self._normalize_composed_message_use_case = NormalizeComposedMessageUseCase()
         self._extension_timeout_seconds = self._resolve_extension_timeout_seconds()
         self._extension_failure_policy = self._resolve_extension_failure_policy()
+        self._extension_metrics: dict[str, int] = {}
+
+    def _increment_extension_metric(self, metric_name: str, amount: int = 1) -> None:
+        self._extension_metrics[metric_name] = (
+            self._extension_metrics.get(metric_name, 0) + amount
+        )
 
     def _resolve_extension_timeout_seconds(self) -> float | None:
         environment = str(
@@ -163,9 +166,11 @@ class DefaultMessagingService(IMessagingService):
     ) -> None:
         _ = extension_name
         if self._should_fail_closed():
+            self._increment_extension_metric("messaging.extensions.fail_closed")
             if cause is None:
                 raise RuntimeError(message)
             raise RuntimeError(message) from cause
+        self._increment_extension_metric("messaging.extensions.fail_open")
         self._logging_gateway.warning(message)
 
     async def _invoke_message_handler(
@@ -194,6 +199,7 @@ class DefaultMessagingService(IMessagingService):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # pylint: disable=broad-exception-caught
+                self._increment_extension_metric("messaging.extensions.exception")
                 self._handle_extension_handler_failure(
                     extension_name=extension_name,
                     message=(
@@ -208,6 +214,7 @@ class DefaultMessagingService(IMessagingService):
         try:
             return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
         except asyncio.TimeoutError as exc:
+            self._increment_extension_metric("messaging.extensions.timeout")
             self._handle_extension_handler_failure(
                 extension_name=extension_name,
                 message=(
@@ -221,6 +228,7 @@ class DefaultMessagingService(IMessagingService):
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._increment_extension_metric("messaging.extensions.exception")
             self._handle_extension_handler_failure(
                 extension_name=extension_name,
                 message=(

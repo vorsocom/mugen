@@ -30,6 +30,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                 "modules": {
                     "core": {
                         "gateway": {
+                            "completion": "mugen.gateway.completion:CompletionProvider",
                             "storage": {
                                 "keyval": "mugen.gateway.keyval:KeyValProvider",
                             }
@@ -764,7 +765,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         config = self._readiness_config()
         self.assertEqual(
             di._resolve_readiness_provider_names(config),
-            ["keyval_storage_gateway"],
+            ["completion_gateway", "keyval_storage_gateway"],
         )
 
     def test_resolve_readiness_provider_names_includes_relational_when_configured(
@@ -773,7 +774,11 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         config = self._readiness_config(include_relational=True)
         self.assertEqual(
             di._resolve_readiness_provider_names(config),
-            ["keyval_storage_gateway", "relational_storage_gateway"],
+            [
+                "completion_gateway",
+                "keyval_storage_gateway",
+                "relational_storage_gateway",
+            ],
         )
 
     def test_resolve_readiness_provider_names_web_profile_includes_web_store(self) -> None:
@@ -785,9 +790,26 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         self.assertEqual(
             di._resolve_readiness_provider_names(config),
             [
+                "completion_gateway",
                 "keyval_storage_gateway",
                 "relational_storage_gateway",
                 "web_runtime_store",
+            ],
+        )
+
+    def test_resolve_readiness_provider_names_includes_optional_io_gateways(self) -> None:
+        config = self._readiness_config()
+        config["mugen"]["modules"]["core"]["gateway"]["email"] = "email.mod:EmailProvider"  # type: ignore[index]
+        config["mugen"]["modules"]["core"]["gateway"]["knowledge"] = (  # type: ignore[index]
+            "knowledge.mod:KnowledgeProvider"
+        )
+        self.assertEqual(
+            di._resolve_readiness_provider_names(config),
+            [
+                "completion_gateway",
+                "keyval_storage_gateway",
+                "email_gateway",
+                "knowledge_gateway",
             ],
         )
 
@@ -855,7 +877,9 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                 self.ready = True
 
         provider = _ReadyProvider()
+        completion_provider = _ReadyProvider()
         injector = di.injector.DependencyInjector(
+            completion_gateway=completion_provider,
             keyval_storage_gateway=provider,
         )
 
@@ -866,6 +890,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             )
         )
         self.assertTrue(provider.ready)
+        self.assertTrue(completion_provider.ready)
 
     def test_ensure_injector_readiness_async_fails_for_missing_provider(self) -> None:
         injector = di.injector.DependencyInjector()
@@ -877,11 +902,16 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                 )
             )
 
-        self.assertIn("keyval_storage_gateway", str(raised.exception))
-        self.assertIn("mugen.gateway.keyval:KeyValProvider", str(raised.exception))
+        self.assertIn("completion_gateway", str(raised.exception))
+        self.assertIn("mugen.gateway.completion:CompletionProvider", str(raised.exception))
 
     def test_ensure_injector_readiness_async_fails_for_missing_hook(self) -> None:
+        class _ReadyProvider:  # pylint: disable=too-few-public-methods
+            async def check_readiness(self) -> None:
+                return None
+
         injector = di.injector.DependencyInjector(
+            completion_gateway=_ReadyProvider(),
             keyval_storage_gateway=object(),
         )
 
@@ -896,11 +926,16 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         self.assertIn("check_readiness is unavailable", str(raised.exception))
 
     def test_ensure_injector_readiness_async_wraps_provider_exception(self) -> None:
+        class _ReadyProvider:  # pylint: disable=too-few-public-methods
+            async def check_readiness(self) -> None:
+                return None
+
         class _FailingProvider:  # pylint: disable=too-few-public-methods
             async def check_readiness(self) -> None:
                 raise RuntimeError("backend unavailable")
 
         injector = di.injector.DependencyInjector(
+            completion_gateway=_ReadyProvider(),
             keyval_storage_gateway=_FailingProvider(),
         )
 
@@ -920,6 +955,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                 return None
 
         injector = di.injector.DependencyInjector(
+            completion_gateway=_Provider(),
             keyval_storage_gateway=_Provider(),
         )
 

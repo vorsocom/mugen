@@ -137,6 +137,34 @@ class TestObjectMediaStorageGateway(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_check_readiness_handles_awaitable_nonawaitable_and_missing_hook(self) -> None:
+        self.keyval.check_readiness = AsyncMock(return_value=None)
+        await self.gateway.check_readiness()
+        self.keyval.check_readiness.assert_awaited_once_with()
+
+        class _NonAwaitableReady:  # pylint: disable=too-few-public-methods
+            def check_readiness(self):
+                return "ok"
+
+        nonawaitable_gateway = ObjectMediaStorageGateway(
+            keyval_storage_gateway=_NonAwaitableReady(),
+            cache_path=os.path.join(self.tmpdir.name, "cache_nonawaitable"),
+        )
+        await nonawaitable_gateway.check_readiness()
+
+        class _MissingReady:  # pylint: disable=too-few-public-methods
+            pass
+
+        missing_hook_gateway = ObjectMediaStorageGateway(
+            keyval_storage_gateway=_MissingReady(),
+            cache_path=os.path.join(self.tmpdir.name, "cache_missing"),
+        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "requires keyval_storage_gateway.check_readiness",
+        ):
+            await missing_hook_gateway.check_readiness()
+
     async def test_store_bytes_rolls_back_blob_when_meta_write_fails(self) -> None:
         original_put_bytes = self.keyval.put_bytes
         original_delete = self.keyval.delete

@@ -40,6 +40,12 @@ class SESEmailGateway(IEmailGateway):
         self._ses_config = self._resolve_ses_config()
         self._client = self._build_ses_client()
 
+    async def check_readiness(self) -> None:
+        if not isinstance(self._ses_config, dict):
+            raise RuntimeError("Amazon SES gateway configuration is unavailable.")
+        if self._client is None:
+            raise RuntimeError("Amazon SES gateway client is unavailable.")
+
     async def send_email(self, request: EmailSendRequest) -> EmailSendResult:
         if not isinstance(request, EmailSendRequest):
             raise EmailGatewayError(

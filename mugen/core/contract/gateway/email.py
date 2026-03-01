@@ -210,5 +210,9 @@ class IEmailGateway(ABC):  # pylint: disable=too-few-public-methods
     """An abstract base class for outbound email gateways."""
 
     @abstractmethod
+    async def check_readiness(self) -> None:
+        """Validate provider readiness for startup fail-fast checks."""
+
+    @abstractmethod
     async def send_email(self, request: EmailSendRequest) -> EmailSendResult:
         """Send an outbound email."""

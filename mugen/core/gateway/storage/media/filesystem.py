@@ -21,6 +21,13 @@ class FilesystemMediaStorageGateway(IMediaStorageGateway):
     ) -> None:
         self._base_path = Path(base_path).resolve()
 
+    async def check_readiness(self) -> None:
+        await asyncio.to_thread(
+            self._base_path.mkdir,
+            parents=True,
+            exist_ok=True,
+        )
+
     async def init(self) -> None:
         await asyncio.to_thread(
             self._base_path.mkdir,

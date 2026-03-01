@@ -56,6 +56,18 @@ def _smtp_client(*, rejected=None) -> MagicMock:
 class TestMugenGatewayEmailSMTP(unittest.IsolatedAsyncioTestCase):
     """Covers request serialization and SMTP transport behavior."""
 
+    async def test_check_readiness_validates_required_smtp_fields(self) -> None:
+        gateway = SMTPEmailGateway(_make_config(), Mock())
+        await gateway.check_readiness()
+
+        gateway._smtp_config = None  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "configuration is unavailable"):
+            await gateway.check_readiness()
+
+        gateway._smtp_config = {"host": "smtp.example.com"}  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "configuration is incomplete"):
+            await gateway.check_readiness()
+
     async def test_send_email_sends_text_only_email(self) -> None:
         config = _make_config(starttls=False)
         logging_gateway = Mock()

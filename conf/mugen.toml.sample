@@ -51,6 +51,7 @@ gateway.completion = "mugen.core.gateway.completion.bedrock:BedrockCompletionGat
 # gateway.knowledge = "mugen.core.gateway.knowledge.qdrant:QdrantKnowledgeGateway"
 gateway.logging = "mugen.core.gateway.logging.standard:StandardLoggingGateway"
 gateway.storage.keyval = "mugen.core.gateway.storage.keyval.relational:RelationalKeyValStorageGateway"
+gateway.storage.media = "mugen.core.gateway.storage.media.provider:DefaultMediaStorageGateway"
 gateway.storage.relational = "mugen.core.gateway.storage.rdbms.sqla.sqla_gateway:SQLAlchemyRelationalStorageGateway"
 gateway.storage.web_runtime = "mugen.core.gateway.storage.web_runtime.relational_store:RelationalWebRuntimeStore"
 
@@ -425,6 +426,12 @@ url = "postgresql+psycopg://user:password@server/database"
 [rdbms.sqlalchemy]
 # SQLAlchemy requires an asynchronous driver.
 url = "postgresql+psycopg://user:password@server/database"
+pool_pre_ping = true
+pool_recycle_seconds = 1800
+pool_timeout_seconds = 30
+pool_size = 10
+max_overflow = 20
+statement_timeout_ms = 15000
 
 [rdbms.migration_tracks.core]
 # Core track remains the default migration lineage.
@@ -525,6 +532,7 @@ webhook.dedupe_ttl_seconds = 86400
 [web]
 sse.keepalive_seconds = 15
 sse.replay_max_events = 200
+sse.cross_instance_poll_seconds = 1.0
 queue.poll_interval_seconds = 0.25
 queue.processing_lease_seconds = 30
 queue.max_pending_jobs = 2000

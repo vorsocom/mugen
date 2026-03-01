@@ -3,11 +3,11 @@
 __all__ = ["RoomManagementIPCExtension"]
 
 from mugen.core import di
-from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
+from mugen.core.plugin.matrix.contract import IMatrixRoomAdminClient
 
 
 def _matrix_client_provider():
@@ -27,7 +27,7 @@ class RoomManagementIPCExtension(IIPCExtension):
 
     def __init__(
         self,
-        matrix_client: IMatrixClient | None = None,
+        matrix_client: IMatrixRoomAdminClient | None = None,
         keyval_storage_gateway: IKeyValStorageGateway | None = None,
         logging_gateway: ILoggingGateway | None = None,
     ) -> None:
@@ -102,8 +102,12 @@ class RoomManagementIPCExtension(IIPCExtension):
         ## 2. Leave room.
         ###
         for room_id in await self._joined_room_ids():
-            members = await self._client.joined_members(room_id)
-            to_kick = self._collect_member_ids(members)
+            members = await self._client.joined_member_ids(room_id)
+            to_kick = [
+                user_id
+                for user_id in members
+                if user_id != self._client.current_user_id
+            ]
             ## 1. Kick users from room.
             for user_id in to_kick:
                 self._logging_gateway.debug(
@@ -119,15 +123,12 @@ class RoomManagementIPCExtension(IIPCExtension):
         ## 2. Leave room.
         ###
         for room_id in await self._joined_room_ids():
-            members = await self._client.joined_members(room_id)
-            members_list = getattr(members, "members", [])
-            if not isinstance(members_list, list):
+            members = await self._client.joined_member_ids(room_id)
+            if len(members) != 1:
                 continue
-            if len(members_list) != 1:
-                continue
-            first_member_user_id = getattr(members_list[0], "user_id", None)
+            first_member_user_id = members[0]
             ## 1. Find empty room.
-            if self._client.user_id == first_member_user_id:
+            if self._client.current_user_id == first_member_user_id:
                 self._logging_gateway.debug(f"Found empty room: {room_id}")
                 ## 2. Leave room.
                 await self._util_leave_room(room_id)
@@ -152,8 +153,7 @@ class RoomManagementIPCExtension(IIPCExtension):
                     "chat_threads": [],
                 }
             )
-            room_state = await self._client.room_get_state(room_id)
-            events = self._state_events(room_state)
+            events = await self._client.room_state_events(room_id)
             ## 2. Determine if room is encrypted.
             room_encrypted_content = self._state_event_content(
                 events,
@@ -172,8 +172,9 @@ class RoomManagementIPCExtension(IIPCExtension):
                 if isinstance(room_name, str):
                     response[-1]["room_name"] = room_name
             ## 5. List all members of the room.
-            members = await self._client.joined_members(room_id)
-            for user_id in self._collect_member_ids(members):
+            for user_id in await self._client.joined_member_ids(room_id):
+                if user_id == self._client.current_user_id:
+                    continue
                 response[-1]["members"].append(user_id)
             ## 6. List all chat threads.
             response[-1]["chat_threads"] = await self._load_chat_thread_keys(room_id)
@@ -201,56 +202,17 @@ class RoomManagementIPCExtension(IIPCExtension):
             await self._keyval_storage_gateway.delete(chat_threads_list_key)
 
     async def _joined_room_ids(self) -> list[str]:
-        rooms = await self._client.joined_rooms()
-        room_ids = getattr(rooms, "rooms", None)
-        if not isinstance(room_ids, list):
-            return []
-        return [item for item in room_ids if isinstance(item, str) and item != ""]
+        return await self._client.joined_room_ids()
 
     async def _direct_room_ids(self) -> set[str]:
         try:
-            response = await self._client.list_direct_rooms()
+            return await self._client.direct_room_ids()
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
                 "RoomManagementIPCExtension: direct-room lookup failed "
                 f"error={type(exc).__name__}: {exc}"
             )
             return set()
-
-        rooms = getattr(response, "rooms", None)
-        if not isinstance(rooms, dict):
-            return set()
-
-        direct_room_ids: set[str] = set()
-        for room_ids in rooms.values():
-            if not isinstance(room_ids, list):
-                continue
-            for room_id in room_ids:
-                if isinstance(room_id, str) and room_id != "":
-                    direct_room_ids.add(room_id)
-        return direct_room_ids
-
-    def _collect_member_ids(self, joined_members_response) -> list[str]:
-        collected: list[str] = []
-        members = getattr(joined_members_response, "members", [])
-        if not isinstance(members, list):
-            return collected
-        assistant_user_id = getattr(self._client, "user_id", None)
-        for user in members:
-            user_id = getattr(user, "user_id", None)
-            if not isinstance(user_id, str) or user_id == "":
-                continue
-            if user_id == assistant_user_id:
-                continue
-            collected.append(user_id)
-        return collected
-
-    @staticmethod
-    def _state_events(room_state_response) -> list:
-        events = getattr(room_state_response, "events", None)
-        if not isinstance(events, list):
-            return []
-        return events
 
     @staticmethod
     def _state_event_content(events: list, event_type: str) -> dict | None:

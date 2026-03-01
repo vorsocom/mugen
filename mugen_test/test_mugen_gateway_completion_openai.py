@@ -50,6 +50,20 @@ def _simple_request() -> CompletionRequest:
 class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
     """Covers request shaping and failure handling for OpenAI completion."""
 
+    async def test_check_readiness_resolves_required_operation_configs(self) -> None:
+        config = _make_config()
+        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
+            responses=SimpleNamespace(create=AsyncMock()),
+        )
+
+        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        await gateway.check_readiness()
+
     def test_constructor_builds_client_with_optional_settings(self) -> None:
         config = _make_config()
         logging_gateway = Mock()

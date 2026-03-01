@@ -120,6 +120,10 @@ class ICompletionGateway(ABC):  # pylint: disable=too-few-public-methods
     """A chat completion gateway base class."""
 
     @abstractmethod
+    async def check_readiness(self) -> None:
+        """Validate provider readiness for startup fail-fast checks."""
+
+    @abstractmethod
     async def get_completion(
         self,
         request: CompletionRequest,

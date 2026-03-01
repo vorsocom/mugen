@@ -249,7 +249,6 @@ class TestDIBuildMessagingService(unittest.TestCase):
                     def __init__(  # pylint: disable=too-many-arguments
                         self,
                         config,
-                        completion_gateway,
                         keyval_storage_gateway,
                         logging_gateway,
                         user_service,

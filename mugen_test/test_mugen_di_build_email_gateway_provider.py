@@ -188,6 +188,9 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                     def __init__(self, config, logging_gateway):
                         pass
 
+                    async def check_readiness(self):
+                        pass
+
                     async def send_email(self, request):
                         pass
 

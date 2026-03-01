@@ -20,7 +20,6 @@ __all__ = [
     "bootstrap_app",
     "create_quart_app",
     "get_bootstrap_state",
-    "run_platform_clients",
     "run_web_client",
     "validate_web_relational_runtime_config",
     "validate_phase_b_runtime_config",
