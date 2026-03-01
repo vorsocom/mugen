@@ -27,6 +27,7 @@ class TestDIProviderSpecIntegrity(unittest.TestCase):
         injector = di.injector.DependencyInjector()
         known_attrs = {
             "config",
+            "relational_runtime",
             *(s.injector_attr for s in di._PROVIDER_SPECS.values()),
         }
 
@@ -39,7 +40,7 @@ class TestDIProviderSpecIntegrity(unittest.TestCase):
 
     def test_build_order_satisfies_constructor_dependencies(self):
         """Every provider dependency should be built by the time it is needed."""
-        available = {"config", "logging_gateway"}
+        available = {"config", "logging_gateway", "relational_runtime"}
 
         for provider_name in di._PROVIDER_BUILD_ORDER:
             spec = di._PROVIDER_SPECS[provider_name]

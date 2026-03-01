@@ -9,6 +9,7 @@ from unittest.mock import patch
 from sqlalchemy import Column, Integer, MetaData, String, Table
 
 from mugen.core.gateway.storage.rdbms.sqla import sqla_gateway
+from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.gateway.storage.rdbms.sqla.sqla_gateway import (
     SQLAlchemyRelationalStorageGateway,
 )
@@ -75,30 +76,24 @@ class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
             metadata,
             Column("id", Integer, primary_key=True),
         )
-        self.config = SimpleNamespace(
-            rdbms=SimpleNamespace(
-                sqlalchemy=SimpleNamespace(url="sqlite+aiosqlite:///:memory:")
-            )
-        )
+        self.config = SimpleNamespace()
+        self.runtime = SimpleNamespace(engine="engine", session_maker="session-maker")
 
     def test_init_and_register_tables(self) -> None:
         with (
-            patch.object(sqla_gateway, "create_async_engine", return_value="engine") as cae,
             patch.object(
                 sqla_gateway,
                 "build_table_registry_from_base",
                 return_value={"widgets": self.widgets},
             ) as build_registry,
-            patch.object(sqla_gateway, "async_sessionmaker", return_value="session-maker") as asm,
         ):
             gateway = SQLAlchemyRelationalStorageGateway(
                 config=self.config,
                 logging_gateway=SimpleNamespace(),
+                relational_runtime=self.runtime,
             )
 
-        cae.assert_called_once_with("sqlite+aiosqlite:///:memory:")
         build_registry.assert_called_once()
-        asm.assert_called_once_with("engine", expire_on_commit=False)
         self.assertEqual(gateway._tables["widgets"], self.widgets)  # pylint: disable=protected-access
 
         gateway.register_tables({"extras": self.extras})
@@ -107,19 +102,18 @@ class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             gateway.register_tables({"widgets": self.extras})
 
-    async def test_unit_of_work_and_raw_session_contexts(self) -> None:
+    async def test_unit_of_work_context(self) -> None:
         with (
-            patch.object(sqla_gateway, "create_async_engine", return_value="engine"),
             patch.object(
                 sqla_gateway,
                 "build_table_registry_from_base",
                 return_value={"widgets": self.widgets},
             ),
-            patch.object(sqla_gateway, "async_sessionmaker", return_value="session-maker"),
         ):
             gateway = SQLAlchemyRelationalStorageGateway(
                 config=self.config,
                 logging_gateway=SimpleNamespace(),
+                relational_runtime=self.runtime,
             )
 
         fake_session = _FakeSession()
@@ -135,24 +129,33 @@ class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(uow, "uow-marker")
             uow_ctor.assert_called_once_with(fake_session, {"widgets": self.widgets})
 
-        async with gateway.raw_session() as raw:
-            self.assertIs(raw, fake_session)
+        self.assertEqual(fake_session.begin_calls, 1)
 
-        self.assertEqual(fake_session.begin_calls, 2)
+    async def test_aclose_is_noop_for_shared_runtime(self) -> None:
+        with patch.object(
+            sqla_gateway,
+            "build_table_registry_from_base",
+            return_value={"widgets": self.widgets},
+        ):
+            gateway = SQLAlchemyRelationalStorageGateway(
+                config=self.config,
+                logging_gateway=SimpleNamespace(),
+                relational_runtime=self.runtime,
+            )
+        self.assertIsNone(await gateway.aclose())
 
     async def test_check_readiness_runs_probe_query(self) -> None:
         with (
-            patch.object(sqla_gateway, "create_async_engine", return_value="engine"),
             patch.object(
                 sqla_gateway,
                 "build_table_registry_from_base",
                 return_value={"widgets": self.widgets},
             ),
-            patch.object(sqla_gateway, "async_sessionmaker", return_value="session-maker"),
         ):
             gateway = SQLAlchemyRelationalStorageGateway(
                 config=self.config,
                 logging_gateway=SimpleNamespace(),
+                relational_runtime=self.runtime,
             )
 
         conn = _FakeConn()
@@ -161,3 +164,12 @@ class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
         await gateway.check_readiness()
 
         self.assertEqual(conn.executed, ["SELECT 1"])
+
+
+class TestSharedSQLAlchemyRuntime(unittest.TestCase):
+    def test_from_config_requires_sqlalchemy_url(self) -> None:
+        config = SimpleNamespace(
+            rdbms=SimpleNamespace(sqlalchemy=SimpleNamespace(url="")),
+        )
+        with self.assertRaises(RuntimeError):
+            SharedSQLAlchemyRuntime.from_config(config)

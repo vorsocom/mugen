@@ -13,9 +13,10 @@ import uuid
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
 from mugen.core.domain.use_case.queue_job_lifecycle import QueueJobLifecycleUseCase
+from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.gateway.storage.web_runtime.sql import text as web_sql_text
 from sqlalchemy import text as sa_text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 
 class RelationalWebRuntimeStore(IWebRuntimeStore):
@@ -25,30 +26,22 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         self,
         config: SimpleNamespace,
         logging_gateway: ILoggingGateway,
+        relational_runtime: SharedSQLAlchemyRuntime,
         session_provider=None,
         readiness_probe=None,
     ) -> None:
         self._config = config
         self._logging_gateway = logging_gateway
+        self._runtime = relational_runtime
         self._queue_job_lifecycle_use_case = QueueJobLifecycleUseCase()
-        self._engine = None
+        self._engine = self._runtime.engine
         self._readiness_probe = readiness_probe
 
         if callable(session_provider):
             self._session_provider = session_provider
             return
 
-        try:
-            sqlalchemy_url = self._config.rdbms.sqlalchemy.url
-        except AttributeError as exc:
-            raise RuntimeError(
-                "Relational web storage requires rdbms.sqlalchemy.url in configuration."
-            ) from exc
-        self._engine = create_async_engine(sqlalchemy_url)
-        session_maker = async_sessionmaker(
-            self._engine,
-            expire_on_commit=False,
-        )
+        session_maker: async_sessionmaker = self._runtime.session_maker
 
         @asynccontextmanager
         async def _session_provider():
@@ -64,9 +57,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             yield session
 
     async def aclose(self) -> None:
-        if self._engine is None:
-            return
-        await self._engine.dispose()
+        return None
 
     async def check_readiness(self) -> None:
         if callable(self._readiness_probe):

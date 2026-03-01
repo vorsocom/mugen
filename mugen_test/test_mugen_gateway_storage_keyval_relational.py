@@ -294,6 +294,7 @@ def _new_gateway(*, engine=None, config=None, logger=None):
     gateway = RelationalKeyValStorageGateway.__new__(RelationalKeyValStorageGateway)
     gateway._config = config or _make_config()
     gateway._logging_gateway = logger or Mock()
+    gateway._runtime = SimpleNamespace(engine=None)
     gateway._namespace_default = "core"
     gateway._list_limit_default = 2
     gateway._closed = False
@@ -453,11 +454,7 @@ class TestMugenGatewayStorageKeyvalRelational(unittest.IsolatedAsyncioTestCase):
 
         await gateway.aclose()
         self.assertTrue(gateway._closed)  # pylint: disable=protected-access
-        self.assertTrue(gateway._engine.disposed)  # pylint: disable=protected-access
-
-        gateway._engine.disposed = False  # pylint: disable=protected-access
         await gateway.aclose()
-        self.assertFalse(gateway._engine.disposed)  # pylint: disable=protected-access
 
 class TestMugenGatewayStorageKeyvalRelationalInit(unittest.IsolatedAsyncioTestCase):
     """Covers initialization and readiness helper behavior."""
@@ -505,13 +502,11 @@ class TestMugenGatewayStorageKeyvalRelationalInit(unittest.IsolatedAsyncioTestCa
     def test_init_builds_engine_and_runtime_flags(self) -> None:
         config = _make_config()
         logger = Mock()
-        with patch(
-            "mugen.core.gateway.storage.keyval.relational.create_async_engine",
-            return_value=Mock(),
-        ):
-            gateway = RelationalKeyValStorageGateway(config, logger)
+        runtime = SimpleNamespace(engine=Mock(), session_maker=Mock())
+        gateway = RelationalKeyValStorageGateway(config, logger, runtime)
         self.assertFalse(gateway._closed)  # pylint: disable=protected-access
         self.assertFalse(gateway._backend_ready)  # pylint: disable=protected-access
+        self.assertIs(gateway._engine, runtime.engine)  # pylint: disable=protected-access
 
     def test_config_resolvers_and_helpers(self) -> None:
         logger = Mock()

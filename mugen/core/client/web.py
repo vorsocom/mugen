@@ -39,6 +39,67 @@ from mugen.core.utility.processing_signal import (
 )
 
 
+class _SSEFanoutDispatcher:
+    """Bounded-parallel SSE fan-out helper."""
+
+    def __init__(
+        self,
+        *,
+        enqueue_timeout_seconds: float,
+        parallelism: int,
+    ) -> None:
+        self._enqueue_timeout_seconds = enqueue_timeout_seconds
+        self._parallelism = parallelism
+
+    async def publish(
+        self,
+        *,
+        subscribers: list[asyncio.Queue],
+        event_entry: dict[str, Any],
+        on_timeout,
+        on_error,
+    ) -> dict[str, int]:
+        semaphore = asyncio.Semaphore(self._parallelism)
+
+        async def _deliver(subscriber: asyncio.Queue) -> tuple[int, int, int]:
+            async with semaphore:
+                try:
+                    await asyncio.wait_for(
+                        subscriber.put(event_entry),
+                        timeout=self._enqueue_timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    await on_timeout(subscriber)
+                    return (0, 1, 0)
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    on_error(exc)
+                    return (0, 0, 1)
+
+            return (1, 0, 0)
+
+        delivered = 0
+        timed_out = 0
+        failed = 0
+        delivery_results = await asyncio.gather(
+            *[_deliver(subscriber) for subscriber in subscribers],
+            return_exceptions=True,
+        )
+        for result in delivery_results:
+            if isinstance(result, Exception):
+                on_error(result)
+                failed += 1
+                continue
+            delivered += result[0]
+            timed_out += result[1]
+            failed += result[2]
+
+        return {
+            "delivered": delivered,
+            "timed_out": timed_out,
+            "failed": failed,
+        }
+
+
 # pylint: disable=too-many-instance-attributes
 class DefaultWebClient(IWebClient):
     """An implementation of IWebClient."""
@@ -76,6 +137,7 @@ class DefaultWebClient(IWebClient):
     _default_sse_replay_max_events: int = 200
     _default_sse_enqueue_timeout_seconds: float = 0.5
     _default_sse_fanout_parallelism: int = 16
+    _default_sse_max_subscribers_per_conversation: int = 256
     _default_queue_poll_interval_seconds: float = 0.25
     _default_queue_processing_lease_seconds: float = 30.0
     _default_queue_max_pending_jobs: int = 2000
@@ -120,6 +182,7 @@ class DefaultWebClient(IWebClient):
         self._storage_lock = asyncio.Lock()
         self._subscriber_lock = asyncio.Lock()
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
+        self._web_metrics: dict[str, int] = {}
 
         self._worker_task: asyncio.Task | None = None
         self._worker_stop = asyncio.Event()
@@ -146,7 +209,16 @@ class DefaultWebClient(IWebClient):
             self._default_sse_fanout_parallelism,
             minimum=1,
         )
+        self._sse_max_subscribers_per_conversation = self._resolve_int_config(
+            ("web", "sse", "max_subscribers_per_conversation"),
+            self._default_sse_max_subscribers_per_conversation,
+            minimum=1,
+        )
         self._sse_disconnect_sentinel = object()
+        self._sse_fanout_dispatcher = _SSEFanoutDispatcher(
+            enqueue_timeout_seconds=self._sse_enqueue_timeout_seconds,
+            parallelism=self._sse_fanout_parallelism,
+        )
         self._queue_poll_interval_seconds = self._resolve_float_config(
             ("web", "queue", "poll_interval_seconds"),
             self._default_queue_poll_interval_seconds,
@@ -270,6 +342,9 @@ class DefaultWebClient(IWebClient):
         if self._web_runtime_store is None:
             raise RuntimeError("Web runtime store is unavailable.")
         return self._web_runtime_store
+
+    def _increment_web_metric(self, metric_name: str, amount: int = 1) -> None:
+        self._web_metrics[metric_name] = self._web_metrics.get(metric_name, 0) + amount
 
     @staticmethod
     def _to_utc_datetime(epoch_seconds: float) -> datetime:
@@ -1470,38 +1545,45 @@ class DefaultWebClient(IWebClient):
         if not subscribers:
             return
 
-        semaphore = asyncio.Semaphore(self._sse_fanout_parallelism)
+        self._increment_web_metric("web.sse.fanout.publish_calls")
 
-        async def _deliver(subscriber: asyncio.Queue) -> None:
-            async with semaphore:
-                try:
-                    await asyncio.wait_for(
-                        subscriber.put(event_entry),
-                        timeout=self._sse_enqueue_timeout_seconds,
-                    )
-                except asyncio.TimeoutError:
-                    self._log_sse_diagnostic(
-                        conversation_id=conversation_id,
-                        incoming_event_id=event_entry.get("id"),
-                        last_event_id=None,
-                        reason="subscriber_enqueue_timeout_disconnect",
-                        warning=True,
-                    )
-                    await self._disconnect_subscriber_for_backpressure(
-                        conversation_id=conversation_id,
-                        subscriber=subscriber,
-                    )
+        async def _on_timeout(subscriber: asyncio.Queue) -> None:
+            self._log_sse_diagnostic(
+                conversation_id=conversation_id,
+                incoming_event_id=event_entry.get("id"),
+                last_event_id=None,
+                reason="subscriber_enqueue_timeout_disconnect",
+                warning=True,
+            )
+            await self._disconnect_subscriber_for_backpressure(
+                conversation_id=conversation_id,
+                subscriber=subscriber,
+            )
 
-        delivery_results = await asyncio.gather(
-            *[_deliver(subscriber) for subscriber in subscribers],
-            return_exceptions=True,
+        def _on_error(error: Exception) -> None:
+            self._logging_gateway.warning(
+                "Web SSE fan-out delivery failed "
+                f"error_type={type(error).__name__} error={error}"
+            )
+
+        delivery_summary = await self._sse_fanout_dispatcher.publish(
+            subscribers=subscribers,
+            event_entry=event_entry,
+            on_timeout=_on_timeout,
+            on_error=_on_error,
         )
-        for result in delivery_results:
-            if isinstance(result, Exception):
-                self._logging_gateway.warning(
-                    "Web SSE fan-out delivery failed "
-                    f"error_type={type(result).__name__} error={result}"
-                )
+        self._increment_web_metric(
+            "web.sse.fanout.delivered",
+            delivery_summary["delivered"],
+        )
+        self._increment_web_metric(
+            "web.sse.fanout.timed_out",
+            delivery_summary["timed_out"],
+        )
+        self._increment_web_metric(
+            "web.sse.fanout.failed",
+            delivery_summary["failed"],
+        )
 
     async def _disconnect_subscriber_for_backpressure(
         self,
@@ -1542,7 +1624,18 @@ class DefaultWebClient(IWebClient):
         async with self._subscriber_lock:
             if conversation_id not in self._subscribers:
                 self._subscribers[conversation_id] = set()
-            self._subscribers[conversation_id].add(subscriber)
+            subscribers = self._subscribers[conversation_id]
+            if subscriber in subscribers:
+                return
+            if (
+                len(subscribers)
+                >= self._sse_max_subscribers_per_conversation
+            ):
+                self._increment_web_metric("web.sse.subscriber_limit_exceeded")
+                raise OverflowError(
+                    "Max SSE subscribers reached for conversation."
+                )
+            subscribers.add(subscriber)
 
     async def _unregister_subscriber(
         self,

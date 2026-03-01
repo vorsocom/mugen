@@ -192,11 +192,18 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 user_service=user_service,
             )
 
-        base_init.assert_called_once_with(
-            client,
-            homeserver="https://matrix.example.com",
-            user="@assistant:example.com",
-            store_path="/tmp/olm",
+        base_init.assert_called_once()
+        self.assertEqual(
+            base_init.call_args.kwargs["homeserver"],
+            "https://matrix.example.com",
+        )
+        self.assertEqual(
+            base_init.call_args.kwargs["user"],
+            "@assistant:example.com",
+        )
+        self.assertEqual(
+            base_init.call_args.kwargs["store_path"],
+            "/tmp/olm",
         )
         self.assertIs(
             client._ipc_service, ipc_service
@@ -257,6 +264,11 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._matrix_secrets_encryption_required()  # pylint: disable=protected-access
         )
 
+    def test_getattr_raises_when_vendor_client_is_unset(self) -> None:
+        client = object.__new__(DefaultMatrixClient)
+        with self.assertRaises(AttributeError):
+            _ = client.non_existent_attr
+
     def test_init_requires_encryption_key_for_matrix_in_production(self) -> None:
         config = SimpleNamespace(
             basedir="/tmp",
@@ -278,11 +290,14 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                matrix_mod.IMatrixClient,
+                matrix_mod.AsyncClient,
                 "__init__",
                 autospec=True,
                 return_value=None,
             ),
+            patch.object(DefaultMatrixClient, "add_event_callback", autospec=True),
+            patch.object(DefaultMatrixClient, "add_to_device_callback", autospec=True),
+            patch.object(DefaultMatrixClient, "add_response_callback", autospec=True),
             self.assertRaises(RuntimeError),
         ):
             DefaultMatrixClient(
@@ -323,6 +338,16 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
         client._logging_gateway = Mock()
         client._keyval_storage_gateway = Mock()
+        client._vendor_client = SimpleNamespace(
+            synced=asyncio.Event(),
+            sync_forever=AsyncMock(),
+            get_profile=AsyncMock(),
+            set_displayname=AsyncMock(),
+            add_event_callback=Mock(),
+            add_to_device_callback=Mock(),
+            add_response_callback=Mock(),
+        )
+        client.synced = client._vendor_client.synced
         client._keyval_data: dict[str, str | bytes] = {}
 
         def _sync_get(key: str, decode: bool = True):  # noqa: ARG001
@@ -418,14 +443,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             displayname="Assistant",
             avatar_url="mxc://example/avatar",
         )
-        with patch.object(
-            matrix_mod.AsyncClient,
-            "get_profile",
-            AsyncMock(return_value=response),
-        ) as get_profile_mock:
-            profile = await DefaultMatrixClient.get_profile(client, user_id="@u:example.com")
+        client._vendor_client.get_profile = AsyncMock(return_value=response)  # pylint: disable=protected-access
+        profile = await DefaultMatrixClient.get_profile(client, user_id="@u:example.com")
 
-        get_profile_mock.assert_awaited_once_with(user_id="@u:example.com")
+        client._vendor_client.get_profile.assert_awaited_once_with(  # pylint: disable=protected-access
+            user_id="@u:example.com"
+        )
         self.assertEqual(profile.user_id, "@u:example.com")
         self.assertEqual(profile.displayname, "Assistant")
         self.assertEqual(profile.avatar_url, "mxc://example/avatar")
@@ -433,14 +456,94 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     async def test_set_displayname_delegates_to_asyncclient(self) -> None:
         client = self._client()
-        with patch.object(
-            matrix_mod.AsyncClient,
-            "set_displayname",
-            AsyncMock(return_value=object()),
-        ) as set_displayname_mock:
-            await DefaultMatrixClient.set_displayname(client, "New Name")
+        client._vendor_client.set_displayname = AsyncMock(return_value=object())  # pylint: disable=protected-access
+        await DefaultMatrixClient.set_displayname(client, "New Name")
 
-        set_displayname_mock.assert_awaited_once_with("New Name")
+        client._vendor_client.set_displayname.assert_awaited_once_with(  # pylint: disable=protected-access
+            "New Name"
+        )
+
+    async def test_sync_forever_delegates_to_vendor_client(self) -> None:
+        client = self._client()
+        client._vendor_client.sync_forever = AsyncMock(return_value=None)  # pylint: disable=protected-access
+
+        await DefaultMatrixClient.sync_forever(
+            client,
+            since="s1",
+            timeout=500,
+            full_state=False,
+            set_presence="offline",
+        )
+
+        client._vendor_client.sync_forever.assert_awaited_once_with(  # pylint: disable=protected-access
+            since="s1",
+            timeout=500,
+            full_state=False,
+            set_presence="offline",
+        )
+
+    async def test_callback_registration_wrappers_delegate_to_vendor_client(self) -> None:
+        client = self._client()
+        callback = Mock()
+        event_type = object()
+        response_type = object()
+
+        client.add_event_callback(callback, event_type)
+        client.add_to_device_callback(callback, event_type)
+        client.add_response_callback(callback, response_type)
+
+        client._vendor_client.add_event_callback.assert_called_once_with(  # pylint: disable=protected-access
+            callback, event_type
+        )
+        client._vendor_client.add_to_device_callback.assert_called_once_with(  # pylint: disable=protected-access
+            callback, event_type
+        )
+        client._vendor_client.add_response_callback.assert_called_once_with(  # pylint: disable=protected-access
+            callback, response_type
+        )
+
+    async def test_build_matrix_event_hook_payload_serializes_and_sanitizes(self) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        event = SimpleNamespace(
+            sender="@user:example.com",
+            content={"safe": "value", "bad": {1, 2, 3}},
+            source={"safe": True},
+            event_id=" $event ",
+            state_key=" ",
+            origin_server_ts="bad",
+        )
+
+        payload = client._build_matrix_event_hook_payload(  # pylint: disable=protected-access
+            callback_name="_cb_tag_event",
+            event=event,
+            room=room,
+            reason="unit-test",
+        )
+
+        self.assertEqual(payload["callback"], "_cb_tag_event")
+        self.assertEqual(payload["event_type"], "SimpleNamespace")
+        self.assertEqual(payload["room_id"], "!room:test")
+        self.assertEqual(payload["sender"], "@user:example.com")
+        self.assertIsNone(payload["content"])
+        self.assertEqual(payload["source"], {"safe": True})
+        self.assertEqual(payload["event_id"], "$event")
+        self.assertIsNone(payload["state_key"])
+        self.assertIsNone(payload["origin_server_ts"])
+
+    async def test_normalize_event_dict_rejects_non_dict_roundtrip_value(self) -> None:
+        client = self._client()
+        with patch("mugen.core.client.matrix.json.loads", return_value=[]):
+            self.assertIsNone(
+                client._normalize_event_dict({"safe": "value"})  # pylint: disable=protected-access
+            )
+
+    async def test_coerce_optional_int_accepts_valid_values(self) -> None:
+        client = self._client()
+        self.assertEqual(
+            client._coerce_optional_int("123"),  # pylint: disable=protected-access
+            123,
+        )
 
     def test_init_requires_secret_encryption_key_in_production(self) -> None:
         config = SimpleNamespace(
@@ -455,7 +558,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                matrix_mod.IMatrixClient, "__init__", autospec=True, return_value=None
+                matrix_mod.AsyncClient, "__init__", autospec=True, return_value=None
             ),
             patch.object(DefaultMatrixClient, "add_event_callback", autospec=True),
             patch.object(DefaultMatrixClient, "add_to_device_callback", autospec=True),
@@ -1234,8 +1337,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             content={"membership": "invite", "is_direct": True},
             sender="@u:example.com",
         )
-        with patch.object(matrix_mod, "ProfileGetResponse", _FakeProfileGetResponse):
-            await client._cb_invite_member_event(room, event)
+        await client._cb_invite_member_event(room, event)
 
         client.join.assert_awaited_once_with("!room:test")
         client._mark_room_as_direct.assert_awaited_once_with(
@@ -1287,8 +1389,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.get_profile = AsyncMock(return_value=_FakeProfileGetResponse("User"))
         event = SimpleNamespace(content={"membership": "invite"}, sender="@u:example.com")
 
-        with patch.object(matrix_mod, "ProfileGetResponse", _FakeProfileGetResponse):
-            await client._cb_invite_member_event(room, event)
+        await client._cb_invite_member_event(room, event)
 
         client.room_leave.assert_not_called()
         client.join.assert_awaited_once_with("!room:test")
@@ -1330,8 +1431,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             sender="@beta:example.com",
         )
 
-        with patch.object(matrix_mod, "ProfileGetResponse", _FakeProfileGetResponse):
-            await client._cb_invite_member_event(room, event)
+        await client._cb_invite_member_event(room, event)
 
         client.join.assert_awaited_once_with("!room:test")
         client._mark_room_as_direct.assert_awaited_once_with(
@@ -1424,6 +1524,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 client._callback_skip_reason_dm_scope,
             )
             self.assertIn("event_type", payload.data)
+            self.assertNotIn("event", payload.data)
 
     async def test_dispatch_matrix_event_hook_handles_missing_ipc_service_paths(
         self,

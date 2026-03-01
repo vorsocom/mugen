@@ -10,7 +10,7 @@ from typing import Any
 
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
@@ -20,6 +20,7 @@ from mugen.core.contract.gateway.storage.keyval_model import (
     KeyValEntry,
     KeyValListPage,
 )
+from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 
 
 class RelationalKeyValStorageGateway(IKeyValStorageGateway):
@@ -33,18 +34,18 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         self,
         config: SimpleNamespace,
         logging_gateway: ILoggingGateway,
+        relational_runtime: SharedSQLAlchemyRuntime,
     ) -> None:
         self._config = config
         self._logging_gateway = logging_gateway
+        self._runtime = relational_runtime
         self._namespace_default = self._resolve_namespace_default()
         self._list_limit_default = self._resolve_list_limit_default()
         self._closed = False
         self._backend_ready = False
         self._backend_ready_lock: asyncio.Lock | None = None
 
-        self._engine: AsyncEngine = create_async_engine(
-            self._config.rdbms.sqlalchemy.url,
-        )
+        self._engine: AsyncEngine = self._runtime.engine
 
     def _assert_open(self) -> None:
         if self._closed:
@@ -612,7 +613,4 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
     async def aclose(self) -> None:
         if self._closed:
             return
-        try:
-            await self._engine.dispose()
-        finally:
-            self._closed = True
+        self._closed = True
