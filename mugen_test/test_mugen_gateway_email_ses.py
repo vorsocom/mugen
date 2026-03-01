@@ -49,6 +49,21 @@ def _make_config(
 class TestMugenGatewayEmailSES(unittest.IsolatedAsyncioTestCase):
     """Covers request serialization and transport behavior for SES gateway."""
 
+    async def test_check_readiness_validates_configuration_and_client(self) -> None:
+        with patch("mugen.core.gateway.email.ses.boto3.client", return_value=Mock()):
+            gateway = SESEmailGateway(_make_config(), Mock())
+
+        await gateway.check_readiness()
+
+        gateway._ses_config = None  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "configuration is unavailable"):
+            await gateway.check_readiness()
+
+        gateway._ses_config = {}  # pylint: disable=protected-access
+        gateway._client = None  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "client is unavailable"):
+            await gateway.check_readiness()
+
     def test_constructor_builds_client_with_explicit_credentials(self) -> None:
         config = _make_config(
             region="us-west-2",

@@ -6,10 +6,10 @@ import textwrap
 from types import SimpleNamespace
 
 from mugen.core import di
-from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
+from mugen.core.plugin.matrix.contract import IMatrixDeviceAdminClient
 
 
 def _config_provider():
@@ -30,7 +30,7 @@ class DeviceManagementIPCExtension(IIPCExtension):
     def __init__(
         self,
         config: SimpleNamespace | None = None,
-        matrix_client: IMatrixClient | None = None,
+        matrix_client: IMatrixDeviceAdminClient | None = None,
         logging_gateway: ILoggingGateway | None = None,
     ) -> None:
         self._client = (
@@ -88,7 +88,7 @@ class DeviceManagementIPCExtension(IIPCExtension):
             "device",
             "",
         )
-        session_id = getattr(self._client, "device_id", "")
+        session_id = self._client.device_id
         return {
             "response": {
                 "data": {
@@ -100,14 +100,7 @@ class DeviceManagementIPCExtension(IIPCExtension):
         }
 
     def _resolve_session_key(self) -> str:
-        identity_keys = getattr(
-            getattr(getattr(self._client, "olm", None), "account", None),
-            "identity_keys",
-            None,
-        )
-        if not isinstance(identity_keys, dict):
-            return ""
-        raw_key = identity_keys.get("ed25519")
+        raw_key = self._client.device_ed25519_key()
         if not isinstance(raw_key, str) or raw_key == "":
             return ""
         return " ".join(textwrap.wrap(raw_key, 4))

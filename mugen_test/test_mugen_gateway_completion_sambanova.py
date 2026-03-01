@@ -40,6 +40,16 @@ def _simple_request() -> CompletionRequest:
 class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
     """Covers response parsing and failure handling for SambaNova completion."""
 
+    async def test_check_readiness_resolves_required_operation_configs(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["classification"] = dict(
+            config.sambanova.api.dict["completion"]
+        )
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+
+        await gateway.check_readiness()
+
     async def test_get_completion_parses_non_stream_response(self) -> None:
         config = _make_config()
         logging_gateway = Mock()

@@ -122,6 +122,11 @@ class BedrockCompletionGateway(ICompletionGateway):
             },
         )
 
+    async def check_readiness(self) -> None:
+        _ = self._client
+        self._resolve_operation_config("classification")
+        self._resolve_operation_config("completion")
+
     async def get_completion(
         self,
         request: CompletionRequest,

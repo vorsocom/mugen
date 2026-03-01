@@ -47,6 +47,21 @@ def _simple_request() -> CompletionRequest:
 class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
     """Covers request shaping and failure handling for Groq completion."""
 
+    async def test_check_readiness_resolves_required_operation_configs(self) -> None:
+        config = _make_config()
+        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            )
+        )
+
+        with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api):
+            gateway = GroqCompletionGateway(config, logging_gateway)
+
+        await gateway.check_readiness()
+
     async def test_get_completion_builds_request_and_returns_response(self) -> None:
         config = _make_config()
         logging_gateway = Mock()

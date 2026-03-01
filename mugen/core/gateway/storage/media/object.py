@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import inspect
 import logging
 import os
 from pathlib import Path
@@ -32,6 +33,21 @@ class ObjectMediaStorageGateway(IMediaStorageGateway):
         self._keyval_storage_gateway = keyval_storage_gateway
         self._cache_path = Path(cache_path).resolve()
         self._key_prefix = key_prefix.strip() or "web:media:object"
+
+    async def check_readiness(self) -> None:
+        await asyncio.to_thread(
+            self._cache_path.mkdir,
+            parents=True,
+            exist_ok=True,
+        )
+        check_readiness = getattr(self._keyval_storage_gateway, "check_readiness", None)
+        if callable(check_readiness) is not True:
+            raise RuntimeError(
+                "Object media storage requires keyval_storage_gateway.check_readiness."
+            )
+        maybe_awaitable = check_readiness()
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
 
     async def init(self) -> None:
         await asyncio.to_thread(

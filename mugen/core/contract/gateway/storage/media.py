@@ -9,6 +9,10 @@ class IMediaStorageGateway(ABC):
     """Abstract interface for media object persistence backends."""
 
     @abstractmethod
+    async def check_readiness(self) -> None:
+        """Validate backend connectivity/readiness for startup checks."""
+
+    @abstractmethod
     async def init(self) -> None:
         """Initialize backend runtime state."""
 

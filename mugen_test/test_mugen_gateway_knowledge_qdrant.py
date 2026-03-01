@@ -96,6 +96,14 @@ class _CountObject:
 class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
     """Covers timeout parsing, retry behavior, and search flow branches."""
 
+    async def test_check_readiness_requires_qdrant_url(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config())
+        await gateway.check_readiness()
+
+        gateway._config.qdrant.api.url = ""  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "requires qdrant.api.url"):
+            await gateway.check_readiness()
+
     def test_constructor_ignores_encoder_preload_and_warns(self) -> None:
         config = _make_config(encoder_preload="yes")
         logging_gateway = Mock()

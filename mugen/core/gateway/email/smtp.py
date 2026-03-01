@@ -36,6 +36,17 @@ class SMTPEmailGateway(IEmailGateway):
         self._logging_gateway = logging_gateway
         self._smtp_config = self._resolve_smtp_config()
 
+    async def check_readiness(self) -> None:
+        if not isinstance(self._smtp_config, dict):
+            raise RuntimeError("SMTP gateway configuration is unavailable.")
+        required = ("host", "port", "timeout_seconds")
+        missing = [key for key in required if key not in self._smtp_config]
+        if missing:
+            raise RuntimeError(
+                "SMTP gateway configuration is incomplete: "
+                f"{', '.join(sorted(missing))}."
+            )
+
     async def send_email(self, request: EmailSendRequest) -> EmailSendResult:
         if not isinstance(request, EmailSendRequest):
             raise EmailGatewayError(

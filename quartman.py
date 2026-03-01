@@ -45,8 +45,6 @@ from mugen.core.runtime.phase_b_bootstrap import (
 from mugen.core.runtime.phase_b_coordinator import prepare_phase_b_startup_plan
 from mugen.core.runtime.phase_b_controls import (
     parse_bool,
-    resolve_phase_b_startup_timeout_seconds,
-    resolve_phase_b_runtime_controls,
 )
 from mugen.core.runtime.phase_b_runtime import (
     finalize_phase_b_task_completion,
@@ -72,14 +70,6 @@ def _bootstrap_state() -> dict:
 
 def _parse_bool(value: object, default: bool = False) -> bool:
     return parse_bool(value, default=default)
-
-
-def _resolve_phase_b_runtime_controls() -> tuple[float, list[str], bool]:
-    return resolve_phase_b_runtime_controls(getattr(di.container, "config", None))
-
-
-def _resolve_phase_b_startup_timeout() -> float:
-    return resolve_phase_b_startup_timeout_seconds(getattr(di.container, "config", None))
 
 
 async def _shutdown_container() -> None:

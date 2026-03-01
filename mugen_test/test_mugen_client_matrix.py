@@ -452,7 +452,10 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile.user_id, "@u:example.com")
         self.assertEqual(profile.displayname, "Assistant")
         self.assertEqual(profile.avatar_url, "mxc://example/avatar")
-        self.assertIs(profile.raw, response)
+        self.assertEqual(
+            profile.metadata.get("vendor_response_type"),
+            type(response).__name__,
+        )
 
     async def test_set_displayname_delegates_to_asyncclient(self) -> None:
         client = self._client()
@@ -501,6 +504,199 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._vendor_client.add_response_callback.assert_called_once_with(  # pylint: disable=protected-access
             callback, response_type
         )
+
+    async def test_vendor_property_and_method_wrappers_delegate_explicitly(self) -> None:
+        client = self._client()
+        client._vendor_client = SimpleNamespace(  # pylint: disable=protected-access
+            access_token="tok-1",
+            device_id="dev-1",
+            user_id="@assistant:example.com",
+            client_session=SimpleNamespace(close=AsyncMock()),
+            olm=SimpleNamespace(),
+            verify_device=Mock(),
+            login=AsyncMock(return_value={"ok": True}),
+            load_store=Mock(),
+            join=AsyncMock(return_value={"joined": True}),
+            list_direct_rooms=AsyncMock(return_value={"rooms": {}}),
+            joined_rooms=AsyncMock(return_value={"rooms": []}),
+            joined_members=AsyncMock(return_value={"members": []}),
+            room_get_state=AsyncMock(return_value={"events": []}),
+            room_kick=AsyncMock(return_value={"kicked": True}),
+            room_leave=AsyncMock(return_value={"left": True}),
+            room_send=AsyncMock(return_value={"sent": True}),
+            room_typing=AsyncMock(return_value={"typing": True}),
+            room_read_markers=AsyncMock(return_value={"markers": True}),
+            upload=AsyncMock(return_value={"uploaded": True}),
+            download=AsyncMock(return_value={"downloaded": True}),
+            _send=AsyncMock(return_value={"raw": True}),
+        )
+
+        self.assertEqual(client.current_user_id, "@assistant:example.com")
+        client.user_id = None
+        self.assertEqual(client.current_user_id, "")
+        self.assertEqual(client.device_store, {})
+        client.device_store = {"ok": True}
+        self.assertEqual(client.device_store, {"ok": True})
+
+        client.olm = SimpleNamespace(account=SimpleNamespace(identity_keys={}))
+        self.assertIsNotNone(client.olm)
+        DefaultMatrixClient.verify_device(client, "dev")
+        client._vendor_client.verify_device.assert_called_once_with("dev")  # pylint: disable=protected-access
+
+        self.assertEqual(
+            await DefaultMatrixClient.login(client, "pw", "device"),
+            {"ok": True},
+        )
+        DefaultMatrixClient.load_store(client)
+        client._vendor_client.load_store.assert_called_once_with()  # pylint: disable=protected-access
+        self.assertEqual(await DefaultMatrixClient.join(client, "!room:test"), {"joined": True})
+        self.assertEqual(
+            await DefaultMatrixClient.list_direct_rooms(client),
+            {"rooms": {}},
+        )
+        self.assertEqual(await DefaultMatrixClient.joined_rooms(client), {"rooms": []})
+        self.assertEqual(
+            await DefaultMatrixClient.joined_members(client, "!room:test"),
+            {"members": []},
+        )
+        self.assertEqual(
+            await DefaultMatrixClient.room_get_state(client, "!room:test"),
+            {"events": []},
+        )
+        self.assertEqual(
+            await DefaultMatrixClient.room_kick(client, "!room:test", "@u:example.com"),
+            {"kicked": True},
+        )
+        self.assertEqual(
+            await DefaultMatrixClient.room_leave(client, "!room:test"),
+            {"left": True},
+        )
+        self.assertEqual(
+            await DefaultMatrixClient.room_send(
+                client,
+                "!room:test",
+                "m.room.message",
+                {"body": "hi"},
+            ),
+            {"sent": True},
+        )
+        self.assertEqual(
+            await DefaultMatrixClient.room_typing(client, "!room:test", True),
+            {"typing": True},
+        )
+        self.assertEqual(
+            await DefaultMatrixClient.room_read_markers(
+                client,
+                "!room:test",
+                "$event",
+                "$event",
+            ),
+            {"markers": True},
+        )
+        self.assertEqual(await DefaultMatrixClient.upload(client, b"bin"), {"uploaded": True})
+        self.assertEqual(
+            await DefaultMatrixClient.download(client, "mxc://example/file"),
+            {"downloaded": True},
+        )
+        self.assertEqual(
+            await DefaultMatrixClient._send(client, "GET", "/path"),  # pylint: disable=protected-access
+            {"raw": True},
+        )
+
+        del client.client_session
+        del client.client_session
+
+    async def test_matrix_admin_helpers_normalize_vendor_payloads(self) -> None:
+        client = self._client()
+        client._vendor_client.joined_rooms = AsyncMock(  # pylint: disable=protected-access
+            side_effect=[
+                SimpleNamespace(rooms=["!a:test", "", None, 1]),
+                SimpleNamespace(rooms=None),
+            ]
+        )
+        client._vendor_client.joined_members = AsyncMock(  # pylint: disable=protected-access
+            side_effect=[
+                SimpleNamespace(
+                    members=[
+                        SimpleNamespace(user_id="@u1:test"),
+                        SimpleNamespace(user_id=""),
+                        SimpleNamespace(),
+                    ]
+                ),
+                SimpleNamespace(members=None),
+            ]
+        )
+        client._vendor_client.room_get_state = AsyncMock(  # pylint: disable=protected-access
+            side_effect=[
+                SimpleNamespace(
+                    events=[
+                        {"type": "m.room.create", "content": {"creator": "@u:test"}},
+                        SimpleNamespace(type="m.room.name", content={"name": "Demo"}),
+                    ]
+                ),
+                SimpleNamespace(events=None),
+            ]
+        )
+        client.room_get_state = AsyncMock(
+            side_effect=[
+                SimpleNamespace(
+                    events=[
+                        {"type": "m.room.create", "content": {"creator": "@u:test"}},
+                        SimpleNamespace(type="m.room.name", content={"name": "Demo"}),
+                    ]
+                ),
+                SimpleNamespace(events=None),
+            ]
+        )
+        client.list_direct_rooms = AsyncMock(
+            side_effect=[
+                SimpleNamespace(
+                    rooms={
+                        "@u:test": ["!a:test", "", None],
+                        "@v:test": ["!b:test"],
+                        "@w:test": "bad",
+                    }
+                ),
+                SimpleNamespace(rooms=None),
+            ]
+        )
+
+        self.assertEqual(await client.joined_room_ids(), ["!a:test"])
+        self.assertEqual(await client.joined_room_ids(), [])
+        self.assertEqual(await client.joined_member_ids("!room:test"), ["@u1:test"])
+        self.assertEqual(await client.joined_member_ids("!room:test"), [])
+        self.assertEqual(
+            await client.room_state_events("!room:test"),
+            [
+                {"type": "m.room.create", "content": {"creator": "@u:test"}},
+                {"type": "m.room.name", "content": {"name": "Demo"}},
+            ],
+        )
+        self.assertEqual(await client.room_state_events("!room:test"), [])
+        self.assertEqual(await client.direct_room_ids(), {"!a:test", "!b:test"})
+        self.assertEqual(await client.direct_room_ids(), set())
+
+        client.olm = SimpleNamespace(account=SimpleNamespace(identity_keys={"ed25519": "k1"}))
+        self.assertEqual(client.device_ed25519_key(), "k1")
+        client.olm = SimpleNamespace(account=SimpleNamespace(identity_keys={"ed25519": ""}))
+        self.assertEqual(client.device_ed25519_key(), "")
+        client.olm = SimpleNamespace(account=SimpleNamespace(identity_keys=None))
+        self.assertEqual(client.device_ed25519_key(), "")
+
+    async def test_send_wrapper_raises_when_vendor_send_missing(self) -> None:
+        client = self._client()
+        client._vendor_client = SimpleNamespace()  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "does not expose _send"):
+            await DefaultMatrixClient._send(client, "GET", "/path")  # pylint: disable=protected-access
+
+    def test_device_store_property_uses_vendor_store_on_base_client(self) -> None:
+        client = object.__new__(DefaultMatrixClient)
+        client._vendor_client = SimpleNamespace()  # pylint: disable=protected-access
+
+        self.assertEqual(DefaultMatrixClient.device_store.fget(client), {})
+
+        DefaultMatrixClient.device_store.fset(client, {"@u:test": {"DEV": object()}})
+        self.assertIn("@u:test", DefaultMatrixClient.device_store.fget(client))
 
     async def test_build_matrix_event_hook_payload_serializes_and_sanitizes(self) -> None:
         client = self._client()

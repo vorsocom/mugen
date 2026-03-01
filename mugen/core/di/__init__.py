@@ -31,6 +31,7 @@ from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
 from mugen.core.contract.service.ipc import IIPCService
@@ -308,6 +309,7 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         "messaging_service",
     ]
     if "web" in active_platform_set:
+        required.append("media_storage_gateway")
         required.append("relational_storage_gateway")
         required.append("web_runtime_store")
 
@@ -459,6 +461,20 @@ _PROVIDER_SPECS = {
             ("relational_runtime", "relational_runtime"),
         ),
     ),
+    "media_storage_gateway": _ProviderSpec(
+        provider_name="media_storage_gateway",
+        injector_attr="media_storage_gateway",
+        interface=IMediaStorageGateway,
+        module_path=("mugen", "modules", "core", "gateway", "storage", "media"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required_platform="web",
+        inactive_platform_warning="Web platform not active. Media storage gateway not loaded.",
+    ),
     "relational_storage_gateway": _ProviderSpec(
         provider_name="relational_storage_gateway",
         injector_attr="relational_storage_gateway",
@@ -518,7 +534,6 @@ _PROVIDER_SPECS = {
         module_path=("mugen", "modules", "core", "service", "messaging"),
         constructor_bindings=(
             ("config", "config"),
-            ("completion_gateway", "completion_gateway"),
             ("keyval_storage_gateway", "keyval_storage_gateway"),
             ("logging_gateway", "logging_gateway"),
             ("user_service", "user_service"),
@@ -578,7 +593,7 @@ _PROVIDER_SPECS = {
         constructor_bindings=(
             ("config", "config"),
             ("ipc_service", "ipc_service"),
-            ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("media_storage_gateway", "media_storage_gateway"),
             ("web_runtime_store", "web_runtime_store"),
             ("logging_gateway", "logging_gateway"),
             ("messaging_service", "messaging_service"),
@@ -595,6 +610,7 @@ _PROVIDER_BUILD_ORDER = (
     "email_gateway",
     "ipc_service",
     "keyval_storage_gateway",
+    "media_storage_gateway",
     "relational_storage_gateway",
     "web_runtime_store",
     "nlp_service",
@@ -617,7 +633,23 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
     profile = _infer_runtime_profile(config)
     active_platforms = _normalize_platforms(_get_active_platforms(config))
 
-    readiness_provider_names: list[str] = ["keyval_storage_gateway"]
+    readiness_provider_names: list[str] = [
+        "completion_gateway",
+        "keyval_storage_gateway",
+    ]
+
+    media_configured = _config_path_exists(
+        config,
+        "mugen",
+        "modules",
+        "core",
+        "gateway",
+        "storage",
+        "media",
+    )
+    if media_configured:
+        readiness_provider_names.append("media_storage_gateway")
+
     relational_configured = _config_path_exists(
         config,
         "mugen",
@@ -636,6 +668,19 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
 
     if profile in {"web_only", "platform_full"} and "web" in active_platforms:
         readiness_provider_names.append("web_runtime_store")
+
+    if _config_path_exists(config, "mugen", "modules", "core", "gateway", "email"):
+        readiness_provider_names.append("email_gateway")
+
+    if _config_path_exists(
+        config,
+        "mugen",
+        "modules",
+        "core",
+        "gateway",
+        "knowledge",
+    ):
+        readiness_provider_names.append("knowledge_gateway")
 
     return list(dict.fromkeys(readiness_provider_names))
 
@@ -681,7 +726,7 @@ async def _await_readiness_probe_async(
     except asyncio.TimeoutError as exc:
         raise ProviderBootstrapError(
             "Provider readiness failed "
-            f"({provider_name}) class_path={configured_class_path!r}: "
+            f"({provider_name}) class_path={configured_class_path!r} stage=readiness: "
             f"TimeoutError: readiness timed out after {timeout_seconds:.2f}s"
         ) from exc
 
@@ -699,7 +744,7 @@ async def _ensure_injector_readiness_async(
         if provider is None:
             raise ProviderBootstrapError(
                 "Provider readiness failed "
-                f"({provider_name}) class_path={configured_class_path!r}: "
+                f"({provider_name}) class_path={configured_class_path!r} stage=readiness: "
                 "provider instance is unavailable."
             )
 
@@ -707,7 +752,7 @@ async def _ensure_injector_readiness_async(
         if callable(check_readiness) is not True:
             raise ProviderBootstrapError(
                 "Provider readiness failed "
-                f"({provider_name}) class_path={configured_class_path!r}: "
+                f"({provider_name}) class_path={configured_class_path!r} stage=readiness: "
                 "check_readiness is unavailable."
             )
 
@@ -723,7 +768,7 @@ async def _ensure_injector_readiness_async(
         except Exception as exc:  # pylint: disable=broad-exception-caught
             raise ProviderBootstrapError(
                 "Provider readiness failed "
-                f"({provider_name}) class_path={configured_class_path!r}: "
+                f"({provider_name}) class_path={configured_class_path!r} stage=readiness: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
 
@@ -773,7 +818,7 @@ def _build_provider_from_spec(
         if raise_errors:
             message = (
                 f"Missing required provider configuration ({spec.provider_name}) at "
-                f"{'.'.join(spec.module_path)}."
+                f"{'.'.join(spec.module_path)} stage=build."
             )
             raise ProviderBootstrapError(message)
         logger.error(f"Invalid configuration ({spec.provider_name}).")
@@ -793,7 +838,7 @@ def _build_provider_from_spec(
         if raise_errors:
             message = (
                 f"Provider bootstrap failed ({spec.provider_name}) "
-                f"class_path={configured_class_path!r}: {exc}"
+                f"class_path={configured_class_path!r} stage=build: {exc}"
             )
             raise ProviderBootstrapError(message) from exc
         if spec.required:
@@ -826,7 +871,8 @@ def _build_provider_from_spec(
     except Exception as exc:  # pylint: disable=broad-exception-caught
         message = (
             f"Provider construction failed ({spec.provider_name}) "
-            f"class_path={configured_class_path!r}: {type(exc).__name__}: {exc}"
+            f"class_path={configured_class_path!r} stage=build: "
+            f"{type(exc).__name__}: {exc}"
         )
         if raise_errors:
             raise ProviderBootstrapError(message) from exc

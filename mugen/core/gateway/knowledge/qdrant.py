@@ -173,6 +173,16 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                 "QdrantKnowledgeGateway: timeout_seconds is not configured in production."
             )
 
+    async def check_readiness(self) -> None:
+        url = getattr(
+            getattr(getattr(self._config, "qdrant", SimpleNamespace()), "api", None),
+            "url",
+            None,
+        )
+        if not isinstance(url, str) or url.strip() == "":
+            raise RuntimeError("Qdrant knowledge gateway requires qdrant.api.url.")
+        _ = self._client
+
     async def _get_encoder(self) -> SentenceTransformer:
         if self._encoder is not None:
             return self._encoder

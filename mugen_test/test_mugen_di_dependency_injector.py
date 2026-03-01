@@ -33,6 +33,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.email_gateway)
         self.assertIsNone(injector.ipc_service)
         self.assertIsNone(injector.keyval_storage_gateway)
+        self.assertIsNone(injector.media_storage_gateway)
         self.assertIsNone(injector.relational_storage_gateway)
         self.assertIsNone(injector.web_runtime_store)
         self.assertIsNone(injector.nlp_service)
@@ -82,6 +83,9 @@ class TestDependencyInjector(unittest.TestCase):
             def __init__(self, config, logging_gateway):
                 pass
 
+            async def check_readiness(self):
+                pass
+
             async def get_completion(self, context, operation="completion"):
                 pass
 
@@ -96,6 +100,9 @@ class TestDependencyInjector(unittest.TestCase):
             """Dummy email class."""
 
             def __init__(self, config, logging_gateway):
+                pass
+
+            async def check_readiness(self):
                 pass
 
             async def send_email(self, request):
@@ -261,7 +268,6 @@ class TestDependencyInjector(unittest.TestCase):
             def __init__(  # pylint: disable=too-many-arguments
                 self,
                 config,
-                completion_gateway,
                 keyval_storage_gateway,
                 logging_gateway,
                 user_service,
@@ -367,7 +373,6 @@ class TestDependencyInjector(unittest.TestCase):
 
         messaging_service = DummyMessagingServiceClass(
             config=config,
-            completion_gateway=completion_gateway,
             keyval_storage_gateway=keyval_storage_gateway,
             logging_gateway=logging_gateway,
             user_service=user_service,
@@ -379,6 +384,9 @@ class TestDependencyInjector(unittest.TestCase):
             """Dummy knowledge class."""
 
             def __init__(self, config, logging_gateway, nlp_service):
+                pass
+
+            async def check_readiness(self):
                 pass
 
             async def search(  # pylint: disable=too-many-arguments
@@ -612,7 +620,8 @@ class TestDependencyInjector(unittest.TestCase):
                 self,
                 config,
                 ipc_service,
-                keyval_storage_gateway,
+                media_storage_gateway,
+                web_runtime_store,
                 logging_gateway,
                 messaging_service,
                 user_service,
@@ -663,11 +672,13 @@ class TestDependencyInjector(unittest.TestCase):
         web_client = DummyWebClientClass(
             config=config,
             ipc_service=ipc_service,
-            keyval_storage_gateway=keyval_storage_gateway,
+            media_storage_gateway=object(),
+            web_runtime_store=object(),
             logging_gateway=logging_gateway,
             messaging_service=messaging_service,
             user_service=user_service,
         )
+        media_storage_gateway = object()
         relational_storage_gateway = object()
         web_runtime_store = object()
 
@@ -679,6 +690,7 @@ class TestDependencyInjector(unittest.TestCase):
             email_gateway=email_gateway,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
+            media_storage_gateway=media_storage_gateway,
             relational_storage_gateway=relational_storage_gateway,
             web_runtime_store=web_runtime_store,
             nlp_service=nlp_service,
@@ -698,6 +710,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.email_gateway, email_gateway)
         self.assertEqual(injector.ipc_service, ipc_service)
         self.assertEqual(injector.keyval_storage_gateway, keyval_storage_gateway)
+        self.assertEqual(injector.media_storage_gateway, media_storage_gateway)
         self.assertEqual(injector.relational_storage_gateway, relational_storage_gateway)
         self.assertEqual(injector.web_runtime_store, web_runtime_store)
         self.assertEqual(injector.nlp_service, nlp_service)
@@ -894,3 +907,12 @@ class TestDependencyInjector(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             injector.has_ext_service("")
+
+    def test_knowledge_gateway_setter_assignment(self):
+        """Test knowledge_gateway setter path after initialization."""
+        injector = di.injector.DependencyInjector()
+        gateway = object()
+
+        injector.knowledge_gateway = gateway
+
+        self.assertIs(injector.knowledge_gateway, gateway)

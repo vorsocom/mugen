@@ -63,6 +63,9 @@ class TestDIProviderResolution(unittest.TestCase):
             def __init__(self, config, logging_gateway):  # noqa: ARG002
                 pass
 
+            async def check_readiness(self) -> None:
+                return None
+
             async def get_completion(self, context, operation="completion"):
                 return None
 
@@ -82,7 +85,7 @@ class TestDIProviderResolution(unittest.TestCase):
         }
         injector = di.injector.DependencyInjector(
             config=object(),
-            logging_gateway=object(),
+            logging_gateway=unittest.mock.Mock(),
         )
 
         with unittest.mock.patch.dict("sys.modules", {"module.right": fake_module}):

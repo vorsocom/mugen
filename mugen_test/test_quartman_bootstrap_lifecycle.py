@@ -20,6 +20,10 @@ from mugen import (
     ExtensionLoadError,
 )
 from mugen.core.runtime.phase_b_bootstrap import PhaseBStartupPlan
+from mugen.core.runtime.phase_b_controls import (
+    resolve_phase_b_runtime_controls,
+    resolve_phase_b_startup_timeout_seconds,
+)
 
 
 def _import_quartman_with_app(app: Quart):
@@ -300,16 +304,6 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch.object(
                 quartman,
-                "_resolve_phase_b_runtime_controls",
-                return_value=(0.0, ["whatsapp"], True),
-            ),
-            unittest.mock.patch.object(
-                quartman,
-                "_resolve_phase_b_startup_timeout",
-                return_value=30.0,
-            ),
-            unittest.mock.patch.object(
-                quartman,
                 "run_platform_clients",
                 new=_phase_b_runner,
             ),
@@ -513,11 +507,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(phase_b_runner.await_count, 0)
         self.assertIsNone(state.get(quartman._PLATFORM_CLIENTS_TASK_KEY))
 
-    async def test_resolve_phase_b_startup_timeout_wrapper_reads_container_config(
-        self,
-    ) -> None:
-        app = Quart("quartman_test")
-        quartman = _import_quartman_with_app(app)
+    async def test_phase_b_startup_timeout_resolution_reads_container_config(self) -> None:
         container = unittest.mock.Mock()
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
@@ -526,9 +516,10 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-
-        with unittest.mock.patch.object(quartman.di, "container", container):
-            self.assertEqual(quartman._resolve_phase_b_startup_timeout(), 12.5)
+        self.assertEqual(
+            resolve_phase_b_startup_timeout_seconds(container.config),
+            12.5,
+        )
 
     async def test_startup_rejects_phase_b_plan_missing_timeout_value(self) -> None:
         app = Quart("quartman_test")
@@ -602,16 +593,6 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch.object(
                 quartman,
-                "_resolve_phase_b_runtime_controls",
-                return_value=(0.0, [], True),
-            ),
-            unittest.mock.patch.object(
-                quartman,
-                "_resolve_phase_b_startup_timeout",
-                return_value=30.0,
-            ),
-            unittest.mock.patch.object(
-                quartman,
                 "wait_for_critical_startup",
                 new=unittest.mock.AsyncMock(
                     side_effect=RuntimeError("critical startup timeout")
@@ -671,16 +652,6 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch.object(
                 quartman,
-                "_resolve_phase_b_runtime_controls",
-                return_value=(0.0, [], True),
-            ),
-            unittest.mock.patch.object(
-                quartman,
-                "_resolve_phase_b_startup_timeout",
-                return_value=30.0,
-            ),
-            unittest.mock.patch.object(
-                quartman,
                 "wait_for_critical_startup",
                 new=_late_failure,
             ),
@@ -717,21 +688,15 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_runtime_controls_default_when_container_config_missing(self) -> None:
-        app = Quart("quartman_test")
-        quartman = _import_quartman_with_app(app)
-
-        with unittest.mock.patch.object(quartman.di, "container", object()):
-            grace, critical, degrade_on_critical_exit = (
-                quartman._resolve_phase_b_runtime_controls()
-            )
+        grace, critical, degrade_on_critical_exit = resolve_phase_b_runtime_controls(
+            object()
+        )
 
         self.assertEqual(grace, 0.0)
         self.assertEqual(critical, [])
         self.assertTrue(degrade_on_critical_exit)
 
     async def test_runtime_controls_normalize_invalid_values(self) -> None:
-        app = Quart("quartman_test")
-        quartman = _import_quartman_with_app(app)
         container = unittest.mock.Mock()
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
@@ -745,11 +710,9 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 platforms=["matrix"],
             )
         )
-
-        with unittest.mock.patch.object(quartman.di, "container", container):
-            grace, critical, degrade_on_critical_exit = (
-                quartman._resolve_phase_b_runtime_controls()
-            )
+        grace, critical, degrade_on_critical_exit = resolve_phase_b_runtime_controls(
+            container.config
+        )
 
         self.assertEqual(grace, 0.0)
         self.assertEqual(critical, ["web", "whatsapp"])
@@ -758,10 +721,9 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config.mugen.runtime.phase_b.readiness_grace_seconds = -10
         container.config.mugen.runtime.phase_b.critical_platforms = None
         container.config.mugen.runtime.phase_b.degrade_on_critical_exit = "invalid"
-        with unittest.mock.patch.object(quartman.di, "container", container):
-            grace, critical, degrade_on_critical_exit = (
-                quartman._resolve_phase_b_runtime_controls()
-            )
+        grace, critical, degrade_on_critical_exit = resolve_phase_b_runtime_controls(
+            container.config
+        )
 
         self.assertEqual(grace, 0.0)
         self.assertEqual(critical, ["matrix"])
@@ -786,8 +748,6 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_controls_return_empty_critical_list_for_non_list_platforms(
         self,
     ) -> None:
-        app = Quart("quartman_test")
-        quartman = _import_quartman_with_app(app)
         container = unittest.mock.Mock()
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
@@ -801,19 +761,15 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 platforms="web",
             )
         )
-
-        with unittest.mock.patch.object(quartman.di, "container", container):
-            grace, critical, degrade_on_critical_exit = (
-                quartman._resolve_phase_b_runtime_controls()
-            )
+        grace, critical, degrade_on_critical_exit = resolve_phase_b_runtime_controls(
+            container.config
+        )
 
         self.assertEqual(grace, 3.0)
         self.assertEqual(critical, [])
         self.assertTrue(degrade_on_critical_exit)
 
     async def test_runtime_controls_parse_true_and_fallback_values(self) -> None:
-        app = Quart("quartman_test")
-        quartman = _import_quartman_with_app(app)
         container = unittest.mock.Mock()
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
@@ -827,14 +783,15 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 platforms=["web"],
             )
         )
-
-        with unittest.mock.patch.object(quartman.di, "container", container):
-            _, _, degrade_on_critical_exit = quartman._resolve_phase_b_runtime_controls()
+        _, _, degrade_on_critical_exit = resolve_phase_b_runtime_controls(
+            container.config
+        )
         self.assertTrue(degrade_on_critical_exit)
 
         container.config.mugen.runtime.phase_b.degrade_on_critical_exit = object()
-        with unittest.mock.patch.object(quartman.di, "container", container):
-            _, _, degrade_on_critical_exit = quartman._resolve_phase_b_runtime_controls()
+        _, _, degrade_on_critical_exit = resolve_phase_b_runtime_controls(
+            container.config
+        )
         self.assertTrue(degrade_on_critical_exit)
 
     async def test_done_callback_marks_stopped_on_clean_shutdown_completion(self) -> None:

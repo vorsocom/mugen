@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Literal, Protocol
+from typing import Awaitable, Literal, Protocol, TypeAlias
 
 MatrixPresence = Literal["online", "offline", "unavailable"]
+MatrixMetadataValue: TypeAlias = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | dict[str, "MatrixMetadataValue"]
+    | list["MatrixMetadataValue"]
+)
 
 
 class IMatrixSyncSignal(Protocol):
@@ -25,4 +34,4 @@ class MatrixProfile:
     user_id: str | None = None
     displayname: str | None = None
     avatar_url: str | None = None
-    raw: Any = field(default=None, repr=False)
+    metadata: dict[str, MatrixMetadataValue] = field(default_factory=dict)

@@ -3,8 +3,30 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+
+
+@dataclass(frozen=True)
+class WebRuntimeTailEvent:
+    """One durable event row returned by stream-tail queries."""
+
+    id: int
+    event: str
+    data: dict[str, Any]
+    created_at: str | None
+    stream_generation: str
+    stream_version: int
+
+
+@dataclass(frozen=True)
+class WebRuntimeTailBatch:
+    """Ordered durable stream-tail batch."""
+
+    stream_generation: str
+    max_event_id: int
+    events: list[WebRuntimeTailEvent] = field(default_factory=list)
 
 
 class IWebRuntimeStore(ABC):
@@ -94,6 +116,17 @@ class IWebRuntimeStore(ABC):
     @abstractmethod
     async def list_media_tokens(self) -> list[dict[str, Any]]:
         """List all media-token rows."""
+
+    @abstractmethod
+    async def tail_events_since(
+        self,
+        *,
+        conversation_id: str,
+        stream_generation: str | None,
+        after_event_id: int,
+        limit: int,
+    ) -> WebRuntimeTailBatch:
+        """Tail durable events strictly after event-id cursor."""
 
     @abstractmethod
     async def delete_media_token(self, *, token: str) -> None:
