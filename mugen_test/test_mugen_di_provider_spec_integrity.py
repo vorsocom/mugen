@@ -53,3 +53,9 @@ class TestDIProviderSpecIntegrity(unittest.TestCase):
                 )
 
             available.add(spec.injector_attr)
+
+    def test_shutdown_order_is_reverse_build_order_with_logging_last(self):
+        """Shutdown order should be deterministic and reverse the build dependency order."""
+        expected = list(reversed(("logging_gateway",) + di._PROVIDER_BUILD_ORDER))
+        actual = [spec.provider_name for spec in di._provider_specs_for_shutdown()]
+        self.assertEqual(actual, expected)

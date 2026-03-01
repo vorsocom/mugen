@@ -262,6 +262,9 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     async def aclose(self):
                         pass
 
+                    async def check_readiness(self):
+                        pass
+
                     async def get_entry(
                         self,
                         key,

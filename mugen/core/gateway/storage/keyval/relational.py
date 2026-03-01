@@ -82,6 +82,9 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
             )
             raise RuntimeError("Relational keyval backend is unavailable.") from exc
 
+    async def check_readiness(self) -> None:
+        await self._ensure_backend_ready()
+
     def _resolve_namespace_default(self) -> str:
         namespace = getattr(
             getattr(
