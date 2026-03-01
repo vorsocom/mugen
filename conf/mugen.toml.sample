@@ -31,7 +31,7 @@ history_save_cas_retries = 5
 # Timeout in seconds for extension callbacks (CP/CTX/RAG/RPP/CT).
 extension_timeout_seconds = 10.0
 # Extension failure policy: fail_open (log and continue) | fail_closed (propagate error).
-extension_failure_policy = "fail_open"
+extension_failure_policy = "fail_closed"
 # If true, CT extensions with non-empty triggers only run on trigger matches.
 ct_trigger_prefilter_enabled = true
 
@@ -45,7 +45,7 @@ client.matrix = "mugen.core.client.matrix:DefaultMatrixClient"
 client.whatsapp = "mugen.core.client.whatsapp:DefaultWhatsAppClient"
 client.web = "mugen.core.client.web:DefaultWebClient"
 
-gateway.completion = "mugen.core.gateway.completion.bedrock:BedrockCompletionGateway"
+gateway.completion = "mugen.core.gateway.completion.sambanova:SambaNovaCompletionGateway"
 # gateway.email = "mugen.core.gateway.email.smtp:SMTPEmailGateway"
 # gateway.email = "mugen.core.gateway.email.ses:SESEmailGateway"
 # gateway.knowledge = "mugen.core.gateway.knowledge.qdrant:QdrantKnowledgeGateway"
@@ -304,11 +304,11 @@ api.access_key_id = "<aws-access-key-id>"
 # Built-in InvokeModel serializers currently cover:
 # anthropic.*, meta.*, amazon.titan-text*, amazon.nova*, ai21.j2*,
 # ai21.jamba*, cohere.*, mistral.*, deepseek.*, openai.*, writer.*
-api.classification.model = ""
+api.classification.model = "placeholder-model"
 api.classification.max_tokens = 1024
 api.classification.temp = 0.0
 api.classification.top_p = 0.9
-api.completion.model = ""
+api.completion.model = "placeholder-model"
 api.completion.max_tokens = 1024
 api.completion.temp = 0.0
 api.completion.top_p = 0.9

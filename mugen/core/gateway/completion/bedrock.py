@@ -124,8 +124,43 @@ class BedrockCompletionGateway(ICompletionGateway):
 
     async def check_readiness(self) -> None:
         _ = self._client
-        self._resolve_operation_config("classification")
-        self._resolve_operation_config("completion")
+        classification_cfg = self._resolve_operation_config("classification")
+        completion_cfg = self._resolve_operation_config("completion")
+        probe_model = completion_cfg.get("model") or classification_cfg.get("model")
+        if not isinstance(probe_model, str) or probe_model.strip() == "":
+            raise RuntimeError("Bedrock completion gateway readiness probe model is missing.")
+
+        timeout_seconds = self._read_timeout_seconds
+        if timeout_seconds is None or timeout_seconds <= 0:
+            timeout_seconds = 10.0
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._client.invoke_model,
+                    modelId=probe_model.strip(),
+                    body="{}",
+                    contentType="application/json",
+                    accept="application/json",
+                ),
+                timeout=timeout_seconds,
+            )
+        except ClientError as exc:
+            if self._is_expected_probe_validation_error(exc):
+                return
+            raise RuntimeError("Bedrock completion gateway readiness probe failed.") from exc
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError("Bedrock completion gateway readiness probe failed.") from exc
+
+    @staticmethod
+    def _is_expected_probe_validation_error(error: ClientError) -> bool:
+        error_payload = getattr(error, "response", {}) or {}
+        error_data = error_payload.get("Error", {}) if isinstance(error_payload, dict) else {}
+        code = str(error_data.get("Code", "")).strip().lower()
+        message = str(error_data.get("Message", "")).strip().lower()
+        validation_codes = {"validationexception", "serializationexception"}
+        if code in validation_codes:
+            return True
+        return "validation" in message and "model" in message
 
     async def get_completion(
         self,

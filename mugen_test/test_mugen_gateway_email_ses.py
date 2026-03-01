@@ -50,10 +50,13 @@ class TestMugenGatewayEmailSES(unittest.IsolatedAsyncioTestCase):
     """Covers request serialization and transport behavior for SES gateway."""
 
     async def test_check_readiness_validates_configuration_and_client(self) -> None:
-        with patch("mugen.core.gateway.email.ses.boto3.client", return_value=Mock()):
+        ses_client = Mock()
+        ses_client.get_send_quota.return_value = {"Max24HourSend": 1000.0}
+        with patch("mugen.core.gateway.email.ses.boto3.client", return_value=ses_client):
             gateway = SESEmailGateway(_make_config(), Mock())
 
         await gateway.check_readiness()
+        ses_client.get_send_quota.assert_called_once_with()
 
         gateway._ses_config = None  # pylint: disable=protected-access
         with self.assertRaisesRegex(RuntimeError, "configuration is unavailable"):
@@ -63,6 +66,23 @@ class TestMugenGatewayEmailSES(unittest.IsolatedAsyncioTestCase):
         gateway._client = None  # pylint: disable=protected-access
         with self.assertRaisesRegex(RuntimeError, "client is unavailable"):
             await gateway.check_readiness()
+
+    async def test_check_readiness_raises_when_probe_missing_or_failing(self) -> None:
+        with patch("mugen.core.gateway.email.ses.boto3.client", return_value=Mock()):
+            gateway = SESEmailGateway(_make_config(), Mock())
+        gateway._client = object()  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "probe is unavailable"):
+            await gateway.check_readiness()
+
+        failing_client = Mock()
+        failing_client.get_send_quota.side_effect = RuntimeError("boom")
+        with patch(
+            "mugen.core.gateway.email.ses.boto3.client",
+            return_value=failing_client,
+        ):
+            failing_gateway = SESEmailGateway(_make_config(), Mock())
+        with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
+            await failing_gateway.check_readiness()
 
     def test_constructor_builds_client_with_explicit_credentials(self) -> None:
         config = _make_config(

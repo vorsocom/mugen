@@ -57,12 +57,134 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
             responses=SimpleNamespace(create=AsyncMock()),
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
         )
 
         with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         await gateway.check_readiness()
+        api.models.list.assert_awaited_once_with(limit=1)
+
+    async def test_check_readiness_raises_when_models_list_is_missing(self) -> None:
+        config = _make_config()
+        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
+            responses=SimpleNamespace(create=AsyncMock()),
+            models=SimpleNamespace(list=None),
+        )
+
+        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        with self.assertRaisesRegex(RuntimeError, "readiness probe unavailable"):
+            await gateway.check_readiness()
+
+    async def test_check_readiness_falls_back_when_limit_kwarg_is_unsupported(self) -> None:
+        config = _make_config()
+        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        logging_gateway = Mock()
+        calls: list[dict[str, object]] = []
+
+        def _list_models(**kwargs):
+            calls.append(dict(kwargs))
+            if "limit" in kwargs:
+                raise TypeError("unexpected keyword argument 'limit'")
+
+            async def _done():
+                return SimpleNamespace(data=[])
+
+            return _done()
+
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
+            responses=SimpleNamespace(create=AsyncMock()),
+            models=SimpleNamespace(list=_list_models),
+        )
+
+        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        await gateway.check_readiness()
+        self.assertEqual(calls, [{"limit": 1}, {}])
+
+    async def test_check_readiness_uses_default_timeout_when_missing(self) -> None:
+        config = _make_config()
+        config.openai.api.timeout_seconds = None
+        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
+            responses=SimpleNamespace(create=AsyncMock()),
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+        )
+
+        wait_for_calls: list[float] = []
+
+        async def _wait_for(awaitable, timeout):
+            wait_for_calls.append(float(timeout))
+            return await awaitable
+
+        with (
+            patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api),
+            patch("mugen.core.gateway.completion.openai.asyncio.wait_for", side_effect=_wait_for),
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+            await gateway.check_readiness()
+
+        self.assertEqual(wait_for_calls, [5.0])
+
+    async def test_check_readiness_uses_default_timeout_when_nonpositive(self) -> None:
+        config = _make_config()
+        config.openai.api.timeout_seconds = None
+        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
+            responses=SimpleNamespace(create=AsyncMock()),
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+        )
+
+        wait_for_calls: list[float] = []
+
+        async def _wait_for(awaitable, timeout):
+            wait_for_calls.append(float(timeout))
+            return await awaitable
+
+        with (
+            patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api),
+            patch("mugen.core.gateway.completion.openai.asyncio.wait_for", side_effect=_wait_for),
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+            gateway._timeout_seconds = 0  # pylint: disable=protected-access
+            await gateway.check_readiness()
+
+        self.assertEqual(wait_for_calls, [5.0])
+
+    async def test_check_readiness_wraps_probe_failures(self) -> None:
+        config = _make_config()
+        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
+            responses=SimpleNamespace(create=AsyncMock()),
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+        )
+
+        async def _wait_for(awaitable, timeout):
+            _ = timeout
+            await awaitable
+            raise RuntimeError("probe boom")
+
+        with (
+            patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api),
+            patch("mugen.core.gateway.completion.openai.asyncio.wait_for", side_effect=_wait_for),
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+            with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
+                await gateway.check_readiness()
 
     def test_constructor_builds_client_with_optional_settings(self) -> None:
         config = _make_config()

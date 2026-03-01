@@ -632,6 +632,7 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
     """Resolve providers that must pass readiness before bootstrap succeeds."""
     profile = _infer_runtime_profile(config)
     active_platforms = _normalize_platforms(_get_active_platforms(config))
+    web_active = profile in {"web_only", "platform_full"} and "web" in active_platforms
 
     readiness_provider_names: list[str] = [
         "completion_gateway",
@@ -647,7 +648,7 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
         "storage",
         "media",
     )
-    if media_configured:
+    if media_configured and web_active:
         readiness_provider_names.append("media_storage_gateway")
 
     relational_configured = _config_path_exists(
@@ -720,7 +721,11 @@ async def _await_readiness_probe_async(
     timeout_seconds: float,
 ) -> None:
     if inspect.isawaitable(maybe_awaitable) is not True:
-        return
+        raise ProviderBootstrapError(
+            "Provider readiness failed "
+            f"({provider_name}) class_path={configured_class_path!r} stage=readiness: "
+            "check_readiness must return an awaitable."
+        )
     try:
         await asyncio.wait_for(maybe_awaitable, timeout=timeout_seconds)
     except asyncio.TimeoutError as exc:

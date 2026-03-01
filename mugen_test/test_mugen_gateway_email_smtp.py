@@ -58,7 +58,11 @@ class TestMugenGatewayEmailSMTP(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_readiness_validates_required_smtp_fields(self) -> None:
         gateway = SMTPEmailGateway(_make_config(), Mock())
-        await gateway.check_readiness()
+        smtp_client = _smtp_client()
+        with patch("mugen.core.gateway.email.smtp.smtplib.SMTP", return_value=smtp_client):
+            await gateway.check_readiness()
+        smtp_client.ehlo.assert_called()
+        smtp_client.noop.assert_called()
 
         gateway._smtp_config = None  # pylint: disable=protected-access
         with self.assertRaisesRegex(RuntimeError, "configuration is unavailable"):
@@ -67,6 +71,47 @@ class TestMugenGatewayEmailSMTP(unittest.IsolatedAsyncioTestCase):
         gateway._smtp_config = {"host": "smtp.example.com"}  # pylint: disable=protected-access
         with self.assertRaisesRegex(RuntimeError, "configuration is incomplete"):
             await gateway.check_readiness()
+
+    async def test_check_readiness_handles_starttls_ssl_and_login_paths(self) -> None:
+        starttls_gateway = SMTPEmailGateway(
+            _make_config(
+                starttls=True,
+                username="smtp-user",
+                password="smtp-pass",
+            ),
+            Mock(),
+        )
+        starttls_client = _smtp_client()
+        with patch(
+            "mugen.core.gateway.email.smtp.smtplib.SMTP",
+            return_value=starttls_client,
+        ):
+            await starttls_gateway.check_readiness()
+        starttls_client.starttls.assert_called_once_with()
+        starttls_client.login.assert_called_once_with("smtp-user", "smtp-pass")
+
+        ssl_gateway = SMTPEmailGateway(
+            _make_config(
+                use_ssl=True,
+            ),
+            Mock(),
+        )
+        ssl_client = _smtp_client()
+        with patch(
+            "mugen.core.gateway.email.smtp.smtplib.SMTP_SSL",
+            return_value=ssl_client,
+        ):
+            await ssl_gateway.check_readiness()
+        ssl_client.noop.assert_called_once_with()
+
+    async def test_check_readiness_raises_on_connectivity_failure(self) -> None:
+        gateway = SMTPEmailGateway(_make_config(), Mock())
+        with patch(
+            "mugen.core.gateway.email.smtp.smtplib.SMTP",
+            side_effect=OSError("socket down"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
+                await gateway.check_readiness()
 
     async def test_send_email_sends_text_only_email(self) -> None:
         config = _make_config(starttls=False)

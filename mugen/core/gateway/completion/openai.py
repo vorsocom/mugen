@@ -1,5 +1,6 @@
 """Provides an OpenAI completion gateway."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -156,6 +157,31 @@ class OpenAICompletionGateway(ICompletionGateway):
         _ = self._api
         self._resolve_operation_config("classification")
         self._resolve_operation_config("completion")
+        models_api = getattr(self._api, "models", None)
+        list_models = getattr(models_api, "list", None)
+        if callable(list_models) is not True:
+            raise RuntimeError(
+                "OpenAI completion gateway readiness probe unavailable: models.list."
+            )
+        timeout_seconds = self._timeout_seconds
+        if timeout_seconds is None:
+            timeout_seconds = 5.0
+        if timeout_seconds <= 0:
+            timeout_seconds = 5.0
+        try:
+            try:
+                readiness_probe = list_models(limit=1)
+            except TypeError:
+                # openai-python >= 1.0 accepts list() without limit.
+                readiness_probe = list_models()
+            await asyncio.wait_for(
+                readiness_probe,
+                timeout=timeout_seconds,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError(
+                "OpenAI completion gateway readiness probe failed."
+            ) from exc
 
     async def get_completion(
         self,

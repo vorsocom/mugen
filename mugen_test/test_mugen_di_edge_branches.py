@@ -19,6 +19,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         profile: str = "api_only",
         platforms: list[str] | None = None,
         include_relational: bool = False,
+        include_media: bool = False,
     ) -> dict:
         config: dict = {
             "mugen": {
@@ -42,6 +43,10 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         if include_relational:
             config["mugen"]["modules"]["core"]["gateway"]["storage"]["relational"] = (  # type: ignore[index]
                 "mugen.gateway.rdbms:RelationalProvider"
+            )
+        if include_media:
+            config["mugen"]["modules"]["core"]["gateway"]["storage"]["media"] = (  # type: ignore[index]
+                "mugen.gateway.media:MediaProvider"
             )
         return config
 
@@ -813,15 +818,39 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             ],
         )
 
-    def test_await_readiness_probe_async_returns_for_non_awaitable(self) -> None:
-        asyncio.run(
-            di._await_readiness_probe_async(  # pylint: disable=protected-access
-                None,
-                provider_name="keyval_storage_gateway",
-                configured_class_path="mugen.gateway.keyval:KeyValProvider",
-                timeout_seconds=1.0,
-            )
+    def test_resolve_readiness_provider_names_media_requires_web_platform(self) -> None:
+        api_only_config = self._readiness_config(include_media=True)
+        self.assertEqual(
+            di._resolve_readiness_provider_names(api_only_config),
+            ["completion_gateway", "keyval_storage_gateway"],
         )
+        web_config = self._readiness_config(
+            profile="web_only",
+            platforms=["web"],
+            include_media=True,
+        )
+        self.assertEqual(
+            di._resolve_readiness_provider_names(web_config),
+            [
+                "completion_gateway",
+                "keyval_storage_gateway",
+                "media_storage_gateway",
+                "relational_storage_gateway",
+                "web_runtime_store",
+            ],
+        )
+
+    def test_await_readiness_probe_async_requires_awaitable(self) -> None:
+        with self.assertRaises(di.ProviderBootstrapError) as raised:
+            asyncio.run(
+                di._await_readiness_probe_async(  # pylint: disable=protected-access
+                    None,
+                    provider_name="keyval_storage_gateway",
+                    configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                    timeout_seconds=1.0,
+                )
+            )
+        self.assertIn("must return an awaitable", str(raised.exception))
 
     def test_await_readiness_probe_async_runs(self) -> None:
         marker = {"ready": False}
@@ -1008,6 +1037,13 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             di._injector_config_dict(injector)  # pylint: disable=protected-access
 
+    def test_injector_config_dict_returns_dict_when_available(self) -> None:
+        injector = di.injector.DependencyInjector(
+            config=SimpleNamespace(dict={"mugen": {"runtime": {"profile": "api_only"}}})
+        )
+        resolved = di._injector_config_dict(injector)  # pylint: disable=protected-access
+        self.assertEqual(resolved["mugen"]["runtime"]["profile"], "api_only")
+
     def test_container_proxy_ensure_readiness_short_circuits_when_cached(self) -> None:
         proxy = di._ContainerProxy()  # pylint: disable=protected-access
         injector = di.injector.DependencyInjector(
@@ -1018,3 +1054,37 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
 
         resolved = asyncio.run(proxy.ensure_readiness())
         self.assertIs(resolved, injector)
+
+    def test_container_proxy_ensure_readiness_runs_readiness_and_validation(self) -> None:
+        proxy = di._ContainerProxy()  # pylint: disable=protected-access
+        injector = di.injector.DependencyInjector(
+            config=SimpleNamespace(dict={"mugen": {"runtime": {"profile": "api_only"}}})
+        )
+        proxy._injector = injector  # pylint: disable=protected-access
+        proxy._readiness_checked = False  # pylint: disable=protected-access
+
+        readiness_mock = unittest.mock.AsyncMock()
+        validate_mock = unittest.mock.Mock()
+        with patch(
+            "mugen.core.di._ensure_injector_readiness_async",
+            new=readiness_mock,
+        ), patch(
+            "mugen.core.di._validate_container",
+            new=validate_mock,
+        ):
+            resolved = asyncio.run(proxy.ensure_readiness())
+
+        self.assertIs(resolved, injector)
+        readiness_mock.assert_awaited_once()
+        validate_mock.assert_called_once()
+        self.assertTrue(proxy._readiness_checked)  # pylint: disable=protected-access
+
+    def test_ensure_container_readiness_async_delegates_to_proxy(self) -> None:
+        sentinel_injector = object()
+        ensure_mock = unittest.mock.AsyncMock(return_value=sentinel_injector)
+        fake_container = SimpleNamespace(ensure_readiness=ensure_mock)
+        with patch("mugen.core.di.container", fake_container):
+            resolved = asyncio.run(di.ensure_container_readiness_async())
+
+        self.assertIs(resolved, sentinel_injector)
+        ensure_mock.assert_awaited_once_with()

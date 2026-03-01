@@ -46,6 +46,36 @@ class SMTPEmailGateway(IEmailGateway):
                 "SMTP gateway configuration is incomplete: "
                 f"{', '.join(sorted(missing))}."
             )
+        timeout_seconds = float(self._smtp_config["timeout_seconds"])
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self._probe_smtp_connectivity),
+                timeout=timeout_seconds,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError("SMTP gateway readiness probe failed.") from exc
+
+    def _probe_smtp_connectivity(self) -> None:
+        host = str(self._smtp_config["host"])
+        port = int(self._smtp_config["port"])
+        timeout_seconds = float(self._smtp_config["timeout_seconds"])
+        use_ssl = bool(self._smtp_config["use_ssl"])
+        starttls = bool(self._smtp_config["starttls"])
+        username = self._smtp_config["username"]
+        password = self._smtp_config["password"]
+
+        client_factory = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
+        with client_factory(host=host, port=port, timeout=timeout_seconds) as client:
+            if use_ssl:
+                client.noop()
+            else:
+                client.ehlo()
+                if starttls:
+                    client.starttls()
+                    client.ehlo()
+                client.noop()
+            if isinstance(username, str) and isinstance(password, str):
+                client.login(username, password)
 
     async def send_email(self, request: EmailSendRequest) -> EmailSendResult:
         if not isinstance(request, EmailSendRequest):
