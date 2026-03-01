@@ -17,6 +17,7 @@ runtime.phase_b.readiness_grace_seconds = 0.0
 runtime.phase_b.startup_timeout_seconds = 30.0
 runtime.phase_b.critical_platforms = ["web"]
 runtime.phase_b.degrade_on_critical_exit = true
+runtime.provider_readiness_timeout_seconds = 15.0
 runtime.profile = "platform_full"   # api_only|web_only|platform_full
 
 [mugen.commands]
@@ -29,6 +30,8 @@ history_max_messages = 40
 history_save_cas_retries = 5
 # Timeout in seconds for extension callbacks (CP/CTX/RAG/RPP/CT).
 extension_timeout_seconds = 10.0
+# Extension failure policy: fail_open (log and continue) | fail_closed (propagate error).
+extension_failure_policy = "fail_open"
 # If true, CT extensions with non-empty triggers only run on trigger matches.
 ct_trigger_prefilter_enabled = true
 

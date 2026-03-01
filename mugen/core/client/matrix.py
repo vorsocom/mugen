@@ -57,6 +57,7 @@ from nio.responses import (
 )
 
 from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.matrix_types import MatrixProfile
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
@@ -95,8 +96,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     _device_trust_mode_strict_known: str = "strict_known"
 
     _direct_rooms_event_type: str = "m.direct"
-
-    _legacy_direct_flags_key: str = "m.agent_flags"
 
     _ipc_callback: Coroutine
 
@@ -257,6 +256,20 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             await self.client_session.close()
         except AttributeError:
             ...
+
+    async def get_profile(self, user_id: str | None = None) -> MatrixProfile:
+        """Return normalized profile payload for core runtime orchestration."""
+        response = await super().get_profile(user_id=user_id)
+        return MatrixProfile(
+            user_id=user_id,
+            displayname=getattr(response, "displayname", None),
+            avatar_url=getattr(response, "avatar_url", None),
+            raw=response,
+        )
+
+    async def set_displayname(self, displayname: str) -> None:
+        """Set profile display name."""
+        await super().set_displayname(displayname)
 
     def _matrix_secrets_encryption_required(self) -> bool:
         environment = str(
@@ -1324,26 +1337,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
         self._direct_room_ids.add(room_id)
 
-    async def _is_legacy_direct_message(self, room_id: str) -> bool:
-        """Fallback for rooms flagged by legacy muGen markers."""
-        room_state = await self.room_get_state(room_id)
-        events = getattr(room_state, "events", [])
-        if not isinstance(events, list):
-            return False
-
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            if event.get("type") != self._legacy_direct_flags_key:
-                continue
-            content = event.get("content")
-            if not isinstance(content, dict):
-                continue
-            if content.get("m.direct") in [1, True]:
-                return True
-
-        return False
-
     async def _is_direct_message(self, room_id: str) -> bool:
         """Indicate if the room is marked direct via Matrix account data."""
         if room_id in self._direct_room_ids:
@@ -1355,8 +1348,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 self._direct_room_ids.add(room_id)
                 return True
 
-        # Retain compatibility with rooms marked before m.direct support.
-        return await self._is_legacy_direct_message(room_id)
+        return False
 
     async def _process_message_responses(
         self, room_id: str, message_responses: list[dict]

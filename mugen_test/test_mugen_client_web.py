@@ -726,8 +726,9 @@ def _build_runtime_store(
 ) -> RelationalWebRuntimeStore:
     return RelationalWebRuntimeStore(
         config=config,
-        relational_storage_gateway=relational_storage_gateway,
         logging_gateway=logging_gateway,
+        session_provider=relational_storage_gateway.raw_session,
+        readiness_probe=getattr(relational_storage_gateway, "check_readiness", None),
     )
 
 
@@ -758,7 +759,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=self.relational,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=self.relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -818,7 +818,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=relational,
                 logging_gateway=logger,
             ),
-            relational_storage_gateway=relational,
             logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -846,7 +845,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=relational,
                 logging_gateway=logger,
             ),
-            relational_storage_gateway=relational,
             logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -893,7 +891,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=relational,
                 logging_gateway=logger,
             ),
-            relational_storage_gateway=relational,
             logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -930,7 +927,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                     relational_storage_gateway=relational,
                     logging_gateway=logger,
                 ),
-                relational_storage_gateway=relational,
                 logging_gateway=logger,
                 messaging_service=self.messaging,
                 user_service=Mock(),
@@ -1042,7 +1038,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=relational,
                 logging_gateway=logger,
             ),
-            relational_storage_gateway=relational,
             logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -1074,7 +1069,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=relational,
                 logging_gateway=logger,
             ),
-            relational_storage_gateway=relational,
             logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -1122,7 +1116,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=relational,
                 logging_gateway=client_logger,
             ),
-            relational_storage_gateway=relational,
             logging_gateway=client_logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -1253,7 +1246,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=relational,
                 logging_gateway=logger,
             ),
-            relational_storage_gateway=relational,
             logging_gateway=logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -1513,7 +1505,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=relational,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -2519,7 +2510,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=loop_relational,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=loop_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -2557,7 +2547,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=sleeper_relational,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=sleeper_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -2815,6 +2804,31 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 and "conversation_id='conv-drop'" in message
                 and "incoming_event_id='2'" in message
                 and "reason='subscriber_enqueue_timeout_disconnect'" in message
+                for message in warning_messages
+            )
+        )
+
+    async def test_publish_event_logs_fanout_delivery_exception(self) -> None:
+        class _QueueRaising:
+            async def put(self, _item):
+                raise RuntimeError("fanout boom")
+
+        async with self.client._subscriber_lock:  # pylint: disable=protected-access
+            self.client._subscribers["conv-fanout-error"] = {  # pylint: disable=protected-access
+                _QueueRaising()
+            }
+
+        await self.client._publish_event(  # pylint: disable=protected-access
+            "conv-fanout-error",
+            {"id": "2", "event": "system", "data": {}},
+        )
+
+        warning_messages = [call.args[0] for call in self.logger.warning.call_args_list]
+        self.assertTrue(
+            any(
+                "Web SSE fan-out delivery failed" in message
+                and "RuntimeError" in message
+                and "fanout boom" in message
                 for message in warning_messages
             )
         )
@@ -3438,7 +3452,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=failing_relational,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=failing_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3911,7 +3924,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=no_dir_relational,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=no_dir_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -3931,7 +3943,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=young_relational,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=young_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -4028,7 +4039,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=helper_relational,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=helper_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -4045,7 +4055,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=helper_relational_2,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=helper_relational_2,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -4069,7 +4078,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=no_base_relational,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=no_base_relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -4293,7 +4301,6 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway=self.relational,
                 logging_gateway=self.logger,
             ),
-            relational_storage_gateway=self.relational,
             logging_gateway=self.logger,
             messaging_service=self.messaging,
             user_service=Mock(),
@@ -4310,7 +4317,6 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                 ipc_service=Mock(),
                 keyval_storage_gateway=self.keyval,
                 web_runtime_store=None,
-                relational_storage_gateway=self.relational,
                 logging_gateway=self.logger,
                 messaging_service=self.messaging,
                 user_service=Mock(),

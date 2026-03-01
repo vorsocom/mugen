@@ -4,9 +4,13 @@ __all__ = ["IMatrixClient"]
 
 from abc import ABC, abstractmethod
 from types import TracebackType
-from typing import Any
-from typing import Literal
 from typing import Type
+
+from mugen.core.contract.client.matrix_types import (
+    IMatrixSyncSignal,
+    MatrixPresence,
+    MatrixProfile,
+)
 
 
 class IMatrixClient(ABC):
@@ -30,7 +34,7 @@ class IMatrixClient(ABC):
     def sync_token(self) -> str:
         """Get the next_batch token."""
 
-    synced: Any
+    synced: IMatrixSyncSignal
     """Sync-ready signal/event populated by concrete adapters."""
 
     @abstractmethod
@@ -40,16 +44,16 @@ class IMatrixClient(ABC):
         since: str | None = None,
         timeout: int = 100,
         full_state: bool = True,
-        set_presence: Literal["online", "offline", "unavailable"] = "online",
-    ) -> Any:
+        set_presence: MatrixPresence = "online",
+    ) -> None:
         """Run long-polling sync loop."""
 
     @abstractmethod
-    async def get_profile(self, user_id: str | None = None) -> Any:
+    async def get_profile(self, user_id: str | None = None) -> MatrixProfile:
         """Fetch current profile."""
 
     @abstractmethod
-    async def set_displayname(self, displayname: str) -> Any:
+    async def set_displayname(self, displayname: str) -> None:
         """Set profile display name."""
 
     @abstractmethod

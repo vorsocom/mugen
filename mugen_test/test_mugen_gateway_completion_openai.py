@@ -40,6 +40,13 @@ async def _stream_chunks(chunks: list[Any]):
         yield chunk
 
 
+def _simple_request() -> CompletionRequest:
+    return CompletionRequest(
+        operation="completion",
+        messages=[CompletionMessage(role="user", content="hello")],
+    )
+
+
 class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
     """Covers request shaping and failure handling for OpenAI completion."""
 
@@ -115,7 +122,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         response = await gateway.get_completion(
-            [{"role": "user", "content": "hello"}],
+            _simple_request(),
         )
 
         self.assertEqual(response.content, "hello world")
@@ -429,7 +436,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         _, kwargs = api.chat.completions.create.await_args
         self.assertEqual(kwargs["max_completion_tokens"], 21)
@@ -442,7 +449,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         _, kwargs = api.chat.completions.create.await_args
         self.assertEqual(kwargs["max_completion_tokens"], 17)
@@ -481,7 +488,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
-        await gateway.get_completion([{"role": "user", "content": "hello"}])
+        await gateway.get_completion(_simple_request())
 
         _, kwargs = api.chat.completions.create.await_args
         self.assertNotIn("temperature", kwargs)
@@ -781,7 +788,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError):
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
     async def test_get_completion_includes_additional_choices_metadata(self) -> None:
         config = _make_config()
@@ -811,7 +818,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
-        response = await gateway.get_completion([{"role": "user", "content": "hello"}])
+        response = await gateway.get_completion(_simple_request())
         self.assertEqual(
             response.vendor_fields["additional_choices"][0]["finish_reason"],
             "length",
@@ -845,7 +852,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
-        response = await gateway.get_completion([{"role": "user", "content": "hello"}])
+        response = await gateway.get_completion(_simple_request())
         self.assertEqual(response.content, "hello")
         self.assertEqual(response.vendor_fields, {})
 
@@ -886,7 +893,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
-        response = await gateway.get_completion([{"role": "user", "content": "hello"}])
+        response = await gateway.get_completion(_simple_request())
 
         self.assertEqual(response.content, "hello responses")
         self.assertEqual(response.usage.input_tokens, 3)
@@ -957,7 +964,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError):
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         api.chat.completions.create.assert_not_called()
         api.responses.create.assert_not_called()
@@ -1166,7 +1173,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
-        response = await gateway.get_completion([{"role": "user", "content": "hello"}])
+        response = await gateway.get_completion(_simple_request())
 
         self.assertEqual(response.content[0]["type"], "reasoning")
         self.assertEqual(
@@ -1223,7 +1230,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
-        response = await gateway.get_completion([{"role": "user", "content": "hello"}])
+        response = await gateway.get_completion(_simple_request())
 
         self.assertEqual(response.tool_calls[0]["id"], "fc_1")
         self.assertEqual(response.usage.input_tokens, 10)
@@ -1428,7 +1435,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError):
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         api.chat.completions.create.assert_not_called()
 
@@ -1500,7 +1507,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError):
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         logging_gateway.warning.assert_called_once()
 
@@ -1524,7 +1531,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError) as context:
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         self.assertIs(context.exception, sentinel)
 
@@ -1545,7 +1552,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError):
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         logging_gateway.warning.assert_called_once()
 

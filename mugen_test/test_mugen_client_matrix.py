@@ -412,6 +412,36 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.client_session = SimpleNamespace(close=AsyncMock())
         return client
 
+    async def test_get_profile_wraps_asyncclient_response(self) -> None:
+        client = self._client()
+        response = SimpleNamespace(
+            displayname="Assistant",
+            avatar_url="mxc://example/avatar",
+        )
+        with patch.object(
+            matrix_mod.AsyncClient,
+            "get_profile",
+            AsyncMock(return_value=response),
+        ) as get_profile_mock:
+            profile = await DefaultMatrixClient.get_profile(client, user_id="@u:example.com")
+
+        get_profile_mock.assert_awaited_once_with(user_id="@u:example.com")
+        self.assertEqual(profile.user_id, "@u:example.com")
+        self.assertEqual(profile.displayname, "Assistant")
+        self.assertEqual(profile.avatar_url, "mxc://example/avatar")
+        self.assertIs(profile.raw, response)
+
+    async def test_set_displayname_delegates_to_asyncclient(self) -> None:
+        client = self._client()
+        with patch.object(
+            matrix_mod.AsyncClient,
+            "set_displayname",
+            AsyncMock(return_value=object()),
+        ) as set_displayname_mock:
+            await DefaultMatrixClient.set_displayname(client, "New Name")
+
+        set_displayname_mock.assert_awaited_once_with("New Name")
+
     def test_init_requires_secret_encryption_key_in_production(self) -> None:
         config = SimpleNamespace(
             basedir="/tmp",
@@ -980,11 +1010,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._matrix_metrics["matrix.messages.rejected.malformed_sender"], 1  # pylint: disable=protected-access
         )
 
-    async def test_is_direct_message_handles_direct_rooms_and_legacy_fallback(self) -> None:
+    async def test_is_direct_message_handles_direct_rooms_without_legacy_fallback(
+        self,
+    ) -> None:
         client = self._client()
 
         client.list_direct_rooms = AsyncMock(return_value=SimpleNamespace(rooms="invalid"))
-        client.room_get_state = AsyncMock(return_value=SimpleNamespace(events="invalid"))
         self.assertFalse(await client._is_direct_message("!room:test"))
 
         client.list_direct_rooms = AsyncMock(
@@ -994,29 +1025,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         client._direct_room_ids.clear()
         client.list_direct_rooms = AsyncMock(return_value=SimpleNamespace(rooms={}))
-        client.room_get_state = AsyncMock(
-            return_value=SimpleNamespace(
-                events=[
-                    "not-a-dict",
-                    {"type": "m.other", "content": {"m.direct": 1}},
-                    {"type": client._legacy_direct_flags_key, "content": {"m.direct": 0}},
-                ]
-            )
-        )
         self.assertFalse(await client._is_direct_message("!room:test"))
-
-        client.room_get_state = AsyncMock(
-            return_value=SimpleNamespace(
-                events=[
-                    {"type": client._legacy_direct_flags_key, "content": "invalid"},
-                    {
-                        "type": client._legacy_direct_flags_key,
-                        "content": {"m.direct": True},
-                    },
-                ]
-            )
-        )
-        self.assertTrue(await client._is_direct_message("!room:test"))
 
     async def test_is_direct_message_cache_hit_and_multi_user_scan(self) -> None:
         client = self._client()

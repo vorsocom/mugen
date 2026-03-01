@@ -37,6 +37,13 @@ async def _stream_chunks(chunks: list[SimpleNamespace]):
         yield chunk
 
 
+def _simple_request() -> CompletionRequest:
+    return CompletionRequest(
+        operation="completion",
+        messages=[CompletionMessage(role="user", content="hello")],
+    )
+
+
 class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
     """Covers request shaping and failure handling for Groq completion."""
 
@@ -81,7 +88,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         async_groq.assert_called_once_with(api_key="gsk_test")
 
         response = await gateway.get_completion(
-            [{"role": "user", "content": "hello"}],
+            _simple_request(),
         )
 
         self.assertEqual(response.content, "hello world")
@@ -389,7 +396,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             gateway = GroqCompletionGateway(config, logging_gateway)
 
         response = await gateway.get_completion(
-            [{"role": "user", "content": "hello"}],
+            _simple_request(),
         )
 
         self.assertEqual(response.content[0]["type"], "output_text")
@@ -627,7 +634,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             gateway = GroqCompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError):
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
     async def test_get_completion_includes_additional_choices_metadata(self) -> None:
         config = _make_config()
@@ -655,7 +662,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api):
             gateway = GroqCompletionGateway(config, logging_gateway)
 
-        response = await gateway.get_completion([{"role": "user", "content": "hello"}])
+        response = await gateway.get_completion(_simple_request())
         self.assertEqual(response.vendor_fields["additional_choices"][0]["finish_reason"], "length")
 
     async def test_get_completion_handles_response_without_payload_dict(self) -> None:
@@ -684,7 +691,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api):
             gateway = GroqCompletionGateway(config, logging_gateway)
 
-        response = await gateway.get_completion([{"role": "user", "content": "hello"}])
+        response = await gateway.get_completion(_simple_request())
         self.assertEqual(response.content, "hello")
         self.assertEqual(response.vendor_fields, {})
 
@@ -703,7 +710,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             gateway = GroqCompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError):
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
     async def test_get_completion_rethrows_completion_gateway_error(self) -> None:
         config = _make_config()
@@ -723,7 +730,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             gateway = GroqCompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError) as context:
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         self.assertIs(context.exception, sentinel)
 
@@ -742,7 +749,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             gateway = GroqCompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError):
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         logging_gateway.warning.assert_called_once()
 

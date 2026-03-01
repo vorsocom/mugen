@@ -29,6 +29,8 @@ class DefaultMessagingService(IMessagingService):
     _thread_list_version: int = 1
 
     _default_extension_timeout_seconds: float = 10.0
+    _extension_failure_policy_fail_open = "fail_open"
+    _extension_failure_policy_fail_closed = "fail_closed"
 
     # pylint: disable=too-many-arguments
     # pylint: disable=too-many-positional-arguments
@@ -60,6 +62,7 @@ class DefaultMessagingService(IMessagingService):
         self._rpp_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._normalize_composed_message_use_case = NormalizeComposedMessageUseCase()
         self._extension_timeout_seconds = self._resolve_extension_timeout_seconds()
+        self._extension_failure_policy = self._resolve_extension_failure_policy()
 
     def _resolve_extension_timeout_seconds(self) -> float | None:
         environment = str(
@@ -113,6 +116,58 @@ class DefaultMessagingService(IMessagingService):
             return None
         return timeout_seconds
 
+    def _resolve_extension_failure_policy(self) -> str:
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+        ).strip().lower()
+        default_policy = (
+            self._extension_failure_policy_fail_closed
+            if environment == "production"
+            else self._extension_failure_policy_fail_open
+        )
+        raw_policy = getattr(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "messaging", None),
+            "extension_failure_policy",
+            None,
+        )
+        if raw_policy in [None, ""]:
+            return default_policy
+        if not isinstance(raw_policy, str):
+            self._logging_gateway.warning(
+                "Invalid extension failure policy configuration; "
+                f"using default {default_policy}."
+            )
+            return default_policy
+        normalized_policy = raw_policy.strip().lower()
+        if normalized_policy in {
+            self._extension_failure_policy_fail_open,
+            self._extension_failure_policy_fail_closed,
+        }:
+            return normalized_policy
+
+        self._logging_gateway.warning(
+            "Unsupported extension failure policy configuration; "
+            f"using default {default_policy}."
+        )
+        return default_policy
+
+    def _should_fail_closed(self) -> bool:
+        return self._extension_failure_policy == self._extension_failure_policy_fail_closed
+
+    def _handle_extension_handler_failure(
+        self,
+        *,
+        extension_name: str,
+        message: str,
+        cause: Exception | None = None,
+    ) -> None:
+        _ = extension_name
+        if self._should_fail_closed():
+            if cause is None:
+                raise RuntimeError(message)
+            raise RuntimeError(message) from cause
+        self._logging_gateway.warning(message)
+
     async def _invoke_message_handler(
         self,
         *,
@@ -139,29 +194,41 @@ class DefaultMessagingService(IMessagingService):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                self._logging_gateway.warning(
-                    "Messaging extension handler failed "
-                    f"(extension={extension_name} "
-                    f"error_type={type(exc).__name__} error={exc})."
+                self._handle_extension_handler_failure(
+                    extension_name=extension_name,
+                    message=(
+                        "Messaging extension handler failed "
+                        f"(extension={extension_name} "
+                        f"error_type={type(exc).__name__} error={exc})."
+                    ),
+                    cause=exc,
                 )
                 return None
 
         try:
             return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
-        except asyncio.TimeoutError:
-            self._logging_gateway.warning(
-                "Messaging extension handler timed out "
-                f"(extension={extension_name} "
-                f"timeout_seconds={timeout_seconds})."
+        except asyncio.TimeoutError as exc:
+            self._handle_extension_handler_failure(
+                extension_name=extension_name,
+                message=(
+                    "Messaging extension handler timed out "
+                    f"(extension={extension_name} "
+                    f"timeout_seconds={timeout_seconds})."
+                ),
+                cause=exc,
             )
             return None
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            self._logging_gateway.warning(
-                "Messaging extension handler failed "
-                f"(extension={extension_name} "
-                f"error_type={type(exc).__name__} error={exc})."
+            self._handle_extension_handler_failure(
+                extension_name=extension_name,
+                message=(
+                    "Messaging extension handler failed "
+                    f"(extension={extension_name} "
+                    f"error_type={type(exc).__name__} error={exc})."
+                ),
+                cause=exc,
             )
             return None
 

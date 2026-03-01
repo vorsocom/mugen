@@ -11,6 +11,7 @@ from typing import Any
 from mugen.core import di
 from mugen.core.contract.gateway.completion import (
     CompletionGatewayError,
+    CompletionMessage,
     CompletionRequest,
     ICompletionGateway,
 )
@@ -542,9 +543,12 @@ class DefaultTextMHExtension(IMHExtension):
             return None
 
         try:
-            return CompletionRequest.from_context(
-                completion_context,
+            return CompletionRequest(
                 operation="completion",
+                messages=[
+                    CompletionMessage.from_dict(message_payload)
+                    for message_payload in completion_context
+                ],
             )
         except ValueError as exc:
             self._logging_gateway.warning(

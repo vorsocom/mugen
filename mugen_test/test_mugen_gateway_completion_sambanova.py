@@ -30,6 +30,13 @@ def _make_config() -> SimpleNamespace:
     )
 
 
+def _simple_request() -> CompletionRequest:
+    return CompletionRequest(
+        operation="completion",
+        messages=[CompletionMessage(role="user", content="hello")],
+    )
+
+
 class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
     """Covers response parsing and failure handling for SambaNova completion."""
 
@@ -49,7 +56,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             return_value=(200, payload),
         ):
             response = await gateway.get_completion(
-                [{"role": "user", "content": "hello"}],
+                _simple_request(),
             )
 
         self.assertEqual(response.content, "hello world")
@@ -96,7 +103,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             return_value=(401, '{"error":{"message":"Unauthorized"}}'),
         ):
             with self.assertRaises(CompletionGatewayError):
-                await gateway.get_completion([{"role": "user", "content": "hello"}])
+                await gateway.get_completion(_simple_request())
 
         logging_gateway.warning.assert_called_once()
 
@@ -155,7 +162,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             "_perform_request",
             return_value=(200, payload),
         ) as perform_request:
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         _, kwargs = perform_request.call_args
         headers = kwargs["headers"]
@@ -329,7 +336,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             "_perform_request",
             return_value=(200, payload),
         ) as perform_request:
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         _, kwargs = perform_request.call_args
         body = kwargs["body"]
@@ -343,7 +350,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             "_perform_request",
             return_value=(200, payload),
         ) as perform_request:
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         _, kwargs = perform_request.call_args
         body = kwargs["body"]
@@ -361,7 +368,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             "_perform_request",
             return_value=(200, payload),
         ) as perform_request:
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         _, kwargs = perform_request.call_args
         body = kwargs["body"]
@@ -374,7 +381,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             "_perform_request",
             return_value=(200, payload),
         ) as perform_request:
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         _, kwargs = perform_request.call_args
         body = kwargs["body"]
@@ -397,7 +404,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             return_value=(200, payload),
         ):
             response = await gateway.get_completion(
-                [{"role": "user", "content": "hello"}],
+                _simple_request(),
             )
 
         self.assertEqual(response.content[0]["type"], "output_text")
@@ -417,7 +424,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             return_value=(200, payload),
         ):
             response = await gateway.get_completion(
-                [{"role": "user", "content": "hello"}],
+                _simple_request(),
             )
 
         self.assertEqual(response.content, "")
@@ -515,7 +522,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             side_effect=RuntimeError("network down"),
         ):
             with self.assertRaises(CompletionGatewayError):
-                await gateway.get_completion([{"role": "user", "content": "hello"}])
+                await gateway.get_completion(_simple_request())
 
     async def test_get_completion_raises_gateway_error_on_invalid_payload(self) -> None:
         config = _make_config()
@@ -528,7 +535,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             return_value=(200, "not-json"),
         ):
             with self.assertRaises(CompletionGatewayError):
-                await gateway.get_completion([{"role": "user", "content": "hello"}])
+                await gateway.get_completion(_simple_request())
 
     def test_resolve_operation_config_validation(self) -> None:
         logging_gateway = Mock()

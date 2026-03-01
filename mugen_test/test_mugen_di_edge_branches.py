@@ -1,5 +1,6 @@
 """Edge-branch unit tests for mugen.core.di helper routines."""
 
+import asyncio
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -805,6 +806,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             None,
             provider_name="keyval_storage_gateway",
             configured_class_path="mugen.gateway.keyval:KeyValProvider",
+            timeout_seconds=1.0,
         )
 
     def test_await_readiness_probe_sync_runs_when_no_event_loop(self) -> None:
@@ -818,8 +820,13 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                     awaitable,
                     provider_name="keyval_storage_gateway",
                     configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                    timeout_seconds=1.0,
                 )
-        run_mock.assert_called_once_with(awaitable)
+        run_mock.assert_called_once()
+        run_arg = run_mock.call_args.args[0]
+        close = getattr(run_arg, "close", None)
+        if callable(close):
+            close()
 
     def test_await_readiness_probe_sync_runs_in_thread_when_loop_is_running(
         self,
@@ -837,6 +844,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                 _ready(),
                 provider_name="keyval_storage_gateway",
                 configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                timeout_seconds=1.0,
             )
         self.assertTrue(marker["ready"])
 
@@ -853,8 +861,47 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                     _boom(),
                     provider_name="keyval_storage_gateway",
                     configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                    timeout_seconds=1.0,
                 )
         self.assertIn("RuntimeError: readiness boom", str(raised.exception))
+
+    def test_await_readiness_probe_sync_times_out_thread_worker(self) -> None:
+        async def _slow() -> None:
+            await asyncio.sleep(0.2)
+
+        with patch(
+            "mugen.core.di.asyncio.get_running_loop",
+            return_value=object(),
+        ):
+            with self.assertRaises(di.ProviderBootstrapError) as raised:
+                di._await_readiness_probe_sync(  # pylint: disable=protected-access
+                    _slow(),
+                    provider_name="keyval_storage_gateway",
+                    configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                    timeout_seconds=0.01,
+                )
+        self.assertIn("TimeoutError", str(raised.exception))
+
+    def test_await_readiness_probe_sync_raises_when_worker_result_is_missing(self) -> None:
+        async def _ready() -> None:
+            return None
+
+        with patch(
+            "mugen.core.di.asyncio.get_running_loop",
+            return_value=object(),
+        ):
+            with patch(
+                "mugen.core.di.Queue.get_nowait",
+                side_effect=RuntimeError("queue-read-failed"),
+            ):
+                with self.assertRaises(di.ProviderBootstrapError) as raised:
+                    di._await_readiness_probe_sync(  # pylint: disable=protected-access
+                        _ready(),
+                        provider_name="keyval_storage_gateway",
+                        configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                        timeout_seconds=1.0,
+                    )
+        self.assertIn("did not report result", str(raised.exception))
 
     def test_validate_required_provider_readiness_succeeds_for_ready_provider(self) -> None:
         class _ReadyProvider:  # pylint: disable=too-few-public-methods
@@ -935,3 +982,29 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                     injector,
                 )
         self.assertEqual(str(raised.exception), "forced bootstrap error")
+
+    def test_resolve_provider_readiness_timeout_seconds_defaults_and_validation(
+        self,
+    ) -> None:
+        self.assertEqual(
+            di._resolve_provider_readiness_timeout_seconds({}),  # pylint: disable=protected-access
+            15.0,
+        )
+        self.assertEqual(
+            di._resolve_provider_readiness_timeout_seconds(  # pylint: disable=protected-access
+                {"mugen": {"runtime": {"provider_readiness_timeout_seconds": "2.5"}}}
+            ),
+            2.5,
+        )
+        self.assertEqual(
+            di._resolve_provider_readiness_timeout_seconds(  # pylint: disable=protected-access
+                {"mugen": {"runtime": {"provider_readiness_timeout_seconds": "bad"}}}
+            ),
+            15.0,
+        )
+        self.assertEqual(
+            di._resolve_provider_readiness_timeout_seconds(  # pylint: disable=protected-access
+                {"mugen": {"runtime": {"provider_readiness_timeout_seconds": 0}}}
+            ),
+            15.0,
+        )

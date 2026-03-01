@@ -72,23 +72,6 @@ class CompletionRequest:
     )
     vendor_params: dict[str, Any] = field(default_factory=dict)
 
-    @classmethod
-    def from_context(
-        cls,
-        context: list[dict[str, Any]],
-        operation: str = "completion",
-    ) -> "CompletionRequest":
-        """Build a request from legacy context payloads."""
-        if not isinstance(context, list):
-            raise ValueError("Context must be a list.")
-
-        messages = [CompletionMessage.from_dict(item) for item in context]
-        return cls(messages=messages, operation=operation)
-
-    def to_context(self) -> list[dict[str, Any]]:
-        """Convert request back to legacy context payloads."""
-        return [message.to_dict() for message in self.messages]
-
 
 @dataclass(frozen=True)
 class CompletionUsage:
@@ -133,25 +116,13 @@ class CompletionGatewayError(RuntimeError):
         self.timeout_applied = timeout_applied
 
 
-def normalise_completion_request(
-    request: CompletionRequest | list[dict[str, Any]],
-    *,
-    operation: str = "completion",
-) -> CompletionRequest:
-    """Normalise request inputs during migration to the typed contract."""
-    if isinstance(request, CompletionRequest):
-        return request
-
-    return CompletionRequest.from_context(request, operation=operation)
-
-
 class ICompletionGateway(ABC):  # pylint: disable=too-few-public-methods
     """A chat completion gateway base class."""
 
     @abstractmethod
     async def get_completion(
         self,
-        request: CompletionRequest | list[dict[str, Any]],
+        request: CompletionRequest,
         operation: str = "completion",
     ) -> CompletionResponse:
         """Get LLM response from normalized completion request data."""
