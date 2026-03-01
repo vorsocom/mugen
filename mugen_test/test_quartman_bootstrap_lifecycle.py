@@ -559,7 +559,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch.object(
                 quartman,
-                "build_phase_b_startup_plan",
+                "prepare_phase_b_startup_plan",
                 return_value=phase_b_plan,
             ),
             unittest.mock.patch.object(

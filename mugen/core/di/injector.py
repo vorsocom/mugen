@@ -39,6 +39,7 @@ class DependencyInjector(IDependencyInjector):
         email_gateway: IEmailGateway = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_runtime=None,
         relational_storage_gateway: IRelationalStorageGateway = None,
         web_runtime_store: IWebRuntimeStore = None,
         nlp_service: INLPService = None,
@@ -56,6 +57,7 @@ class DependencyInjector(IDependencyInjector):
         self.__email_gateway = email_gateway
         self.__ipc_service = ipc_service
         self.__keyval_storage_gateway = keyval_storage_gateway
+        self.__relational_runtime = relational_runtime
         self.__relational_storage_gateway = relational_storage_gateway
         self.__web_runtime_store = web_runtime_store
         self.__nlp_service = nlp_service
@@ -120,6 +122,14 @@ class DependencyInjector(IDependencyInjector):
     @property
     def relational_storage_gateway(self) -> IRelationalStorageGateway:
         return self.__relational_storage_gateway
+
+    @property
+    def relational_runtime(self):
+        return self.__relational_runtime
+
+    @relational_runtime.setter
+    def relational_runtime(self, value) -> None:
+        self.__relational_runtime = value
 
     @relational_storage_gateway.setter
     def relational_storage_gateway(self, value: IRelationalStorageGateway) -> None:

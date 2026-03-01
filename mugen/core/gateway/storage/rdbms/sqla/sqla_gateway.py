@@ -3,16 +3,13 @@
 __all__ = ["SQLAlchemyRelationalStorageGateway"]
 
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from typing import AsyncIterator, Mapping
 
 from sqlalchemy import Table
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
-    AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -24,6 +21,7 @@ from mugen.core.gateway.storage.rdbms.sqla.sqla_uow import (
     TableRegistry,
 )
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 
 
 class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
@@ -40,24 +38,20 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
 
     def __init__(
         self,
-        config: SimpleNamespace,
+        config,
         logging_gateway: ILoggingGateway,
+        relational_runtime: SharedSQLAlchemyRuntime,
     ) -> None:
         self._config = config
         self._logging_gateway = logging_gateway
-
-        self._engine: AsyncEngine = create_async_engine(
-            self._config.rdbms.sqlalchemy.url,
-        )
+        self._runtime = relational_runtime
+        self._engine: AsyncEngine = self._runtime.engine
         self._tables: TableRegistry = build_table_registry_from_base(ModelBase)
-        self._session_maker = async_sessionmaker(
-            self._engine,
-            expire_on_commit=False,
-        )
+        self._session_maker: async_sessionmaker = self._runtime.session_maker
 
     async def aclose(self) -> None:
-        """Dispose SQLAlchemy engine resources."""
-        await self._engine.dispose()
+        """Shared engine lifecycle is managed by DI runtime shutdown."""
+        return None
 
     async def check_readiness(self) -> None:
         """Validate relational connectivity for fail-fast startup checks."""
@@ -80,21 +74,6 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
                 uow = SQLAlchemyRelationalUnitOfWork(session, self._tables)
                 yield uow
                 # commit / rollback handled by session.begin()
-
-    @asynccontextmanager
-    async def raw_session(self) -> AsyncIterator[AsyncSession]:
-        """Yield a raw SQLAlchemy AsyncSession for non-portable operations.
-
-        This is an escape hatch for advanced use cases that require direct access to
-        SQLAlchemy's session API. Code that depends on `raw_session()` is tied to this
-        implementation and **not** portable across other relational gateway backends.
-
-        The transaction semantics are the same as for `unit_of_work`: a transaction is
-        started, committed on normal exit, and rolled back on exception.
-        """
-        async with self._session_maker() as session:
-            async with session.begin():
-                yield session
 
     def register_tables(
         self,

@@ -65,7 +65,7 @@ class TestDILoadConfig(unittest.TestCase):
                             target="mugen.core.di._build_provider",
                         ):
                             with unittest.mock.patch(
-                                target="mugen.core.di._validate_required_provider_readiness",
+                                target="mugen.core.di._build_shared_relational_runtime",
                             ):
                                 with unittest.mock.patch(
                                     target="mugen.core.di._validate_container",
@@ -101,7 +101,7 @@ class TestDILoadConfig(unittest.TestCase):
                             target="mugen.core.di._build_provider",
                         ):
                             with unittest.mock.patch(
-                                target="mugen.core.di._validate_required_provider_readiness",
+                                target="mugen.core.di._build_shared_relational_runtime",
                             ):
                                 with unittest.mock.patch(
                                     target="mugen.core.di._validate_container",

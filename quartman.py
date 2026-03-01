@@ -40,12 +40,9 @@ from mugen.core import di
 from mugen.core.runtime.phase_b_bootstrap import (
     PHASE_B_CRITICAL_PLATFORMS_KEY as _PHASE_B_CRITICAL_PLATFORMS_KEY,
     PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY as _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY,
-    PHASE_B_READINESS_GRACE_KEY as _PHASE_B_READINESS_GRACE_KEY,
     PHASE_B_STARTUP_PLAN_KEY as _PHASE_B_STARTUP_PLAN_KEY,
-    PHASE_B_STARTUP_TIMEOUT_KEY as _PHASE_B_STARTUP_TIMEOUT_KEY,
-    apply_phase_b_startup_state,
-    build_phase_b_startup_plan,
 )
+from mugen.core.runtime.phase_b_coordinator import prepare_phase_b_startup_plan
 from mugen.core.runtime.phase_b_controls import (
     parse_bool,
     resolve_phase_b_startup_timeout_seconds,
@@ -171,13 +168,12 @@ async def startup():
         raise BootstrapConfigError("Configuration unavailable.")
 
     try:
-        phase_b_plan = build_phase_b_startup_plan(
+        phase_b_plan = prepare_phase_b_startup_plan(
             config=runtime_config,
             bootstrap_state=state,
             logger=app.logger,
             validate_phase_b_runtime_config=validate_phase_b_runtime_config,
             validate_web_relational_runtime_config=validate_web_relational_runtime_config,
-            include_startup_timeout=True,
         )
     except RuntimeError as exc:
         raise BootstrapConfigError(str(exc)) from exc
@@ -185,13 +181,6 @@ async def startup():
     startup_timeout_seconds = phase_b_plan.startup_timeout_seconds
     if startup_timeout_seconds is None:
         raise BootstrapConfigError("Invalid runtime configuration: startup timeout is required.")
-
-    apply_phase_b_startup_state(
-        state,
-        plan=phase_b_plan,
-        reset_started_at=True,
-    )
-    state[_PHASE_B_STARTUP_PLAN_KEY] = phase_b_plan
 
     phase_b_started_at = perf_counter()
     app.logger.info("Bootstrap phase_b starting.")

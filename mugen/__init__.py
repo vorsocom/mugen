@@ -73,10 +73,11 @@ from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.runtime.phase_b_bootstrap import (
     PHASE_B_CRITICAL_PLATFORMS_KEY as _PHASE_B_CRITICAL_PLATFORMS_KEY,
     PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY as _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY,
-    PHASE_B_STARTUP_PLAN_KEY as _PHASE_B_STARTUP_PLAN_KEY,
     PhaseBStartupPlan,
-    apply_phase_b_startup_state,
-    build_phase_b_startup_plan,
+)
+from mugen.core.runtime.phase_b_coordinator import (
+    prepare_phase_b_startup_plan,
+    resolve_phase_b_startup_plan,
 )
 from mugen.core.runtime.phase_b_controls import (
     parse_bool as _parse_bool,
@@ -480,6 +481,8 @@ async def bootstrap_app(
     config_provider=_config_provider,
 ) -> None:
     """Phase A bootstrap for app extensions and API registration."""
+    await di.ensure_container_readiness_async()
+
     # Discover and register core plugins and
     # third-party extensions.
     await register_extensions(app, config_provider=config_provider)
@@ -503,35 +506,21 @@ async def run_platform_clients(
     logger: ILoggingGateway = logger_provider()
     bootstrap_state = get_bootstrap_state(app)
     bootstrap_state[SHUTDOWN_REQUESTED_KEY] = False
-    startup_plan = bootstrap_state.pop(_PHASE_B_STARTUP_PLAN_KEY, None)
-    if not isinstance(startup_plan, PhaseBStartupPlan):
-        startup_plan = build_phase_b_startup_plan(
-            config=config,
-            bootstrap_state=bootstrap_state,
-            logger=logger,
-            validate_phase_b_runtime_config=validate_phase_b_runtime_config,
-            validate_web_relational_runtime_config=lambda **kwargs: (
-                validate_web_relational_runtime_config(
-                    **kwargs,
-                    relational_storage_gateway_provider=(
-                        relational_storage_gateway_provider
-                    ),
-                    web_runtime_store_provider=web_runtime_store_provider,
-                )
-            ),
-            include_startup_timeout=False,
-        )
-        apply_phase_b_startup_state(
-            bootstrap_state,
-            plan=startup_plan,
-            reset_started_at=True,
-        )
-    else:
-        apply_phase_b_startup_state(
-            bootstrap_state,
-            plan=startup_plan,
-            reset_started_at=False,
-        )
+    startup_plan: PhaseBStartupPlan = resolve_phase_b_startup_plan(
+        config=config,
+        bootstrap_state=bootstrap_state,
+        logger=logger,
+        validate_phase_b_runtime_config=validate_phase_b_runtime_config,
+        validate_web_relational_runtime_config=lambda **kwargs: (
+            validate_web_relational_runtime_config(
+                **kwargs,
+                relational_storage_gateway_provider=(
+                    relational_storage_gateway_provider
+                ),
+                web_runtime_store_provider=web_runtime_store_provider,
+            )
+        ),
+    )
 
     active_platforms = list(startup_plan.active_platforms)
     critical_platforms = list(startup_plan.critical_platforms)

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+import mugen.core.client.web as web_mod
 from mugen.core.client.web import DefaultWebClient
 from mugen.core.gateway.storage.web_runtime.relational_store import (
     RelationalWebRuntimeStore,
@@ -577,6 +578,9 @@ class _InMemoryWebRelationalGateway:
     async def raw_session(self):
         yield _InMemoryWebRelationalSession(self._state)
 
+    async def check_readiness(self):
+        return None
+
 
 class _SequenceMappings:
     def __init__(self, rows):
@@ -724,11 +728,14 @@ def _build_runtime_store(
     relational_storage_gateway,
     logging_gateway,
 ) -> RelationalWebRuntimeStore:
+    runtime = SimpleNamespace(engine=None, session_maker=Mock())
     return RelationalWebRuntimeStore(
         config=config,
         logging_gateway=logging_gateway,
+        relational_runtime=runtime,
         session_provider=relational_storage_gateway.raw_session,
-        readiness_probe=getattr(relational_storage_gateway, "check_readiness", None),
+        readiness_probe=getattr(relational_storage_gateway, "check_readiness", None)
+        or (lambda: None),
     )
 
 
@@ -2833,6 +2840,32 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_sse_fanout_dispatcher_handles_result_level_exceptions(self) -> None:
+        class _QueueRaising:
+            async def put(self, _item):
+                raise RuntimeError("fanout boom")
+
+        dispatcher = web_mod._SSEFanoutDispatcher(  # pylint: disable=protected-access
+            enqueue_timeout_seconds=0.01,
+            parallelism=1,
+        )
+        on_error_calls: list[str] = []
+
+        def _on_error(exc: Exception) -> None:
+            on_error_calls.append(type(exc).__name__)
+            if len(on_error_calls) == 1:
+                raise ValueError("handler-failed")
+
+        summary = await dispatcher.publish(
+            subscribers=[_QueueRaising()],
+            event_entry={"id": "1"},
+            on_timeout=AsyncMock(),
+            on_error=_on_error,
+        )
+
+        self.assertEqual(summary["failed"], 1)
+        self.assertEqual(on_error_calls, ["RuntimeError", "ValueError"])
+
     async def test_stream_events_handles_non_positive_next_event_id(self) -> None:
         await self.client.enqueue_message(
             auth_user="user-1",
@@ -3817,9 +3850,17 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         # Register twice to hit existing-conversation branch.
         q1 = asyncio.Queue()
         q2 = asyncio.Queue()
+        self.client._sse_max_subscribers_per_conversation = 2  # pylint: disable=protected-access
         await self.client._register_subscriber("conv-sub", q1)  # pylint: disable=protected-access
         await self.client._register_subscriber("conv-sub", q2)  # pylint: disable=protected-access
         await self.client._register_subscriber("conv-sub", q1)  # pylint: disable=protected-access
+        q3 = asyncio.Queue()
+        with self.assertRaises(OverflowError):
+            await self.client._register_subscriber("conv-sub", q3)  # pylint: disable=protected-access
+        self.assertEqual(
+            self.client._web_metrics["web.sse.subscriber_limit_exceeded"],  # pylint: disable=protected-access
+            1,
+        )
         await self.client._unregister_subscriber("conv-sub", q1)  # pylint: disable=protected-access
         await self.client._unregister_subscriber("conv-sub", q2)  # pylint: disable=protected-access
 
@@ -3860,6 +3901,14 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 _QueueStillFull(),
             }
         await self.client._publish_event("conv-full", {"id": "2"})  # pylint: disable=protected-access
+        self.assertGreaterEqual(
+            self.client._web_metrics["web.sse.fanout.publish_calls"],  # pylint: disable=protected-access
+            1,
+        )
+        self.assertGreaterEqual(
+            self.client._web_metrics["web.sse.fanout.timed_out"],  # pylint: disable=protected-access
+            1,
+        )
 
     async def test_publish_cleanup_state_and_helper_branches(self) -> None:
         # _publish_event timeout branch.
@@ -4291,6 +4340,7 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         self.config = _build_config(basedir=self.tmpdir.name)
         self.relational = SimpleNamespace(
             raw_session=lambda: None,  # replaced per test
+            check_readiness=lambda: None,
         )
         self.client = DefaultWebClient(
             config=self.config,

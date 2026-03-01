@@ -58,22 +58,20 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
         session=None,
     ) -> tuple[RelationalWebRuntimeStore, _Session]:
         active_session = session or _Session(row)
+        runtime = SimpleNamespace(engine=None, session_maker=Mock())
         store = RelationalWebRuntimeStore(
             config=SimpleNamespace(),
             logging_gateway=Mock(),
+            relational_runtime=runtime,
             session_provider=_session_provider(active_session),
             readiness_probe=readiness_probe,
         )
         return store, active_session
 
-    def test_init_requires_sqlalchemy_url_without_session_provider(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "requires rdbms.sqlalchemy.url"):
-            RelationalWebRuntimeStore(
-                config=SimpleNamespace(
-                    rdbms=SimpleNamespace(
-                        sqlalchemy=SimpleNamespace(),
-                    )
-                ),
+    def test_init_requires_relational_runtime(self) -> None:
+        with self.assertRaises(TypeError):
+            RelationalWebRuntimeStore(  # type: ignore[call-arg]
+                config=SimpleNamespace(),
                 logging_gateway=Mock(),
             )
 
@@ -143,9 +141,7 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
 
     async def test_aclose_disposes_engine_when_present(self) -> None:
         store, _ = self._build_store(row={})
-        store._engine = SimpleNamespace(dispose=AsyncMock())  # pylint: disable=protected-access
         await store.aclose()
-        store._engine.dispose.assert_awaited_once()  # pylint: disable=protected-access
 
     def test_datetime_and_iso_helpers_cover_naive_and_blank_paths(self) -> None:
         naive = datetime(2025, 1, 1, 0, 0, 0)

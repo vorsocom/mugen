@@ -63,6 +63,11 @@ class IDependencyInjector(ABC):
 
     @property
     @abstractmethod
+    def relational_runtime(self) -> Any:
+        """Get the shared relational runtime resources."""
+
+    @property
+    @abstractmethod
     def web_runtime_store(self) -> IWebRuntimeStore:
         """Get the global web-runtime storage gateway."""
 

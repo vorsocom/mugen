@@ -251,12 +251,14 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
 
                 # New injector
                 injector = di.injector.DependencyInjector()
+                injector.relational_runtime = unittest.mock.Mock()
 
                 # Dummy subclasses
                 class DummyKeyValStorageGatewayClass(IKeyValStorageGateway):
                     """Dummy key-value storage class."""
 
-                    def __init__(self, config, logging_gateway):
+                    def __init__(self, config, logging_gateway, relational_runtime):
+                        _ = relational_runtime
                         pass
 
                     async def aclose(self):

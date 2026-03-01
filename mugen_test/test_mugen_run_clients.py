@@ -26,7 +26,17 @@ from mugen import (
 
 
 def _test_config(*, platforms: list[str]) -> SimpleNamespace:
-    mugen_cfg = SimpleNamespace(platforms=list(platforms))
+    mugen_cfg = SimpleNamespace(
+        platforms=list(platforms),
+        runtime=SimpleNamespace(
+            phase_b=SimpleNamespace(
+                startup_timeout_seconds=30.0,
+                readiness_grace_seconds=0.0,
+                critical_platforms=list(platforms),
+                degrade_on_critical_exit=True,
+            )
+        ),
+    )
     if "web" in platforms:
         mugen_cfg.modules = SimpleNamespace(
             core=SimpleNamespace(
@@ -50,7 +60,13 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(mugen=SimpleNamespace())
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                runtime=SimpleNamespace(
+                    phase_b=SimpleNamespace(startup_timeout_seconds=30.0),
+                )
+            )
+        )
 
         with (
             self.assertLogs(logger="test_app", level="ERROR"),
@@ -68,11 +84,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                platforms=["matrix"],
-            )
-        )
+        config = _test_config(platforms=["matrix"])
 
         _run_matrix_client = unittest.mock.AsyncMock()
 
@@ -95,7 +107,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
     async def test_telnet_platform_rejected_by_core_runtime(self) -> None:
         """Core runtime no longer accepts telnet platform."""
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["telnet"]))
+        config = _test_config(platforms=["telnet"])
 
         with self.assertRaises(BootstrapConfigError):
             await run_platform_clients(
@@ -110,11 +122,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                platforms=["whatsapp"],
-            )
-        )
+        config = _test_config(platforms=["whatsapp"])
 
         _run_whatsapp_client = unittest.mock.AsyncMock()
 
@@ -166,11 +174,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                platforms=["whatsapp"],
-            )
-        )
+        config = _test_config(platforms=["whatsapp"])
 
         _run_whatsapp_client = unittest.mock.AsyncMock(
             side_effect=asyncio.exceptions.CancelledError
@@ -199,11 +203,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                platforms=["whatsapp"],
-            )
-        )
+        config = _test_config(platforms=["whatsapp"])
 
         _run_whatsapp_client = unittest.mock.AsyncMock(
             side_effect=asyncio.exceptions.CancelledError
@@ -238,7 +238,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_platform_clients_marks_phase_b_degraded_on_critical_exit(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix"]))
+        config = _test_config(platforms=["matrix"])
         _run_matrix_client = unittest.mock.AsyncMock()
 
         with unittest.mock.patch(
@@ -540,7 +540,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["whatsapp"]))
+        config = _test_config(platforms=["whatsapp"])
         _run_whatsapp_client = unittest.mock.AsyncMock(
             side_effect=asyncio.exceptions.CancelledError
         )
@@ -558,7 +558,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_platform_clients_rejects_telnet_platform(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["telnet"]))
+        config = _test_config(platforms=["telnet"])
 
         with self.assertRaises(BootstrapConfigError):
             await run_platform_clients(
@@ -613,7 +613,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_bootstrap_app_registers_extensions_and_api_blueprint(self) -> None:
         app = Quart("test_app")
-        cfg = SimpleNamespace(mugen=SimpleNamespace(platforms=[]))
+        cfg = _test_config(platforms=[])
         register_extensions_mock = unittest.mock.AsyncMock()
 
         with unittest.mock.patch.object(
@@ -832,7 +832,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix"]))
+        config = _test_config(platforms=["matrix"])
         started = asyncio.Event()
         release = asyncio.Event()
 
@@ -903,7 +903,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_platform_clients_raises_on_unknown_active_platform(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web", "unknown"]))
+        config = _test_config(platforms=["web", "unknown"])
 
         with self.assertRaises(BootstrapConfigError):
             await run_platform_clients(
@@ -929,16 +929,12 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_platform_clients_raises_on_relational_web_miswire(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                platforms=["web"],
-                modules=SimpleNamespace(
-                    core=SimpleNamespace(
-                        gateway=SimpleNamespace(
-                            storage=SimpleNamespace(relational="configured"),
-                        )
-                    )
-                ),
+        config = _test_config(platforms=["web"])
+        config.mugen.modules = SimpleNamespace(
+            core=SimpleNamespace(
+                gateway=SimpleNamespace(
+                    storage=SimpleNamespace(relational="configured"),
+                )
             )
         )
 
@@ -980,7 +976,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["whatsapp"]))
+        config = _test_config(platforms=["whatsapp"])
 
         async def _probe_fail(
             *,
@@ -1055,7 +1051,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["whatsapp"]))
+        config = _test_config(platforms=["whatsapp"])
         degraded = asyncio.Event()
         recover = asyncio.Event()
         release = asyncio.Event()
@@ -1109,7 +1105,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix"]))
+        config = _test_config(platforms=["matrix"])
         degraded = asyncio.Event()
         recover = asyncio.Event()
         release = asyncio.Event()
@@ -1245,7 +1241,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix"]))
+        config = _test_config(platforms=["matrix"])
 
         def _raise_attr_error(coro, *_args, **_kwargs):
             coro.close()
@@ -1261,7 +1257,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_platform_clients_returns_when_no_platforms_enabled(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=[]))
+        config = _test_config(platforms=[])
         await run_platform_clients(
             app,
             config_provider=lambda: config,
@@ -1356,7 +1352,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms=["matrix"]))
+        config = _test_config(platforms=["matrix"])
         call_count = 0
         foreign_task = asyncio.create_task(asyncio.sleep(0))
 

@@ -31,7 +31,6 @@ from nio import (
     MatrixInvitedRoom,
     MatrixRoom,
     MegolmEvent,
-    ProfileGetResponse,
     RoomCreateEvent,
     RoomKeyEvent,
     RoomKeyRequest,
@@ -57,7 +56,8 @@ from nio.responses import (
 )
 
 from mugen.core.contract.client.matrix import IMatrixClient
-from mugen.core.contract.client.matrix_types import MatrixProfile
+from mugen.core.contract.client.matrix_event_hook import MatrixEventHookPayload
+from mugen.core.contract.client.matrix_types import MatrixPresence, MatrixProfile
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
@@ -72,7 +72,6 @@ from mugen.core.utility.processing_signal import (
 
 
 class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
-    AsyncClient,
     IMatrixClient,
 ):
     """A custom implementation of IMatrixClient."""
@@ -122,7 +121,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         user_service: IUserService = None,
     ):
         self._config = config
-        super().__init__(
+        self._vendor_client = AsyncClient(
             homeserver=self._config.matrix.homeserver,
             user=self._config.matrix.client.user,
             store_path=os.path.join(
@@ -130,6 +129,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 self._config.matrix.storage.olm.path,
             ),
         )
+        self.synced = getattr(self._vendor_client, "synced", asyncio.Event())
         self._ipc_service = ipc_service
         self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway
@@ -173,6 +173,22 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
         # Responses.
         self.add_response_callback(self._cb_sync_response, SyncResponse)
+
+    def __getattr__(self, name: str):
+        vendor_client = self.__dict__.get("_vendor_client")
+        if vendor_client is not None:
+            return getattr(vendor_client, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value) -> None:
+        if name.startswith("_") or name == "synced":
+            object.__setattr__(self, name, value)
+            return
+        vendor_client = self.__dict__.get("_vendor_client")
+        if vendor_client is not None and hasattr(vendor_client, name):
+            setattr(vendor_client, name, value)
+            return
+        object.__setattr__(self, name, value)
 
     async def __aenter__(self) -> "DefaultMatrixClient":
         """Initialisation."""
@@ -248,7 +264,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self.load_store()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
         """Finalisation."""
         self._logging_gateway.debug("DefaultMatrixClient.__aexit__")
         await self._stop_matrix_ipc_worker()
@@ -256,10 +272,39 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             await self.client_session.close()
         except AttributeError:
             ...
+        return False
+
+    async def sync_forever(
+        self,
+        *,
+        since: str | None = None,
+        timeout: int = 100,
+        full_state: bool = True,
+        set_presence: MatrixPresence = "online",
+    ) -> None:
+        """Run long-polling sync loop using vendor client."""
+        await self._vendor_client.sync_forever(
+            since=since,
+            timeout=timeout,
+            full_state=full_state,
+            set_presence=set_presence,
+        )
+
+    def add_event_callback(self, callback, event_type) -> None:
+        """Delegate event callback registration to the vendor client."""
+        self._vendor_client.add_event_callback(callback, event_type)
+
+    def add_to_device_callback(self, callback, event_type) -> None:
+        """Delegate to-device callback registration to the vendor client."""
+        self._vendor_client.add_to_device_callback(callback, event_type)
+
+    def add_response_callback(self, callback, response_type) -> None:
+        """Delegate response callback registration to the vendor client."""
+        self._vendor_client.add_response_callback(callback, response_type)
 
     async def get_profile(self, user_id: str | None = None) -> MatrixProfile:
         """Return normalized profile payload for core runtime orchestration."""
-        response = await super().get_profile(user_id=user_id)
+        response = await self._vendor_client.get_profile(user_id=user_id)
         return MatrixProfile(
             user_id=user_id,
             displayname=getattr(response, "displayname", None),
@@ -269,7 +314,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     async def set_displayname(self, displayname: str) -> None:
         """Set profile display name."""
-        await super().set_displayname(displayname)
+        await self._vendor_client.set_displayname(displayname)
 
     def _matrix_secrets_encryption_required(self) -> bool:
         environment = str(
@@ -324,6 +369,65 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     def _log_send_failure(self, message: str) -> None:
         self._logging_gateway.warning(f"{message}\n{traceback.format_exc()}")
+
+    @staticmethod
+    def _coerce_optional_string(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        if normalized == "":
+            return None
+        return normalized
+
+    @staticmethod
+    def _coerce_optional_int(value: object) -> int | None:
+        if value in [None, ""]:
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed
+
+    @staticmethod
+    def _normalize_event_dict(value: object) -> dict[str, object] | None:
+        if not isinstance(value, dict):
+            return None
+        try:
+            normalized = json.loads(
+                json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+            )
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(normalized, dict):
+            return None
+        return normalized
+
+    def _build_matrix_event_hook_payload(
+        self,
+        *,
+        callback_name: str,
+        event: object = None,
+        room: MatrixRoom | MatrixInvitedRoom | None = None,
+        reason: str = _callback_skip_reason_dm_scope,
+    ) -> dict[str, object]:
+        room_id = self._coerce_optional_string(getattr(room, "room_id", None))
+        payload = MatrixEventHookPayload(
+            version=self._matrix_event_hook_payload_version,
+            callback=callback_name,
+            event_type=type(event).__name__ if event is not None else "UnknownEvent",
+            reason=reason,
+            room_id=room_id,
+            sender=self._coerce_optional_string(getattr(event, "sender", None)),
+            content=self._normalize_event_dict(getattr(event, "content", None)),
+            source=self._normalize_event_dict(getattr(event, "source", None)),
+            event_id=self._coerce_optional_string(getattr(event, "event_id", None)),
+            state_key=self._coerce_optional_string(getattr(event, "state_key", None)),
+            origin_server_ts=self._coerce_optional_int(
+                getattr(event, "origin_server_ts", None)
+            ),
+        )
+        return payload.to_dict()
 
     def _resolve_matrix_ipc_queue_size(self) -> int:
         raw_value = getattr(
@@ -768,30 +872,17 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if not callable(getattr(self._ipc_service, "handle_ipc_request", None)):
             return
 
-        event_type = type(event).__name__ if event is not None else "UnknownEvent"
-        room_id = getattr(room, "room_id", None)
+        payload_data = self._build_matrix_event_hook_payload(
+            callback_name=callback_name,
+            event=event,
+            room=room,
+            reason=reason,
+        )
+        event_type = str(payload_data.get("event_type", "UnknownEvent"))
         payload = IPCCommandRequest(
             platform="matrix",
             command=self._matrix_event_hook_command,
-            data={
-                "version": self._matrix_event_hook_payload_version,
-                "callback": callback_name,
-                "event_type": event_type,
-                "reason": reason,
-                "room_id": room_id if isinstance(room_id, str) else None,
-                "sender": getattr(event, "sender", None),
-                "content": (
-                    event.content
-                    if isinstance(getattr(event, "content", None), dict)
-                    else None
-                ),
-                "source": (
-                    event.source
-                    if isinstance(getattr(event, "source", None), dict)
-                    else None
-                ),
-                "event": event,
-            },
+            data=payload_data,
         )
         self._start_matrix_ipc_worker()
         if self._matrix_ipc_queue is None:
@@ -992,9 +1083,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
         # Get profile and add user to list of known users if required.
         resp = await self.get_profile(event.sender)
-        if isinstance(resp, ProfileGetResponse):
+        displayname = getattr(resp, "displayname", None)
+        if isinstance(displayname, str):
             await self._user_service.add_known_user(
-                event.sender, resp.displayname, room.room_id
+                event.sender, displayname, room.room_id
             )
 
     async def _cb_invite_name_event(

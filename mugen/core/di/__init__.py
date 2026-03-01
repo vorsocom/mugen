@@ -7,6 +7,7 @@ __all__ = [
     "EXT_SERVICE_ADMIN_SVC_JWT",
     "build_container",
     "container",
+    "ensure_container_readiness_async",
     "reset_container",
     "shutdown_container",
     "shutdown_container_async",
@@ -17,8 +18,6 @@ from importlib import import_module
 import inspect
 import logging
 import os
-from queue import Queue
-import threading
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -39,6 +38,7 @@ from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.nlp import INLPService
 from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.utility.collection.namespace import NamespaceConfig, to_namespace
 from mugen.core.utility.platforms import normalize_platforms, unknown_platforms
 
@@ -62,9 +62,6 @@ class ContainerBootstrapError(RuntimeError):
 
 class ProviderBootstrapError(ContainerBootstrapError):
     """Raised when a required provider fails deterministic bootstrap."""
-
-
-_DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS = 15.0
 
 
 def _nested_namespace_from_dict(items: dict, ns: SimpleNamespace) -> None:
@@ -91,6 +88,15 @@ def _build_config_provider(
     if not isinstance(injector, DependencyInjector):
         raise RuntimeError("Invalid dependency injector instance.")
     injector.config = ns
+
+
+def _build_shared_relational_runtime(injector: DependencyInjector) -> None:
+    """Build and attach shared relational SQLAlchemy resources."""
+    if not isinstance(injector, DependencyInjector):
+        raise RuntimeError("Invalid dependency injector instance.")
+    if injector.config is None:
+        raise RuntimeError("Configuration provider unavailable for relational runtime.")
+    injector.relational_runtime = SharedSQLAlchemyRuntime.from_config(injector.config)
 
 
 def _split_class_path(
@@ -450,6 +456,7 @@ _PROVIDER_SPECS = {
         constructor_bindings=(
             ("config", "config"),
             ("logging_gateway", "logging_gateway"),
+            ("relational_runtime", "relational_runtime"),
         ),
     ),
     "relational_storage_gateway": _ProviderSpec(
@@ -460,6 +467,7 @@ _PROVIDER_SPECS = {
         constructor_bindings=(
             ("config", "config"),
             ("logging_gateway", "logging_gateway"),
+            ("relational_runtime", "relational_runtime"),
         ),
     ),
     "web_runtime_store": _ProviderSpec(
@@ -470,6 +478,7 @@ _PROVIDER_SPECS = {
         constructor_bindings=(
             ("config", "config"),
             ("logging_gateway", "logging_gateway"),
+            ("relational_runtime", "relational_runtime"),
         ),
         invalid_config_exceptions=(KeyError, ValueError),
         required_platform="web",
@@ -639,17 +648,26 @@ def _resolve_provider_readiness_timeout_seconds(config: dict) -> float:
         "provider_readiness_timeout_seconds",
     )
     if raw_value in [None, ""]:
-        return _DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS
+        raise RuntimeError(
+            "Invalid runtime configuration: "
+            "mugen.runtime.provider_readiness_timeout_seconds is required."
+        )
     try:
         timeout_seconds = float(raw_value)
-    except (TypeError, ValueError):
-        return _DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Invalid runtime configuration: "
+            "mugen.runtime.provider_readiness_timeout_seconds must be a positive number."
+        ) from exc
     if timeout_seconds <= 0:
-        return _DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS
+        raise RuntimeError(
+            "Invalid runtime configuration: "
+            "mugen.runtime.provider_readiness_timeout_seconds must be greater than 0."
+        )
     return timeout_seconds
 
 
-def _await_readiness_probe_sync(
+async def _await_readiness_probe_async(
     maybe_awaitable,
     *,
     provider_name: str,
@@ -658,48 +676,17 @@ def _await_readiness_probe_sync(
 ) -> None:
     if inspect.isawaitable(maybe_awaitable) is not True:
         return
-
     try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(asyncio.wait_for(maybe_awaitable, timeout=timeout_seconds))
-        return
-    readiness_outcome: Queue[Exception | None] = Queue(maxsize=1)
-
-    def _probe_worker() -> None:
-        try:
-            asyncio.run(asyncio.wait_for(maybe_awaitable, timeout=timeout_seconds))
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            readiness_outcome.put(exc)
-            return
-        readiness_outcome.put(None)
-
-    thread = threading.Thread(target=_probe_worker, daemon=True)
-    thread.start()
-    thread.join(timeout_seconds)
-    if thread.is_alive():
+        await asyncio.wait_for(maybe_awaitable, timeout=timeout_seconds)
+    except asyncio.TimeoutError as exc:
         raise ProviderBootstrapError(
             "Provider readiness failed "
             f"({provider_name}) class_path={configured_class_path!r}: "
             f"TimeoutError: readiness timed out after {timeout_seconds:.2f}s"
-        )
-    try:
-        thread_error = readiness_outcome.get_nowait()
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        raise ProviderBootstrapError(
-            "Provider readiness failed "
-            f"({provider_name}) class_path={configured_class_path!r}: "
-            f"RuntimeError: readiness worker did not report result ({exc})."
         ) from exc
-    if thread_error is not None:
-        raise ProviderBootstrapError(
-            "Provider readiness failed "
-            f"({provider_name}) class_path={configured_class_path!r}: "
-            f"{type(thread_error).__name__}: {thread_error}"
-        ) from thread_error
 
 
-def _validate_required_provider_readiness(
+async def _ensure_injector_readiness_async(
     config: dict,
     injector: DependencyInjector,
 ) -> None:
@@ -725,7 +712,7 @@ def _validate_required_provider_readiness(
             )
 
         try:
-            _await_readiness_probe_sync(
+            await _await_readiness_probe_async(
                 check_readiness(),
                 provider_name=provider_name,
                 configured_class_path=configured_class_path,
@@ -923,6 +910,7 @@ def _build_container() -> DependencyInjector:
     injector = DependencyInjector()
 
     _build_config_provider(config, injector)
+    _build_shared_relational_runtime(injector)
 
     _build_provider(
         config,
@@ -939,7 +927,6 @@ def _build_container() -> DependencyInjector:
             strict_required=True,
         )
 
-    _validate_required_provider_readiness(config, injector)
     _validate_container(config, injector)
 
     return injector
@@ -1075,12 +1062,28 @@ async def _shutdown_injector_async(injector: DependencyInjector | None) -> None:
         seen.add(service_id)
         await _shutdown_provider_async(f"ext_service:{name}", service, logger)
 
+    relational_runtime = getattr(injector, "relational_runtime", None)
+    if relational_runtime is not None and id(relational_runtime) not in seen:
+        seen.add(id(relational_runtime))
+        await _shutdown_provider_async("relational_runtime", relational_runtime, logger)
+
+
+def _injector_config_dict(injector: DependencyInjector | None) -> dict:
+    if injector is None:
+        raise RuntimeError("Container is not built.")
+    config_ns = getattr(injector, "config", None)
+    config_dict = getattr(config_ns, "dict", None)
+    if not isinstance(config_dict, dict):
+        raise RuntimeError("Configuration dict is unavailable in container config.")
+    return config_dict
+
 
 class _ContainerProxy:
     """Lazy proxy for the application-wide dependency injector."""
 
     def __init__(self) -> None:
         self._injector: DependencyInjector | None = None
+        self._readiness_checked: bool = False
 
     def build(self, *, force: bool = False) -> DependencyInjector:
         """Build and cache the injector if needed."""
@@ -1088,17 +1091,31 @@ class _ContainerProxy:
             if force and self._injector is not None:
                 _shutdown_injector(self._injector)
             self._injector = _build_container()
+            self._readiness_checked = False
         return self._injector
+
+    async def ensure_readiness(self) -> DependencyInjector:
+        """Ensure required provider readiness checks pass for cached injector."""
+        injector = self.build()
+        if self._readiness_checked:
+            return injector
+        config = _injector_config_dict(injector)
+        await _ensure_injector_readiness_async(config, injector)
+        _validate_container(config, injector)
+        self._readiness_checked = True
+        return injector
 
     def shutdown(self) -> None:
         """Shutdown providers and clear the cached injector."""
         _shutdown_injector(self._injector)
         self._injector = None
+        self._readiness_checked = False
 
     async def shutdown_async(self) -> None:
         """Shutdown providers asynchronously and clear cached injector."""
         await _shutdown_injector_async(self._injector)
         self._injector = None
+        self._readiness_checked = False
 
     def reset(self) -> None:
         """Reset the cached injector."""
@@ -1108,7 +1125,7 @@ class _ContainerProxy:
         return getattr(self.build(), name)
 
     def __setattr__(self, name: str, value) -> None:
-        if name == "_injector":
+        if name in {"_injector", "_readiness_checked"}:
             object.__setattr__(self, name, value)
             return
         setattr(self.build(), name, value)
@@ -1120,6 +1137,11 @@ container = _ContainerProxy()
 def build_container(*, force: bool = False) -> DependencyInjector:
     """Build and cache the app-wide injector."""
     return container.build(force=force)
+
+
+async def ensure_container_readiness_async() -> DependencyInjector:
+    """Ensure required provider readiness checks pass for cached injector."""
+    return await container.ensure_readiness()
 
 
 def reset_container() -> None:
