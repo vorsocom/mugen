@@ -16,7 +16,6 @@ from mugen.core.contract.gateway.completion import (
     CompletionResponse,
     CompletionUsage,
     ICompletionGateway,
-    normalise_completion_request,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import (
@@ -102,10 +101,10 @@ class SambaNovaCompletionGateway(ICompletionGateway):
 
     async def get_completion(
         self,
-        request: CompletionRequest | list[dict[str, Any]],
+        request: CompletionRequest,
         operation: str = "completion",
     ) -> CompletionResponse:
-        completion_request = normalise_completion_request(request, operation=operation)
+        completion_request = request
         operation_config = self._resolve_operation_config(completion_request.operation)
         model = completion_request.model or operation_config["model"]
 
@@ -138,7 +137,10 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             "Content-Type: application/json",
         ]
         data: dict[str, Any] = {
-            "messages": completion_request.to_context(),
+            "messages": [
+                message.to_dict()
+                for message in completion_request.messages
+            ],
             "model": model,
             "stream": stream,
             "temperature": temperature,

@@ -64,6 +64,9 @@ class ProviderBootstrapError(ContainerBootstrapError):
     """Raised when a required provider fails deterministic bootstrap."""
 
 
+_DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS = 15.0
+
+
 def _nested_namespace_from_dict(items: dict, ns: SimpleNamespace) -> None:
     """Convert a nested dict to a nested SimpleNamespace."""
     if not isinstance(items, dict):
@@ -466,7 +469,6 @@ _PROVIDER_SPECS = {
         module_path=("mugen", "modules", "core", "gateway", "storage", "web_runtime"),
         constructor_bindings=(
             ("config", "config"),
-            ("relational_storage_gateway", "relational_storage_gateway"),
             ("logging_gateway", "logging_gateway"),
         ),
         invalid_config_exceptions=(KeyError, ValueError),
@@ -629,11 +631,30 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
     return list(dict.fromkeys(readiness_provider_names))
 
 
+def _resolve_provider_readiness_timeout_seconds(config: dict) -> float:
+    raw_value = _config_path_value(
+        config,
+        "mugen",
+        "runtime",
+        "provider_readiness_timeout_seconds",
+    )
+    if raw_value in [None, ""]:
+        return _DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS
+    try:
+        timeout_seconds = float(raw_value)
+    except (TypeError, ValueError):
+        return _DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS
+    if timeout_seconds <= 0:
+        return _DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS
+    return timeout_seconds
+
+
 def _await_readiness_probe_sync(
     maybe_awaitable,
     *,
     provider_name: str,
     configured_class_path: object,
+    timeout_seconds: float,
 ) -> None:
     if inspect.isawaitable(maybe_awaitable) is not True:
         return
@@ -641,13 +662,13 @@ def _await_readiness_probe_sync(
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        asyncio.run(maybe_awaitable)
+        asyncio.run(asyncio.wait_for(maybe_awaitable, timeout=timeout_seconds))
         return
     readiness_outcome: Queue[Exception | None] = Queue(maxsize=1)
 
     def _probe_worker() -> None:
         try:
-            asyncio.run(maybe_awaitable)
+            asyncio.run(asyncio.wait_for(maybe_awaitable, timeout=timeout_seconds))
         except Exception as exc:  # pylint: disable=broad-exception-caught
             readiness_outcome.put(exc)
             return
@@ -655,9 +676,21 @@ def _await_readiness_probe_sync(
 
     thread = threading.Thread(target=_probe_worker, daemon=True)
     thread.start()
-    thread.join()
-
-    thread_error = readiness_outcome.get()
+    thread.join(timeout_seconds)
+    if thread.is_alive():
+        raise ProviderBootstrapError(
+            "Provider readiness failed "
+            f"({provider_name}) class_path={configured_class_path!r}: "
+            f"TimeoutError: readiness timed out after {timeout_seconds:.2f}s"
+        )
+    try:
+        thread_error = readiness_outcome.get_nowait()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise ProviderBootstrapError(
+            "Provider readiness failed "
+            f"({provider_name}) class_path={configured_class_path!r}: "
+            f"RuntimeError: readiness worker did not report result ({exc})."
+        ) from exc
     if thread_error is not None:
         raise ProviderBootstrapError(
             "Provider readiness failed "
@@ -671,6 +704,7 @@ def _validate_required_provider_readiness(
     injector: DependencyInjector,
 ) -> None:
     """Run required provider readiness checks before runtime validation."""
+    timeout_seconds = _resolve_provider_readiness_timeout_seconds(config)
     for provider_name in _resolve_readiness_provider_names(config):
         spec = _PROVIDER_SPECS[provider_name]
         configured_class_path = _configured_class_path_for_spec(config, spec)
@@ -695,6 +729,7 @@ def _validate_required_provider_readiness(
                 check_readiness(),
                 provider_name=provider_name,
                 configured_class_path=configured_class_path,
+                timeout_seconds=timeout_seconds,
             )
         except ProviderBootstrapError:
             raise

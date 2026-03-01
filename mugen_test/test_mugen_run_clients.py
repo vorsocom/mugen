@@ -1,4 +1,4 @@
-"""Provides unit tests for mugen.run_clients."""
+"""Provides unit tests for mugen.run_platform_clients."""
 
 import asyncio
 from types import SimpleNamespace
@@ -19,7 +19,7 @@ from mugen import (
     PHASE_STATUS_STARTING,
     SHUTDOWN_REQUESTED_KEY,
     BootstrapConfigError,
-    run_clients,
+    bootstrap_app,
     run_platform_clients,
     run_whatsapp_client,
 )
@@ -41,8 +41,8 @@ def _test_config(*, platforms: list[str]) -> SimpleNamespace:
     return SimpleNamespace(mugen=mugen_cfg)
 
 
-class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
-    """Unit tests for mugen.run_clients."""
+class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for mugen.run_platform_clients."""
 
     async def test_platforms_configuration_unavailable(self) -> None:
         """Test effects of missing platforms configuration."""
@@ -56,7 +56,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
             self.assertLogs(logger="test_app", level="ERROR"),
             self.assertRaises(BootstrapConfigError),
         ):
-            await run_clients(
+            await run_platform_clients(
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
@@ -82,7 +82,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 target="mugen.run_matrix_client", new=_run_matrix_client
             ),
         ):
-            await run_clients(
+            await run_platform_clients(
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
@@ -98,7 +98,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(mugen=SimpleNamespace(platforms=["telnet"]))
 
         with self.assertRaises(BootstrapConfigError):
-            await run_clients(
+            await run_platform_clients(
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
@@ -124,7 +124,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 target="mugen.run_whatsapp_client", new=_run_whatsapp_client
             ),
         ):
-            await run_clients(
+            await run_platform_clients(
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
@@ -148,7 +148,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 new=_run_web_client,
             ),
         ):
-            await run_clients(
+            await run_platform_clients(
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
@@ -182,7 +182,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 target="mugen.run_whatsapp_client", new=_run_whatsapp_client
             ),
         ):
-            await run_clients(
+            await run_platform_clients(
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
@@ -225,7 +225,7 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 target="mugen.run_whatsapp_client", new=_run_whatsapp_client
             ),
         ):
-            await run_clients(
+            await run_platform_clients(
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
@@ -578,6 +578,57 @@ class TestMuGenInitRunClients(unittest.IsolatedAsyncioTestCase):
                 mugen_mod._whatsapp_provider(),  # pylint: disable=protected-access
                 sentinel_client,
             )
+
+    def test_runtime_provider_helpers_read_di_container(self) -> None:
+        sentinel_logger = object()
+        sentinel_ipc = object()
+        sentinel_messaging = object()
+        sentinel_platform = object()
+        with unittest.mock.patch.object(
+            mugen_mod.di,
+            "container",
+            SimpleNamespace(
+                logging_gateway=sentinel_logger,
+                ipc_service=sentinel_ipc,
+                messaging_service=sentinel_messaging,
+                platform_service=sentinel_platform,
+            ),
+        ):
+            self.assertIs(
+                mugen_mod._logger_provider(),  # pylint: disable=protected-access
+                sentinel_logger,
+            )
+            self.assertIs(
+                mugen_mod._ipc_provider(),  # pylint: disable=protected-access
+                sentinel_ipc,
+            )
+            self.assertIs(
+                mugen_mod._messaging_provider(),  # pylint: disable=protected-access
+                sentinel_messaging,
+            )
+            self.assertIs(
+                mugen_mod._platform_provider(),  # pylint: disable=protected-access
+                sentinel_platform,
+            )
+
+    async def test_bootstrap_app_registers_extensions_and_api_blueprint(self) -> None:
+        app = Quart("test_app")
+        cfg = SimpleNamespace(mugen=SimpleNamespace(platforms=[]))
+        register_extensions_mock = unittest.mock.AsyncMock()
+
+        with unittest.mock.patch.object(
+            mugen_mod,
+            "register_extensions",
+            new=register_extensions_mock,
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        register_extensions_mock.assert_awaited_once()
+        self.assertIn("api", app.blueprints)
+        self.assertIs(app.blueprints["api"], mugen_mod.api)
 
     def test_platform_state_helpers_cover_edge_branches(self) -> None:
         self.assertTrue(

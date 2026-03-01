@@ -37,6 +37,13 @@ def _make_config() -> SimpleNamespace:
     )
 
 
+def _simple_request() -> CompletionRequest:
+    return CompletionRequest(
+        operation="completion",
+        messages=[CompletionMessage(role="user", content="hello")],
+    )
+
+
 class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
     """Covers request shaping and failure handling for Bedrock completion."""
 
@@ -129,11 +136,14 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         )
 
         response = await gateway.get_completion(
-            [
-                {"role": "system", "content": "sys"},
-                {"role": "user", "content": "hello"},
-                {"role": "assistant", "content": "hi"},
-            ]
+            CompletionRequest(
+                operation="completion",
+                messages=[
+                    CompletionMessage(role="system", content="sys"),
+                    CompletionMessage(role="user", content="hello"),
+                    CompletionMessage(role="assistant", content="hi"),
+                ],
+            )
         )
 
         self.assertIsNotNone(response)
@@ -165,7 +175,7 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
             gateway = BedrockCompletionGateway(config, logging_gateway)
 
         with self.assertRaises(CompletionGatewayError):
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
         logging_gateway.warning.assert_called_once()
 
@@ -194,7 +204,7 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         ):
             gateway = BedrockCompletionGateway(config, logging_gateway)
 
-        response = await gateway.get_completion([{"role": "user", "content": "hello"}])
+        response = await gateway.get_completion(_simple_request())
 
         self.assertEqual(response.content, "invoke fallback output")
         self.assertEqual(response.stop_reason, "end_turn")
@@ -422,7 +432,7 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
             gateway = BedrockCompletionGateway(_make_config(), logging_gateway)
 
         with self.assertRaises(CompletionGatewayError):
-            await gateway.get_completion([{"role": "user", "content": "hello"}])
+            await gateway.get_completion(_simple_request())
 
     async def test_get_completion_rethrows_completion_gateway_error(self) -> None:
         config = _make_config()
@@ -440,7 +450,7 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(BedrockCompletionGateway, "_converse", side_effect=sentinel):
             with self.assertRaises(CompletionGatewayError) as context:
-                await gateway.get_completion([{"role": "user", "content": "hello"}])
+                await gateway.get_completion(_simple_request())
 
         self.assertIs(context.exception, sentinel)
 

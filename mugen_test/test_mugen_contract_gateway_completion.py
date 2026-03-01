@@ -6,7 +6,6 @@ from mugen.core.contract.gateway.completion import (
     CompletionInferenceConfig,
     CompletionMessage,
     CompletionRequest,
-    normalise_completion_request,
 )
 
 
@@ -51,22 +50,16 @@ class TestMugenContractGatewayCompletion(unittest.TestCase):
                 {"role": "assistant", "content": ["invalid-item"]},
             )
 
-    def test_completion_request_from_context_validates_context_type(self) -> None:
-        with self.assertRaises(ValueError):
-            CompletionRequest.from_context(context="invalid")  # type: ignore[arg-type]
-
-    def test_normalise_completion_request_handles_both_input_shapes(self) -> None:
-        request = CompletionRequest.from_context(
-            [{"role": "user", "content": "hello"}],
+    def test_completion_request_accepts_typed_message_list(self) -> None:
+        request = CompletionRequest(
             operation="completion",
+            messages=[
+                CompletionMessage.from_dict(
+                    {"role": "assistant", "content": "hi"}
+                )
+            ],
         )
-        self.assertIs(normalise_completion_request(request), request)
-
-        converted = normalise_completion_request(
-            [{"role": "assistant", "content": "hi"}],
-            operation="completion",
-        )
-        self.assertEqual(converted.messages[0].role, "assistant")
+        self.assertEqual(request.messages[0].role, "assistant")
 
     def test_inference_effective_max_tokens_prefers_max_completion_tokens(self) -> None:
         inference = CompletionInferenceConfig(max_completion_tokens=128, max_tokens=32)

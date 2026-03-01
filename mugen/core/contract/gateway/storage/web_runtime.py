@@ -11,6 +11,10 @@ class IWebRuntimeStore(ABC):
     """Storage port for web runtime queue, event stream, and media token state."""
 
     @abstractmethod
+    async def aclose(self) -> None:
+        """Close backend resources asynchronously."""
+
+    @abstractmethod
     async def check_readiness(self) -> None:
         """Validate backend connectivity and required tables."""
 

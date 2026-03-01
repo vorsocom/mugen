@@ -20,7 +20,6 @@ __all__ = [
     "bootstrap_app",
     "create_quart_app",
     "get_bootstrap_state",
-    "run_clients",
     "run_platform_clients",
     "run_web_client",
     "validate_web_relational_runtime_config",
@@ -474,28 +473,6 @@ def create_quart_app(
 
     # Return the built application object.
     return app
-
-
-# pylint: disable=too-many-branches
-# pylint: disable=too-many-arguments
-# pylint: disable=too-many-locals
-# pylint: disable=too-many-statements
-async def run_clients(
-    app: Quart,
-    config_provider=_config_provider,
-    logger_provider=_logger_provider,
-    whatsapp_provider=_whatsapp_provider,
-    web_provider=_web_provider,
-) -> None:
-    """Entrypoint for assistants."""
-    await bootstrap_app(app, config_provider=config_provider)
-    await run_platform_clients(
-        app,
-        config_provider=config_provider,
-        logger_provider=logger_provider,
-        whatsapp_provider=whatsapp_provider,
-        web_provider=web_provider,
-    )
 
 
 async def bootstrap_app(

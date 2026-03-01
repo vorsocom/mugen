@@ -19,7 +19,6 @@ from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
-from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
@@ -76,6 +75,7 @@ class DefaultWebClient(IWebClient):
     _default_sse_keepalive_seconds: float = 15.0
     _default_sse_replay_max_events: int = 200
     _default_sse_enqueue_timeout_seconds: float = 0.5
+    _default_sse_fanout_parallelism: int = 16
     _default_queue_poll_interval_seconds: float = 0.25
     _default_queue_processing_lease_seconds: float = 30.0
     _default_queue_max_pending_jobs: int = 2000
@@ -103,7 +103,6 @@ class DefaultWebClient(IWebClient):
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
         web_runtime_store: IWebRuntimeStore = None,
-        relational_storage_gateway: IRelationalStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
@@ -112,7 +111,6 @@ class DefaultWebClient(IWebClient):
         self._ipc_service = ipc_service
         self._keyval_storage_gateway = keyval_storage_gateway
         self._web_runtime_store = web_runtime_store
-        _ = relational_storage_gateway
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._user_service = user_service
@@ -142,6 +140,11 @@ class DefaultWebClient(IWebClient):
             ("web", "sse", "enqueue_timeout_seconds"),
             self._default_sse_enqueue_timeout_seconds,
             minimum=0.01,
+        )
+        self._sse_fanout_parallelism = self._resolve_int_config(
+            ("web", "sse", "fanout_parallelism"),
+            self._default_sse_fanout_parallelism,
+            minimum=1,
         )
         self._sse_disconnect_sentinel = object()
         self._queue_poll_interval_seconds = self._resolve_float_config(
@@ -1464,23 +1467,40 @@ class DefaultWebClient(IWebClient):
         async with self._subscriber_lock:
             subscribers = list(self._subscribers.get(conversation_id, set()))
 
-        for subscriber in subscribers:
-            try:
-                await asyncio.wait_for(
-                    subscriber.put(event_entry),
-                    timeout=self._sse_enqueue_timeout_seconds,
-                )
-            except asyncio.TimeoutError:
-                self._log_sse_diagnostic(
-                    conversation_id=conversation_id,
-                    incoming_event_id=event_entry.get("id"),
-                    last_event_id=None,
-                    reason="subscriber_enqueue_timeout_disconnect",
-                    warning=True,
-                )
-                await self._disconnect_subscriber_for_backpressure(
-                    conversation_id=conversation_id,
-                    subscriber=subscriber,
+        if not subscribers:
+            return
+
+        semaphore = asyncio.Semaphore(self._sse_fanout_parallelism)
+
+        async def _deliver(subscriber: asyncio.Queue) -> None:
+            async with semaphore:
+                try:
+                    await asyncio.wait_for(
+                        subscriber.put(event_entry),
+                        timeout=self._sse_enqueue_timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    self._log_sse_diagnostic(
+                        conversation_id=conversation_id,
+                        incoming_event_id=event_entry.get("id"),
+                        last_event_id=None,
+                        reason="subscriber_enqueue_timeout_disconnect",
+                        warning=True,
+                    )
+                    await self._disconnect_subscriber_for_backpressure(
+                        conversation_id=conversation_id,
+                        subscriber=subscriber,
+                    )
+
+        delivery_results = await asyncio.gather(
+            *[_deliver(subscriber) for subscriber in subscribers],
+            return_exceptions=True,
+        )
+        for result in delivery_results:
+            if isinstance(result, Exception):
+                self._logging_gateway.warning(
+                    "Web SSE fan-out delivery failed "
+                    f"error_type={type(result).__name__} error={result}"
                 )
 
     async def _disconnect_subscriber_for_backpressure(

@@ -148,6 +148,11 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
 
         matrix_client = SimpleNamespace(
             user_id="@assistant:example.com",
+            list_direct_rooms=AsyncMock(
+                return_value=SimpleNamespace(
+                    rooms={"@alice:example.com": ["!room-a:example.com"]},
+                )
+            ),
             joined_rooms=AsyncMock(
                 return_value=SimpleNamespace(
                     rooms=["!room-a:example.com", "!room-b:example.com"]
@@ -160,10 +165,6 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
                             {
                                 "type": "m.room.encryption",
                                 "content": {"algorithm": "m.megolm.v1.aes-sha2"},
-                            },
-                            {
-                                "type": "m.agent_flags",
-                                "content": {"m.direct": True},
                             },
                             {
                                 "type": "m.room.name",
@@ -234,6 +235,7 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
                             "room_id": "!room-b:example.com",
                             "members": ["@bob:example.com"],
                             "chat_threads": [],
+                            "direct": False,
                             "room_name": "Room B",
                         },
                     ]
@@ -522,6 +524,11 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
     async def test_matrix_list_rooms_ignores_non_string_state_fields(self) -> None:
         matrix_client = SimpleNamespace(
             user_id="@assistant:example.com",
+            list_direct_rooms=AsyncMock(
+                return_value=SimpleNamespace(
+                    rooms={"@alice:example.com": ["!room:example.com"]},
+                )
+            ),
             joined_rooms=AsyncMock(return_value=SimpleNamespace(rooms=["!room:example.com"])),
             room_get_state=AsyncMock(
                 return_value=SimpleNamespace(
@@ -529,10 +536,6 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
                         {
                             "type": "m.room.encryption",
                             "content": {"algorithm": 123},
-                        },
-                        {
-                            "type": "m.agent_flags",
-                            "content": {"m.direct": "yes"},
                         },
                         {
                             "type": "m.room.name",
@@ -620,3 +623,35 @@ class TestRoomManagementIPCExtension(unittest.IsolatedAsyncioTestCase):
         room_payload = response.response["response"]["rooms"][0]
         self.assertEqual(room_payload["room_id"], "!room-no-name:example.com")
         self.assertNotIn("room_name", room_payload)
+
+    async def test_direct_room_ids_returns_empty_for_non_dict_payload(self) -> None:
+        ext = RoomManagementIPCExtension(
+            matrix_client=SimpleNamespace(
+                list_direct_rooms=AsyncMock(return_value=SimpleNamespace(rooms=["!room:example.com"])),
+            ),
+            keyval_storage_gateway=_InMemoryKeyValStorageGateway(),
+            logging_gateway=Mock(),
+        )
+
+        self.assertEqual(await ext._direct_room_ids(), set())  # pylint: disable=protected-access
+
+    async def test_direct_room_ids_filters_non_list_and_invalid_room_ids(self) -> None:
+        ext = RoomManagementIPCExtension(
+            matrix_client=SimpleNamespace(
+                list_direct_rooms=AsyncMock(
+                    return_value=SimpleNamespace(
+                        rooms={
+                            "@alice:example.com": ["!room-a:example.com", "", 123],
+                            "@bob:example.com": "!room-b:example.com",
+                        }
+                    )
+                ),
+            ),
+            keyval_storage_gateway=_InMemoryKeyValStorageGateway(),
+            logging_gateway=Mock(),
+        )
+
+        self.assertEqual(
+            await ext._direct_room_ids(),  # pylint: disable=protected-access
+            {"!room-a:example.com"},
+        )

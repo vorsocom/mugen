@@ -142,6 +142,7 @@ class RoomManagementIPCExtension(IIPCExtension):
         ## 6. List all chat threads.
         ###
         response = []
+        direct_room_ids = await self._direct_room_ids()
         ## 1. List all rooms.
         for room_id in await self._joined_room_ids():
             response.append(
@@ -163,12 +164,7 @@ class RoomManagementIPCExtension(IIPCExtension):
                 if isinstance(encryption_algorithm, str):
                     response[-1]["encrypted"] = encryption_algorithm
             ## 3. Determine if room is direct chat.
-            room_direct_content = self._state_event_content(
-                events,
-                "m.agent_flags",
-            )
-            if room_direct_content is not None:
-                response[-1]["direct"] = bool(room_direct_content.get("m.direct"))
+            response[-1]["direct"] = room_id in direct_room_ids
             ## 4. Get room name if available.
             room_name_content = self._state_event_content(events, "m.room.name")
             if room_name_content is not None:
@@ -210,6 +206,29 @@ class RoomManagementIPCExtension(IIPCExtension):
         if not isinstance(room_ids, list):
             return []
         return [item for item in room_ids if isinstance(item, str) and item != ""]
+
+    async def _direct_room_ids(self) -> set[str]:
+        try:
+            response = await self._client.list_direct_rooms()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "RoomManagementIPCExtension: direct-room lookup failed "
+                f"error={type(exc).__name__}: {exc}"
+            )
+            return set()
+
+        rooms = getattr(response, "rooms", None)
+        if not isinstance(rooms, dict):
+            return set()
+
+        direct_room_ids: set[str] = set()
+        for room_ids in rooms.values():
+            if not isinstance(room_ids, list):
+                continue
+            for room_id in room_ids:
+                if isinstance(room_id, str) and room_id != "":
+                    direct_room_ids.add(room_id)
+        return direct_room_ids
 
     def _collect_member_ids(self, joined_members_response) -> list[str]:
         collected: list[str] = []

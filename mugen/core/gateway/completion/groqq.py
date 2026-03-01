@@ -13,7 +13,6 @@ from mugen.core.contract.gateway.completion import (
     CompletionResponse,
     CompletionUsage,
     ICompletionGateway,
-    normalise_completion_request,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import (
@@ -103,10 +102,10 @@ class GroqCompletionGateway(ICompletionGateway):
 
     async def get_completion(
         self,
-        request: CompletionRequest | list[dict[str, Any]],
+        request: CompletionRequest,
         operation: str = "completion",
     ) -> CompletionResponse:
-        completion_request = normalise_completion_request(request, operation=operation)
+        completion_request = request
         operation_config = self._resolve_operation_config(completion_request.operation)
         model, kwargs = self._serialize_create_kwargs(
             completion_request,

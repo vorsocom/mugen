@@ -11,10 +11,11 @@ from typing import Any
 import uuid
 
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
 from mugen.core.domain.use_case.queue_job_lifecycle import QueueJobLifecycleUseCase
 from mugen.core.gateway.storage.web_runtime.sql import text as web_sql_text
+from sqlalchemy import text as sa_text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 class RelationalWebRuntimeStore(IWebRuntimeStore):
@@ -23,35 +24,58 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     def __init__(
         self,
         config: SimpleNamespace,
-        relational_storage_gateway: IRelationalStorageGateway,
         logging_gateway: ILoggingGateway,
+        session_provider=None,
+        readiness_probe=None,
     ) -> None:
         self._config = config
-        self._relational_storage_gateway = relational_storage_gateway
         self._logging_gateway = logging_gateway
         self._queue_job_lifecycle_use_case = QueueJobLifecycleUseCase()
+        self._engine = None
+        self._readiness_probe = readiness_probe
 
-    def _raw_relational_session_provider(self):
-        raw_session = getattr(self._relational_storage_gateway, "raw_session", None)
-        if callable(raw_session):
-            return raw_session
-        raise RuntimeError(
-            "Relational web storage is configured but "
-            "relational_storage_gateway.raw_session is unavailable."
+        if callable(session_provider):
+            self._session_provider = session_provider
+            return
+
+        try:
+            sqlalchemy_url = self._config.rdbms.sqlalchemy.url
+        except AttributeError as exc:
+            raise RuntimeError(
+                "Relational web storage requires rdbms.sqlalchemy.url in configuration."
+            ) from exc
+        self._engine = create_async_engine(sqlalchemy_url)
+        session_maker = async_sessionmaker(
+            self._engine,
+            expire_on_commit=False,
         )
+
+        @asynccontextmanager
+        async def _session_provider():
+            async with session_maker() as session:
+                async with session.begin():
+                    yield session
+
+        self._session_provider = _session_provider
 
     @asynccontextmanager
     async def _relational_session(self):
-        raw_session = self._raw_relational_session_provider()
-        async with raw_session() as session:
+        async with self._session_provider() as session:
             yield session
 
+    async def aclose(self) -> None:
+        if self._engine is None:
+            return
+        await self._engine.dispose()
+
     async def check_readiness(self) -> None:
-        check_readiness = getattr(self._relational_storage_gateway, "check_readiness", None)
-        if callable(check_readiness):
-            maybe_awaitable = check_readiness()
+        if callable(self._readiness_probe):
+            maybe_awaitable = self._readiness_probe()
             if inspect.isawaitable(maybe_awaitable):
                 await maybe_awaitable
+        elif self._engine is not None:
+            async with self._engine.connect() as conn:
+                await conn.execute(sa_text("SELECT 1"))
 
         async with self._relational_session() as session:
             result = await session.execute(
