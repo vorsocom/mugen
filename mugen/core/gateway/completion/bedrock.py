@@ -165,7 +165,6 @@ class BedrockCompletionGateway(ICompletionGateway):
     async def get_completion(
         self,
         request: CompletionRequest,
-        operation: str = "completion",
     ) -> CompletionResponse:
         completion_request = request
         operation_config = self._resolve_operation_config(completion_request.operation)
@@ -277,6 +276,15 @@ class BedrockCompletionGateway(ICompletionGateway):
                 operation=operation,
                 message=f"Bedrock operation '{operation}' is missing model.",
             )
+        if "max_tokens" in cfg:
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=operation,
+                message=(
+                    f"Bedrock operation '{operation}' includes removed legacy key "
+                    "'max_tokens'. Use 'max_completion_tokens'."
+                ),
+            )
 
         return cfg
 
@@ -298,9 +306,9 @@ class BedrockCompletionGateway(ICompletionGateway):
     ) -> dict[str, Any]:
         inference_config: dict[str, Any] = {}
 
-        max_tokens = request.inference.max_tokens
-        if max_tokens is None and "max_tokens" in operation_config:
-            max_tokens = int(operation_config["max_tokens"])
+        max_tokens = request.inference.max_completion_tokens
+        if max_tokens is None and "max_completion_tokens" in operation_config:
+            max_tokens = int(operation_config["max_completion_tokens"])
         if max_tokens is not None:
             inference_config["maxTokens"] = int(max_tokens)
 

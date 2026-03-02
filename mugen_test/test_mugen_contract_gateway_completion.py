@@ -61,15 +61,12 @@ class TestMugenContractGatewayCompletion(unittest.TestCase):
         )
         self.assertEqual(request.messages[0].role, "assistant")
 
-    def test_inference_effective_max_tokens_prefers_max_completion_tokens(self) -> None:
-        inference = CompletionInferenceConfig(max_completion_tokens=128, max_tokens=32)
-        self.assertEqual(inference.effective_max_tokens, 128)
-
-        legacy_only = CompletionInferenceConfig(max_tokens=32)
-        self.assertEqual(legacy_only.effective_max_tokens, 32)
+    def test_inference_max_completion_tokens_roundtrip(self) -> None:
+        inference = CompletionInferenceConfig(max_completion_tokens=128)
+        self.assertEqual(inference.max_completion_tokens, 128)
 
         empty = CompletionInferenceConfig()
-        self.assertIsNone(empty.effective_max_tokens)
+        self.assertIsNone(empty.max_completion_tokens)
 
     def test_inference_stream_defaults(self) -> None:
         inference = CompletionInferenceConfig()

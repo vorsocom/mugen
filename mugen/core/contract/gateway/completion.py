@@ -45,19 +45,11 @@ class CompletionInferenceConfig:
     """Provider-agnostic inference controls."""
 
     max_completion_tokens: int | None = None
-    max_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None
     stop: list[str] = field(default_factory=list)
     stream: bool = False
     stream_options: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def effective_max_tokens(self) -> int | None:
-        """Unified token limit where max_completion_tokens wins over max_tokens."""
-        if self.max_completion_tokens is not None:
-            return self.max_completion_tokens
-        return self.max_tokens
 
 
 @dataclass(frozen=True)
@@ -127,6 +119,5 @@ class ICompletionGateway(ABC):  # pylint: disable=too-few-public-methods
     async def get_completion(
         self,
         request: CompletionRequest,
-        operation: str = "completion",
     ) -> CompletionResponse:
         """Get LLM response from normalized completion request data."""

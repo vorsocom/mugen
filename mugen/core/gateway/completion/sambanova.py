@@ -32,6 +32,14 @@ class SambaNovaCompletionGateway(ICompletionGateway):
     """A SambaNova chat completion gateway."""
 
     _provider = "sambanova"
+    _removed_legacy_vendor_param_keys = (
+        "sambanova_auth_scheme",
+        "sambanova_token_limit_field",
+        "sambanova_emit_legacy_max_tokens",
+        "stream",
+        "stream_options",
+        "include_usage",
+    )
     _vendor_passthrough_keys = (
         "chat_template_kwargs",
         "do_sample",
@@ -100,15 +108,61 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         )
 
     async def check_readiness(self) -> None:
-        self._resolve_operation_config("classification")
-        self._resolve_operation_config("completion")
+        classification_cfg = self._resolve_operation_config("classification")
+        completion_cfg = self._resolve_operation_config("completion")
+        probe_model = completion_cfg.get("model") or classification_cfg.get("model")
+        if not isinstance(probe_model, str) or probe_model.strip() == "":
+            raise RuntimeError(
+                "SambaNova completion gateway readiness probe model is missing."
+            )
+
+        timeout_seconds = self._read_timeout_seconds
+        if timeout_seconds is None or timeout_seconds <= 0:
+            timeout_seconds = 10.0
+
+        headers = [
+            self._build_authorization_header(),
+            "Content-Type: application/json",
+        ]
+        probe_body = {
+            "model": probe_model.strip(),
+            "messages": [],
+            "stream": False,
+        }
+        try:
+            status_code, body_text = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._perform_request,
+                    headers=headers,
+                    body=probe_body,
+                ),
+                timeout=timeout_seconds,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError(
+                "SambaNova completion gateway readiness probe failed."
+            ) from exc
+
+        if 200 <= int(status_code) < 300:
+            return
+        if self._is_expected_probe_validation_response(status_code, body_text):
+            return
+        if int(status_code) in {401, 403}:
+            raise RuntimeError(
+                "SambaNova completion gateway readiness probe failed: authentication error."
+            )
+        if int(status_code) >= 500:
+            raise RuntimeError(
+                "SambaNova completion gateway readiness probe failed: provider unavailable."
+            )
+        raise RuntimeError("SambaNova completion gateway readiness probe failed.")
 
     async def get_completion(
         self,
         request: CompletionRequest,
-        operation: str = "completion",
     ) -> CompletionResponse:
         completion_request = request
+        self._validate_removed_legacy_vendor_params(completion_request)
         operation_config = self._resolve_operation_config(completion_request.operation)
         model = completion_request.model or operation_config["model"]
 
@@ -116,16 +170,10 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         if temperature is None:
             temperature = float(operation_config.get("temp", 0.0))
         top_p = completion_request.inference.top_p
-        max_tokens = completion_request.inference.effective_max_tokens
+        max_tokens = completion_request.inference.max_completion_tokens
         if max_tokens is None and "max_completion_tokens" in operation_config:
             max_tokens = int(operation_config["max_completion_tokens"])
-        if max_tokens is None and "max_tokens" in operation_config:
-            max_tokens = int(operation_config["max_tokens"])
         stop = self._resolve_stop_sequences(
-            completion_request,
-            operation_config=operation_config,
-        )
-        token_limit_field = self._resolve_token_limit_field(
             completion_request,
             operation_config=operation_config,
         )
@@ -134,10 +182,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         stream_options = self._resolve_stream_options(completion_request)
 
         headers: list[str] = [
-            self._build_authorization_header(
-                completion_request,
-                operation_config=operation_config,
-            ),
+            self._build_authorization_header(),
             "Content-Type: application/json",
         ]
         data: dict[str, Any] = {
@@ -154,16 +199,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         if top_p is not None:
             data["top_p"] = top_p
         if max_tokens is not None:
-            data[token_limit_field] = max_tokens
-            if (
-                token_limit_field == "max_completion_tokens"
-                and self._resolve_vendor_bool(
-                    completion_request,
-                    key="sambanova_emit_legacy_max_tokens",
-                    default=False,
-                )
-            ):
-                data["max_tokens"] = max_tokens
+            data["max_completion_tokens"] = int(max_tokens)
         if stream:
             data["stream_options"] = stream_options
 
@@ -250,55 +286,22 @@ class SambaNovaCompletionGateway(ICompletionGateway):
                 operation=operation,
                 message=f"SambaNova operation '{operation}' is missing model.",
             )
+        for legacy_key in ("max_tokens", "auth_scheme", "token_limit_field"):
+            if legacy_key not in cfg:
+                continue
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=operation,
+                message=(
+                    f"SambaNova operation '{operation}' includes removed legacy key "
+                    f"'{legacy_key}'."
+                ),
+            )
 
         return cfg
 
-    def _build_authorization_header(
-        self,
-        request: CompletionRequest,
-        *,
-        operation_config: dict[str, Any],
-    ) -> str:
-        scheme = self._resolve_auth_scheme(request, operation_config=operation_config)
-        if scheme == "basic":
-            return f"Authorization: Basic {self._config.sambanova.api.key}"
+    def _build_authorization_header(self) -> str:
         return f"Authorization: Bearer {self._config.sambanova.api.key}"
-
-    @staticmethod
-    def _resolve_auth_scheme(
-        request: CompletionRequest,
-        *,
-        operation_config: dict[str, Any],
-    ) -> str:
-        raw_scheme = request.vendor_params.get(
-            "sambanova_auth_scheme",
-            operation_config.get("auth_scheme", "bearer"),
-        )
-        if not isinstance(raw_scheme, str):
-            return "bearer"
-
-        normalized = raw_scheme.strip().lower().replace("-", "_")
-        if normalized in {"basic", "legacy_basic"}:
-            return "basic"
-        return "bearer"
-
-    @staticmethod
-    def _resolve_token_limit_field(
-        request: CompletionRequest,
-        *,
-        operation_config: dict[str, Any],
-    ) -> str:
-        raw_field = request.vendor_params.get(
-            "sambanova_token_limit_field",
-            operation_config.get("token_limit_field", "max_tokens"),
-        )
-        if not isinstance(raw_field, str):
-            return "max_tokens"
-
-        normalized = raw_field.strip().lower()
-        if normalized == "max_completion_tokens":
-            return "max_completion_tokens"
-        return "max_tokens"
 
     def _resolve_stream_options(self, request: CompletionRequest) -> dict[str, Any]:
         stream_options = request.inference.stream_options
@@ -306,52 +309,16 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         if isinstance(stream_options, dict) and stream_options:
             resolved = dict(stream_options)
 
-        vendor_stream_options = request.vendor_params.get("stream_options")
-        if isinstance(vendor_stream_options, dict) and vendor_stream_options:
-            resolved = dict(vendor_stream_options)
-
-        if "include_usage" in request.vendor_params:
-            resolved.setdefault(
-                "include_usage",
-                self._resolve_vendor_bool(
-                    request,
-                    key="include_usage",
-                    default=False,
-                ),
-            )
-
         if not resolved:
             resolved = {"include_usage": False}
 
         return resolved
 
     def _resolve_stream(self, request: CompletionRequest) -> bool:
-        stream = self._parse_bool_like(
+        return self._parse_bool_like(
             request=request,
             value=request.inference.stream,
             field_name="inference.stream",
-        )
-        if "stream" in request.vendor_params:
-            stream = self._parse_bool_like(
-                request=request,
-                value=request.vendor_params["stream"],
-                field_name="vendor_params.stream",
-            )
-        return stream
-
-    def _resolve_vendor_bool(
-        self,
-        request: CompletionRequest,
-        *,
-        key: str,
-        default: bool,
-    ) -> bool:
-        if key not in request.vendor_params:
-            return default
-        return self._parse_bool_like(
-            request=request,
-            value=request.vendor_params[key],
-            field_name=f"vendor_params.{key}",
         )
 
     def _parse_bool_like(
@@ -394,6 +361,38 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             ]
 
         return []
+
+    @staticmethod
+    def _is_expected_probe_validation_response(
+        status_code: int,
+        body_text: str,
+    ) -> bool:
+        if int(status_code) not in {400, 422}:
+            return False
+        error_text = SambaNovaCompletionGateway._extract_http_error(body_text).lower()
+        if error_text == "":
+            return False
+        return any(
+            token in error_text
+            for token in ("validation", "invalid", "required", "messages", "prompt")
+        )
+
+    def _validate_removed_legacy_vendor_params(
+        self,
+        request: CompletionRequest,
+    ) -> None:
+        for key in self._removed_legacy_vendor_param_keys:
+            if key not in request.vendor_params:
+                continue
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=request.operation,
+                message=(
+                    "SambaNovaCompletionGateway: Removed legacy vendor param "
+                    f"'{key}' is not supported."
+                ),
+                timeout_applied=self._read_timeout_seconds,
+            )
 
     def _perform_request(
         self,

@@ -251,7 +251,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     async def check_readiness(self):
                         pass
 
-                    async def get_completion(self, context, operation="completion"):
+                    async def get_completion(self, request):
                         pass
 
                 DummyCompletionGatewayClass.__module__ = "valid_completion_module"

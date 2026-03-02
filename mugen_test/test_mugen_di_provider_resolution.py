@@ -66,7 +66,7 @@ class TestDIProviderResolution(unittest.TestCase):
             async def check_readiness(self) -> None:
                 return None
 
-            async def get_completion(self, context, operation="completion"):
+            async def get_completion(self, request):
                 return None
 
         fake_module = ModuleType("module.right")

@@ -52,6 +52,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
         logging_gateway = Mock()
         api = SimpleNamespace(
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
             chat=SimpleNamespace(
                 completions=SimpleNamespace(create=AsyncMock()),
             )
@@ -61,6 +62,112 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             gateway = GroqCompletionGateway(config, logging_gateway)
 
         await gateway.check_readiness()
+        api.models.list.assert_awaited_once_with(limit=1)
+
+    async def test_check_readiness_raises_when_models_list_is_missing(self) -> None:
+        config = _make_config()
+        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            models=SimpleNamespace(list=None),
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+        )
+
+        with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api):
+            gateway = GroqCompletionGateway(config, logging_gateway)
+
+        with self.assertRaisesRegex(RuntimeError, "readiness probe unavailable"):
+            await gateway.check_readiness()
+
+    async def test_check_readiness_wraps_probe_failures(self) -> None:
+        config = _make_config()
+        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+        )
+
+        async def _wait_for(awaitable, timeout):
+            _ = timeout
+            await awaitable
+            raise RuntimeError("probe boom")
+
+        with (
+            patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api),
+            patch("mugen.core.gateway.completion.groqq.asyncio.wait_for", side_effect=_wait_for),
+        ):
+            gateway = GroqCompletionGateway(config, logging_gateway)
+            with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
+                await gateway.check_readiness()
+
+    async def test_check_readiness_uses_configured_timeout_and_typeerror_fallback(
+        self,
+    ) -> None:
+        config = _make_config()
+        config.groq.api.timeout_seconds = 3.5
+        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        logging_gateway = Mock()
+        calls: list[dict[str, object]] = []
+
+        def _list_models(**kwargs):
+            calls.append(dict(kwargs))
+            if "limit" in kwargs:
+                raise TypeError("unexpected keyword argument 'limit'")
+
+            async def _done():
+                return SimpleNamespace(data=[])
+
+            return _done()
+
+        api = SimpleNamespace(
+            models=SimpleNamespace(list=_list_models),
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+        )
+        wait_for_calls: list[float] = []
+
+        async def _wait_for(awaitable, timeout):
+            wait_for_calls.append(float(timeout))
+            return await awaitable
+
+        with (
+            patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api),
+            patch("mugen.core.gateway.completion.groqq.asyncio.wait_for", side_effect=_wait_for),
+        ):
+            gateway = GroqCompletionGateway(config, logging_gateway)
+            await gateway.check_readiness()
+
+        self.assertEqual(calls, [{"limit": 1}, {}])
+        self.assertEqual(wait_for_calls, [3.5])
+
+    async def test_check_readiness_rejects_removed_legacy_max_tokens_config_key(
+        self,
+    ) -> None:
+        config = _make_config()
+        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        config.groq.api.dict["classification"]["max_tokens"] = "10"
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+        )
+
+        with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api):
+            gateway = GroqCompletionGateway(config, logging_gateway)
+
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "includes removed legacy key 'max_tokens'",
+        ):
+            await gateway.check_readiness()
 
     async def test_get_completion_builds_request_and_returns_response(self) -> None:
         config = _make_config()
@@ -150,7 +257,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             operation="completion",
             messages=[CompletionMessage(role="user", content="hello")],
             inference=CompletionInferenceConfig(
-                max_tokens=42,
+                max_completion_tokens=42,
                 temperature=0.8,
                 top_p=0.4,
                 stop=["<END>"],
@@ -211,10 +318,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         request = CompletionRequest(
             operation="completion",
             messages=[CompletionMessage(role="user", content="hello")],
-            inference=CompletionInferenceConfig(
-                max_completion_tokens=64,
-                max_tokens=16,
-            ),
+            inference=CompletionInferenceConfig(max_completion_tokens=64),
         )
         await gateway.get_completion(request)
 
@@ -227,7 +331,9 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             max_completion_tokens=64,
         )
 
-    async def test_get_completion_uses_legacy_max_tokens_when_requested(self) -> None:
+    async def test_get_completion_rejects_removed_legacy_max_tokens_vendor_param(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         response_payload = SimpleNamespace(
@@ -259,16 +365,40 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             ),
             vendor_params={"use_legacy_max_tokens": True},
         )
-        await gateway.get_completion(request)
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "Removed legacy vendor param 'use_legacy_max_tokens'",
+        ):
+            await gateway.get_completion(request)
 
-        api.chat.completions.create.assert_awaited_once_with(
-            messages=[{"role": "user", "content": "hello"}],
+    async def test_get_completion_uses_operation_token_defaults(self) -> None:
+        config = _make_config()
+        config.groq.api.dict["completion"]["max_completion_tokens"] = "23"
+        logging_gateway = Mock()
+        response_payload = SimpleNamespace(
             model="llama-3.1-8b-instant",
-            temperature=0.1,
-            top_p=0.8,
-            stream=False,
-            max_tokens=64,
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(content="hello"),
+                )
+            ],
+            usage=None,
         )
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=response_payload),
+                )
+            )
+        )
+
+        with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api):
+            gateway = GroqCompletionGateway(config, logging_gateway)
+            await gateway.get_completion(_simple_request())
+
+        _, kwargs = api.chat.completions.create.await_args
+        self.assertEqual(kwargs["max_completion_tokens"], 23)
 
     async def test_get_completion_streams_content_tool_calls_and_usage(self) -> None:
         config = _make_config()
@@ -418,7 +548,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.stop_reason, "tool_calls")
         self.assertEqual(response.tool_calls[0]["id"], "tool-1")
 
-    async def test_get_completion_uses_vendor_stream_overrides(self) -> None:
+    async def test_get_completion_uses_inference_stream_fields(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
         chunks = [
@@ -441,7 +571,10 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         request = CompletionRequest(
             operation="completion",
             messages=[CompletionMessage(role="user", content="hello")],
-            vendor_params={"stream": True, "stream_options": {"include_usage": True}},
+            inference=CompletionInferenceConfig(
+                stream=True,
+                stream_options={"include_usage": True},
+            ),
         )
         await gateway.get_completion(request)
 
@@ -454,23 +587,13 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             stream_options={"include_usage": True},
         )
 
-    async def test_get_completion_vendor_stream_parses_string_false(self) -> None:
+    async def test_get_completion_rejects_removed_vendor_stream_override(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
-        response_payload = SimpleNamespace(
-            model="llama-3.1-8b-instant",
-            choices=[
-                SimpleNamespace(
-                    finish_reason="stop",
-                    message=SimpleNamespace(content="hello"),
-                )
-            ],
-            usage=None,
-        )
         api = SimpleNamespace(
             chat=SimpleNamespace(
                 completions=SimpleNamespace(
-                    create=AsyncMock(return_value=response_payload),
+                    create=AsyncMock(),
                 )
             )
         )
@@ -483,15 +606,11 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             messages=[CompletionMessage(role="user", content="hello")],
             vendor_params={"stream": "false"},
         )
-        await gateway.get_completion(request)
-
-        api.chat.completions.create.assert_awaited_once_with(
-            messages=[{"role": "user", "content": "hello"}],
-            model="llama-3.1-8b-instant",
-            temperature=0.1,
-            top_p=0.8,
-            stream=False,
-        )
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "Removed legacy vendor param 'stream'",
+        ):
+            await gateway.get_completion(request)
 
     async def test_get_completion_rejects_invalid_vendor_stream_boolean(self) -> None:
         config = _make_config()
@@ -514,7 +633,32 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaisesRegex(
             CompletionGatewayError,
-            "Invalid boolean value for vendor_params.stream",
+            "Removed legacy vendor param 'stream'",
+        ):
+            await gateway.get_completion(request)
+
+    async def test_get_completion_rejects_invalid_inference_stream_boolean(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(),
+                )
+            )
+        )
+
+        with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api):
+            gateway = GroqCompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(stream="definitely"),  # type: ignore[arg-type]
+        )
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "Invalid boolean value for inference.stream",
         ):
             await gateway.get_completion(request)
 

@@ -86,7 +86,7 @@ class TestDependencyInjector(unittest.TestCase):
             async def check_readiness(self):
                 pass
 
-            async def get_completion(self, context, operation="completion"):
+            async def get_completion(self, request):
                 pass
 
         completion_gateway = DummyCompletionGatewayClass(

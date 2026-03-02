@@ -26,7 +26,7 @@ def _make_config() -> SimpleNamespace:
                     dict={
                         "completion": {
                             "model": "anthropic.claude",
-                            "max_tokens": "128",
+                            "max_completion_tokens": "128",
                             "temp": "0.7",
                             "top_p": "0.9",
                         },
@@ -69,7 +69,7 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
                 CompletionMessage(role="assistant", content="hi"),
             ],
             inference=CompletionInferenceConfig(
-                max_tokens=64,
+                max_completion_tokens=64,
                 temperature=0.2,
                 top_p=0.95,
                 stop=["<END>"],
@@ -152,6 +152,22 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         gateway = self._build_gateway(config=config)
 
         with self.assertRaisesRegex(RuntimeError, "probe model is missing"):
+            await gateway.check_readiness()
+
+    async def test_check_readiness_rejects_removed_legacy_max_tokens_config_key(
+        self,
+    ) -> None:
+        config = _make_config()
+        config.aws.bedrock.api.dict["classification"] = dict(
+            config.aws.bedrock.api.dict["completion"]
+        )
+        config.aws.bedrock.api.dict["classification"]["max_tokens"] = "10"
+        gateway = self._build_gateway(config=config)
+
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "includes removed legacy key 'max_tokens'",
+        ):
             await gateway.check_readiness()
 
     async def test_check_readiness_defaults_timeout_when_nonpositive(self) -> None:
@@ -685,7 +701,7 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
 
         inferred = gateway._build_inference_config(
             request,
-            {"max_tokens": "12", "temp": "0.3", "top_p": "0.7"},
+            {"max_completion_tokens": "12", "temp": "0.3", "top_p": "0.7"},
         )
         self.assertEqual(inferred["maxTokens"], 12)
         self.assertEqual(inferred["temperature"], 0.3)
