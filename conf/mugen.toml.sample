@@ -244,7 +244,6 @@ media.allowed_mimetypes = [
 ]
 media.max_download_bytes = 20_971_520   # 20 MiB
 ipc.queue_size = 256
-ipc.enqueue_timeout_seconds = 2.0
 security.device_trust.mode = "strict_known"
 # Optional allowlist entries used when security.device_trust.mode = "allowlist".
 # [[matrix.security.device_trust.allowlist]]

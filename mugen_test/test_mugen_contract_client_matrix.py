@@ -16,6 +16,9 @@ class _MatrixClientPort(IMatrixClient):
         _ = (exc_type, exc_val, exc_tb)
         return False
 
+    async def close(self) -> None:
+        return None
+
     @property
     def sync_token(self) -> str:
         return "token"

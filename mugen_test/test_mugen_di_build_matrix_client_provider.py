@@ -345,6 +345,9 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                     async def __aexit__(self, exc_type, exc_val, exc_tb):
                         pass
 
+                    async def close(self):
+                        pass
+
                     @property
                     def sync_token(self):
                         pass

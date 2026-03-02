@@ -53,6 +53,9 @@ muGen core keeps Matrix support intentionally lean:
   command.
 - The callback hot path is non-blocking: callback handlers enqueue and return
   without awaiting IPC extension execution.
+- Inline fallback dispatch is not supported in callback handlers. When enqueue
+  cannot be accepted, core drops the event and emits operator-visible warning
+  logs.
 - Queue overflow policy is `drop-new` with warning log emission and an
   incremented `matrix.ipc.dispatch.queue_full_drop_new` counter.
 - `matrix_event` payloads include `version=1` plus `callback`, `event_type`,
