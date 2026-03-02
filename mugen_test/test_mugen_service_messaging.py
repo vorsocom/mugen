@@ -1072,12 +1072,12 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
         rag = Mock()
         rpp = Mock()
 
-        svc.register_cp_extension(cp)
-        svc.register_ct_extension(ct)
-        svc.register_ctx_extension(ctx)
-        svc.register_mh_extension(mh)
-        svc.register_rag_extension(rag)
-        svc.register_rpp_extension(rpp)
+        svc.bind_cp_extension(cp)
+        svc.bind_ct_extension(ct)
+        svc.bind_ctx_extension(ctx)
+        svc.bind_mh_extension(mh)
+        svc.bind_rag_extension(rag)
+        svc.bind_rpp_extension(rpp)
 
         self.assertEqual(svc.cp_extensions, [cp])
         self.assertEqual(svc.ct_extensions, [ct])
@@ -1097,9 +1097,9 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
     def test_register_extension_rejects_instance_duplicate(self) -> None:
         svc = self._new_service()
         ext = SimpleNamespace(platforms=["matrix"])
-        svc.register_cp_extension(ext)
+        svc.bind_cp_extension(ext)
         with self.assertRaises(ValueError):
-            svc.register_cp_extension(ext)
+            svc.bind_cp_extension(ext)
 
     def test_register_extension_rejects_logical_duplicate(self) -> None:
         svc = self._new_service()
@@ -1110,6 +1110,6 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
 
         first = _LocalExtension()
         second = _LocalExtension()
-        svc.register_cp_extension(first)
+        svc.bind_cp_extension(first)
         with self.assertRaises(ValueError):
-            svc.register_cp_extension(second)
+            svc.bind_cp_extension(second)

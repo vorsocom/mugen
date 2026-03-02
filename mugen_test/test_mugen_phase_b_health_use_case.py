@@ -17,7 +17,7 @@ from mugen.core.domain.use_case.phase_b_health import (
 class TestPhaseBHealthUseCase(unittest.TestCase):
     """Validate pure runtime/readiness health evaluation behavior."""
 
-    def test_preserves_reported_degraded_when_requested(self) -> None:
+    def test_evaluates_healthy_when_all_critical_platforms_are_healthy(self) -> None:
         result = evaluate_phase_b_health(
             PhaseBHealthInput(
                 platform_statuses={"web": PHASE_STATUS_HEALTHY},
@@ -29,12 +29,11 @@ class TestPhaseBHealthUseCase(unittest.TestCase):
                 phase_b_error="phase_b task failed",
                 phase_b_started_at=0.0,
                 readiness_grace_seconds=0.0,
-                preserve_reported_degraded=True,
             )
         )
 
-        self.assertEqual(result.phase_b_status, PHASE_STATUS_DEGRADED)
-        self.assertEqual(result.phase_b_error, "phase_b task failed")
+        self.assertEqual(result.phase_b_status, PHASE_STATUS_HEALTHY)
+        self.assertIsNone(result.phase_b_error)
 
     def test_normalize_platform_list_and_parse_float_helpers_cover_edge_paths(self) -> None:
         self.assertEqual(

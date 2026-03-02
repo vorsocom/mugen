@@ -248,7 +248,8 @@ class TestDIBuildIPCService(unittest.TestCase):
                     def __init__(self, config, logging_gateway):
                         pass
 
-                    def register_ipc_extension(self, ext):
+                    def bind_ipc_extension(self, ext, *, critical: bool = False):
+                        _ = critical
                         pass
 
                     async def handle_ipc_request(self, request):

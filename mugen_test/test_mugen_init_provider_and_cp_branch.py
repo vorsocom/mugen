@@ -57,8 +57,8 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-        messaging_service = SimpleNamespace(register_cp_extension=Mock())
-        ipc_service = SimpleNamespace(register_ipc_extension=Mock())
+        messaging_service = SimpleNamespace(bind_cp_extension=Mock())
+        ipc_service = SimpleNamespace(bind_ipc_extension=Mock())
         platform_service = SimpleNamespace(extension_supported=Mock(return_value=True))
 
         with patch(
@@ -75,11 +75,12 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
             )
 
         platform_service.extension_supported.assert_called_once()
-        messaging_service.register_cp_extension.assert_called_once()
+        messaging_service.bind_cp_extension.assert_called_once()
         self.assertIsInstance(
-            messaging_service.register_cp_extension.call_args.args[0],
+            messaging_service.bind_cp_extension.call_args.args[0],
             _DummyCPExt,
         )
+        self.assertFalse(messaging_service.bind_cp_extension.call_args.kwargs["critical"])
 
     async def test_register_extensions_skips_unsupported_cp_and_missing_core_plugins(
         self,
@@ -93,8 +94,8 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-        messaging_service = SimpleNamespace(register_cp_extension=Mock())
-        ipc_service = SimpleNamespace(register_ipc_extension=Mock())
+        messaging_service = SimpleNamespace(bind_cp_extension=Mock())
+        ipc_service = SimpleNamespace(bind_ipc_extension=Mock())
         platform_service = SimpleNamespace(extension_supported=Mock(return_value=False))
 
         with (
@@ -114,7 +115,7 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
             )
 
         platform_service.extension_supported.assert_called_once()
-        messaging_service.register_cp_extension.assert_not_called()
+        messaging_service.bind_cp_extension.assert_not_called()
         self.assertIn(
             "WARNING:test_app:Extension not supported by active platforms: test.cp.ping.",
             logger.output,

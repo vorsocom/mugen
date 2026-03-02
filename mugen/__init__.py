@@ -82,6 +82,7 @@ from mugen.core.runtime.phase_b_coordinator import (
     prepare_phase_b_startup_plan,
     resolve_phase_b_startup_plan,
 )
+from mugen.core.runtime.bootstrap_contract import parse_runtime_bootstrap_settings
 from mugen.core.runtime.phase_b_controls import (
     parse_bool as _parse_bool,
 )
@@ -263,9 +264,13 @@ def _resolve_phase_b_critical_platforms(
     if resolved:
         return resolved
 
-    runtime_cfg = getattr(getattr(config, "mugen", SimpleNamespace()), "runtime", None)
-    phase_b_cfg = getattr(runtime_cfg, "phase_b", None)
-    resolved = _normalize_platform_list(getattr(phase_b_cfg, "critical_platforms", None))
+    settings = parse_runtime_bootstrap_settings(
+        config,
+        require_profile=False,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=False,
+    )
+    resolved = _normalize_platform_list(settings.critical_platforms)
     if resolved:
         return resolved
 
@@ -279,13 +284,19 @@ def validate_phase_b_runtime_config(
     logger: ILoggingGateway | None = None,
 ) -> tuple[list[str], list[str], bool]:
     """Resolve and validate runtime platform configuration for phase B."""
-    raw_platforms = getattr(getattr(config, "mugen", SimpleNamespace()), "platforms", None)
+    settings = parse_runtime_bootstrap_settings(
+        config,
+        require_profile=False,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=False,
+    )
+    raw_platforms = settings.raw_platforms
     if not isinstance(raw_platforms, list):
         if logger is not None:
             logger.error("Invalid platform configuration.")
         raise BootstrapConfigError("Invalid platform configuration.")
 
-    active_platforms = _normalize_platform_list(raw_platforms)
+    active_platforms = list(settings.active_platforms)
     unsupported_platforms = unknown_platforms(active_platforms)
     if unsupported_platforms:
         supported_platforms_text = ", ".join(sorted(SUPPORTED_CORE_PLATFORMS))
@@ -336,10 +347,13 @@ def _resolve_degrade_on_critical_exit(config: SimpleNamespace, bootstrap_state: 
     if state_value is not None:
         return _parse_bool(state_value, default=True)
 
-    runtime_cfg = getattr(getattr(config, "mugen", SimpleNamespace()), "runtime", None)
-    phase_b_cfg = getattr(runtime_cfg, "phase_b", None)
-    raw_value = getattr(phase_b_cfg, "degrade_on_critical_exit", True)
-    return _parse_bool(raw_value, default=True)
+    settings = parse_runtime_bootstrap_settings(
+        config,
+        require_profile=False,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=False,
+    )
+    return bool(settings.degrade_on_critical_exit)
 
 
 def _coerce_positive_int(value: object, *, default: int) -> int:
@@ -483,7 +497,7 @@ async def bootstrap_app(
     logger_provider=_logger_provider,
 ) -> None:
     """Phase A bootstrap for app extensions and API registration."""
-    logger: ILoggingGateway = logger_provider()
+    _ = logger_provider
     bootstrap_state = get_bootstrap_state(app)
     capability_statuses = bootstrap_state.setdefault(PHASE_A_CAPABILITY_STATUSES_KEY, {})
     capability_errors = bootstrap_state.setdefault(PHASE_A_CAPABILITY_ERRORS_KEY, {})
@@ -496,10 +510,9 @@ async def bootstrap_app(
         capability_statuses["container_readiness"] = PHASE_STATUS_DEGRADED
         capability_errors["container_readiness"] = str(exc)
         bootstrap_state[PHASE_A_ERROR_KEY] = str(exc)
-        logger.warning(
-            "Container readiness degraded; continuing startup in degraded mode "
-            f"(error={exc})."
-        )
+        raise BootstrapConfigError(
+            f"Container readiness check failed: {exc}"
+        ) from exc
 
     # Discover and register core plugins and
     # third-party extensions.
@@ -882,13 +895,11 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
     for ext_cfg in extensions:
         ext_started_at = perf_counter()
         raw_token = getattr(ext_cfg, "token", None)
-        legacy_path = getattr(ext_cfg, "path", None)
-        if raw_token is None and legacy_path is not None:
+        if not isinstance(raw_token, str) or raw_token.strip() == "":
             raise ExtensionLoadError(
-                "Legacy extension path configuration is no longer supported. "
-                "Use token-based extension loading."
+                "Extension token is required and must be a non-empty string."
             )
-        token = str(raw_token or "").strip().lower()
+        token = raw_token.strip().lower()
         configured_type = str(getattr(ext_cfg, "type", "") or "").strip().lower()
         critical = _parse_ext_bool(getattr(ext_cfg, "critical", False), default=False)
 

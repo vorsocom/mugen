@@ -104,8 +104,6 @@ async def core_health_ready():
             phase_b_started_at=status["phase_b_started_at"],
             readiness_grace_seconds=readiness_grace_seconds,
             include_starting_failures=True,
-            preserve_reported_degraded=True,
-            default_critical_platforms_to_statuses=False,
             now_monotonic=perf_counter(),
         )
     )

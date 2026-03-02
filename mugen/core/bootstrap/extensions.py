@@ -166,20 +166,7 @@ class DefaultExtensionRegistry(IExtensionRegistry):
         extension: IIPCExtension,
         critical: bool,
     ) -> None:
-        bind = getattr(self._ipc_service, "bind_ipc_extension", None)
-        if callable(bind):
-            try:
-                bind(extension, critical=critical)
-                return
-            except TypeError:
-                bind(extension)
-                return
-
-        register = getattr(self._ipc_service, "register_ipc_extension", None)
-        if callable(register):
-            register(extension)
-            return
-        raise RuntimeError("IPC extension binding is unavailable.")
+        self._ipc_service.bind_ipc_extension(extension, critical=critical)
 
     def _bind_messaging_extension(
         self,
@@ -188,20 +175,23 @@ class DefaultExtensionRegistry(IExtensionRegistry):
         extension,
         critical: bool,
     ) -> None:
-        bind_method_name = f"bind_{extension_type}_extension"
-        bind = getattr(self._messaging_service, bind_method_name, None)
-        if callable(bind):
-            try:
-                bind(extension, critical=critical)
-                return
-            except TypeError:
-                bind(extension)
-                return
-
-        register_method_name = f"register_{extension_type}_extension"
-        register = getattr(self._messaging_service, register_method_name, None)
-        if callable(register):
-            register(extension)
+        if extension_type == "cp":
+            self._messaging_service.bind_cp_extension(extension, critical=critical)
+            return
+        if extension_type == "ct":
+            self._messaging_service.bind_ct_extension(extension, critical=critical)
+            return
+        if extension_type == "ctx":
+            self._messaging_service.bind_ctx_extension(extension, critical=critical)
+            return
+        if extension_type == "mh":
+            self._messaging_service.bind_mh_extension(extension, critical=critical)
+            return
+        if extension_type == "rag":
+            self._messaging_service.bind_rag_extension(extension, critical=critical)
+            return
+        if extension_type == "rpp":
+            self._messaging_service.bind_rpp_extension(extension, critical=critical)
             return
         raise RuntimeError(
             f"Messaging extension binding is unavailable for type {extension_type!r}."

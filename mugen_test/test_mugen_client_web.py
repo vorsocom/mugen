@@ -327,7 +327,7 @@ class _InMemoryWebRelationalSession:
             return _MemoryResult(rows=pending_rows[:1])
 
         if (
-            sql.startswith("update mugen.web_queue_job set status = cast(:status as mugen.citext),")
+            sql.startswith("update mugen.web_queue_job set status = :status,")
             and "returning job_id" in sql
         ):
             job_id = str(args.get("job_id", ""))
@@ -370,7 +370,7 @@ class _InMemoryWebRelationalSession:
             return _MemoryResult(rows=[] if row is None else [row])
 
         if (
-            sql.startswith("update mugen.web_queue_job set status = cast(:status as mugen.citext),")
+            sql.startswith("update mugen.web_queue_job set status = :status,")
             and "error_message = :error_message, completed_at = :completed_at where job_id = :job_id"
             in sql
         ):
@@ -378,7 +378,7 @@ class _InMemoryWebRelationalSession:
             row = self._state.queue_jobs.get(job_id)
             if row is None:
                 return _MemoryResult(rowcount=0)
-            if "and status = cast(:current_status as mugen.citext)" in sql:
+            if "and status = :current_status" in sql:
                 if str(row.get("status", "")).strip().lower() != str(
                     args.get("current_status", "")
                 ).strip().lower():
@@ -2688,12 +2688,23 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             event_type="system",
             data={"message": "ready"},
         )
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            stream_log = await self.client._read_event_log_unlocked("conv-stream")  # pylint: disable=protected-access
+        stream_generation = str(stream_log["generation"])
+        last_event_id_one = self.client._format_stream_cursor_id(  # pylint: disable=protected-access
+            stream_generation=stream_generation,
+            event_id=1,
+        )
+        last_event_id_two = self.client._format_stream_cursor_id(  # pylint: disable=protected-access
+            stream_generation=stream_generation,
+            event_id=2,
+        )
 
         self.client._sse_keepalive_seconds = 0.001  # pylint: disable=protected-access
         stream = await self.client.stream_events(
             auth_user="user-1",
             conversation_id="conv-stream",
-            last_event_id="1",
+            last_event_id=last_event_id_one,
         )
 
         first = await stream.__anext__()
@@ -2715,7 +2726,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         replay_stream = await self.client.stream_events(
             auth_user="user-1",
             conversation_id="conv-stream",
-            last_event_id="2",
+            last_event_id=last_event_id_two,
         )
         # Inject duplicate and newer live events to hit de-dup branches.
         await self.client._publish_event(  # pylint: disable=protected-access
@@ -3058,7 +3069,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         ]
         reset_payload = json.loads("\n".join(reset_data_lines))
         self.assertEqual(reset_payload["signal"], "stream_reset")
-        self.assertEqual(reset_payload["reason"], "legacy_cursor_ahead_of_stream")
+        self.assertEqual(reset_payload["reason"], "invalid_last_event_id")
 
         await self.client._publish_event(  # pylint: disable=protected-access
             "conv-reset",
@@ -3509,7 +3520,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             conversation_id="conv-helper",
             incoming_last_event_id="bad-cursor",
             stream_generation="gen-helper",
-            max_event_id=0,
         )
         self.assertIsNotNone(invalid_cursor["reset_event"])
 
@@ -3517,7 +3527,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             conversation_id="conv-helper",
             incoming_last_event_id="v999:gen-helper:1",
             stream_generation="gen-helper",
-            max_event_id=10,
         )
         self.assertIsNotNone(version_mismatch_cursor["reset_event"])
 
@@ -3527,7 +3536,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 f"v{self.client._event_log_version}:other-generation:1"  # pylint: disable=protected-access
             ),
             stream_generation="gen-helper",
-            max_event_id=10,
         )
         self.assertIsNotNone(generation_mismatch_cursor["reset_event"])
 
@@ -3537,7 +3545,6 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 f"v{self.client._event_log_version}:gen-helper:1"  # pylint: disable=protected-access
             ),
             stream_generation="gen-helper",
-            max_event_id=10,
         )
         self.assertIsNone(matching_cursor["reset_event"])
         self.assertEqual(matching_cursor["effective_last_event_id"], 1)
@@ -5418,11 +5425,11 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         await self.client._mark_job_done("job-1")  # pylint: disable=protected-access
         mark_sql, mark_params = mark_session.calls[1]
         self.assertIn(
-            "SET status = CAST(:status AS mugen.citext)",
+            "SET status = :status",
             mark_sql,
         )
         self.assertIn(
-            "AND status = CAST(:current_status AS mugen.citext)",
+            "AND status = :current_status",
             mark_sql,
         )
         self.assertIn("AND attempts = :expected_attempt", mark_sql)
@@ -5461,11 +5468,11 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         await self.client._mark_job_failed("job-2", "boom")  # pylint: disable=protected-access
         failed_sql, failed_params = failed_mark_session.calls[1]
         self.assertIn(
-            "SET status = CAST(:status AS mugen.citext)",
+            "SET status = :status",
             failed_sql,
         )
         self.assertIn(
-            "AND status = CAST(:current_status AS mugen.citext)",
+            "AND status = :current_status",
             failed_sql,
         )
         self.assertIn("AND attempts = :expected_attempt", failed_sql)

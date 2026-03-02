@@ -754,16 +754,120 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
                 payload='data: {"error":{"message":"stream failed"}}\n\n',
             )
 
-    def test_parse_streaming_response_handles_non_prefixed_chunks(self) -> None:
+    def test_parse_streaming_response_rejects_non_sse_chunks(self) -> None:
+        config = _make_config()
+        gateway = SambaNovaCompletionGateway(config, Mock())
+        with self.assertRaisesRegex(CompletionGatewayError, "unsupported field"):
+            gateway._parse_streaming_response(
+                model="Meta-Llama-3.1-70B-Instruct",
+                operation="completion",
+                payload='{"choices":[{"delta":{"content":123},"finish_reason":"stop"}]}\n\n',
+            )
+
+    def test_parse_streaming_response_handles_multiline_data_and_comments(self) -> None:
         config = _make_config()
         gateway = SambaNovaCompletionGateway(config, Mock())
         response = gateway._parse_streaming_response(
             model="Meta-Llama-3.1-70B-Instruct",
             operation="completion",
-            payload='{"choices":[{"delta":{"content":123},"finish_reason":"stop"}]}\n\n',
+            payload=(
+                ": keepalive\n"
+                "data: {\"choices\":[{\"delta\":{\"content\":\"line two\"},\n"
+                "data: \"finish_reason\":\"stop\"}]}\n\n"
+                "data: [DONE]\n\n"
+            ),
+        )
+        self.assertEqual(response.content, "line two")
+        self.assertEqual(response.stop_reason, "stop")
+
+    def test_parse_streaming_response_skips_empty_event_frames(self) -> None:
+        config = _make_config()
+        gateway = SambaNovaCompletionGateway(config, Mock())
+        response = gateway._parse_streaming_response(
+            model="Meta-Llama-3.1-70B-Instruct",
+            operation="completion",
+            payload="event: ping\nid: 1\nretry: 1\n\n",
+        )
+        self.assertEqual(response.content, "")
+        self.assertIsNone(response.stop_reason)
+
+    def test_parse_streaming_response_raises_for_malformed_json_event(self) -> None:
+        config = _make_config()
+        gateway = SambaNovaCompletionGateway(config, Mock())
+        with self.assertRaisesRegex(CompletionGatewayError, "Malformed SambaNova SSE frame payload"):
+            gateway._parse_streaming_response(
+                model="Meta-Llama-3.1-70B-Instruct",
+                operation="completion",
+                payload='data: {"choices": [}\n\n',
+            )
+
+    def test_parse_streaming_response_supports_delta_content_list(self) -> None:
+        config = _make_config()
+        gateway = SambaNovaCompletionGateway(config, Mock())
+        response = gateway._parse_streaming_response(
+            model="Meta-Llama-3.1-70B-Instruct",
+            operation="completion",
+            payload=(
+                'data: {"choices":[{"delta":{"content":[{"type":"output_text","text":"ok"}]},"finish_reason":"stop"}]}\n\n'
+            ),
+        )
+        self.assertEqual(response.content, [{"type": "output_text", "text": "ok"}])
+        self.assertEqual(
+            response.vendor_fields.get("stream_content_deltas"),
+            [{"type": "output_text", "text": "ok"}],
+        )
+
+    def test_parse_streaming_response_ignores_unsupported_delta_content_types(self) -> None:
+        config = _make_config()
+        gateway = SambaNovaCompletionGateway(config, Mock())
+        response = gateway._parse_streaming_response(
+            model="Meta-Llama-3.1-70B-Instruct",
+            operation="completion",
+            payload='data: {"choices":[{"delta":{"content":123},"finish_reason":"stop"}]}\n\n',
         )
         self.assertEqual(response.content, "")
         self.assertEqual(response.stop_reason, "stop")
+
+    def test_parse_sse_data_frames_supports_lines_without_colons_and_terminal_flush(self) -> None:
+        config = _make_config()
+        gateway = SambaNovaCompletionGateway(config, Mock())
+        self.assertEqual(
+            gateway._parse_sse_data_frames(  # pylint: disable=protected-access
+                operation="completion",
+                payload="data\n",
+            ),
+            [""],
+        )
+        self.assertEqual(
+            gateway._parse_sse_data_frames(  # pylint: disable=protected-access
+                operation="completion",
+                payload='data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}',
+            ),
+            ['{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}'],
+        )
+
+    def test_parse_sse_data_frames_rejects_empty_field_name(self) -> None:
+        config = _make_config()
+        gateway = SambaNovaCompletionGateway(config, Mock())
+        with self.assertRaisesRegex(CompletionGatewayError, "empty field name"):
+            gateway._parse_sse_data_frames(  # pylint: disable=protected-access
+                operation="completion",
+                payload=" :value\n\n",
+            )
+
+    def test_parse_sse_data_frames_ignores_blank_lines_without_active_event(self) -> None:
+        config = _make_config()
+        gateway = SambaNovaCompletionGateway(config, Mock())
+        self.assertEqual(
+            gateway._parse_sse_data_frames(  # pylint: disable=protected-access
+                operation="completion",
+                payload="\n\n",
+            ),
+            [],
+        )
+
+    def test_normalize_content_returns_none_for_unsupported_types(self) -> None:
+        self.assertIsNone(SambaNovaCompletionGateway._normalize_content(123))
 
     def test_perform_request(self) -> None:
         config = _make_config()

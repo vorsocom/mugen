@@ -772,6 +772,11 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     def test_secret_encoding_and_decoding_paths(self) -> None:
         client = self._client()
+        with self.assertRaisesRegex(RuntimeError, "Cannot persist token"):
+            client._encode_secret_value(  # pylint: disable=protected-access
+                "access-token",
+                field_name="token",
+            )
         client._config.security = SimpleNamespace(
             secrets=SimpleNamespace(encryption_key="test-secret")
         )
@@ -793,6 +798,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             client._decode_secret_value(1, field_name="token")  # pylint: disable=protected-access
         )
+
+        with self.assertRaisesRegex(RuntimeError, "must be encrypted"):
+            client._decode_secret_value(  # pylint: disable=protected-access
+                "plaintext-token",
+                field_name="token",
+            )
 
     def test_secret_decoding_requires_valid_cipher_and_payload(self) -> None:
         client = self._client()
@@ -986,11 +997,24 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
     async def test_aenter_uses_saved_credentials_when_access_token_exists(self) -> None:
         client = self._client()
         client._ensure_credential_keys_initialized()  # pylint: disable=protected-access
+        client._config.security = SimpleNamespace(
+            secrets=SimpleNamespace(encryption_key="test-secret")
+        )
+        client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
 
         values = {
-            client._client_access_token_key: "tok",  # pylint: disable=protected-access
-            client._client_device_id_key: "dev",  # pylint: disable=protected-access
-            client._client_user_id_key: "@assistant:example.com",  # pylint: disable=protected-access
+            client._client_access_token_key: client._encode_secret_value(  # pylint: disable=protected-access
+                "tok",
+                field_name="client_access_token",
+            ),
+            client._client_device_id_key: client._encode_secret_value(  # pylint: disable=protected-access
+                "dev",
+                field_name="client_device_id",
+            ),
+            client._client_user_id_key: client._encode_secret_value(  # pylint: disable=protected-access
+                "@assistant:example.com",
+                field_name="client_user_id",
+            ),
         }
         client._keyval_storage_gateway.get_text = AsyncMock(
             side_effect=lambda key, *_: values.get(key)
@@ -1006,6 +1030,10 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     async def test_aenter_password_login_success_saves_credentials(self) -> None:
         client = self._client()
+        client._config.security = SimpleNamespace(
+            secrets=SimpleNamespace(encryption_key="test-secret")
+        )
+        client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
         client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
         client.login = AsyncMock(
             return_value=_FakeLoginResponse("access", "device-1", "@user:example.com")
@@ -1017,6 +1045,23 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, client)
         self.assertEqual(client._keyval_storage_gateway.put_text.await_count, 3)
         client.load_store.assert_called_once_with()
+
+    async def test_aenter_password_login_without_cipher_skips_persistence(self) -> None:
+        client = self._client()
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
+        client.login = AsyncMock(
+            return_value=_FakeLoginResponse("access", "device-1", "@user:example.com")
+        )
+
+        with patch.object(matrix_mod, "LoginResponse", _FakeLoginResponse):
+            result = await client.__aenter__()
+
+        self.assertIs(result, client)
+        client._keyval_storage_gateway.put_text.assert_not_awaited()
+        warning_messages = [str(call.args[0]) for call in client._logging_gateway.warning.call_args_list]
+        self.assertTrue(
+            any("credentials were not persisted" in message for message in warning_messages)
+        )
 
     async def test_aenter_password_login_failure_raises_runtime_error(self) -> None:
         client = self._client()
@@ -1781,7 +1826,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             logging_gateway=Mock(),
         )
         extension = _RecordingMatrixEventIPCExtension()
-        ipc_service.register_ipc_extension(extension)
+        ipc_service.bind_ipc_extension(extension)
         client._ipc_service = ipc_service
 
         room = SimpleNamespace(room_id="!room:test")

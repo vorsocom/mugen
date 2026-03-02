@@ -237,7 +237,3 @@ class DefaultIPCService(IIPCService):
         self._ipc_extensions.append(ext)
         if critical:
             self._ipc_critical_handlers.add(self._normalize_handler_name(ext))
-
-    def register_ipc_extension(self, ext: IIPCExtension) -> None:
-        """Legacy alias for composition-driven bind_ipc_extension."""
-        self.bind_ipc_extension(ext, critical=False)

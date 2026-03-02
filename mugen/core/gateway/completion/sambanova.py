@@ -487,16 +487,27 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         stop_reason = None
         usage = None
 
-        chunks = [
-            item.strip() for item in payload.strip().split("\n\n") if item.strip()
-        ]
+        chunks = self._parse_sse_data_frames(
+            operation=operation,
+            payload=payload,
+        )
         for chunk in chunks:
-            if chunk.startswith("data:"):
-                chunk = chunk[5:].strip()
-            if chunk == "[DONE]":
+            normalized_chunk = chunk.strip()
+            if normalized_chunk == "":
+                continue
+            if normalized_chunk == "[DONE]":
                 continue
 
-            json_payload = json.loads(chunk)
+            try:
+                json_payload = json.loads(chunk)
+            except json.JSONDecodeError as exc:
+                raise CompletionGatewayError(
+                    provider=self._provider,
+                    operation=operation,
+                    message="Malformed SambaNova SSE frame payload.",
+                    cause=exc,
+                    timeout_applied=self._read_timeout_seconds,
+                ) from exc
             if "choices" in json_payload:
                 choice = json_payload["choices"][0]
                 delta = choice.get("delta", {})
@@ -547,6 +558,66 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             vendor_fields=vendor_fields,
             raw=payload,
         )
+
+    def _parse_sse_data_frames(
+        self,
+        *,
+        operation: str,
+        payload: str,
+    ) -> list[str]:
+        frames: list[str] = []
+        data_lines: list[str] = []
+        saw_event_field = False
+
+        for raw_line in payload.splitlines():
+            line = raw_line.rstrip("\r")
+            if line == "":
+                if saw_event_field:
+                    frames.append("\n".join(data_lines))
+                data_lines = []
+                saw_event_field = False
+                continue
+
+            if line.startswith(":"):
+                continue
+
+            if ":" in line:
+                field_name, field_value = line.split(":", 1)
+                if field_value.startswith(" "):
+                    field_value = field_value[1:]
+            else:
+                field_name = line
+                field_value = ""
+
+            normalized_field = field_name.strip().lower()
+            if normalized_field == "":
+                raise CompletionGatewayError(
+                    provider=self._provider,
+                    operation=operation,
+                    message="Malformed SambaNova SSE frame: empty field name.",
+                    timeout_applied=self._read_timeout_seconds,
+                )
+            if normalized_field == "data":
+                data_lines.append(field_value)
+                saw_event_field = True
+                continue
+            if normalized_field in {"event", "id", "retry"}:
+                saw_event_field = True
+                continue
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=operation,
+                message=(
+                    "Malformed SambaNova SSE frame: unsupported field "
+                    f"{normalized_field!r}."
+                ),
+                timeout_applied=self._read_timeout_seconds,
+            )
+
+        if saw_event_field:
+            frames.append("\n".join(data_lines))
+
+        return frames
 
     @staticmethod
     def _usage_from_payload(payload: Any) -> CompletionUsage | None:

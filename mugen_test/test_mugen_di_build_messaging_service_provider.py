@@ -334,22 +334,28 @@ class TestDIBuildMessagingService(unittest.TestCase):
                     ) -> list[dict] | None:
                         pass
 
-                    def register_cp_extension(self, ext):
+                    def bind_cp_extension(self, ext, *, critical: bool = False):
+                        _ = critical
                         pass
 
-                    def register_ct_extension(self, ext):
+                    def bind_ct_extension(self, ext, *, critical: bool = False):
+                        _ = critical
                         pass
 
-                    def register_ctx_extension(self, ext):
+                    def bind_ctx_extension(self, ext, *, critical: bool = False):
+                        _ = critical
                         pass
 
-                    def register_mh_extension(self, ext):
+                    def bind_mh_extension(self, ext, *, critical: bool = False):
+                        _ = critical
                         pass
 
-                    def register_rag_extension(self, ext):
+                    def bind_rag_extension(self, ext, *, critical: bool = False):
+                        _ = critical
                         pass
 
-                    def register_rpp_extension(self, ext):
+                    def bind_rpp_extension(self, ext, *, critical: bool = False):
+                        _ = critical
                         pass
 
                 DummyMessagingServiceClass.__module__ = "valid_messaging_module"

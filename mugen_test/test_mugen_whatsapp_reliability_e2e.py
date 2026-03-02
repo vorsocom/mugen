@@ -139,7 +139,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             config=SimpleNamespace(),
             logging_gateway=logger,
         )
-        ipc_service.register_ipc_extension(ipc_ext)
+        ipc_service.bind_ipc_extension(ipc_ext)
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
         payload = _make_message_event("wamid-dup-1", "hello")
 
@@ -229,7 +229,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             config=SimpleNamespace(),
             logging_gateway=ext_logger,
         )
-        ipc_service.register_ipc_extension(ipc_ext)
+        ipc_service.bind_ipc_extension(ipc_ext)
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
         payload = _make_message_event("wamid-retry-1", "hello")
 
