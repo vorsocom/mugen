@@ -18,7 +18,7 @@ runtime.phase_b.startup_timeout_seconds = 30.0
 runtime.phase_b.critical_platforms = ["web"]
 runtime.phase_b.degrade_on_critical_exit = true
 runtime.provider_readiness_timeout_seconds = 15.0
-runtime.profile = "platform_full"   # api_only|web_only|platform_full
+runtime.profile = "platform_full"
 
 [mugen.commands]
 clear = "..."
@@ -63,163 +63,20 @@ service.nlp = "default"
 service.platform = "default"
 service.user = "default"
 
-# Core framework plugins.
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.acp"
-enabled = true
-name = "com.vorsocomputing.mugen.acp"
-namespace = "com.vorsocomputing.mugen.acp"
-models = "mugen.core.plugin.acp.model"
-contrib = "mugen.core.plugin.acp.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.audit"
-enabled = true
-name = "com.vorsocomputing.mugen.audit"
-namespace = "com.vorsocomputing.mugen.audit"
-models = "mugen.core.plugin.audit.model"
-contrib = "mugen.core.plugin.audit.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.ops_vpn"
-enabled = true
-name = "com.vorsocomputing.mugen.ops_vpn"
-namespace = "com.vorsocomputing.mugen.ops_vpn"
-models = "mugen.core.plugin.ops_vpn.model"
-contrib = "mugen.core.plugin.ops_vpn.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.ops_case"
-enabled = true
-name = "com.vorsocomputing.mugen.ops_case"
-namespace = "com.vorsocomputing.mugen.ops_case"
-models = "mugen.core.plugin.ops_case.model"
-contrib = "mugen.core.plugin.ops_case.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.ops_sla"
-enabled = true
-name = "com.vorsocomputing.mugen.ops_sla"
-namespace = "com.vorsocomputing.mugen.ops_sla"
-models = "mugen.core.plugin.ops_sla.model"
-contrib = "mugen.core.plugin.ops_sla.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.ops_metering"
-enabled = true
-name = "com.vorsocomputing.mugen.ops_metering"
-namespace = "com.vorsocomputing.mugen.ops_metering"
-models = "mugen.core.plugin.ops_metering.model"
-contrib = "mugen.core.plugin.ops_metering.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.ops_workflow"
-enabled = true
-name = "com.vorsocomputing.mugen.ops_workflow"
-namespace = "com.vorsocomputing.mugen.ops_workflow"
-models = "mugen.core.plugin.ops_workflow.model"
-contrib = "mugen.core.plugin.ops_workflow.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.ops_governance"
-enabled = true
-name = "com.vorsocomputing.mugen.ops_governance"
-namespace = "com.vorsocomputing.mugen.ops_governance"
-models = "mugen.core.plugin.ops_governance.model"
-contrib = "mugen.core.plugin.ops_governance.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.ops_reporting"
-enabled = true
-name = "com.vorsocomputing.mugen.ops_reporting"
-namespace = "com.vorsocomputing.mugen.ops_reporting"
-models = "mugen.core.plugin.ops_reporting.model"
-contrib = "mugen.core.plugin.ops_reporting.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.ops_connector"
-enabled = true
-name = "com.vorsocomputing.mugen.ops_connector"
-namespace = "com.vorsocomputing.mugen.ops_connector"
-models = "mugen.core.plugin.ops_connector.model"
-contrib = "mugen.core.plugin.ops_connector.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.billing"
-enabled = true
-name = "com.vorsocomputing.mugen.billing"
-namespace = "com.vorsocomputing.mugen.billing"
-models = "mugen.core.plugin.billing.model"
-contrib = "mugen.core.plugin.billing.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.knowledge_pack"
-enabled = true
-name = "com.vorsocomputing.mugen.knowledge_pack"
-namespace = "com.vorsocomputing.mugen.knowledge_pack"
-models = "mugen.core.plugin.knowledge_pack.model"
-contrib = "mugen.core.plugin.knowledge_pack.contrib"
-
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.channel_orchestration"
-enabled = true
-name = "com.vorsocomputing.mugen.channel_orchestration"
-namespace = "com.vorsocomputing.mugen.channel_orchestration"
-models = "mugen.core.plugin.channel_orchestration.model"
-contrib = "mugen.core.plugin.channel_orchestration.contrib"
-
-# Optional WhatsApp WACAPI framework plugin.
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.whatsapp_wacapi"
-enabled = false
-name = "com.vorsocomputing.mugen.whatsapp.wacapi"
-namespace = "com.vorsocomputing.mugen.whatsapp.wacapi"
-models = "mugen.core.plugin.whatsapp.wacapi.model"
-contrib = "mugen.core.plugin.whatsapp.wacapi.contrib"
-
-# Optional Web REST/SSE framework plugin.
-[[mugen.modules.core.plugins]]
-type = "fw"
-token = "core.fw.web"
-enabled = true
-name = "com.vorsocomputing.mugen.web"
-namespace = "com.vorsocomputing.mugen.web"
-models = "mugen.core.plugin.web.model"
-contrib = "mugen.core.plugin.web.contrib"
-
-# Context.
-[[mugen.modules.core.plugins]]
+# Core-owned extensions.
+[[mugen.modules.core.extensions]]
 type = "ctx"
 token = "core.ctx.system_persona"
 
 # Commands.
-[[mugen.modules.core.plugins]]
+[[mugen.modules.core.extensions]]
 type = "cp"
 token = "core.cp.clear_history"
 
-# Optional WACAPI IPC extension.
-# [[mugen.modules.core.plugins]]
-# type = "ipc"
-# token = "core.ipc.whatsapp_wacapi"
-
-# Downstream extensions.
+# Plugin and downstream extensions (opt-in).
 # [[mugen.modules.extensions]]
-# type = "cp"
-# token = "your.extension.token"
+# type = "fw"
+# token = "core.fw.web"
 
 # === ACP plugin ===
 [acp]

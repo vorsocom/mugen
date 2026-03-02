@@ -86,8 +86,10 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             if missing:
                 missing_text = ", ".join(sorted(missing))
                 raise RuntimeError(
-                    "Web runtime relational tables unavailable: "
-                    f"{missing_text}. Run migrations before startup."
+                    "Database schema is not ready. "
+                    "Run migrations before startup. "
+                    "Missing web runtime table(s): "
+                    f"{missing_text}."
                 )
 
     @staticmethod

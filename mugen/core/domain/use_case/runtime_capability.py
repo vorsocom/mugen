@@ -21,6 +21,7 @@ class RuntimeCapabilityInput:
     has_web_client_runtime_path: bool
     container_ready: bool = True
     provider_ready: bool = True
+    optional_provider_failures: dict[str, str] | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -64,6 +65,17 @@ def evaluate_runtime_capabilities(
         healthy=capability.provider_ready,
         error="Provider readiness check failed.",
     )
+
+    optional_provider_failures = capability.optional_provider_failures
+    if isinstance(optional_provider_failures, dict):
+        for provider_name in sorted(optional_provider_failures.keys()):
+            error_message = optional_provider_failures[provider_name]
+            if not isinstance(error_message, str) or error_message.strip() == "":
+                error_message = (
+                    "Optional provider readiness check failed."
+                )
+            statuses[f"provider_readiness.optional.{provider_name}"] = PHASE_STATUS_DEGRADED
+            errors[f"provider_readiness.optional.{provider_name}"] = error_message
     _record(
         "messaging.mh.mode",
         healthy=mh_mode is not None,

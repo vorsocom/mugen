@@ -8,6 +8,7 @@ __all__ = [
     "build_container",
     "container",
     "ensure_container_readiness_async",
+    "get_container_readiness_report",
     "reset_container",
     "shutdown_container",
     "shutdown_container_async",
@@ -64,6 +65,15 @@ class ContainerBootstrapError(RuntimeError):
 
 class ProviderBootstrapError(ContainerBootstrapError):
     """Raised when a required provider fails deterministic bootstrap."""
+
+
+@dataclass(frozen=True)
+class ProviderReadinessReport:
+    """Structured provider readiness outcome for startup capability reporting."""
+
+    successful_providers: tuple[str, ...]
+    required_failures: dict[str, str]
+    optional_failures: dict[str, str]
 
 
 def _nested_namespace_from_dict(items: dict, ns: SimpleNamespace) -> None:
@@ -264,7 +274,7 @@ def _validate_core_module_schema(config: dict) -> None:
     _ensure_only_known_keys(
         core_cfg,
         path="mugen.modules.core",
-        allowed={"client", "gateway", "plugins", "service"},
+        allowed={"client", "extensions", "gateway", "service"},
     )
 
     for section_name, allowed_keys in (
@@ -357,17 +367,17 @@ def _validate_core_module_schema(config: dict) -> None:
                 "(module:Class unsupported)."
             )
 
-    plugins_cfg = core_cfg.get("plugins")
-    if plugins_cfg is None:
-        plugins_cfg = []
-    if not isinstance(plugins_cfg, list):
+    core_extensions_cfg = core_cfg.get("extensions")
+    if core_extensions_cfg is None:
+        core_extensions_cfg = []
+    if not isinstance(core_extensions_cfg, list):
         raise RuntimeError(
-            "Invalid configuration: mugen.modules.core.plugins must be an array."
+            "Invalid configuration: mugen.modules.core.extensions must be an array."
         )
-    for index, entry in enumerate(plugins_cfg):
+    for index, entry in enumerate(core_extensions_cfg):
         _validate_extension_entry_schema(
             entry,
-            path=f"mugen.modules.core.plugins[{index}]",
+            path=f"mugen.modules.core.extensions[{index}]",
         )
 
     ext_cfg = modules_cfg.get("extensions")
@@ -382,6 +392,25 @@ def _validate_core_module_schema(config: dict) -> None:
             entry,
             path=f"mugen.modules.extensions[{index}]",
         )
+
+    active_platforms = normalize_platforms(mugen_cfg.get("platforms", []))
+    if "matrix" in active_platforms:
+        security_cfg = config.get("security")
+        secrets_cfg = (
+            security_cfg.get("secrets")
+            if isinstance(security_cfg, dict)
+            else None
+        )
+        encryption_key = (
+            secrets_cfg.get("encryption_key")
+            if isinstance(secrets_cfg, dict)
+            else None
+        )
+        if not isinstance(encryption_key, str) or encryption_key.strip() == "":
+            raise RuntimeError(
+                "Invalid configuration: security.secrets.encryption_key is required "
+                "when matrix platform is enabled."
+            )
 
 
 def _get_active_platforms(config: dict) -> list[str] | None:
@@ -439,21 +468,15 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
             "Allowed values are matrix, web, whatsapp."
         )
 
-    if profile == "api_only" and active_platforms:
+    if profile != "platform_full":
         logger.error(
-            "Runtime profile api_only cannot be used when platforms are enabled."
-        )
-        raise RuntimeError("Runtime profile api_only requires mugen.platforms to be empty.")
-
-    if profile == "web_only" and active_platform_set != {"web"}:
-        logger.error(
-            "Runtime profile web_only requires mugen.platforms to contain only 'web'."
+            "Runtime profile platform_full is required."
         )
         raise RuntimeError(
-            "Runtime profile web_only requires mugen.platforms=['web']."
+            "Runtime profile platform_full is required."
         )
 
-    if profile == "platform_full" and not active_platforms:
+    if not active_platforms:
         logger.error(
             "Runtime profile platform_full requires one or more enabled platforms."
         )
@@ -487,17 +510,14 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         if injector.email_gateway is None:
             missing.append("email_gateway")
 
-    if profile in {"web_only", "platform_full"} and "web" in active_platform_set:
+    if "web" in active_platform_set:
         if injector.web_client is None:
             missing.append("web_client")
 
-    if profile == "platform_full":
-        if "matrix" in active_platform_set and injector.matrix_client is None:
-            missing.append("matrix_client")
-        if "whatsapp" in active_platform_set and injector.whatsapp_client is None:
-            missing.append("whatsapp_client")
-        if "web" in active_platform_set and injector.web_client is None:
-            missing.append("web_client")
+    if "matrix" in active_platform_set and injector.matrix_client is None:
+        missing.append("matrix_client")
+    if "whatsapp" in active_platform_set and injector.whatsapp_client is None:
+        missing.append("whatsapp_client")
 
     if missing:
         for provider_name in missing:
@@ -561,6 +581,7 @@ class _ProviderSpec:
     required_platform: str | None = None
     inactive_platform_warning: str | None = None
     required: bool = True
+    readiness_required: bool = True
 
 
 _PROVIDER_SPECS = {
@@ -592,6 +613,7 @@ _PROVIDER_SPECS = {
         ),
         invalid_config_exceptions=(KeyError, ValueError),
         required=False,
+        readiness_required=False,
     ),
     "ipc_service": _ProviderSpec(
         provider_name="ipc_service",
@@ -704,6 +726,7 @@ _PROVIDER_SPECS = {
         ),
         invalid_config_exceptions=(KeyError, ValueError),
         required=False,
+        readiness_required=False,
     ),
     "matrix_client": _ProviderSpec(
         provider_name="matrix_client",
@@ -790,9 +813,8 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
         require_startup_timeout_seconds=False,
         require_provider_readiness_timeout_seconds=False,
     )
-    profile = str(settings.profile)
     active_platforms = list(settings.active_platforms)
-    web_active = profile in {"web_only", "platform_full"} and "web" in active_platforms
+    web_active = "web" in active_platforms
 
     readiness_provider_names: list[str] = [
         "completion_gateway",
@@ -822,12 +844,12 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
     )
     relational_required = (
         relational_configured is True
-        or (profile in {"web_only", "platform_full"} and "web" in active_platforms)
+        or web_active
     )
     if relational_required:
         readiness_provider_names.append("relational_storage_gateway")
 
-    if profile in {"web_only", "platform_full"} and "web" in active_platforms:
+    if web_active:
         readiness_provider_names.append("web_runtime_store")
 
     if _config_path_exists(config, "mugen", "modules", "core", "gateway", "email"):
@@ -882,43 +904,73 @@ async def _await_readiness_probe_async(
 async def _ensure_injector_readiness_async(
     config: dict,
     injector: DependencyInjector,
-) -> None:
+) -> ProviderReadinessReport:
     """Run required provider readiness checks before runtime validation."""
     timeout_seconds = _resolve_provider_readiness_timeout_seconds(config)
+    successful_providers: list[str] = []
+    required_failures: dict[str, str] = {}
+    optional_failures: dict[str, str] = {}
+
     for provider_name in _resolve_readiness_provider_names(config):
         spec = _PROVIDER_SPECS[provider_name]
         configured_token = _configured_token_for_spec(config, spec)
+        failure_message: str | None = None
         provider = getattr(injector, spec.injector_attr, None)
         if provider is None:
-            raise ProviderBootstrapError(
+            failure_message = (
                 "Provider readiness failed "
                 f"({provider_name}) token={configured_token!r} stage=readiness: "
                 "provider instance is unavailable."
             )
+        else:
+            check_readiness = getattr(provider, "check_readiness", None)
+            if callable(check_readiness) is not True:
+                failure_message = (
+                    "Provider readiness failed "
+                    f"({provider_name}) token={configured_token!r} stage=readiness: "
+                    "check_readiness is unavailable."
+                )
+            else:
+                try:
+                    await _await_readiness_probe_async(
+                        check_readiness(),
+                        provider_name=provider_name,
+                        configured_token=configured_token,
+                        timeout_seconds=timeout_seconds,
+                    )
+                except ProviderBootstrapError as exc:
+                    failure_message = str(exc)
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    failure_message = (
+                        "Provider readiness failed "
+                        f"({provider_name}) token={configured_token!r} stage=readiness: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
 
-        check_readiness = getattr(provider, "check_readiness", None)
-        if callable(check_readiness) is not True:
-            raise ProviderBootstrapError(
-                "Provider readiness failed "
-                f"({provider_name}) token={configured_token!r} stage=readiness: "
-                "check_readiness is unavailable."
-            )
+        if failure_message is None:
+            successful_providers.append(provider_name)
+            continue
 
-        try:
-            await _await_readiness_probe_async(
-                check_readiness(),
-                provider_name=provider_name,
-                configured_token=configured_token,
-                timeout_seconds=timeout_seconds,
-            )
-        except ProviderBootstrapError:
-            raise
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            raise ProviderBootstrapError(
-                "Provider readiness failed "
-                f"({provider_name}) token={configured_token!r} stage=readiness: "
-                f"{type(exc).__name__}: {exc}"
-            ) from exc
+        if spec.readiness_required:
+            required_failures[provider_name] = failure_message
+            continue
+        optional_failures[provider_name] = failure_message
+
+    return ProviderReadinessReport(
+        successful_providers=tuple(successful_providers),
+        required_failures=required_failures,
+        optional_failures=optional_failures,
+    )
+
+
+def _format_required_readiness_failure_message(
+    report: ProviderReadinessReport,
+) -> str:
+    failures = report.required_failures
+    if not failures:
+        return "Provider readiness failed."
+    messages = [failures[name] for name in sorted(failures.keys())]
+    return "; ".join(messages)
 
 
 def _get_bootstrap_provider_logger(config: dict) -> logging.Logger:
@@ -1296,6 +1348,7 @@ class _ContainerProxy:
     def __init__(self) -> None:
         self._injector: DependencyInjector | None = None
         self._readiness_checked: bool = False
+        self._last_readiness_report: ProviderReadinessReport | None = None
 
     def build(self, *, force: bool = False) -> DependencyInjector:
         """Build and cache the injector if needed."""
@@ -1304,6 +1357,7 @@ class _ContainerProxy:
                 _shutdown_injector(self._injector)
             self._injector = _build_container()
             self._readiness_checked = False
+            self._last_readiness_report = None
         return self._injector
 
     async def ensure_readiness(self) -> DependencyInjector:
@@ -1312,22 +1366,33 @@ class _ContainerProxy:
         if self._readiness_checked:
             return injector
         config = _injector_config_dict(injector)
-        await _ensure_injector_readiness_async(config, injector)
+        readiness_report = await _ensure_injector_readiness_async(config, injector)
+        self._last_readiness_report = readiness_report
+        if readiness_report.required_failures:
+            raise ProviderBootstrapError(
+                _format_required_readiness_failure_message(readiness_report)
+            )
         _validate_container(config, injector)
         self._readiness_checked = True
         return injector
+
+    def get_readiness_report(self) -> ProviderReadinessReport | None:
+        """Return the latest provider-readiness report for the cached injector."""
+        return self._last_readiness_report
 
     def shutdown(self) -> None:
         """Shutdown providers and clear the cached injector."""
         _shutdown_injector(self._injector)
         self._injector = None
         self._readiness_checked = False
+        self._last_readiness_report = None
 
     async def shutdown_async(self) -> None:
         """Shutdown providers asynchronously and clear cached injector."""
         await _shutdown_injector_async(self._injector)
         self._injector = None
         self._readiness_checked = False
+        self._last_readiness_report = None
 
     def reset(self) -> None:
         """Reset the cached injector."""
@@ -1337,7 +1402,7 @@ class _ContainerProxy:
         return getattr(self.build(), name)
 
     def __setattr__(self, name: str, value) -> None:
-        if name in {"_injector", "_readiness_checked"}:
+        if name in {"_injector", "_readiness_checked", "_last_readiness_report"}:
             object.__setattr__(self, name, value)
             return
         setattr(self.build(), name, value)
@@ -1354,6 +1419,11 @@ def build_container(*, force: bool = False) -> DependencyInjector:
 async def ensure_container_readiness_async() -> DependencyInjector:
     """Ensure required provider readiness checks pass for cached injector."""
     return await container.ensure_readiness()
+
+
+def get_container_readiness_report() -> ProviderReadinessReport | None:
+    """Return latest provider readiness report for startup capability tracking."""
+    return container.get_readiness_report()
 
 
 def reset_container() -> None:

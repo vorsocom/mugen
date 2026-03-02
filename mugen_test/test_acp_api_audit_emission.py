@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+import logging
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
@@ -187,6 +188,33 @@ class TestACPAuditEmission(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace()
         )  # pylint: disable=protected-access
         self.assertEqual(defaults, (False, False, None, None))
+
+    def test_helper_providers_fallback_when_container_access_fails(self) -> None:
+        class _FailingContainer:  # pylint: disable=too-few-public-methods
+            @property
+            def config(self):
+                raise RuntimeError("config unavailable")
+
+            @property
+            def logging_gateway(self):
+                raise RuntimeError("logger unavailable")
+
+        with patch.object(audit_mod.di, "container", new=_FailingContainer()):
+            fallback_config = audit_mod._config_provider()  # pylint: disable=protected-access
+            fallback_logger = audit_mod._logger_provider()  # pylint: disable=protected-access
+
+        self.assertIsInstance(fallback_config, SimpleNamespace)
+        self.assertIs(fallback_logger, logging.getLogger())
+
+        with patch.object(
+            audit_mod.di,
+            "container",
+            new=SimpleNamespace(config=SimpleNamespace(), logging_gateway=None),
+        ):
+            self.assertIs(
+                audit_mod._logger_provider(),  # pylint: disable=protected-access
+                logging.getLogger(),
+            )
 
     async def test_request_id_resolution_paths(self) -> None:
         app = Quart("audit-request-id-paths")

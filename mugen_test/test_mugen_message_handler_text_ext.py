@@ -1,4 +1,4 @@
-"""Unit tests for mugen.core.plugin.message_handler.text.mh_ext."""
+"""Unit tests for mugen.core.extension.mh.default_text."""
 
 import asyncio
 import json
@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from mugen.core.contract.gateway.completion import CompletionGatewayError
 from mugen.core.contract.gateway.storage.keyval_model import KeyValConflictError
-from mugen.core.plugin.message_handler.text.mh_ext import DefaultTextMHExtension
+from mugen.core.extension.mh.default_text import DefaultTextMHExtension
 
 
 class _MemoryKeyVal:
@@ -856,7 +856,7 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
                 ext._format_completion_response_for_log(_VarsCarrier()),
             )
 
-        with patch("mugen.core.plugin.message_handler.text.mh_ext.json.dumps", side_effect=TypeError("dumps boom")):
+        with patch("mugen.core.extension.mh.default_text.json.dumps", side_effect=TypeError("dumps boom")):
             self.assertEqual(
                 ext._format_completion_response_for_log({"k": "v"}),
                 "{'k': 'v'}",
@@ -900,7 +900,7 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ext._normalize_augmentation_items(payload="bad", stage="test"), [])
 
         with unittest.mock.patch(
-            "mugen.core.plugin.message_handler.text.mh_ext.json.dumps",
+            "mugen.core.extension.mh.default_text.json.dumps",
             side_effect=TypeError("bad"),
         ):
             self.assertEqual(ext._coerce_to_text({"a": 1}), "{'a': 1}")

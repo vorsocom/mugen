@@ -1,4 +1,4 @@
-"""Unit tests for mugen.core.plugin.command.clear_history.cp_ext."""
+"""Unit tests for mugen.core.extension.cp.clear_history."""
 
 import json
 from types import SimpleNamespace
@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 
 from mugen.core.contract.gateway.storage.keyval_model import KeyValConflictError
-from mugen.core.plugin.command.clear_history.cp_ext import ClearChatHistoryICPExtension
+from mugen.core.extension.cp.clear_history import ClearChatHistoryICPExtension
 
 
 class _MemoryKeyVal:

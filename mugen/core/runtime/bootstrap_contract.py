@@ -9,7 +9,7 @@ from mugen.core.utility.platforms import normalize_platforms
 _PROFILE_KEY = "mugen.runtime.profile"
 _STARTUP_TIMEOUT_KEY = "mugen.runtime.phase_b.startup_timeout_seconds"
 _PROVIDER_TIMEOUT_KEY = "mugen.runtime.provider_readiness_timeout_seconds"
-_ALLOWED_PROFILES = {"api_only", "web_only", "platform_full"}
+_ALLOWED_PROFILES = {"platform_full"}
 
 
 @dataclass(slots=True, frozen=True)
@@ -89,8 +89,8 @@ def _parse_runtime_profile(raw_value: object) -> str:
     if raw_value is _MISSING:
         raise RuntimeError(
             "Invalid runtime profile configuration: "
-            "mugen.runtime.profile is required and must be one of "
-            "api_only|web_only|platform_full."
+            "mugen.runtime.profile is required and must be "
+            "platform_full."
         )
     if not isinstance(raw_value, str):
         raise RuntimeError(
@@ -100,12 +100,12 @@ def _parse_runtime_profile(raw_value: object) -> str:
     if normalized in {"", "auto"}:
         raise RuntimeError(
             "Invalid runtime profile configuration: mugen.runtime.profile must be "
-            "explicitly set to one of api_only|web_only|platform_full."
+            "explicitly set to platform_full."
         )
     if normalized not in _ALLOWED_PROFILES:
         raise RuntimeError(
             "Invalid runtime profile configuration: "
-            "mugen.runtime.profile must be one of api_only|web_only|platform_full."
+            "mugen.runtime.profile must be platform_full."
         )
     return normalized
 

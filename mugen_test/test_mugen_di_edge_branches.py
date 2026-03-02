@@ -16,7 +16,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
     @staticmethod
     def _readiness_config(
         *,
-        profile: str = "api_only",
+        profile: str = "platform_full",
         platforms: list[str] | None = None,
         include_relational: bool = False,
         include_media: bool = False,
@@ -58,8 +58,8 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
     def test_config_path_value_returns_none_for_missing_paths(self) -> None:
         self.assertIsNone(di._config_path_value({"mugen": {}}, "mugen", "runtime", "profile"))
         self.assertEqual(
-            di._config_path_value({"mugen": {"runtime": {"profile": "api_only"}}}, "mugen", "runtime", "profile"),
-            "api_only",
+            di._config_path_value({"mugen": {"runtime": {"profile": "platform_full"}}}, "mugen", "runtime", "profile"),
+            "platform_full",
         )
 
     def test_get_active_platforms_requires_list(self) -> None:
@@ -68,8 +68,8 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
 
     def test_infer_runtime_profile(self) -> None:
         self.assertEqual(
-            di._infer_runtime_profile({"mugen": {"runtime": {"profile": "api_only"}}}),
-            "api_only",
+            di._infer_runtime_profile({"mugen": {"runtime": {"profile": "platform_full"}}}),
+            "platform_full",
         )
         self.assertEqual(
             di._infer_runtime_profile(
@@ -79,9 +79,9 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         self.assertEqual(
             di._infer_runtime_profile(
-                {"mugen": {"runtime": {"profile": "api_only"}, "platforms": ["web"]}}
+                {"mugen": {"runtime": {"profile": "platform_full"}, "platforms": ["web"]}}
             ),
-            "api_only",
+            "platform_full",
         )
         self.assertEqual(
             di._infer_runtime_profile(
@@ -145,7 +145,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         config = {
             "mugen": {
-                "runtime": {"profile": "web_only"},
+                "runtime": {"profile": "platform_full"},
                 "platforms": ["web"],
             }
         }
@@ -230,12 +230,13 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             user_service=object(),
             messaging_service=object(),
             knowledge_gateway=object(),
+            matrix_client=object(),
         )
         config = {
             "mugen": {
                 "modules": {"core": {"gateway": {"knowledge": "knowledge.module"}}},
-                "runtime": {"profile": "api_only"},
-                "platforms": [],
+                "runtime": {"profile": "platform_full"},
+                "platforms": ["matrix"],
             }
         }
 
@@ -254,18 +255,19 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             user_service=object(),
             messaging_service=object(),
             email_gateway=object(),
+            matrix_client=object(),
         )
         config = {
             "mugen": {
                 "modules": {"core": {"gateway": {"email": "email.module"}}},
-                "runtime": {"profile": "api_only"},
-                "platforms": [],
+                "runtime": {"profile": "platform_full"},
+                "platforms": ["matrix"],
             }
         }
 
         di._validate_container(config, injector)
 
-    def test_validate_container_rejects_api_only_with_enabled_platforms(self) -> None:
+    def test_validate_container_rejects_non_platform_full_profile(self) -> None:
         injector = di.injector.DependencyInjector(
             config=object(),
             logging_gateway=Mock(),
@@ -282,13 +284,41 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         config = {
             "mugen": {
                 "runtime": {"profile": "api_only"},
-                "platforms": ["web"],
+                "platforms": [],
             }
         }
         with self.assertRaises(RuntimeError):
             di._validate_container(config, injector)
 
-    def test_validate_container_rejects_web_only_profile_without_web_platform(self) -> None:
+    def test_validate_container_rejects_non_platform_full_profile_guard(self) -> None:
+        logger = Mock()
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=logger,
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            relational_storage_gateway=object(),
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+            matrix_client=object(),
+        )
+        config = {
+            "mugen": {
+                "runtime": {"profile": "platform_full"},
+                "platforms": ["matrix"],
+            }
+        }
+
+        with patch("mugen.core.di._infer_runtime_profile", return_value="legacy"):
+            with self.assertRaisesRegex(RuntimeError, "Runtime profile platform_full is required"):
+                di._validate_container(config, injector)
+
+        logger.error.assert_called_with("Runtime profile platform_full is required.")
+
+    def test_validate_container_rejects_web_only_profile(self) -> None:
         injector = di.injector.DependencyInjector(
             config=object(),
             logging_gateway=Mock(),
@@ -305,7 +335,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         config = {
             "mugen": {
                 "runtime": {"profile": "web_only"},
-                "platforms": ["matrix"],
+                "platforms": ["web"],
             }
         }
         with self.assertRaises(RuntimeError):
@@ -725,7 +755,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
 
     def test_resolve_readiness_provider_names_web_profile_includes_web_store(self) -> None:
         config = self._readiness_config(
-            profile="web_only",
+            profile="platform_full",
             platforms=[" web "],
             include_relational=False,
         )
@@ -756,13 +786,13 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
 
     def test_resolve_readiness_provider_names_media_requires_web_platform(self) -> None:
-        api_only_config = self._readiness_config(include_media=True)
+        non_web_config = self._readiness_config(include_media=True)
         self.assertEqual(
-            di._resolve_readiness_provider_names(api_only_config),
+            di._resolve_readiness_provider_names(non_web_config),
             ["completion_gateway", "keyval_storage_gateway"],
         )
         web_config = self._readiness_config(
-            profile="web_only",
+            profile="platform_full",
             platforms=["web"],
             include_media=True,
         )
@@ -849,7 +879,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             keyval_storage_gateway=provider,
         )
 
-        asyncio.run(
+        report = asyncio.run(
             di._ensure_injector_readiness_async(  # pylint: disable=protected-access
                 self._readiness_config(),
                 injector,
@@ -857,19 +887,19 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         self.assertTrue(provider.ready)
         self.assertTrue(completion_provider.ready)
+        self.assertEqual(report.required_failures, {})
+        self.assertEqual(report.optional_failures, {})
 
     def test_ensure_injector_readiness_async_fails_for_missing_provider(self) -> None:
         injector = di.injector.DependencyInjector()
-        with self.assertRaises(di.ProviderBootstrapError) as raised:
-            asyncio.run(
-                di._ensure_injector_readiness_async(  # pylint: disable=protected-access
-                    self._readiness_config(),
-                    injector,
-                )
+        report = asyncio.run(
+            di._ensure_injector_readiness_async(  # pylint: disable=protected-access
+                self._readiness_config(),
+                injector,
             )
-
-        self.assertIn("completion_gateway", str(raised.exception))
-        self.assertIn("token='deterministic'", str(raised.exception))
+        )
+        self.assertIn("completion_gateway", report.required_failures)
+        self.assertIn("token='deterministic'", report.required_failures["completion_gateway"])
 
     def test_ensure_injector_readiness_async_fails_for_missing_hook(self) -> None:
         class _ReadyProvider:  # pylint: disable=too-few-public-methods
@@ -881,15 +911,17 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             keyval_storage_gateway=object(),
         )
 
-        with self.assertRaises(di.ProviderBootstrapError) as raised:
-            asyncio.run(
-                di._ensure_injector_readiness_async(  # pylint: disable=protected-access
-                    self._readiness_config(),
-                    injector,
-                )
+        report = asyncio.run(
+            di._ensure_injector_readiness_async(  # pylint: disable=protected-access
+                self._readiness_config(),
+                injector,
             )
-
-        self.assertIn("check_readiness is unavailable", str(raised.exception))
+        )
+        self.assertIn("keyval_storage_gateway", report.required_failures)
+        self.assertIn(
+            "check_readiness is unavailable",
+            report.required_failures["keyval_storage_gateway"],
+        )
 
     def test_ensure_injector_readiness_async_wraps_provider_exception(self) -> None:
         class _ReadyProvider:  # pylint: disable=too-few-public-methods
@@ -905,15 +937,17 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             keyval_storage_gateway=_FailingProvider(),
         )
 
-        with self.assertRaises(di.ProviderBootstrapError) as raised:
-            asyncio.run(
-                di._ensure_injector_readiness_async(  # pylint: disable=protected-access
-                    self._readiness_config(),
-                    injector,
-                )
+        report = asyncio.run(
+            di._ensure_injector_readiness_async(  # pylint: disable=protected-access
+                self._readiness_config(),
+                injector,
             )
-
-        self.assertIn("RuntimeError: backend unavailable", str(raised.exception))
+        )
+        self.assertIn("keyval_storage_gateway", report.required_failures)
+        self.assertIn(
+            "RuntimeError: backend unavailable",
+            report.required_failures["keyval_storage_gateway"],
+        )
 
     def test_ensure_injector_readiness_async_preserves_bootstrap_error(self) -> None:
         class _Provider:  # pylint: disable=too-few-public-methods
@@ -929,14 +963,57 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             "mugen.core.di._await_readiness_probe_async",
             side_effect=di.ProviderBootstrapError("forced bootstrap error"),
         ):
-            with self.assertRaises(di.ProviderBootstrapError) as raised:
-                asyncio.run(
-                    di._ensure_injector_readiness_async(  # pylint: disable=protected-access
-                        self._readiness_config(),
-                        injector,
-                    )
+            report = asyncio.run(
+                di._ensure_injector_readiness_async(  # pylint: disable=protected-access
+                    self._readiness_config(),
+                    injector,
                 )
-        self.assertEqual(str(raised.exception), "forced bootstrap error")
+            )
+        failures_text = " ".join(report.required_failures.values())
+        self.assertIn("forced bootstrap error", failures_text)
+
+    def test_ensure_injector_readiness_async_collects_optional_failures(self) -> None:
+        class _ReadyProvider:  # pylint: disable=too-few-public-methods
+            async def check_readiness(self) -> None:
+                return None
+
+        injector = di.injector.DependencyInjector(
+            completion_gateway=_ReadyProvider(),
+            keyval_storage_gateway=_ReadyProvider(),
+            email_gateway=object(),
+        )
+        config = self._readiness_config()
+        config["mugen"]["modules"]["core"]["gateway"]["email"] = "smtp"
+
+        report = asyncio.run(
+            di._ensure_injector_readiness_async(  # pylint: disable=protected-access
+                config,
+                injector,
+            )
+        )
+        self.assertIn("email_gateway", report.optional_failures)
+        self.assertEqual(report.required_failures, {})
+
+    def test_format_required_readiness_failure_message_handles_empty_and_populated(self) -> None:
+        empty_report = di.ProviderReadinessReport(
+            successful_providers=(),
+            required_failures={},
+            optional_failures={},
+        )
+        self.assertEqual(
+            di._format_required_readiness_failure_message(empty_report),  # pylint: disable=protected-access
+            "Provider readiness failed.",
+        )
+
+        report = di.ProviderReadinessReport(
+            successful_providers=(),
+            required_failures={"b": "failure-b", "a": "failure-a"},
+            optional_failures={},
+        )
+        self.assertEqual(
+            di._format_required_readiness_failure_message(report),  # pylint: disable=protected-access
+            "failure-a; failure-b",
+        )
 
     def test_resolve_provider_readiness_timeout_seconds_defaults_and_validation(
         self,
@@ -976,15 +1053,15 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
 
     def test_injector_config_dict_returns_dict_when_available(self) -> None:
         injector = di.injector.DependencyInjector(
-            config=SimpleNamespace(dict={"mugen": {"runtime": {"profile": "api_only"}}})
+            config=SimpleNamespace(dict={"mugen": {"runtime": {"profile": "platform_full"}}})
         )
         resolved = di._injector_config_dict(injector)  # pylint: disable=protected-access
-        self.assertEqual(resolved["mugen"]["runtime"]["profile"], "api_only")
+        self.assertEqual(resolved["mugen"]["runtime"]["profile"], "platform_full")
 
     def test_container_proxy_ensure_readiness_short_circuits_when_cached(self) -> None:
         proxy = di._ContainerProxy()  # pylint: disable=protected-access
         injector = di.injector.DependencyInjector(
-            config=SimpleNamespace(dict={"mugen": {"runtime": {"profile": "api_only"}}})
+            config=SimpleNamespace(dict={"mugen": {"runtime": {"profile": "platform_full"}}})
         )
         proxy._injector = injector  # pylint: disable=protected-access
         proxy._readiness_checked = True  # pylint: disable=protected-access
@@ -995,12 +1072,18 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
     def test_container_proxy_ensure_readiness_runs_readiness_and_validation(self) -> None:
         proxy = di._ContainerProxy()  # pylint: disable=protected-access
         injector = di.injector.DependencyInjector(
-            config=SimpleNamespace(dict={"mugen": {"runtime": {"profile": "api_only"}}})
+            config=SimpleNamespace(dict={"mugen": {"runtime": {"profile": "platform_full"}}})
         )
         proxy._injector = injector  # pylint: disable=protected-access
         proxy._readiness_checked = False  # pylint: disable=protected-access
 
-        readiness_mock = unittest.mock.AsyncMock()
+        readiness_mock = unittest.mock.AsyncMock(
+            return_value=di.ProviderReadinessReport(
+                successful_providers=("completion_gateway",),
+                required_failures={},
+                optional_failures={},
+            )
+        )
         validate_mock = unittest.mock.Mock()
         with patch(
             "mugen.core.di._ensure_injector_readiness_async",
@@ -1015,6 +1098,41 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         readiness_mock.assert_awaited_once()
         validate_mock.assert_called_once()
         self.assertTrue(proxy._readiness_checked)  # pylint: disable=protected-access
+
+    def test_container_proxy_ensure_readiness_raises_for_required_failures(self) -> None:
+        proxy = di._ContainerProxy()  # pylint: disable=protected-access
+        injector = di.injector.DependencyInjector(
+            config=SimpleNamespace(dict={"mugen": {"runtime": {"profile": "platform_full"}}})
+        )
+        proxy._injector = injector  # pylint: disable=protected-access
+
+        readiness_mock = unittest.mock.AsyncMock(
+            return_value=di.ProviderReadinessReport(
+                successful_providers=(),
+                required_failures={"completion_gateway": "completion down"},
+                optional_failures={},
+            )
+        )
+
+        with patch(
+            "mugen.core.di._ensure_injector_readiness_async",
+            new=readiness_mock,
+        ), patch(
+            "mugen.core.di._validate_container",
+            new=unittest.mock.Mock(),
+        ):
+            with self.assertRaises(di.ProviderBootstrapError):
+                asyncio.run(proxy.ensure_readiness())
+
+    def test_container_proxy_get_readiness_report_returns_last_report(self) -> None:
+        proxy = di._ContainerProxy()  # pylint: disable=protected-access
+        report = di.ProviderReadinessReport(
+            successful_providers=("completion_gateway",),
+            required_failures={},
+            optional_failures={},
+        )
+        proxy._last_readiness_report = report  # pylint: disable=protected-access
+        self.assertIs(proxy.get_readiness_report(), report)
 
     def test_ensure_container_readiness_async_delegates_to_proxy(self) -> None:
         sentinel_injector = object()

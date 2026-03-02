@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from dataclasses import fields, is_dataclass
 from datetime import datetime, timedelta, timezone
@@ -21,11 +22,20 @@ _DEFAULT_BIZ_TRACE_DETAIL_BYTES = 32 * 1024
 
 
 def _config_provider():
-    return di.container.config
+    try:
+        return di.container.config
+    except Exception:  # pylint: disable=broad-exception-caught
+        return SimpleNamespace()
 
 
 def _logger_provider():
-    return di.container.logging_gateway
+    try:
+        logger = di.container.logging_gateway
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger = None
+    if logger is None:
+        return logging.getLogger()
+    return logger
 
 
 def _json_safe(value: Any) -> Any:

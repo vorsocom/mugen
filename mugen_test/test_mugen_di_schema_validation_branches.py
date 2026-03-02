@@ -14,7 +14,7 @@ def _valid_core_config() -> dict:
     return {
         "mugen": {
             "runtime": {
-                "profile": "api_only",
+                "profile": "platform_full",
                 "provider_readiness_timeout_seconds": 15.0,
                 "phase_b": {
                     "startup_timeout_seconds": 30.0,
@@ -50,7 +50,7 @@ def _valid_core_config() -> dict:
                         "platform": "default",
                         "user": "default",
                     },
-                    "plugins": [],
+                    "extensions": [],
                 },
                 "extensions": [],
             },
@@ -146,23 +146,23 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cases.append((cfg, "gateway.email must be a token"))
 
         cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["plugins"] = {}
-        cases.append((cfg, "core.plugins must be an array"))
+        cfg["mugen"]["modules"]["core"]["extensions"] = {}
+        cases.append((cfg, "core.extensions must be an array"))
 
         cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["plugins"] = [123]
+        cfg["mugen"]["modules"]["core"]["extensions"] = [123]
         cases.append((cfg, "entries must be tables"))
 
         cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["plugins"] = [{"type": "cp"}]
+        cfg["mugen"]["modules"]["core"]["extensions"] = [{"type": "cp"}]
         cases.append((cfg, ".token is required and must be a string"))
 
         cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["plugins"] = [{"type": "cp", "token": "mod:Cls"}]
+        cfg["mugen"]["modules"]["core"]["extensions"] = [{"type": "cp", "token": "mod:Cls"}]
         cases.append((cfg, ".token must be a token"))
 
         cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["plugins"] = [{"type": 123, "token": "t"}]
+        cfg["mugen"]["modules"]["core"]["extensions"] = [{"type": 123, "token": "t"}]
         cases.append((cfg, ".type must be a string"))
 
         cfg = _valid_core_config()
@@ -174,9 +174,9 @@ class TestDISchemaValidationBranches(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, re.escape(message)):
                     di._validate_core_module_schema(candidate)
 
-    def test_core_schema_handles_none_plugin_and_extension_lists(self) -> None:
+    def test_core_schema_handles_none_core_and_extension_lists(self) -> None:
         cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["plugins"] = None
+        cfg["mugen"]["modules"]["core"]["extensions"] = None
         cfg["mugen"]["modules"]["extensions"] = None
         di._validate_core_module_schema(cfg)
 
@@ -190,6 +190,29 @@ class TestDISchemaValidationBranches(unittest.TestCase):
                 "token": "core.cp.clear_history",
             }
         ]
+        di._validate_core_module_schema(cfg)
+
+    def test_core_schema_requires_matrix_encryption_key_when_matrix_enabled(self) -> None:
+        for mutate in (
+            lambda cfg: cfg,
+            lambda cfg: cfg.update({"security": "invalid-shape"}),
+            lambda cfg: cfg.update({"security": {}}),
+            lambda cfg: cfg.update({"security": {"secrets": {}}}),
+            lambda cfg: cfg.update({"security": {"secrets": {"encryption_key": "   "}}}),
+        ):
+            cfg = _valid_core_config()
+            cfg["mugen"]["platforms"] = ["matrix"]
+            mutate(cfg)
+            with self.subTest(security=cfg.get("security")):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "security.secrets.encryption_key is required when matrix platform is enabled",
+                ):
+                    di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["security"] = {"secrets": {"encryption_key": "matrix-secret"}}
         di._validate_core_module_schema(cfg)
 
     def test_build_provider_logs_relational_runtime_bootstrap_failure(self) -> None:

@@ -8,7 +8,6 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
-from mugen.core import di
 from mugen.core.contract.gateway.completion import (
     CompletionGatewayError,
     CompletionMessage,
@@ -20,26 +19,6 @@ from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.keyval_model import KeyValConflictError
 from mugen.core.contract.service.messaging import IMessagingService
-
-
-def _completion_gateway_provider():
-    return di.container.completion_gateway
-
-
-def _config_provider():
-    return di.container.config
-
-
-def _keyval_storage_gateway_provider():
-    return di.container.keyval_storage_gateway
-
-
-def _logging_gateway_provider():
-    return di.container.logging_gateway
-
-
-def _messaging_service_provider():
-    return di.container.messaging_service
 
 
 class DefaultTextMHExtension(IMHExtension):
@@ -57,33 +36,17 @@ class DefaultTextMHExtension(IMHExtension):
     # pylint: disable=too-many-positional-arguments
     def __init__(
         self,
-        completion_gateway: ICompletionGateway | None = None,
-        config: SimpleNamespace | None = None,
-        keyval_storage_gateway: IKeyValStorageGateway | None = None,
-        logging_gateway: ILoggingGateway | None = None,
-        messaging_service: IMessagingService | None = None,
+        completion_gateway: ICompletionGateway,
+        config: SimpleNamespace,
+        keyval_storage_gateway: IKeyValStorageGateway,
+        logging_gateway: ILoggingGateway,
+        messaging_service: IMessagingService,
     ) -> None:
-        self._completion_gateway = (
-            completion_gateway
-            if completion_gateway is not None
-            else _completion_gateway_provider()
-        )
-        self._config = config if config is not None else _config_provider()
-        self._keyval_storage_gateway = (
-            keyval_storage_gateway
-            if keyval_storage_gateway is not None
-            else _keyval_storage_gateway_provider()
-        )
-        self._logging_gateway = (
-            logging_gateway
-            if logging_gateway is not None
-            else _logging_gateway_provider()
-        )
-        self._messaging_service = (
-            messaging_service
-            if messaging_service is not None
-            else _messaging_service_provider()
-        )
+        self._completion_gateway = completion_gateway
+        self._config = config
+        self._keyval_storage_gateway = keyval_storage_gateway
+        self._logging_gateway = logging_gateway
+        self._messaging_service = messaging_service
 
         self._history_max_messages = self._resolve_history_max_messages()
         self._history_save_cas_retries = self._resolve_history_save_cas_retries()

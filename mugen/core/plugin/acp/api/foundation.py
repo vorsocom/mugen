@@ -205,7 +205,10 @@ async def commit_idempotency_failure(
 
 
 def _enforce_bindings_enabled(config_provider=_config_provider) -> bool:
-    cfg = config_provider()
+    try:
+        cfg = config_provider()
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
     acp_cfg = getattr(cfg, "acp", None)
     if acp_cfg is None:
         return False

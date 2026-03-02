@@ -141,7 +141,7 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
                 "web_media_token": "mugen.web_media_token",
             }
         )
-        with self.assertRaisesRegex(RuntimeError, "tables unavailable"):
+        with self.assertRaisesRegex(RuntimeError, "Database schema is not ready"):
             await store.check_readiness()
 
     async def test_check_readiness_executes_table_query_once(self) -> None:

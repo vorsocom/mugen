@@ -143,7 +143,7 @@ class DefaultMessagingService(IMessagingService):
 
     def _build_builtin_text_handler(self):
         try:
-            module = importlib.import_module("mugen.core.plugin.message_handler.text.mh_ext")
+            module = importlib.import_module("mugen.core.extension.mh.default_text")
             handler_class = getattr(module, "DefaultTextMHExtension")
             return handler_class(
                 completion_gateway=self._completion_gateway,

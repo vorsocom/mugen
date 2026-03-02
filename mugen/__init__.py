@@ -59,7 +59,8 @@ from mugen.bootstrap_state import (
 from mugen.config import AppConfig
 from mugen.core.bootstrap.extensions import (
     DefaultExtensionRegistry,
-    configured_extensions,
+    configured_core_extensions,
+    configured_downstream_extensions,
     parse_bool as _parse_ext_bool,
     resolve_extension_spec,
 )
@@ -152,6 +153,10 @@ def _web_runtime_store_provider():
     return di.container.web_runtime_store
 
 
+def _keyval_storage_gateway_provider():
+    return di.container.keyval_storage_gateway
+
+
 def _extension_enabled(ext: SimpleNamespace) -> bool:
     """Resolve whether an extension is enabled by configuration."""
     raw_enabled = getattr(ext, "enabled", True)
@@ -162,6 +167,39 @@ def _extension_enabled(ext: SimpleNamespace) -> bool:
         if normalized in {"false", "0", "no", "off"}:
             return False
     return bool(raw_enabled)
+
+
+def _build_core_extension_instance(
+    *,
+    extension_class: type,
+    config: SimpleNamespace,
+    keyval_storage_gateway_provider=_keyval_storage_gateway_provider,
+):
+    """Instantiate core-owned extensions with explicit constructor dependencies."""
+    parameters = list(inspect.signature(extension_class.__init__).parameters.values())[1:]
+    kwargs: dict[str, object] = {}
+
+    for parameter in parameters:
+        if parameter.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+
+        if parameter.name == "config":
+            kwargs["config"] = config
+            continue
+        if parameter.name == "keyval_storage_gateway":
+            kwargs["keyval_storage_gateway"] = keyval_storage_gateway_provider()
+            continue
+
+        if parameter.default is inspect.Parameter.empty:
+            raise ExtensionLoadError(
+                "Core extension constructor dependency is unsupported "
+                f"({extension_class.__module__}.{extension_class.__name__}.{parameter.name})."
+            )
+
+    return extension_class(**kwargs)
 
 
 def _normalize_platform_list(values: object) -> list[str]:
@@ -549,6 +587,10 @@ async def bootstrap_app(
         raise BootstrapConfigError(
             f"Container readiness check failed: {exc}"
         ) from exc
+    readiness_report = di.get_container_readiness_report()
+    optional_provider_failures: dict[str, str] = {}
+    if readiness_report is not None:
+        optional_provider_failures = dict(readiness_report.optional_failures)
 
     # Discover and register core plugins and
     # third-party extensions.
@@ -584,6 +626,7 @@ async def bootstrap_app(
             provider_ready=(
                 capability_statuses.get("container_readiness") == PHASE_STATUS_HEALTHY
             ),
+            optional_provider_failures=optional_provider_failures,
         )
     )
     for capability_name, status in capability_result.statuses.items():
@@ -956,6 +999,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
     logger_provider=_logger_provider,
     messaging_provider=_messaging_provider,
     platform_provider=_platform_provider,
+    keyval_storage_gateway_provider=_keyval_storage_gateway_provider,
     extension_registry_provider=None,
 ) -> dict[str, list[str]]:
     """Register core plugins and third party extensions."""
@@ -966,9 +1010,14 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
     platform_service: IPlatformService = platform_provider()
     sweep_started_at = perf_counter()
     try:
-        extensions = configured_extensions(config)
+        core_extensions = configured_core_extensions(config)
+        downstream_extensions = configured_downstream_extensions(config)
     except RuntimeError as exc:
         raise BootstrapConfigError(str(exc)) from exc
+    extensions: list[tuple[str, SimpleNamespace]] = (
+        [("core", ext_cfg) for ext_cfg in core_extensions]
+        + [("plugin", ext_cfg) for ext_cfg in downstream_extensions]
+    )
 
     if extension_registry_provider is None:
         extension_registry: IExtensionRegistry = DefaultExtensionRegistry(
@@ -982,7 +1031,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
 
     registered_tokens_by_type: dict[str, set[str]] = {}
 
-    for ext_cfg in extensions:
+    for extension_scope, ext_cfg in extensions:
         ext_started_at = perf_counter()
         raw_token = getattr(ext_cfg, "token", None)
         if not isinstance(raw_token, str) or raw_token.strip() == "":
@@ -1001,7 +1050,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
             continue
 
         try:
-            spec = resolve_extension_spec(token)
+            spec = resolve_extension_spec(token, scope=extension_scope)
             resolved_type = spec.extension_type
             if configured_type not in {"", resolved_type}:
                 raise ExtensionLoadError(
@@ -1009,7 +1058,14 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
                     f"(token={token} configured_type={configured_type} "
                     f"resolved_type={resolved_type})."
                 )
-            extension = spec.extension_class()
+            if extension_scope == "core":
+                extension = _build_core_extension_instance(
+                    extension_class=spec.extension_class,
+                    config=config,
+                    keyval_storage_gateway_provider=keyval_storage_gateway_provider,
+                )
+            else:
+                extension = spec.extension_class()
             registered = await extension_registry.register(
                 app=app,
                 extension_type=resolved_type,

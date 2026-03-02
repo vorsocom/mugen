@@ -11,7 +11,7 @@ def _minimal_core_config() -> dict:
     return {
         "mugen": {
             "runtime": {
-                "profile": "api_only",
+                "profile": "platform_full",
                 "provider_readiness_timeout_seconds": 15.0,
                 "phase_b": {
                     "startup_timeout_seconds": 30.0,
@@ -47,8 +47,9 @@ def _minimal_core_config() -> dict:
                         "platform": "default",
                         "user": "default",
                     },
-                    "plugins": [],
+                    "extensions": [],
                 },
+                "extensions": [],
             },
             "platforms": [],
         },

@@ -175,11 +175,14 @@ class DefaultWebClient(IWebClient):
         if self._media_storage_gateway is None:
             raise ValueError("media_storage_gateway is required.")
 
-        self._media_backend = self._resolve_str_config(
+        media_backend = self._resolve_str_config(
             ("web", "media", "backend"),
             "object",
         ).strip().lower()
-        self._enforce_media_backend_policy()
+        if media_backend != "object":
+            raise RuntimeError(
+                "web.media.backend must be 'object'."
+            )
         self._media_storage_path = self._resolve_storage_path(
             self._resolve_str_config(
                 ("web", "media", "storage", "path"),
@@ -2085,25 +2088,7 @@ class DefaultWebClient(IWebClient):
         return os.path.abspath(configured_path)
 
     def _ensure_media_directory(self) -> None:
-        if self._media_backend in {"filesystem", "fs", "local"}:
-            os.makedirs(self._media_storage_path, exist_ok=True)
-
-    def _enforce_media_backend_policy(self) -> None:
-        if self._media_backend not in {"filesystem", "fs", "local"}:
-            return
-        if self._is_production_environment() is not True:
-            return
-        raise RuntimeError(
-            "web.media.backend=filesystem is not allowed in production. "
-            "Use object backend."
-        )
-
-    def _is_production_environment(self) -> bool:
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-            or ""
-        ).strip().lower()
-        return environment == "production"
+        os.makedirs(self._media_storage_path, exist_ok=True)
 
     def _resolve_float_config(
         self,
