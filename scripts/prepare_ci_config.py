@@ -114,15 +114,26 @@ def _ensure_platform_enabled(doc: tomlkit.TOMLDocument, platform: str) -> None:
 
 
 def _enable_web_framework_plugin(doc: tomlkit.TOMLDocument) -> None:
-    plugins = doc["mugen"]["modules"]["core"]["plugins"]
-    for plugin in plugins:
+    modules = doc["mugen"]["modules"]
+    if "extensions" not in modules:
+        modules["extensions"] = tomlkit.aot()
+    extensions = modules["extensions"]
+
+    for extension in extensions:
         if (
-            str(plugin.get("type", "")).strip().lower() == "fw"
-            and str(plugin.get("token", "")).strip().lower()
+            str(extension.get("type", "")).strip().lower() == "fw"
+            and str(extension.get("token", "")).strip().lower()
             == _WEB_FRAMEWORK_PLUGIN_TOKEN
         ):
-            plugin["enabled"] = True
+            extension["enabled"] = True
             return
+
+    # CI requires web framework routes when web platform is enabled.
+    extension = tomlkit.table()
+    extension["type"] = "fw"
+    extension["token"] = _WEB_FRAMEWORK_PLUGIN_TOKEN
+    extension["enabled"] = True
+    extensions.append(extension)
 
 
 def main() -> int:
