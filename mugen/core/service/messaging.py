@@ -3,6 +3,7 @@
 __all__ = ["DefaultMessagingService"]
 
 import asyncio
+import importlib
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,6 +13,7 @@ from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
+from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.messaging import IMessagingService
@@ -34,11 +36,13 @@ class DefaultMessagingService(IMessagingService):
     def __init__(
         self,
         config: SimpleNamespace,
+        completion_gateway: ICompletionGateway,
         keyval_storage_gateway: IKeyValStorageGateway,
         logging_gateway: ILoggingGateway,
         user_service: IUserService,
     ) -> None:
         self._config = config
+        self._completion_gateway = completion_gateway
         self._keyval_storage_gateway = keyval_storage_gateway
         self._logging_gateway = logging_gateway
         self._user_service = user_service
@@ -57,6 +61,8 @@ class DefaultMessagingService(IMessagingService):
         self._rpp_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._critical_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._normalize_composed_message_use_case = NormalizeComposedMessageUseCase()
+        self._mh_mode = self._resolve_mh_mode()
+        self._builtin_text_handler = self._build_builtin_text_handler()
         self._extension_timeout_seconds = self._resolve_extension_timeout_seconds()
         self._extension_metrics: dict[str, int] = {}
 
@@ -116,6 +122,40 @@ class DefaultMessagingService(IMessagingService):
             )
             return None
         return timeout_seconds
+
+    def _resolve_mh_mode(self) -> str:
+        messaging_cfg = getattr(
+            getattr(self._config, "mugen", SimpleNamespace()),
+            "messaging",
+            SimpleNamespace(),
+        )
+        if isinstance(messaging_cfg, dict):
+            configured_mode = messaging_cfg.get("mh_mode")
+        else:
+            configured_mode = getattr(messaging_cfg, "mh_mode", None)
+        mode = str(configured_mode or "").strip().lower()
+        if mode not in {"optional", "required"}:
+            raise ValueError(
+                "Invalid configuration: mugen.messaging.mh_mode is required and must be "
+                "'optional' or 'required'."
+            )
+        return mode
+
+    def _build_builtin_text_handler(self):
+        try:
+            module = importlib.import_module("mugen.core.plugin.message_handler.text.mh_ext")
+            handler_class = getattr(module, "DefaultTextMHExtension")
+            return handler_class(
+                completion_gateway=self._completion_gateway,
+                config=self._config,
+                keyval_storage_gateway=self._keyval_storage_gateway,
+                logging_gateway=self._logging_gateway,
+                messaging_service=self,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError(
+                "Failed to initialize built-in text messaging pipeline."
+            ) from exc
 
     def _is_critical_extension(self, extension: Any, *, kind: str) -> bool:
         key = self._extension_logical_key(extension, kind=kind)
@@ -410,12 +450,18 @@ class DefaultMessagingService(IMessagingService):
         )
 
         if not handler_responses:
-            return [
-                {
-                    "type": "text",
-                    "content": "Unsupported message type: text.",
-                }
-            ]
+            if self._mh_mode == "required":
+                raise RuntimeError(
+                    "Messaging runtime requires at least one MH extension for text handling "
+                    "when mugen.messaging.mh_mode='required'."
+                )
+            return await self._builtin_text_handler.handle_message(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+                message_context=message_context,
+            )
 
         return handler_responses
 

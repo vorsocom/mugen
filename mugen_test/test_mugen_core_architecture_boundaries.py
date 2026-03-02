@@ -62,6 +62,22 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
             )
         self.assertEqual(violations, [])
 
+    def test_service_layer_does_not_import_plugin_or_adapter_implementations(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        service_root = repo_root / "mugen" / "core" / "service"
+        forbidden_prefixes = (
+            "mugen.core.api",
+            "mugen.core.bootstrap",
+            "mugen.core.client",
+            "mugen.core.gateway.",
+            "mugen.core.plugin",
+        )
+        violations = _find_import_violations(
+            python_files=sorted(service_root.rglob("*.py")),
+            forbidden_prefixes=forbidden_prefixes,
+        )
+        self.assertEqual(violations, [])
+
     def test_bootstrap_orchestration_avoids_direct_adapter_imports(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         orchestration_files = [

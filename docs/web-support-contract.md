@@ -63,6 +63,7 @@ Routing behavior for structured payloads:
   - structured attachment context,
   - media-derived evidence context.
 - standard text pipeline semantics still apply, so extensions may emit additional side responses.
+- zero-MH mode is supported when `mugen.messaging.mh_mode="optional"`; baseline text synthesis remains available without MH bindings.
 
 MIME inference:
 - `audio/*` -> `audio`

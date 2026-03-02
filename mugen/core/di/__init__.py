@@ -223,16 +223,30 @@ def _validate_core_module_schema(config: dict) -> None:
     )
 
     messaging_cfg = mugen_cfg.get("messaging")
-    if isinstance(messaging_cfg, dict):
-        _ensure_only_known_keys(
-            messaging_cfg,
-            path="mugen.messaging",
-            allowed={
-                "ct_trigger_prefilter_enabled",
-                "extension_timeout_seconds",
-                "history_max_messages",
-                "history_save_cas_retries",
-            },
+    if not isinstance(messaging_cfg, dict):
+        raise RuntimeError("Invalid configuration: mugen.messaging must be a table.")
+    _ensure_only_known_keys(
+        messaging_cfg,
+        path="mugen.messaging",
+        allowed={
+            "ct_trigger_prefilter_enabled",
+            "extension_timeout_seconds",
+            "history_max_messages",
+            "history_save_cas_retries",
+            "mh_mode",
+        },
+    )
+    mh_mode = messaging_cfg.get("mh_mode")
+    if not isinstance(mh_mode, str) or mh_mode.strip() == "":
+        raise RuntimeError(
+            "Invalid configuration: mugen.messaging.mh_mode is required and must be "
+            "'optional' or 'required'."
+        )
+    normalized_mh_mode = mh_mode.strip().lower()
+    if normalized_mh_mode not in {"optional", "required"}:
+        raise RuntimeError(
+            "Invalid configuration: mugen.messaging.mh_mode is required and must be "
+            "'optional' or 'required'."
         )
 
     modules_cfg = mugen_cfg.get("modules")
@@ -673,6 +687,7 @@ _PROVIDER_SPECS = {
         module_path=("mugen", "modules", "core", "service", "messaging"),
         constructor_bindings=(
             ("config", "config"),
+            ("completion_gateway", "completion_gateway"),
             ("keyval_storage_gateway", "keyval_storage_gateway"),
             ("logging_gateway", "logging_gateway"),
             ("user_service", "user_service"),

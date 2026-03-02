@@ -20,6 +20,9 @@ def _minimal_core_config() -> dict:
                     "degrade_on_critical_exit": True,
                 },
             },
+            "messaging": {
+                "mh_mode": "optional",
+            },
             "modules": {
                 "core": {
                     "client": {

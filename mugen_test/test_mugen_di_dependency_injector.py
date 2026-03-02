@@ -272,10 +272,12 @@ class TestDependencyInjector(unittest.TestCase):
             def __init__(  # pylint: disable=too-many-arguments
                 self,
                 config,
+                completion_gateway,
                 keyval_storage_gateway,
                 logging_gateway,
                 user_service,
             ):
+                _ = completion_gateway
                 pass
 
             @property
@@ -383,6 +385,7 @@ class TestDependencyInjector(unittest.TestCase):
 
         messaging_service = DummyMessagingServiceClass(
             config=config,
+            completion_gateway=completion_gateway,
             keyval_storage_gateway=keyval_storage_gateway,
             logging_gateway=logging_gateway,
             user_service=user_service,

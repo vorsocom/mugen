@@ -225,6 +225,10 @@ recovery and observability.
 
 Message Handler extensions process non-textual input such as images or audio. Implement the `IMHExtension` interface to create a Message Handler extension.
 
+Runtime mode is controlled by `mugen.messaging.mh_mode`:
+- `optional`: zero-MH runtime is supported; core built-in text orchestration remains available.
+- `required`: startup fails when no compatible MH extension is bound for active messaging platforms.
+
 **Setup Code:**
 
 ```python
@@ -331,9 +335,7 @@ class MyRAGExtension(IRAGExtension):
 ### Response Pre-processor (RPP) Extensions
 
 RPP extensions modify LLM responses before they are sent to the user. Implement the `IRPPExtension` interface to create an RPP extension.
-The preferred signature is `preprocess_response(room_id, user_id, assistant_response)`.
-For transition compatibility, the default text message handler also supports legacy
-two-argument implementations.
+Use the signature `preprocess_response(room_id, user_id, assistant_response)`.
 
 **Setup Code:**
 

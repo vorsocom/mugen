@@ -25,9 +25,10 @@ from mugen import (
 )
 
 
-def _test_config(*, platforms: list[str]) -> SimpleNamespace:
+def _test_config(*, platforms: list[str], mh_mode: str = "optional") -> SimpleNamespace:
     mugen_cfg = SimpleNamespace(
         platforms=list(platforms),
+        messaging=SimpleNamespace(mh_mode=mh_mode),
         runtime=SimpleNamespace(
             phase_b=SimpleNamespace(
                 startup_timeout_seconds=30.0,
@@ -810,7 +811,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        cfg = _test_config(platforms=["matrix"])
+        cfg = _test_config(platforms=["matrix"], mh_mode="required")
         register_extensions_mock = unittest.mock.AsyncMock(return_value={})
 
         with (
@@ -840,14 +841,17 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
         errors = state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY]
         self.assertEqual(statuses["messaging.mh.matrix"], PHASE_STATUS_DEGRADED)
-        self.assertIn("Missing message handler capability", errors["messaging.mh.matrix"])
+        self.assertIn(
+            "mugen.messaging.mh_mode='required'",
+            errors["messaging.mh.matrix"],
+        )
 
-    async def test_bootstrap_app_fails_when_web_framework_capability_missing(
+    async def test_bootstrap_app_allows_zero_mh_when_mode_is_optional(
         self,
     ) -> None:
         app = Quart("test_app")
-        cfg = _test_config(platforms=["web"])
-        register_extensions_mock = unittest.mock.AsyncMock(return_value={"fw": []})
+        cfg = _test_config(platforms=["web"], mh_mode="optional")
+        register_extensions_mock = unittest.mock.AsyncMock(return_value={})
 
         with (
             unittest.mock.patch.object(
@@ -864,11 +868,10 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 mugen_mod,
                 "_messaging_provider",
                 return_value=SimpleNamespace(
-                    mh_extensions=[SimpleNamespace(platforms=["web"])]
+                    mh_extensions=[],
                 ),
             ),
             unittest.mock.patch.object(mugen_mod, "_web_provider", return_value=object()),
-            self.assertRaises(BootstrapConfigError),
         ):
             await bootstrap_app(
                 app,
@@ -877,16 +880,17 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
         state = app.extensions["mugen"]["bootstrap"]
         statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
-        self.assertEqual(statuses["web.fw_extension"], PHASE_STATUS_DEGRADED)
+        self.assertEqual(statuses["messaging.mh.mode"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["messaging.mh.availability"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["messaging.mh.web"], PHASE_STATUS_HEALTHY)
+        self.assertNotIn("web.fw_extension", statuses)
 
     async def test_bootstrap_app_marks_required_capabilities_healthy_when_satisfied(
         self,
     ) -> None:
         app = Quart("test_app")
-        cfg = _test_config(platforms=["web", "matrix"])
-        register_extensions_mock = unittest.mock.AsyncMock(
-            return_value={"fw": ["core.fw.web"]}
-        )
+        cfg = _test_config(platforms=["web", "matrix"], mh_mode="required")
+        register_extensions_mock = unittest.mock.AsyncMock(return_value={})
 
         with (
             unittest.mock.patch.object(
@@ -917,7 +921,8 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
         self.assertEqual(statuses["messaging.mh.web"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["messaging.mh.matrix"], PHASE_STATUS_HEALTHY)
-        self.assertEqual(statuses["web.fw_extension"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["messaging.mh.mode"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["messaging.mh.availability"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["web.client_runtime_path"], PHASE_STATUS_HEALTHY)
 
     async def test_bootstrap_app_normalizes_non_dict_phase_a_capability_state(self) -> None:
@@ -983,7 +988,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        cfg = _test_config(platforms=["matrix"])
+        cfg = _test_config(platforms=["matrix"], mh_mode="required")
 
         with (
             unittest.mock.patch.object(
@@ -1042,6 +1047,32 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             await bootstrap_app(
                 app,
                 config_provider=lambda: cfg,
+            )
+
+    def test_resolve_messaging_mh_mode_handles_dict_and_namespace_paths(self) -> None:
+        self.assertEqual(
+            mugen_mod._resolve_messaging_mh_mode(  # pylint: disable=protected-access
+                {"mugen": {"messaging": {"mh_mode": "optional"}}}
+            ),
+            "optional",
+        )
+        self.assertEqual(
+            mugen_mod._resolve_messaging_mh_mode(  # pylint: disable=protected-access
+                SimpleNamespace(
+                    mugen=SimpleNamespace(
+                        messaging={"mh_mode": "required"},
+                    )
+                )
+            ),
+            "required",
+        )
+        with self.assertRaises(BootstrapConfigError):
+            mugen_mod._resolve_messaging_mh_mode(  # pylint: disable=protected-access
+                {"mugen": {"messaging": {"mh_mode": "legacy"}}}
+            )
+        with self.assertRaises(BootstrapConfigError):
+            mugen_mod._resolve_messaging_mh_mode(  # pylint: disable=protected-access
+                SimpleNamespace()
             )
 
     def test_platform_state_helpers_cover_edge_branches(self) -> None:
