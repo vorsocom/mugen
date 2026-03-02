@@ -17,7 +17,7 @@ class RuntimeCapabilityInput:
 
     active_platforms: list[str]
     messaging_handler_platforms: list[object]
-    has_web_fw_extension: bool
+    mh_mode: str
     has_web_client_runtime_path: bool
     container_ready: bool = True
     provider_ready: bool = True
@@ -39,6 +39,7 @@ def evaluate_runtime_capabilities(
     """Evaluate runtime capabilities required for phase-A bootstrap."""
     active_platforms = _normalize_platforms(capability.active_platforms)
     handler_scopes = _normalize_handler_scopes(capability.messaging_handler_platforms)
+    mh_mode = _normalize_mh_mode(capability.mh_mode)
 
     statuses: dict[str, str] = {}
     errors: dict[str, str | None] = {}
@@ -63,28 +64,57 @@ def evaluate_runtime_capabilities(
         healthy=capability.provider_ready,
         error="Provider readiness check failed.",
     )
+    _record(
+        "messaging.mh.mode",
+        healthy=mh_mode is not None,
+        error=(
+            "Invalid messaging handler mode. "
+            "mugen.messaging.mh_mode must be 'optional' or 'required'."
+        ),
+    )
+
+    has_any_handler = _has_any_handler(handler_scopes)
+    _record(
+        "messaging.mh.availability",
+        healthy=has_any_handler or mh_mode == "optional",
+        error=(
+            "No message handler extensions are bound while "
+            "mugen.messaging.mh_mode='required'."
+        ),
+    )
 
     for platform in active_platforms:
         if platform not in _MESSAGING_PLATFORMS:
             continue
+        platform_has_handler = _platform_has_handler(
+            platform=platform,
+            handler_scopes=handler_scopes,
+        )
+        if mh_mode == "required":
+            platform_healthy = platform_has_handler
+            error_message = (
+                "Missing message handler capability for active platform "
+                f"'{platform}' while mugen.messaging.mh_mode='required'."
+            )
+        elif mh_mode == "optional":
+            platform_healthy = True
+            error_message = (
+                "Missing built-in messaging capability for active platform "
+                f"'{platform}' while mugen.messaging.mh_mode='optional'."
+            )
+        else:
+            platform_healthy = False
+            error_message = (
+                "Messaging handler mode is invalid; capability resolution "
+                f"for active platform '{platform}' failed."
+            )
         _record(
             f"messaging.mh.{platform}",
-            healthy=_platform_has_handler(platform=platform, handler_scopes=handler_scopes),
-            error=(
-                "Missing message handler capability for active platform "
-                f"'{platform}'."
-            ),
+            healthy=platform_healthy,
+            error=error_message,
         )
 
     if "web" in active_platforms:
-        _record(
-            "web.fw_extension",
-            healthy=capability.has_web_fw_extension,
-            error=(
-                "Web platform requires enabled framework extension token "
-                "'core.fw.web'."
-            ),
-        )
         _record(
             "web.client_runtime_path",
             healthy=capability.has_web_client_runtime_path,
@@ -131,6 +161,22 @@ def _normalize_handler_scopes(values: object) -> list[set[str] | None]:
             continue
         scopes.append(set())
     return scopes
+
+
+def _normalize_mh_mode(value: object) -> str | None:
+    candidate = str(value or "").strip().lower()
+    if candidate in {"optional", "required"}:
+        return candidate
+    return None
+
+
+def _has_any_handler(handler_scopes: Iterable[set[str] | None]) -> bool:
+    for scope in handler_scopes:
+        if scope is None:
+            return True
+        if isinstance(scope, set) and scope:
+            return True
+    return False
 
 
 def _platform_has_handler(

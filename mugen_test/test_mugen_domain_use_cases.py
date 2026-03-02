@@ -244,22 +244,23 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
             RuntimeCapabilityInput(
                 active_platforms=["web", "matrix"],
                 messaging_handler_platforms=[[]],
-                has_web_fw_extension=True,
+                mh_mode="required",
                 has_web_client_runtime_path=True,
                 container_ready=True,
                 provider_ready=True,
             )
         )
         self.assertTrue(healthy.healthy)
+        self.assertEqual(healthy.statuses["messaging.mh.mode"], "healthy")
+        self.assertEqual(healthy.statuses["messaging.mh.availability"], "healthy")
         self.assertEqual(healthy.statuses["messaging.mh.web"], "healthy")
         self.assertEqual(healthy.statuses["messaging.mh.matrix"], "healthy")
-        self.assertEqual(healthy.statuses["web.fw_extension"], "healthy")
 
         degraded = evaluate_runtime_capabilities(
             RuntimeCapabilityInput(
                 active_platforms=["web", "whatsapp"],
                 messaging_handler_platforms=[["web"]],
-                has_web_fw_extension=False,
+                mh_mode="required",
                 has_web_client_runtime_path=False,
                 container_ready=True,
                 provider_ready=False,
@@ -268,33 +269,71 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
         self.assertFalse(degraded.healthy)
         self.assertIn("provider_readiness", degraded.failed_capabilities)
         self.assertIn("messaging.mh.whatsapp", degraded.failed_capabilities)
-        self.assertIn("web.fw_extension", degraded.failed_capabilities)
         self.assertIn("web.client_runtime_path", degraded.failed_capabilities)
+
+        optional_zero_mh = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["web", "whatsapp"],
+                messaging_handler_platforms=[],
+                mh_mode="optional",
+                has_web_client_runtime_path=True,
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertTrue(optional_zero_mh.healthy)
+        self.assertEqual(
+            optional_zero_mh.statuses["messaging.mh.availability"],
+            "healthy",
+        )
+        self.assertEqual(optional_zero_mh.statuses["messaging.mh.web"], "healthy")
+        self.assertEqual(
+            optional_zero_mh.statuses["messaging.mh.whatsapp"],
+            "healthy",
+        )
 
     def test_runtime_capability_use_case_normalizes_edge_inputs(self) -> None:
         non_collection_platforms = evaluate_runtime_capabilities(
             RuntimeCapabilityInput(
                 active_platforms="web",  # type: ignore[arg-type]
                 messaging_handler_platforms="bad",  # type: ignore[arg-type]
-                has_web_fw_extension=True,
+                mh_mode="optional",
                 has_web_client_runtime_path=True,
             )
         )
         self.assertEqual(
             set(non_collection_platforms.statuses.keys()),
-            {"container_readiness", "provider_readiness"},
+            {
+                "container_readiness",
+                "provider_readiness",
+                "messaging.mh.mode",
+                "messaging.mh.availability",
+            },
         )
 
         mixed_scopes = evaluate_runtime_capabilities(
             RuntimeCapabilityInput(
                 active_platforms=["unknown", "whatsapp", " WHATSAPP ", ""],
                 messaging_handler_platforms=[None, object(), ["whatsapp"]],
-                has_web_fw_extension=True,
+                mh_mode="optional",
                 has_web_client_runtime_path=True,
             )
         )
         self.assertTrue(mixed_scopes.healthy)
         self.assertEqual(mixed_scopes.statuses["messaging.mh.whatsapp"], "healthy")
+
+        invalid_mode = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["web"],
+                messaging_handler_platforms=[object()],
+                mh_mode="legacy",
+                has_web_client_runtime_path=True,
+            )
+        )
+        self.assertFalse(invalid_mode.healthy)
+        self.assertIn("messaging.mh.mode", invalid_mode.failed_capabilities)
+        self.assertIn("messaging.mh.availability", invalid_mode.failed_capabilities)
+        self.assertIn("messaging.mh.web", invalid_mode.failed_capabilities)
 
 
 if __name__ == "__main__":

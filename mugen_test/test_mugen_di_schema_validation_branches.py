@@ -23,6 +23,9 @@ def _valid_core_config() -> dict:
                     "degrade_on_critical_exit": True,
                 },
             },
+            "messaging": {
+                "mh_mode": "optional",
+            },
             "modules": {
                 "core": {
                     "client": {
@@ -77,6 +80,18 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cfg = _valid_core_config()
         cfg["mugen"]["runtime"]["phase_b"] = None
         cases.append((cfg, "mugen.runtime.phase_b must be a table"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["messaging"] = None
+        cases.append((cfg, "mugen.messaging must be a table"))
+
+        cfg = _valid_core_config()
+        del cfg["mugen"]["messaging"]["mh_mode"]
+        cases.append((cfg, "mugen.messaging.mh_mode is required"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["messaging"]["mh_mode"] = "invalid"
+        cases.append((cfg, "mugen.messaging.mh_mode is required"))
 
         cfg = _valid_core_config()
         cfg["mugen"]["modules"] = []

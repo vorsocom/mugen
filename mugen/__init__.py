@@ -191,6 +191,31 @@ def _config_path_exists(config: object, *path: str) -> bool:
     return True
 
 
+def _resolve_messaging_mh_mode(config: object) -> str:
+    mugen_config = getattr(config, "mugen", None)
+    if mugen_config is None and isinstance(config, dict):
+        mugen_config = config.get("mugen")
+
+    messaging_config = None
+    if isinstance(mugen_config, dict):
+        messaging_config = mugen_config.get("messaging")
+    elif mugen_config is not None:
+        messaging_config = getattr(mugen_config, "messaging", None)
+
+    if isinstance(messaging_config, dict):
+        raw_mode = messaging_config.get("mh_mode")
+    else:
+        raw_mode = getattr(messaging_config, "mh_mode", None)
+
+    mode = str(raw_mode or "").strip().lower()
+    if mode not in {"optional", "required"}:
+        raise BootstrapConfigError(
+            "Invalid runtime configuration: mugen.messaging.mh_mode is required and "
+            "must be 'optional' or 'required'."
+        )
+    return mode
+
+
 def validate_web_relational_runtime_config(
     *,
     config: SimpleNamespace,
@@ -527,9 +552,7 @@ async def bootstrap_app(
 
     # Discover and register core plugins and
     # third-party extensions.
-    extension_tokens_by_type = await register_extensions(app, config_provider=config_provider)
-    if not isinstance(extension_tokens_by_type, dict):
-        extension_tokens_by_type = {}
+    _ = await register_extensions(app, config_provider=config_provider)
 
     messaging_service: IMessagingService | None = _messaging_provider()
     mh_extension_platforms: list[object] = []
@@ -543,11 +566,7 @@ async def bootstrap_app(
     active_platforms = _normalize_platform_list(
         getattr(getattr(config, "mugen", SimpleNamespace()), "platforms", [])
     )
-    registered_fw_tokens = extension_tokens_by_type.get("fw", [])
-    has_web_fw_extension = (
-        isinstance(registered_fw_tokens, list)
-        and "core.fw.web" in registered_fw_tokens
-    )
+    mh_mode = _resolve_messaging_mh_mode(config)
     has_web_client_runtime_path = (
         _config_path_exists(config, "mugen", "modules", "core", "client", "web")
         and _web_provider() is not None
@@ -557,7 +576,7 @@ async def bootstrap_app(
         RuntimeCapabilityInput(
             active_platforms=active_platforms,
             messaging_handler_platforms=mh_extension_platforms,
-            has_web_fw_extension=has_web_fw_extension,
+            mh_mode=mh_mode,
             has_web_client_runtime_path=has_web_client_runtime_path,
             container_ready=(
                 capability_statuses.get("container_readiness") == PHASE_STATUS_HEALTHY
