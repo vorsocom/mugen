@@ -147,6 +147,12 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._matrix_ipc_queue: asyncio.Queue | None = None
         self._matrix_ipc_worker_task: asyncio.Task | None = None
         self._matrix_ipc_worker_stop = asyncio.Event()
+        self._credentials_key_prefix = self._resolve_credentials_key_prefix()
+        self._known_devices_list_key = self._keyval_key("known_devices_list")
+        self._sync_key = self._keyval_key("matrix_client_sync_next_batch")
+        self._client_access_token_key = self._keyval_key("client_access_token")
+        self._client_device_id_key = self._keyval_key("client_device_id")
+        self._client_user_id_key = self._keyval_key("client_user_id")
         self._sync_token: str | None = None
         self._secret_cipher: Fernet | None = self._build_secret_cipher()
 
@@ -290,9 +296,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     async def __aenter__(self) -> "DefaultMatrixClient":
         """Initialisation."""
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
+        self._ensure_credential_keys_initialized()
         self._start_matrix_ipc_worker()
         stored_access_token = await self._keyval_storage_gateway.get_text(
-            "client_access_token"
+            self._client_access_token_key
         )
         stored_access_token = self._decode_secret_value(
             stored_access_token,
@@ -313,21 +320,21 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
                 # Save credentials.
                 await self._keyval_storage_gateway.put_text(
-                    "client_access_token",
+                    self._client_access_token_key,
                     self._encode_secret_value(
                         resp.access_token,
                         field_name="client_access_token",
                     ),
                 )
                 await self._keyval_storage_gateway.put_text(
-                    "client_device_id",
+                    self._client_device_id_key,
                     self._encode_secret_value(
                         resp.device_id,
                         field_name="client_device_id",
                     ),
                 )
                 await self._keyval_storage_gateway.put_text(
-                    "client_user_id",
+                    self._client_user_id_key,
                     self._encode_secret_value(
                         resp.user_id,
                         field_name="client_user_id",
@@ -350,11 +357,11 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # open the file in read-only mode.
         self.access_token = stored_access_token
         self.device_id = self._decode_secret_value(
-            await self._keyval_storage_gateway.get_text("client_device_id"),
+            await self._keyval_storage_gateway.get_text(self._client_device_id_key),
             field_name="client_device_id",
         )
         self.user_id = self._decode_secret_value(
-            await self._keyval_storage_gateway.get_text("client_user_id"),
+            await self._keyval_storage_gateway.get_text(self._client_user_id_key),
             field_name="client_user_id",
         )
         self._sync_token = await self._keyval_storage_gateway.get_text(self._sync_key)
@@ -600,6 +607,41 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         )
         return payload.to_dict()
 
+    def _resolve_credentials_key_prefix(self) -> str:
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+        ).strip().lower()
+        homeserver = str(getattr(getattr(self._config, "matrix", SimpleNamespace()), "homeserver", ""))
+        client_cfg = getattr(getattr(self._config, "matrix", SimpleNamespace()), "client", SimpleNamespace())
+        client_user = str(getattr(client_cfg, "user", ""))
+        identity_material = "|".join(
+            [
+                environment,
+                "matrix",
+                homeserver.strip().lower(),
+                client_user.strip().lower(),
+            ]
+        )
+        digest = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:16]
+        return f"matrix:{environment}:{digest}"
+
+    def _keyval_key(self, key_name: str) -> str:
+        return f"{self._credentials_key_prefix}:{key_name}"
+
+    def _ensure_credential_keys_initialized(self) -> None:
+        if "_credentials_key_prefix" not in self.__dict__:
+            self._credentials_key_prefix = self._resolve_credentials_key_prefix()
+        if "_known_devices_list_key" not in self.__dict__:
+            self._known_devices_list_key = self._keyval_key("known_devices_list")
+        if "_sync_key" not in self.__dict__:
+            self._sync_key = self._keyval_key("matrix_client_sync_next_batch")
+        if "_client_access_token_key" not in self.__dict__:
+            self._client_access_token_key = self._keyval_key("client_access_token")
+        if "_client_device_id_key" not in self.__dict__:
+            self._client_device_id_key = self._keyval_key("client_device_id")
+        if "_client_user_id_key" not in self.__dict__:
+            self._client_user_id_key = self._keyval_key("client_user_id")
+
     def _resolve_matrix_ipc_queue_size(self) -> int:
         raw_value = getattr(
             getattr(getattr(self._config, "matrix", SimpleNamespace()), "ipc", None),
@@ -690,6 +732,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         return "" if self._sync_token is None else self._sync_token
 
     async def _load_known_devices(self) -> dict[str, list[str]]:
+        self._ensure_credential_keys_initialized()
         payload = await self._keyval_storage_gateway.get_text(self._known_devices_list_key)
         if payload is None:
             return {}
@@ -714,6 +757,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         return known_devices
 
     async def _save_known_devices(self, known_devices: dict[str, list[str]]) -> None:
+        self._ensure_credential_keys_initialized()
         await self._keyval_storage_gateway.put_json(
             self._known_devices_list_key,
             known_devices,

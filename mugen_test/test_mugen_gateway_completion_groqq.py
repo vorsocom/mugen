@@ -146,6 +146,38 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [{"limit": 1}, {}])
         self.assertEqual(wait_for_calls, [3.5])
 
+    async def test_aclose_handles_missing_sync_and_async_close(self) -> None:
+        config = _make_config()
+        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+        )
+        with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api):
+            gateway = GroqCompletionGateway(config, logging_gateway)
+
+        gateway._api = SimpleNamespace()  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+
+        calls: list[str] = []
+
+        def _sync_close():
+            calls.append("sync")
+            return None
+
+        async def _async_close():
+            calls.append("async")
+            return None
+
+        gateway._api = SimpleNamespace(close=_sync_close)  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+        gateway._api = SimpleNamespace(close=_async_close)  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+        self.assertEqual(calls, ["sync", "async"])
+
     async def test_check_readiness_rejects_removed_legacy_max_tokens_config_key(
         self,
     ) -> None:

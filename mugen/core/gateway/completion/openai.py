@@ -1,6 +1,7 @@
 """Provides an OpenAI completion gateway."""
 
 import asyncio
+import inspect
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -186,6 +187,15 @@ class OpenAICompletionGateway(ICompletionGateway):
             raise RuntimeError(
                 "OpenAI completion gateway readiness probe failed."
             ) from exc
+
+    async def aclose(self) -> None:
+        close = getattr(self._api, "close", None)
+        if callable(close) is not True:
+            return None
+        maybe_awaitable = close()
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
+        return None
 
     async def get_completion(
         self,

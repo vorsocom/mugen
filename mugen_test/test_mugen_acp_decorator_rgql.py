@@ -47,7 +47,7 @@ _bootstrap_namespace_packages()
 # noqa: E402
 # pylint: disable=wrong-import-position
 from mugen.core.plugin.acp.api.decorator import rgql as rgql_mod
-from mugen.core.utility.rgql_helper.error import RGQLExpandError
+from mugen.core.gateway.storage.rdbms.rgql_adapter.error import RGQLExpandError
 
 
 class _AbortCalled(Exception):

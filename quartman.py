@@ -24,6 +24,9 @@ from mugen import (
 from mugen.bootstrap_state import (
     BOOTSTRAP_STATE_KEY,
     MUGEN_EXTENSION_KEY,
+    PHASE_A_CAPABILITY_ERRORS_KEY,
+    PHASE_A_CAPABILITY_STATUSES_KEY,
+    PHASE_A_ERROR_KEY,
     PHASE_A_STATUS_KEY,
     PHASE_B_ERROR_KEY,
     PHASE_B_PLATFORM_ERRORS_KEY,
@@ -127,6 +130,9 @@ async def startup():
     phase_a_started_at = perf_counter()
     state = _bootstrap_state()
     state[PHASE_A_STATUS_KEY] = PHASE_STATUS_STARTING
+    state[PHASE_A_ERROR_KEY] = None
+    state[PHASE_A_CAPABILITY_STATUSES_KEY] = {}
+    state[PHASE_A_CAPABILITY_ERRORS_KEY] = {}
     state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
     state[PHASE_B_ERROR_KEY] = None
     state[PHASE_B_PLATFORM_STATUSES_KEY] = {}
@@ -137,13 +143,27 @@ async def startup():
         await bootstrap_app(app)
     except BootstrapError:
         state[PHASE_A_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        state[PHASE_A_ERROR_KEY] = "phase_a bootstrap failed"
         app.logger.error(
             "Bootstrap phase_a failed elapsed_seconds=%.3f",
             perf_counter() - phase_a_started_at,
             exc_info=True,
         )
         raise
-    state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+    capability_statuses = state.get(PHASE_A_CAPABILITY_STATUSES_KEY, {})
+    degraded_capabilities = [
+        name
+        for name, status in capability_statuses.items()
+        if str(status).strip().lower() == PHASE_STATUS_DEGRADED
+    ]
+    if degraded_capabilities:
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        if not isinstance(state.get(PHASE_A_ERROR_KEY), str):
+            state[PHASE_A_ERROR_KEY] = (
+                "phase_a degraded capabilities: " + ", ".join(sorted(degraded_capabilities))
+            )
+    else:
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
     app.logger.info(
         "Bootstrap phase_a completed elapsed_seconds=%.3f",
         perf_counter() - phase_a_started_at,

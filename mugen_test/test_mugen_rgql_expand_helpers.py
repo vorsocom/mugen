@@ -21,7 +21,7 @@ from mugen.core.utility.rgql.model import (
     TypeRef,
 )
 from mugen.core.utility.rgql.url_parser import ExpandItem
-from mugen.core.utility.rgql_helper.rgql_expand import (
+from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand import (
     ExpansionContext,
     _augment_query_columns_for_nested_expands,
     apply_to_filter_groups,
@@ -30,8 +30,8 @@ from mugen.core.utility.rgql_helper.rgql_expand import (
     expand_navs_recursive,
     normalise_expand_levels,
 )
-from mugen.core.utility.rgql_helper.error import RGQLExpandError
-from mugen.core.utility.rgql_helper.rgql_to_relational import RGQLToRelationalAdapter
+from mugen.core.gateway.storage.rdbms.rgql_adapter.error import RGQLExpandError
+from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_to_relational import RGQLToRelationalAdapter
 
 
 @dataclass
@@ -712,7 +712,7 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
 
         # Force defensive branch where collection filter groups are empty.
         with patch(
-            "mugen.core.utility.rgql_helper.rgql_expand.apply_to_filter_groups",
+            "mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand.apply_to_filter_groups",
             return_value=[],
         ):
             await expand_navs_recursive(
@@ -998,7 +998,7 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
         )
         roots = [_Entity(id=10), _Entity(id=11)]
         with patch(
-            "mugen.core.utility.rgql_helper.rgql_expand._augment_query_columns_for_nested_expands",
+            "mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand._augment_query_columns_for_nested_expands",
             return_value=["name"],
         ):
             await expand_navs_bulk(
@@ -1113,7 +1113,7 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
 
         # Force defensive branch where single-path filter groups are empty.
         with patch(
-            "mugen.core.utility.rgql_helper.rgql_expand.apply_to_filter_groups",
+            "mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand.apply_to_filter_groups",
             return_value=[],
         ):
             await expand_navs_bulk(

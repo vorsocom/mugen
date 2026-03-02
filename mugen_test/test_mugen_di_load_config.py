@@ -7,6 +7,51 @@ import unittest.mock
 from mugen.core import di
 
 
+def _minimal_core_config() -> dict:
+    return {
+        "mugen": {
+            "runtime": {
+                "profile": "api_only",
+                "provider_readiness_timeout_seconds": 15.0,
+                "phase_b": {
+                    "startup_timeout_seconds": 30.0,
+                    "readiness_grace_seconds": 0.0,
+                    "critical_platforms": [],
+                    "degrade_on_critical_exit": True,
+                },
+            },
+            "modules": {
+                "core": {
+                    "client": {
+                        "matrix": "default",
+                        "whatsapp": "default",
+                        "web": "default",
+                    },
+                    "gateway": {
+                        "completion": "deterministic",
+                        "logging": "standard",
+                        "storage": {
+                            "keyval": "relational",
+                            "media": "default",
+                            "relational": "sqlalchemy",
+                            "web_runtime": "relational",
+                        },
+                    },
+                    "service": {
+                        "ipc": "default",
+                        "messaging": "default",
+                        "nlp": "default",
+                        "platform": "default",
+                        "user": "default",
+                    },
+                    "plugins": [],
+                },
+            },
+            "platforms": [],
+        },
+    }
+
+
 # pylint: disable=protected-access
 class TestDILoadConfig(unittest.TestCase):
     """Unit tests for mugen.core.di"""
@@ -46,7 +91,7 @@ class TestDILoadConfig(unittest.TestCase):
     def test_build_container_uses_default_config_file_when_env_unset(self) -> None:
         """Build container should default to mugen.toml."""
 
-        load_config = unittest.mock.Mock(return_value={})
+        load_config = unittest.mock.Mock(return_value=_minimal_core_config())
         injector = unittest.mock.Mock()
 
         with unittest.mock.patch.dict("os.environ", {}, clear=True):
@@ -77,7 +122,7 @@ class TestDILoadConfig(unittest.TestCase):
     def test_build_container_uses_env_config_file_override(self) -> None:
         """Build container should honor MUGEN_CONFIG_FILE override."""
 
-        load_config = unittest.mock.Mock(return_value={})
+        load_config = unittest.mock.Mock(return_value=_minimal_core_config())
         injector = unittest.mock.Mock()
         override = "mugen.override.toml"
 

@@ -157,6 +157,9 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             )
         raise RuntimeError("SambaNova completion gateway readiness probe failed.")
 
+    async def aclose(self) -> None:
+        return None
+
     async def get_completion(
         self,
         request: CompletionRequest,

@@ -12,7 +12,7 @@ from mugen.core.utility.rgql.ast import Identifier, Literal, MemberAccess
 from mugen.core.utility.rgql.expr_parser import parse_rgql_expr
 from mugen.core.utility.rgql.orderby_parser import OrderByItem
 from mugen.core.utility.rgql.url_parser import RGQLQueryOptions
-from mugen.core.utility.rgql_helper.rgql_to_relational import (
+from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_to_relational import (
     RGQLToRelationalAdapter,
     _is_literal,
     _literal_value,

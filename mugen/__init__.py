@@ -2,6 +2,9 @@
 
 __all__ = [
     "BOOTSTRAP_STATE_KEY",
+    "PHASE_A_CAPABILITY_ERRORS_KEY",
+    "PHASE_A_CAPABILITY_STATUSES_KEY",
+    "PHASE_A_ERROR_KEY",
     "BootstrapConfigError",
     "BootstrapError",
     "ExtensionLoadError",
@@ -26,7 +29,6 @@ __all__ = [
 ]
 
 import asyncio
-from importlib import import_module
 import inspect
 import random
 import re
@@ -38,6 +40,9 @@ from quart import Quart
 from mugen.bootstrap_state import (
     BOOTSTRAP_STATE_KEY,
     MUGEN_EXTENSION_KEY,
+    PHASE_A_CAPABILITY_ERRORS_KEY,
+    PHASE_A_CAPABILITY_STATUSES_KEY,
+    PHASE_A_ERROR_KEY,
     PHASE_A_STATUS_KEY,
     PHASE_B_ERROR_KEY,
     PHASE_B_PLATFORM_ERRORS_KEY,
@@ -52,19 +57,18 @@ from mugen.bootstrap_state import (
     get_bootstrap_state,
 )
 from mugen.config import AppConfig
+from mugen.core.bootstrap.extensions import (
+    DefaultExtensionRegistry,
+    configured_extensions,
+    parse_bool as _parse_ext_bool,
+    resolve_extension_spec,
+)
 from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
-from mugen.core.contract.extension.cp import ICPExtension
-from mugen.core.contract.extension.ct import ICTExtension
-from mugen.core.contract.extension.ctx import ICTXExtension
-from mugen.core.contract.extension.fw import IFWExtension
-from mugen.core.contract.extension.ipc import IIPCExtension
-from mugen.core.contract.extension.mh import IMHExtension
-from mugen.core.contract.extension.rag import IRAGExtension
-from mugen.core.contract.extension.rpp import IRPPExtension
+from mugen.core.contract.extension.registry import IExtensionRegistry
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
@@ -338,6 +342,48 @@ def _resolve_degrade_on_critical_exit(config: SimpleNamespace, bootstrap_state: 
     return _parse_bool(raw_value, default=True)
 
 
+def _coerce_positive_int(value: object, *, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed < 0:
+        return default
+    return parsed
+
+
+def _coerce_positive_float(value: object, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed <= 0:
+        return default
+    return parsed
+
+
+def _resolve_phase_b_supervision_controls(
+    config: SimpleNamespace,
+) -> tuple[int, float, float]:
+    runtime_cfg = getattr(getattr(config, "mugen", SimpleNamespace()), "runtime", None)
+    phase_b_cfg = getattr(runtime_cfg, "phase_b", None)
+    max_restarts = _coerce_positive_int(
+        getattr(phase_b_cfg, "supervisor_max_restarts", 3),
+        default=3,
+    )
+    base_backoff_seconds = _coerce_positive_float(
+        getattr(phase_b_cfg, "supervisor_backoff_base_seconds", 1.0),
+        default=1.0,
+    )
+    max_backoff_seconds = _coerce_positive_float(
+        getattr(phase_b_cfg, "supervisor_backoff_max_seconds", 30.0),
+        default=30.0,
+    )
+    if max_backoff_seconds < base_backoff_seconds:
+        max_backoff_seconds = base_backoff_seconds
+    return max_restarts, base_backoff_seconds, max_backoff_seconds
+
+
 def _ensure_platform_state(
     bootstrap_state: dict,
     *,
@@ -393,50 +439,6 @@ def _refresh_phase_b_status(
     )
 
 
-def _split_extension_path(path: str) -> tuple[str, str | None]:
-    """Split extension path into module and optional class target."""
-    if not isinstance(path, str) or not path.strip():
-        raise ValueError("Extension path must be a non-empty string.")
-
-    normalized = path.strip()
-    if ":" not in normalized:
-        raise ValueError(
-            "Extension path must use module:ClassName. "
-            "Module-only paths are not supported."
-        )
-
-    module_name, class_name = normalized.split(":", 1)
-    if not module_name or not class_name:
-        raise ValueError("Extension path must use module:ClassName.")
-
-    return module_name, class_name
-
-
-def _resolve_extension_class(
-    *,
-    interface: type,
-    module_name: str,
-    class_name: str | None,
-    ext_path: str,
-) -> type:
-    """Resolve extension class deterministically for the configured path."""
-    if class_name is None:
-        raise ExtensionLoadError(
-            "Extension path must use module:ClassName. "
-            f"Received module-only path: {ext_path}."
-        )
-
-    module = import_module(name=module_name)
-    ext_class = getattr(module, class_name, None)
-    if not isinstance(ext_class, type):
-        raise ExtensionLoadError(f"Extension class not found: {ext_path}.")
-    if not issubclass(ext_class, interface):
-        raise ExtensionLoadError(
-            f"Extension class is not a valid {interface.__name__}: {ext_path}."
-        )
-    return ext_class
-
-
 def create_quart_app(
     config_provider=_config_provider,
     logger_provider=_logger_provider,
@@ -478,9 +480,26 @@ def create_quart_app(
 async def bootstrap_app(
     app: Quart,
     config_provider=_config_provider,
+    logger_provider=_logger_provider,
 ) -> None:
     """Phase A bootstrap for app extensions and API registration."""
-    await di.ensure_container_readiness_async()
+    logger: ILoggingGateway = logger_provider()
+    bootstrap_state = get_bootstrap_state(app)
+    capability_statuses = bootstrap_state.setdefault(PHASE_A_CAPABILITY_STATUSES_KEY, {})
+    capability_errors = bootstrap_state.setdefault(PHASE_A_CAPABILITY_ERRORS_KEY, {})
+
+    try:
+        await di.ensure_container_readiness_async()
+        capability_statuses["container_readiness"] = PHASE_STATUS_HEALTHY
+        capability_errors["container_readiness"] = None
+    except di.ProviderBootstrapError as exc:
+        capability_statuses["container_readiness"] = PHASE_STATUS_DEGRADED
+        capability_errors["container_readiness"] = str(exc)
+        bootstrap_state[PHASE_A_ERROR_KEY] = str(exc)
+        logger.warning(
+            "Container readiness degraded; continuing startup in degraded mode "
+            f"(error={exc})."
+        )
 
     # Discover and register core plugins and
     # third-party extensions.
@@ -673,27 +692,16 @@ async def run_platform_clients(
                     error=None,
                 )
                 logger.debug(f"{platform_name} client stopped during shutdown.")
-            elif (
-                platform_name in critical_platforms
-                and degrade_on_critical_exit is True
-            ):
-                _set_platform_status(
-                    bootstrap_state,
-                    platform=platform_name,
-                    status=PHASE_STATUS_DEGRADED,
-                    error="critical platform exited unexpectedly",
-                )
-                logger.error(
-                    f"{platform_name} client exited unexpectedly without exception."
-                )
             else:
                 _set_platform_status(
                     bootstrap_state,
                     platform=platform_name,
-                    status=PHASE_STATUS_STOPPED,
-                    error=None,
+                    status=PHASE_STATUS_DEGRADED,
+                    error="platform runner stopped unexpectedly",
                 )
-                logger.warning(f"{platform_name} client stopped.")
+                logger.error(
+                    f"{platform_name} client stopped unexpectedly without exception."
+                )
             _refresh_phase_b_status(
                 bootstrap_state,
                 critical_platforms=critical_platforms,
@@ -717,11 +725,61 @@ async def run_platform_clients(
             f"{platform_name} client failed ({error_message})."
         )
 
+    (
+        supervisor_max_restarts,
+        supervisor_backoff_base_seconds,
+        supervisor_backoff_max_seconds,
+    ) = _resolve_phase_b_supervision_controls(config)
+
+    async def _supervise_platform_runner(platform_name: str, runner) -> None:
+        restart_count = 0
+        last_error_message: str | None = None
+        while True:
+            shutdown_requested = _parse_bool(
+                bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
+                default=False,
+            )
+            if shutdown_requested:
+                return
+            try:
+                await _invoke_platform_runner(platform_name, runner)
+                shutdown_requested = _parse_bool(
+                    bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
+                    default=False,
+                )
+                if shutdown_requested:
+                    return
+                last_error_message = "platform runner exited unexpectedly"
+                _on_platform_degraded(platform_name, last_error_message)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                last_error_message = f"{type(exc).__name__}: {exc}"
+                _on_platform_degraded(platform_name, last_error_message)
+
+            if restart_count >= supervisor_max_restarts:
+                raise RuntimeError(
+                    f"{platform_name} runner exhausted restart budget "
+                    f"({supervisor_max_restarts}) after last error: "
+                    f"{last_error_message or 'unknown failure'}."
+                )
+            backoff_seconds = min(
+                supervisor_backoff_max_seconds,
+                supervisor_backoff_base_seconds * (2**restart_count),
+            )
+            logger.warning(
+                f"{platform_name} runner restart scheduled "
+                f"attempt={restart_count + 1}/{supervisor_max_restarts} "
+                f"backoff_seconds={backoff_seconds:.2f}."
+            )
+            restart_count += 1
+            await asyncio.sleep(backoff_seconds)
+
     try:
         if "matrix" in active_platforms:
             logger.debug("Running matrix client.")
             task = asyncio.create_task(
-                _invoke_platform_runner("matrix", run_matrix_client),
+                _supervise_platform_runner("matrix", run_matrix_client),
                 name="mugen.platform.matrix",
             )
             task.add_done_callback(
@@ -734,7 +792,7 @@ async def run_platform_clients(
         if "whatsapp" in active_platforms:
             logger.debug("Running whatsapp client.")
             task = asyncio.create_task(
-                _invoke_platform_runner("whatsapp", run_whatsapp_client),
+                _supervise_platform_runner("whatsapp", run_whatsapp_client),
                 name="mugen.platform.whatsapp",
             )
             task.add_done_callback(
@@ -747,7 +805,7 @@ async def run_platform_clients(
         if "web" in active_platforms:
             logger.debug("Running web client.")
             task = asyncio.create_task(
-                _invoke_platform_runner("web", run_web_client),
+                _supervise_platform_runner("web", run_web_client),
                 name="mugen.platform.web",
             )
             task.add_done_callback(
@@ -783,7 +841,7 @@ async def run_platform_clients(
     except asyncio.exceptions.CancelledError:
         bootstrap_state[SHUTDOWN_REQUESTED_KEY] = True
         for task in tasks.values():
-            if task.done():
+            if task.done():  # pragma: no cover
                 continue
             task.cancel()
         await asyncio.gather(*tasks.values(), return_exceptions=True)
@@ -797,6 +855,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
     logger_provider=_logger_provider,
     messaging_provider=_messaging_provider,
     platform_provider=_platform_provider,
+    extension_registry_provider=None,
 ) -> None:
     """Register core plugins and third party extensions."""
     config: SimpleNamespace = config_provider()
@@ -804,229 +863,86 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
     logger: ILoggingGateway = logger_provider()
     messaging_service: IMessagingService = messaging_provider()
     platform_service: IPlatformService = platform_provider()
-
-    # Load extensions if specified. These include:
-    # 1. Command Processor (CP) extensions.
-    # 2. Conversational Trigger (CT) extensions.
-    # 3. Context (CTX) extensions.
-    # 4. Framework (FW) extensions.
-    # 5. Inter-Process Communication (IPC) extensions.
-    # 6. Message Handler (MH) extensions.
-    # 7. Retrieval Augmented Generation (RAG) extensions.
-    # 8. Response Pre-Processor (RPP) extensions.
-    extensions = []
     sweep_started_at = perf_counter()
+    try:
+        extensions = configured_extensions(config)
+    except RuntimeError as exc:
+        raise BootstrapConfigError(str(exc)) from exc
 
-    modules_config = getattr(
-        getattr(config, "mugen", SimpleNamespace()),
-        "modules",
-        SimpleNamespace(),
-    )
-    core_modules_config = getattr(modules_config, "core", SimpleNamespace())
-
-    plugins = getattr(core_modules_config, "plugins", [])
-    if plugins is None:
-        plugins = []
-    if not isinstance(plugins, list):
-        raise BootstrapConfigError(
-            "Invalid extension configuration: mugen.modules.core.plugins must be a list."
+    if extension_registry_provider is None:
+        extension_registry: IExtensionRegistry = DefaultExtensionRegistry(
+            messaging_service=messaging_service,
+            ipc_service=ipc_service,
+            platform_service=platform_service,
+            logging_gateway=logger,
         )
-    if hasattr(core_modules_config, "plugins"):
-        logger.debug("Adding plugins for loading.")
     else:
-        logger.error("Plugin configuration attribute error.")
-    extensions += plugins
+        extension_registry = extension_registry_provider()
 
-    third_party_extensions = getattr(modules_config, "extensions", [])
-    if third_party_extensions is None:
-        third_party_extensions = []
-    if not isinstance(third_party_extensions, list):
-        raise BootstrapConfigError(
-            "Invalid extension configuration: mugen.modules.extensions must be a list."
-        )
-    if hasattr(modules_config, "extensions"):
-        logger.debug("Adding extensions for loading.")
-    else:
-        logger.error("Extension configuration attribute error.")
-    extensions += third_party_extensions
-
-    # Register core plugins and third party extensions.
-    for ext in extensions:
+    for ext_cfg in extensions:
         ext_started_at = perf_counter()
-        ext_type = getattr(ext, "type", "<unknown>")
-        ext_path = getattr(ext, "path", "<unknown>")
-        if not _extension_enabled(ext):
-            logger.info(f"Skipping disabled extension: {ext_path} ({ext_type}).")
+        raw_token = getattr(ext_cfg, "token", None)
+        legacy_path = getattr(ext_cfg, "path", None)
+        if raw_token is None and legacy_path is not None:
+            raise ExtensionLoadError(
+                "Legacy extension path configuration is no longer supported. "
+                "Use token-based extension loading."
+            )
+        token = str(raw_token or "").strip().lower()
+        configured_type = str(getattr(ext_cfg, "type", "") or "").strip().lower()
+        critical = _parse_ext_bool(getattr(ext_cfg, "critical", False), default=False)
+
+        if not _extension_enabled(ext_cfg):
+            logger.info(
+                f"Skipping disabled extension: {token or '<unknown>'}"
+                f" ({configured_type or '<unknown>'})."
+            )
             continue
 
         try:
-            ext_module_name, ext_class_name = _split_extension_path(ext_path)
-        except ValueError as exc:
-            logger.error("Invalid extension path format.")
-            logger.info(f"Module: {ext_path}.")
-            logger.error(
-                "Extension bootstrap failed"
-                f" type={ext_type} path={ext_path}"
-                f" elapsed_seconds={perf_counter() - ext_started_at:.3f}"
+            spec = resolve_extension_spec(token)
+            resolved_type = spec.extension_type
+            if configured_type not in {"", resolved_type}:
+                raise ExtensionLoadError(
+                    "Extension type/token mismatch "
+                    f"(token={token} configured_type={configured_type} "
+                    f"resolved_type={resolved_type})."
+                )
+            extension = spec.extension_class()
+            registered = await extension_registry.register(
+                app=app,
+                extension_type=resolved_type,
+                extension=extension,
+                token=token,
+                critical=critical,
             )
-            raise ExtensionLoadError(
-                f"Invalid extension path format: {ext_path}."
-            ) from exc
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            if critical:
+                logger.error(
+                    "Critical extension bootstrap failed "
+                    f"token={token} elapsed_seconds={perf_counter() - ext_started_at:.3f}"
+                )
+                if isinstance(exc, ExtensionLoadError):
+                    raise
+                raise ExtensionLoadError(
+                    f"Critical extension failed: {token}."
+                ) from exc
 
-        # Flag used to signal that the plugin/extension
-        # registration was successful.
-        registered = False
-
-        # Flag used to signal that the plugin/extension
-        # platform is unsupported.
-        extension_supported = False
-
-        # Try importing the plugin/extension module.
-        try:
-            import_module(name=ext_module_name)
-        except ModuleNotFoundError as exc:
-            logger.error("Module import failed.")
-            logger.info(f"Module: {ext_module_name}.")
-            logger.error(
-                "Extension bootstrap failed"
-                f" type={ext_type} path={ext_path}"
-                f" elapsed_seconds={perf_counter() - ext_started_at:.3f}"
+            logger.warning(
+                "Non-critical extension bootstrap failed "
+                f"token={token} error_type={type(exc).__name__} error={exc} "
+                f"elapsed_seconds={perf_counter() - ext_started_at:.3f}"
             )
-            raise ExtensionLoadError(f"Module import failed: {ext_module_name}.") from exc
-
-        try:
-            if ext_type == "cp":
-                cp_ext_class = _resolve_extension_class(
-                    interface=ICPExtension,
-                    module_name=ext_module_name,
-                    class_name=ext_class_name,
-                    ext_path=ext_path,
-                )
-                cp_ext = cp_ext_class()
-                extension_supported = platform_service.extension_supported(cp_ext)
-                if extension_supported:
-                    messaging_service.register_cp_extension(cp_ext)
-                    registered = True
-            elif ext_type == "ct":
-                ct_ext_class = _resolve_extension_class(
-                    interface=ICTExtension,
-                    module_name=ext_module_name,
-                    class_name=ext_class_name,
-                    ext_path=ext_path,
-                )
-                ct_ext = ct_ext_class()
-                extension_supported = platform_service.extension_supported(ct_ext)
-                if extension_supported:
-                    messaging_service.register_ct_extension(ct_ext)
-                    registered = True
-            elif ext_type == "ctx":
-                ctx_ext_class = _resolve_extension_class(
-                    interface=ICTXExtension,
-                    module_name=ext_module_name,
-                    class_name=ext_class_name,
-                    ext_path=ext_path,
-                )
-                ctx_ext = ctx_ext_class()
-                extension_supported = platform_service.extension_supported(ctx_ext)
-                if extension_supported:
-                    messaging_service.register_ctx_extension(ctx_ext)
-                    registered = True
-            elif ext_type == "fw":
-                fw_ext_class = _resolve_extension_class(
-                    interface=IFWExtension,
-                    module_name=ext_module_name,
-                    class_name=ext_class_name,
-                    ext_path=ext_path,
-                )
-                fw_ext = fw_ext_class()
-                extension_supported = platform_service.extension_supported(fw_ext)
-                if extension_supported:
-                    await fw_ext.setup(app)
-                    registered = True
-            elif ext_type == "ipc":
-                ipc_ext_class = _resolve_extension_class(
-                    interface=IIPCExtension,
-                    module_name=ext_module_name,
-                    class_name=ext_class_name,
-                    ext_path=ext_path,
-                )
-                ipc_ext = ipc_ext_class()
-                extension_supported = platform_service.extension_supported(ipc_ext)
-                if extension_supported:
-                    ipc_service.register_ipc_extension(ipc_ext)
-                    registered = True
-            elif ext_type == "mh":
-                mh_ext_class = _resolve_extension_class(
-                    interface=IMHExtension,
-                    module_name=ext_module_name,
-                    class_name=ext_class_name,
-                    ext_path=ext_path,
-                )
-                mh_ext = mh_ext_class()
-                extension_supported = platform_service.extension_supported(mh_ext)
-                if extension_supported:
-                    messaging_service.register_mh_extension(mh_ext)
-                    registered = True
-            elif ext_type == "rag":
-                rag_ext_class = _resolve_extension_class(
-                    interface=IRAGExtension,
-                    module_name=ext_module_name,
-                    class_name=ext_class_name,
-                    ext_path=ext_path,
-                )
-                rag_ext = rag_ext_class()
-                extension_supported = platform_service.extension_supported(rag_ext)
-                if extension_supported:
-                    messaging_service.register_rag_extension(rag_ext)
-                    registered = True
-            elif ext_type == "rpp":
-                rpp_ext_class = _resolve_extension_class(
-                    interface=IRPPExtension,
-                    module_name=ext_module_name,
-                    class_name=ext_class_name,
-                    ext_path=ext_path,
-                )
-                rpp_ext = rpp_ext_class()
-                extension_supported = platform_service.extension_supported(rpp_ext)
-                if extension_supported:
-                    messaging_service.register_rpp_extension(rpp_ext)
-                    registered = True
-            else:
-                raise ExtensionLoadError(f"Unknown extension type: {ext_type}.")
-        except TypeError as exc:
-            logger.error(
-                "Incomplete subclass implementation for extension: "
-                f"{ext_path}. {exc}"
-            )
-            logger.error(
-                "Extension bootstrap failed"
-                f" type={ext_type} path={ext_path}"
-                f" elapsed_seconds={perf_counter() - ext_started_at:.3f}"
-            )
-            raise ExtensionLoadError(
-                f"Incomplete subclass implementation for extension: {ext_path}."
-            ) from exc
-        except ExtensionLoadError as exc:
-            logger.error(f"Extension class resolution failed: {ext_path}. {exc}")
-            logger.error(
-                "Extension bootstrap failed"
-                f" type={ext_type} path={ext_path}"
-                f" elapsed_seconds={perf_counter() - ext_started_at:.3f}"
-            )
-            raise
-
-        if not extension_supported:
-            logger.warning(f"Extension not supported by active platforms: {ext_path}.")
+            continue
 
         if registered:
-            logger.debug(f"Registered {ext_type.upper()} extension: {ext_path}.")
-
-        logger.debug(
-            "Extension bootstrap completed"
-            f" type={ext_type} path={ext_path}"
-            f" supported={extension_supported} registered={registered}"
-            f" elapsed_seconds={perf_counter() - ext_started_at:.3f}"
-        )
+            logger.debug(
+                f"Registered {resolved_type.upper()} extension: {token}."
+            )
+        else:
+            logger.debug(
+                f"Skipped unsupported extension: {token} ({resolved_type})."
+            )
 
     logger.debug(
         "Extension bootstrap sweep completed"

@@ -8,6 +8,9 @@ from typing import Any
 from quart import current_app, jsonify
 
 from mugen.bootstrap_state import (
+    PHASE_A_CAPABILITY_ERRORS_KEY,
+    PHASE_A_CAPABILITY_STATUSES_KEY,
+    PHASE_A_ERROR_KEY,
     PHASE_A_STATUS_KEY,
     PHASE_B_ERROR_KEY,
     PHASE_B_PLATFORM_ERRORS_KEY,
@@ -38,6 +41,9 @@ def _resolve_bootstrap_status() -> dict[str, Any]:
     state = get_bootstrap_state(current_app)
     return {
         "phase_a_status": str(state.get(PHASE_A_STATUS_KEY, "") or ""),
+        "phase_a_error": state.get(PHASE_A_ERROR_KEY),
+        "phase_a_capability_statuses": state.get(PHASE_A_CAPABILITY_STATUSES_KEY, {}),
+        "phase_a_capability_errors": state.get(PHASE_A_CAPABILITY_ERRORS_KEY, {}),
         "phase_b_status": str(state.get(PHASE_B_STATUS_KEY, "") or ""),
         "phase_b_error": state.get(PHASE_B_ERROR_KEY),
         "phase_b_started_at": state.get(PHASE_B_STARTED_AT_KEY),
@@ -61,6 +67,7 @@ async def core_health_live():
             {
                 "status": "live",
                 "phase_a_status": status["phase_a_status"],
+                "phase_a_error": status["phase_a_error"],
                 "phase_b_status": status["phase_b_status"],
             }
         ),
@@ -73,6 +80,8 @@ async def core_health_ready():
     """Readiness health probe."""
     status = _resolve_bootstrap_status()
     phase_a_status = status["phase_a_status"]
+    phase_a_error = status["phase_a_error"]
+    phase_a_capability_errors = status["phase_a_capability_errors"]
     readiness_grace_seconds = parse_nonnegative_float(
         status["phase_b_readiness_grace_seconds"],
         default=0.0,
@@ -104,6 +113,14 @@ async def core_health_ready():
     phase_b_error = health.phase_b_error
     failed_platforms = health.failed_critical_platforms
     reasons = health.reasons
+    if phase_a_status != PHASE_STATUS_HEALTHY:
+        if isinstance(phase_a_error, str) and phase_a_error.strip():
+            reasons = [*reasons, f"phase_a: {phase_a_error.strip()}"]
+        elif isinstance(phase_a_capability_errors, dict):
+            for capability_name, capability_error in phase_a_capability_errors.items():
+                if not isinstance(capability_error, str) or capability_error.strip() == "":
+                    continue
+                reasons = [*reasons, f"phase_a.{capability_name}: {capability_error.strip()}"]
     ready = (
         phase_a_status == PHASE_STATUS_HEALTHY
         and phase_b_status != PHASE_STATUS_DEGRADED
@@ -116,6 +133,9 @@ async def core_health_ready():
                 "status": "ready" if ready else "not_ready",
                 "ready": ready,
                 "phase_a_status": phase_a_status,
+                "phase_a_error": phase_a_error,
+                "phase_a_capability_statuses": status["phase_a_capability_statuses"],
+                "phase_a_capability_errors": phase_a_capability_errors,
                 "phase_b_status": phase_b_status,
                 "phase_b_error": phase_b_error,
                 "critical_platforms": critical_platforms,

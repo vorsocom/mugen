@@ -3,6 +3,7 @@
 # https://console.groq.com/docs/api-reference#chat
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 from typing import Any
 
@@ -129,6 +130,15 @@ class GroqCompletionGateway(ICompletionGateway):
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             raise RuntimeError("Groq completion gateway readiness probe failed.") from exc
+
+    async def aclose(self) -> None:
+        close = getattr(self._api, "close", None)
+        if callable(close) is not True:
+            return None
+        maybe_awaitable = close()
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
+        return None
 
     async def get_completion(
         self,

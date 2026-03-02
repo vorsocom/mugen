@@ -31,9 +31,9 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                 "modules": {
                     "core": {
                         "gateway": {
-                            "completion": "mugen.gateway.completion:CompletionProvider",
+                            "completion": "deterministic",
                             "storage": {
-                                "keyval": "mugen.gateway.keyval:KeyValProvider",
+                                "keyval": "relational",
                             }
                         }
                     }
@@ -42,20 +42,13 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         }
         if include_relational:
             config["mugen"]["modules"]["core"]["gateway"]["storage"]["relational"] = (  # type: ignore[index]
-                "mugen.gateway.rdbms:RelationalProvider"
+                "sqlalchemy"
             )
         if include_media:
             config["mugen"]["modules"]["core"]["gateway"]["storage"]["media"] = (  # type: ignore[index]
-                "mugen.gateway.media:MediaProvider"
+                "default"
             )
         return config
-
-    def test_split_class_path_rejects_module_only_value(self) -> None:
-        with self.assertRaises(RuntimeError):
-            di._split_class_path(
-                "module.only",
-                provider_name="completion_gateway",
-            )
 
     def test_config_path_exists_handles_non_dict_missing_and_present_paths(self) -> None:
         self.assertFalse(di._config_path_exists({"mugen": []}, "mugen", "modules"))
@@ -191,69 +184,6 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         injector.logging_gateway.error.assert_any_call("Missing provider (matrix_client).")
         injector.logging_gateway.error.assert_any_call("Missing provider (whatsapp_client).")
         injector.logging_gateway.error.assert_any_call("Missing provider (web_client).")
-
-    def test_validate_container_rejects_removed_legacy_keyval_paths(self) -> None:
-        injector = di.injector.DependencyInjector(
-            config=object(),
-            logging_gateway=Mock(),
-            completion_gateway=object(),
-            ipc_service=object(),
-            keyval_storage_gateway=object(),
-            nlp_service=object(),
-            platform_service=object(),
-            user_service=object(),
-            messaging_service=object(),
-        )
-
-        with self.assertRaises(RuntimeError):
-            di._validate_container(
-                {
-                    "mugen": {
-                        "runtime": {"profile": "api_only"},
-                        "platforms": [],
-                        "storage": {"keyval": {"legacy_import": {"enabled": False}}},
-                    }
-                },
-                injector,
-            )
-
-        with self.assertRaises(RuntimeError):
-            di._validate_container(
-                {
-                    "mugen": {
-                        "runtime": {"profile": "api_only"},
-                        "platforms": [],
-                        "modules": {
-                            "core": {
-                                "client": {
-                                    "telnet": "mugen.core.client.telnet"
-                                }
-                            }
-                        },
-                    }
-                },
-                injector,
-            )
-
-        with self.assertRaises(RuntimeError):
-            di._validate_container(
-                {
-                    "mugen": {
-                        "runtime": {"profile": "api_only"},
-                        "platforms": [],
-                        "modules": {
-                            "core": {
-                                "gateway": {
-                                    "storage": {
-                                        "keyval": "mugen.core.gateway.storage.keyval.dbm"
-                                    }
-                                }
-                            }
-                        },
-                    }
-                },
-                injector,
-            )
 
     def test_validate_container_uses_root_logger_when_injector_logger_is_missing(
         self,
@@ -846,7 +776,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                 di._await_readiness_probe_async(  # pylint: disable=protected-access
                     None,
                     provider_name="keyval_storage_gateway",
-                    configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                    configured_token="mugen.gateway.keyval:KeyValProvider",
                     timeout_seconds=1.0,
                 )
             )
@@ -862,7 +792,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._await_readiness_probe_async(  # pylint: disable=protected-access
                 _ready(),
                 provider_name="keyval_storage_gateway",
-                configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                configured_token="mugen.gateway.keyval:KeyValProvider",
                 timeout_seconds=1.0,
             )
         )
@@ -877,7 +807,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                 di._await_readiness_probe_async(  # pylint: disable=protected-access
                     _boom(),
                     provider_name="keyval_storage_gateway",
-                    configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                    configured_token="mugen.gateway.keyval:KeyValProvider",
                     timeout_seconds=1.0,
                 )
             )
@@ -891,7 +821,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                 di._await_readiness_probe_async(  # pylint: disable=protected-access
                     _slow(),
                     provider_name="keyval_storage_gateway",
-                    configured_class_path="mugen.gateway.keyval:KeyValProvider",
+                    configured_token="mugen.gateway.keyval:KeyValProvider",
                     timeout_seconds=0.01,
                 )
             )
@@ -932,7 +862,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             )
 
         self.assertIn("completion_gateway", str(raised.exception))
-        self.assertIn("mugen.gateway.completion:CompletionProvider", str(raised.exception))
+        self.assertIn("token='deterministic'", str(raised.exception))
 
     def test_ensure_injector_readiness_async_fails_for_missing_hook(self) -> None:
         class _ReadyProvider:  # pylint: disable=too-few-public-methods

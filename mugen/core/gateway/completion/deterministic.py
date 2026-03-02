@@ -29,6 +29,9 @@ class DeterministicCompletionGateway(ICompletionGateway):
         _ = self._config
         _ = self._logging_gateway
 
+    async def aclose(self) -> None:
+        return None
+
     async def get_completion(
         self,
         request: CompletionRequest,

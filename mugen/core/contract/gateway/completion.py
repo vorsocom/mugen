@@ -116,6 +116,10 @@ class ICompletionGateway(ABC):  # pylint: disable=too-few-public-methods
         """Validate provider readiness for startup fail-fast checks."""
 
     @abstractmethod
+    async def aclose(self) -> None:
+        """Close provider resources asynchronously."""
+
+    @abstractmethod
     async def get_completion(
         self,
         request: CompletionRequest,

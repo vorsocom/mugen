@@ -135,7 +135,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (completion_gateway).",
+                    "ERROR:root:Invalid configuration (completion_gateway): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -201,7 +201,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (completion_gateway).",
+                        "ERROR:root:Invalid configuration (completion_gateway): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -251,6 +251,9 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     async def check_readiness(self):
                         pass
 
+                    async def aclose(self):
+                        pass
+
                     async def get_completion(self, request):
                         pass
 
@@ -267,6 +270,10 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",  # pylint: disable=line-too-long
                         return_value=[DummyCompletionGatewayClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyCompletionGatewayClass,
                     ),
                 ):
                     # Attempt to build the completion gateway.

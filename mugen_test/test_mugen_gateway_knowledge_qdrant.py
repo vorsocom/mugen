@@ -99,6 +99,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_readiness_requires_qdrant_url(self) -> None:
         gateway, client, _, _ = _build_gateway(config=_make_config())
+        gateway._encoder = Mock()  # pylint: disable=protected-access
         await gateway.check_readiness()
         client.get_collections.assert_awaited_once_with()
 
@@ -125,6 +126,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
     async def test_check_readiness_defaults_timeout_when_nonpositive(self) -> None:
         gateway, _, _, _ = _build_gateway(config=_make_config(timeout_seconds=2.5))
         gateway._api_timeout_seconds = 0  # pylint: disable=protected-access
+        gateway._encoder = Mock()  # pylint: disable=protected-access
 
         timeout_values: list[float] = []
 
@@ -138,7 +140,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         ):
             await gateway.check_readiness()
 
-        self.assertEqual(timeout_values, [5.0])
+        self.assertEqual(timeout_values, [5.0, 5.0])
 
     def test_constructor_ignores_encoder_preload_and_warns(self) -> None:
         config = _make_config(encoder_preload="yes")
@@ -174,6 +176,48 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
                 tokenizer_kwargs={"clean_up_tokenization_spaces": False},
                 cache_folder="/tmp/hf",
             )
+
+    def test_resolve_encoder_model_name_falls_back_for_invalid_values(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config())
+        gateway._config.qdrant.encoder.model = 123  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            gateway._resolve_encoder_model_name(),
+            gateway._default_encoder_model,  # pylint: disable=protected-access
+        )
+        gateway._config.qdrant.encoder.model = "   "  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            gateway._resolve_encoder_model_name(),
+            gateway._default_encoder_model,  # pylint: disable=protected-access
+        )
+
+    async def test_check_readiness_wraps_encoder_probe_failures(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config())
+        gateway._get_encoder = AsyncMock(side_effect=RuntimeError("encoder failed"))  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "encoder readiness probe failed"):
+            await gateway.check_readiness()
+
+    async def test_aclose_handles_missing_sync_and_async_client_close(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config())
+
+        gateway._client = SimpleNamespace()  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+
+        close_calls: list[str] = []
+
+        def _sync_close():
+            close_calls.append("sync")
+            return None
+
+        gateway._client = SimpleNamespace(close=_sync_close)  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+
+        async def _async_close():
+            close_calls.append("async")
+            return None
+
+        gateway._client = SimpleNamespace(close=_async_close)  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+        self.assertEqual(close_calls, ["sync", "async"])
 
     def test_parse_helpers_cover_invalid_and_edge_values(self) -> None:
         config = _make_config()

@@ -170,6 +170,10 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(timeout_values, [4.0])
 
+    async def test_aclose_is_noop(self) -> None:
+        gateway = SambaNovaCompletionGateway(_make_config(), Mock())
+        self.assertIsNone(await gateway.aclose())
+
     async def test_get_completion_parses_non_stream_response(self) -> None:
         config = _make_config()
         logging_gateway = Mock()

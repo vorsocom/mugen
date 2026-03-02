@@ -132,7 +132,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                 # The knowledge gateway module cannot be imported
                 # since a nonexistent module was supplied.
                 self.assertIn(
-                    "WARNING:root:Could not import module (knowledge_gateway).",
+                    "WARNING:root:Invalid configuration (knowledge_gateway): module:Class paths are not supported.",
                     logger.output,
                 )
         except:  # pylint: disable=bare-except
@@ -202,7 +202,7 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                     # The operation cannot be completed since a valid
                     # subclass would not be found.
                     self.assertIn(
-                        "WARNING:root:Valid subclass not found (knowledge_gateway).",
+                        "WARNING:root:Invalid configuration (knowledge_gateway): module:Class paths are not supported.",
                         logger.output,
                     )
         except:  # pylint: disable=bare-except
@@ -269,6 +269,10 @@ class TestDIBuildKnowledgeGateway(unittest.TestCase):
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.knowledge.IKnowledgeGateway.__subclasses__",  # pylint: disable=line-too-long
                         return_value=[DummyKnowledgeGatewayClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyKnowledgeGatewayClass,
                     ),
                 ):
                     # Attempt to build the knowledge gateway.

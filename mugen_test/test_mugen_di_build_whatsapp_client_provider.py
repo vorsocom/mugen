@@ -184,7 +184,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (whatsapp_client).",
+                    "ERROR:root:Invalid configuration (whatsapp_client): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -253,7 +253,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (whatsapp_client).",
+                        "ERROR:root:Invalid configuration (whatsapp_client): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -448,6 +448,10 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                             "mugen.core.contract.client.whatsapp.IWhatsAppClient.__subclasses__"
                         ),
                         return_value=[DummyWhatsAppClientClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyWhatsAppClientClass,
                     ),
                 ):
                     # Attempt to build the WhatsApp service.

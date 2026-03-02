@@ -135,7 +135,7 @@ class TestDIBuildUserService(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (user_service).",
+                    "ERROR:root:Invalid configuration (user_service): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -201,7 +201,7 @@ class TestDIBuildUserService(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (user_service).",
+                        "ERROR:root:Invalid configuration (user_service): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -274,6 +274,10 @@ class TestDIBuildUserService(unittest.TestCase):
                             "mugen.core.contract.service.user.IUserService.__subclasses__"
                         ),
                         return_value=[DummyUserServiceClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyUserServiceClass,
                     ),
                 ):
                     # Attempt to build the User service.

@@ -120,27 +120,3 @@ class IMessagingService(ABC):
         message: dict,
     ) -> list[dict] | None:
         """Handle a video message from a chat."""
-
-    @abstractmethod
-    def register_cp_extension(self, ext: ICPExtension) -> None:
-        """Register a Command Processor (CP) extension."""
-
-    @abstractmethod
-    def register_ct_extension(self, ext: ICTExtension) -> None:
-        """Register a Coversational Trigger (CT) extension."""
-
-    @abstractmethod
-    def register_ctx_extension(self, ext: ICTXExtension) -> None:
-        """Register a Context (CTX) extension."""
-
-    @abstractmethod
-    def register_mh_extension(self, ext: IMHExtension) -> None:
-        """Register a Message Handler (MH) extension."""
-
-    @abstractmethod
-    def register_rag_extension(self, ext: IRAGExtension) -> None:
-        """Register a Retrieval Augmented Generation (RAG) extension."""
-
-    @abstractmethod
-    def register_rpp_extension(self, ext: IRPPExtension) -> None:
-        """Register a Response Pre-Processor (RPP) extension."""

@@ -3,6 +3,7 @@
 __all__ = ["QdrantKnowledgeGateway"]
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 from typing import Any
 
@@ -43,6 +44,7 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         self._logging_gateway = logging_gateway
         self._encoder: SentenceTransformer | None = None
         self._encoder_lock = asyncio.Lock()
+        self._encoder_model_name = self._resolve_encoder_model_name()
         self._encoder_max_concurrency = self._resolve_encoder_max_concurrency()
         self._encode_semaphore = asyncio.Semaphore(self._encoder_max_concurrency)
         self._api_timeout_seconds = self._resolve_api_timeout_seconds()
@@ -63,12 +65,25 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
 
     def _build_encoder(self) -> SentenceTransformer:
         return SentenceTransformer(
-            model_name_or_path=self._default_encoder_model,
+            model_name_or_path=self._encoder_model_name,
             tokenizer_kwargs={
                 "clean_up_tokenization_spaces": False,
             },
             cache_folder=self._config.transformers.hf.home,
         )
+
+    def _resolve_encoder_model_name(self) -> str:
+        raw_model = getattr(
+            getattr(getattr(self._config, "qdrant", SimpleNamespace()), "encoder", None),
+            "model",
+            self._default_encoder_model,
+        )
+        if not isinstance(raw_model, str):
+            return self._default_encoder_model
+        normalized = raw_model.strip()
+        if normalized == "":
+            return self._default_encoder_model
+        return normalized
 
     def _resolve_encoder_preload(self) -> bool:
         raw_value = getattr(
@@ -191,6 +206,21 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             await asyncio.wait_for(probe(), timeout=timeout_seconds)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             raise RuntimeError("Qdrant knowledge gateway readiness probe failed.") from exc
+        try:
+            await asyncio.wait_for(self._get_encoder(), timeout=timeout_seconds)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError(
+                "Qdrant knowledge gateway encoder readiness probe failed."
+            ) from exc
+
+    async def aclose(self) -> None:
+        close = getattr(self._client, "close", None)
+        if callable(close) is not True:
+            return None
+        maybe_awaitable = close()
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
+        return None
 
     async def _get_encoder(self) -> SentenceTransformer:
         if self._encoder is not None:

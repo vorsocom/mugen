@@ -119,6 +119,74 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(phase_b_runner.await_count, 0)
         await quartman.app.shutdown()
 
+    async def test_startup_marks_phase_a_degraded_for_degraded_capabilities(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        phase_b_runner = unittest.mock.AsyncMock(return_value=None)
+
+        async def _degraded_bootstrap(_app: Quart) -> None:
+            state = quartman._bootstrap_state()
+            state[quartman.PHASE_A_CAPABILITY_STATUSES_KEY] = {
+                "container_readiness": quartman.PHASE_STATUS_DEGRADED
+            }
+            state[quartman.PHASE_A_ERROR_KEY] = None
+
+        container = unittest.mock.Mock()
+        container.config = unittest.mock.Mock(
+            mugen=unittest.mock.Mock(
+                platforms=[],
+                runtime=unittest.mock.Mock(
+                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
+                ),
+            )
+        )
+
+        with (
+            unittest.mock.patch.object(quartman.di, "container", container),
+            unittest.mock.patch.object(quartman, "bootstrap_app", new=_degraded_bootstrap),
+            unittest.mock.patch.object(quartman, "run_platform_clients", new=phase_b_runner),
+        ):
+            await quartman.app.startup()
+            state = quartman._bootstrap_state()
+            self.assertEqual(state[quartman.PHASE_A_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+            self.assertIn("phase_a degraded capabilities", str(state[quartman.PHASE_A_ERROR_KEY]))
+            await quartman.app.shutdown()
+
+    async def test_startup_preserves_existing_phase_a_error_for_degraded_capabilities(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        phase_b_runner = unittest.mock.AsyncMock(return_value=None)
+
+        async def _degraded_bootstrap(_app: Quart) -> None:
+            state = quartman._bootstrap_state()
+            state[quartman.PHASE_A_CAPABILITY_STATUSES_KEY] = {
+                "container_readiness": quartman.PHASE_STATUS_DEGRADED
+            }
+            state[quartman.PHASE_A_ERROR_KEY] = "container probe failed"
+
+        container = unittest.mock.Mock()
+        container.config = unittest.mock.Mock(
+            mugen=unittest.mock.Mock(
+                platforms=[],
+                runtime=unittest.mock.Mock(
+                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
+                ),
+            )
+        )
+
+        with (
+            unittest.mock.patch.object(quartman.di, "container", container),
+            unittest.mock.patch.object(quartman, "bootstrap_app", new=_degraded_bootstrap),
+            unittest.mock.patch.object(quartman, "run_platform_clients", new=phase_b_runner),
+        ):
+            await quartman.app.startup()
+            state = quartman._bootstrap_state()
+            self.assertEqual(state[quartman.PHASE_A_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+            self.assertEqual(state[quartman.PHASE_A_ERROR_KEY], "container probe failed")
+            await quartman.app.shutdown()
+
     async def test_startup_fails_fast_on_invalid_platform_config_before_phase_b_task(
         self,
     ) -> None:

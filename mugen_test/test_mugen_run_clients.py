@@ -351,6 +351,131 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         state = app.extensions["mugen"]["bootstrap"]
         self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED)
 
+    async def test_run_platform_clients_ignores_started_and_degraded_callbacks_after_shutdown(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _test_config(platforms=["web"])
+        trigger = asyncio.Event()
+
+        async def _run_web_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            await trigger.wait()
+            if callable(started_callback):
+                started_callback()
+            if callable(healthy_callback):
+                healthy_callback()
+            if callable(degraded_callback):
+                degraded_callback("late error")
+
+        with unittest.mock.patch("mugen.run_web_client", new=_run_web_client):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.sleep(0)
+            state = app.extensions["mugen"]["bootstrap"]
+            state[SHUTDOWN_REQUESTED_KEY] = True
+            trigger.set()
+            await runner
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED)
+
+    async def test_run_platform_clients_marks_task_clean_exit_without_shutdown_as_degraded(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _test_config(platforms=["web"])
+        original_parse_bool = mugen_mod._parse_bool  # pylint: disable=protected-access
+        false_bool_calls = 0
+
+        def _patched_parse_bool(value: object, *, default: bool) -> bool:
+            nonlocal false_bool_calls
+            if value is False:
+                false_bool_calls += 1
+                if false_bool_calls == 1:
+                    return True
+                if false_bool_calls == 2:
+                    return False
+            return original_parse_bool(value, default=default)
+
+        _run_web_client = unittest.mock.AsyncMock(return_value=None)
+
+        with (
+            unittest.mock.patch("mugen._parse_bool", new=_patched_parse_bool),
+            unittest.mock.patch("mugen.run_web_client", new=_run_web_client),
+        ):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["web"],
+            PHASE_STATUS_DEGRADED,
+        )
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_ERRORS_KEY]["web"],
+            "platform runner stopped unexpectedly",
+        )
+        self.assertEqual(_run_web_client.await_count, 0)
+
+    async def test_run_platform_clients_shutdown_guards_ignore_healthy_and_degraded_callbacks(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _test_config(platforms=["web"])
+        original_parse_bool = mugen_mod._parse_bool  # pylint: disable=protected-access
+        false_bool_calls = 0
+
+        def _patched_parse_bool(value: object, *, default: bool) -> bool:
+            nonlocal false_bool_calls
+            if value is False:
+                false_bool_calls += 1
+                if false_bool_calls == 1:
+                    return False
+                if false_bool_calls in {2, 3, 4, 5}:
+                    return True
+            return original_parse_bool(value, default=default)
+
+        async def _run_web_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = healthy_callback
+            if callable(started_callback):
+                started_callback()
+            if callable(degraded_callback):
+                degraded_callback("ignored after shutdown")
+
+        with (
+            unittest.mock.patch("mugen._parse_bool", new=_patched_parse_bool),
+            unittest.mock.patch("mugen.run_web_client", new=_run_web_client),
+        ):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["web"],
+            PHASE_STATUS_STOPPED,
+        )
+
     async def test_run_platform_clients_ignores_duplicate_started_callback_signal(
         self,
     ) -> None:
@@ -379,7 +504,11 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             )
 
         state = app.extensions["mugen"]["bootstrap"]
-        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
+        self.assertIn(
+            "exhausted restart budget",
+            str(state[PHASE_B_PLATFORM_ERRORS_KEY]["web"]),
+        )
 
     async def test_run_platform_clients_rethrows_unexpected_type_error_from_runner(
         self,
@@ -399,12 +528,14 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             raise TypeError("boom")
 
         with unittest.mock.patch("mugen.run_web_client", new=_bad_runner):
-            with self.assertRaises(TypeError):
-                await run_platform_clients(
-                    app,
-                    config_provider=lambda: config,
-                    logger_provider=lambda: app.logger,
-                )
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
+        self.assertIn("TypeError: boom", str(state[PHASE_B_PLATFORM_ERRORS_KEY]["web"]))
 
     async def test_run_platform_clients_rethrows_type_error_for_callback_aware_runner(
         self,
@@ -416,12 +547,14 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             raise TypeError("boom")
 
         with unittest.mock.patch("mugen.run_web_client", new=_bad_runner):
-            with self.assertRaises(TypeError):
-                await run_platform_clients(
-                    app,
-                    config_provider=lambda: config,
-                    logger_provider=lambda: app.logger,
-                )
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
+        self.assertIn("TypeError: boom", str(state[PHASE_B_PLATFORM_ERRORS_KEY]["web"]))
 
     async def test_run_platform_clients_marks_degraded_when_runner_rejects_callbacks(
         self,
@@ -636,6 +769,40 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertIn("api", app.blueprints)
         self.assertIs(app.blueprints["api"], mugen_mod.api)
 
+    async def test_bootstrap_app_marks_phase_a_degraded_when_provider_readiness_fails(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=[])
+        register_extensions_mock = unittest.mock.AsyncMock()
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(
+                    side_effect=mugen_mod.di.ProviderBootstrapError("provider down")
+                ),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=register_extensions_mock,
+            ),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+                logger_provider=lambda: app.logger,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(
+            state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]["container_readiness"],
+            PHASE_STATUS_DEGRADED,
+        )
+        self.assertIn("provider down", str(state[mugen_mod.PHASE_A_ERROR_KEY]))
+
     def test_platform_state_helpers_cover_edge_branches(self) -> None:
         self.assertTrue(
             mugen_mod._parse_bool("yes", default=False)  # pylint: disable=protected-access
@@ -649,6 +816,14 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             mugen_mod._normalize_platform_list([" web ", "", "web", "matrix"]),  # pylint: disable=protected-access
             ["web", "matrix"],
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            mugen_mod._coerce_positive_int(-1, default=3),
+            3,
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            mugen_mod._coerce_positive_float(0.0, default=1.5),
+            1.5,
         )
         self.assertFalse(
             mugen_mod._config_path_exists(  # pylint: disable=protected-access
@@ -799,6 +974,24 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             critical_platforms=[],
         )
         self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+
+        controls_cfg = SimpleNamespace(
+            mugen=SimpleNamespace(
+                runtime=SimpleNamespace(
+                    phase_b=SimpleNamespace(
+                        supervisor_max_restarts=3,
+                        supervisor_backoff_base_seconds=5.0,
+                        supervisor_backoff_max_seconds=1.0,
+                    )
+                )
+            )
+        )
+        max_restarts, base_backoff, max_backoff = mugen_mod._resolve_phase_b_supervision_controls(  # pylint: disable=protected-access
+            controls_cfg
+        )
+        self.assertEqual(max_restarts, 3)
+        self.assertEqual(base_backoff, 5.0)
+        self.assertEqual(max_backoff, 5.0)
         self.assertIsNone(state[PHASE_B_ERROR_KEY])
 
         # Unexpected non-healthy states degrade readiness with explicit reasons.
@@ -891,8 +1084,8 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             )
 
         state = app.extensions["mugen"]["bootstrap"]
-        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED)
-        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_HEALTHY)
+        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_DEGRADED)
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
 
     async def test_run_platform_clients_raises_on_invalid_critical_platform(self) -> None:
         app = Quart("test_app")

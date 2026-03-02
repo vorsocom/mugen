@@ -13,10 +13,8 @@ from werkzeug.security import generate_password_hash
 
 
 _WEB_PLATFORM = "web"
-_WEB_FRAMEWORK_PLUGIN_PATH = "mugen.core.plugin.web.fw_ext:WebFWExtension"
-_CI_COMPLETION_GATEWAY_PATH = (
-    "mugen.core.gateway.completion.deterministic:DeterministicCompletionGateway"
-)
+_WEB_FRAMEWORK_PLUGIN_TOKEN = "core.fw.web"
+_CI_COMPLETION_GATEWAY_TOKEN = "deterministic"
 
 
 def _generate_ed25519_private_pem() -> str:
@@ -115,7 +113,8 @@ def _enable_web_framework_plugin(doc: tomlkit.TOMLDocument) -> None:
     for plugin in plugins:
         if (
             str(plugin.get("type", "")).strip().lower() == "fw"
-            and str(plugin.get("path", "")).strip() == _WEB_FRAMEWORK_PLUGIN_PATH
+            and str(plugin.get("token", "")).strip().lower()
+            == _WEB_FRAMEWORK_PLUGIN_TOKEN
         ):
             plugin["enabled"] = True
             return
@@ -133,7 +132,9 @@ def main() -> int:
     doc["rdbms"]["sqlalchemy"]["url"] = args.rdbms_url
 
     # CI should use a deterministic no-network completion gateway.
-    doc["mugen"]["modules"]["core"]["gateway"]["completion"] = _CI_COMPLETION_GATEWAY_PATH
+    doc["mugen"]["modules"]["core"]["gateway"]["completion"] = (
+        _CI_COMPLETION_GATEWAY_TOKEN
+    )
 
     doc["quart"]["secret_key"] = args.quart_secret_key
 
