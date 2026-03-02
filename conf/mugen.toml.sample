@@ -24,6 +24,10 @@ runtime.profile = "platform_full"   # api_only|web_only|platform_full
 clear = "..."
 
 [mugen.messaging]
+# Controls message-handler requirements:
+# - optional: zero-MH runtime is supported with core built-in text orchestration.
+# - required: startup fails if no MH extension is available for active messaging platforms.
+mh_mode = "optional"
 # Max number of chat history messages persisted and forwarded to completion context.
 history_max_messages = 40
 # Max CAS retries for chat-history persistence across workers/processes.
@@ -206,11 +210,6 @@ token = "core.ctx.system_persona"
 [[mugen.modules.core.plugins]]
 type = "cp"
 token = "core.cp.clear_history"
-
-# Message handler.
-[[mugen.modules.core.plugins]]
-type = "mh"
-token = "core.mh.default_text"
 
 # Optional WACAPI IPC extension.
 # [[mugen.modules.core.plugins]]

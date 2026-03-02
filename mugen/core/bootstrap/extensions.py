@@ -12,7 +12,6 @@ from mugen.core.contract.extension.ct import ICTExtension
 from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.fw import IFWExtension
 from mugen.core.contract.extension.ipc import IIPCExtension
-from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.registry import IExtensionRegistry
 from mugen.core.contract.extension.rpp import IRPPExtension
@@ -75,7 +74,6 @@ _EXTENSION_TOKEN_REGISTRY: dict[str, _ExtensionClassRef] = {
     "core.ipc.matrix_device_management": _ExtensionClassRef("ipc", IIPCExtension, "mugen.core.plugin.matrix.manager.device_ipc_ext", "DeviceManagementIPCExtension"),
     "core.ctx.system_persona": _ExtensionClassRef("ctx", ICTXExtension, "mugen.core.plugin.context.persona.ctx_ext", "SystemPersonaCTXExtension"),
     "core.cp.clear_history": _ExtensionClassRef("cp", ICPExtension, "mugen.core.plugin.command.clear_history.cp_ext", "ClearChatHistoryICPExtension"),
-    "core.mh.default_text": _ExtensionClassRef("mh", IMHExtension, "mugen.core.plugin.message_handler.text.mh_ext", "DefaultTextMHExtension"),
 }
 
 
