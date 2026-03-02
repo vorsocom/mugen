@@ -47,7 +47,6 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         self._encoder_model_name = self._resolve_encoder_model_name()
         self._encoder_max_concurrency = self._resolve_encoder_max_concurrency()
         self._encode_semaphore = asyncio.Semaphore(self._encoder_max_concurrency)
-        self._encoder_warmup_task: asyncio.Task | None = None
         self._api_timeout_seconds = self._resolve_api_timeout_seconds()
         self._api_max_retries = self._resolve_api_max_retries()
         self._api_retry_backoff_seconds = self._resolve_api_retry_backoff_seconds()
@@ -57,12 +56,6 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             field_values={"timeout_seconds": self._api_timeout_seconds},
         )
         self._warn_missing_timeout_in_production()
-
-        if self._resolve_encoder_preload() is True:
-            self._logging_gateway.warning(
-                "QdrantKnowledgeGateway: encoder preload is ignored; "
-                "using async lazy initialization."
-            )
 
     def _build_encoder(self) -> SentenceTransformer:
         return SentenceTransformer(
@@ -85,22 +78,6 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         if normalized == "":
             return self._default_encoder_model
         return normalized
-
-    def _resolve_encoder_preload(self) -> bool:
-        raw_value = getattr(
-            getattr(getattr(self._config, "qdrant", SimpleNamespace()), "encoder", None),
-            "preload",
-            False,
-        )
-        if isinstance(raw_value, bool):
-            return raw_value
-        if isinstance(raw_value, str):
-            normalized = raw_value.strip().lower()
-            if normalized in {"1", "true", "yes", "on"}:
-                return True
-            if normalized in {"0", "false", "no", "off"}:
-                return False
-        return False
 
     def _resolve_encoder_max_concurrency(self) -> int:
         raw_value = getattr(
@@ -207,15 +184,14 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             await asyncio.wait_for(probe(), timeout=timeout_seconds)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             raise RuntimeError("Qdrant knowledge gateway readiness probe failed.") from exc
-        self._schedule_encoder_warmup()
+        try:
+            await asyncio.wait_for(self._get_encoder(), timeout=timeout_seconds)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError(
+                "Qdrant knowledge gateway encoder initialization failed."
+            ) from exc
 
     async def aclose(self) -> None:
-        warmup_task = self._encoder_warmup_task
-        self._encoder_warmup_task = None
-        if isinstance(warmup_task, asyncio.Task) and not warmup_task.done():
-            warmup_task.cancel()
-            await asyncio.gather(warmup_task, return_exceptions=True)
-
         close = getattr(self._client, "close", None)
         if callable(close) is not True:
             return None
@@ -223,25 +199,6 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         if inspect.isawaitable(maybe_awaitable):
             await maybe_awaitable
         return None
-
-    def _schedule_encoder_warmup(self) -> None:
-        warmup_task = self._encoder_warmup_task
-        if isinstance(warmup_task, asyncio.Task) and not warmup_task.done():
-            return
-        self._encoder_warmup_task = asyncio.create_task(
-            self._run_encoder_warmup(),
-            name="mugen.qdrant.encoder_warmup",
-        )
-
-    async def _run_encoder_warmup(self) -> None:
-        try:
-            await self._get_encoder()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            self._logging_gateway.warning(
-                f"QdrantKnowledgeGateway: async encoder warmup failed ({exc})."
-            )
 
     async def _get_encoder(self) -> SentenceTransformer:
         if self._encoder is not None:

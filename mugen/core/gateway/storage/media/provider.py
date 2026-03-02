@@ -15,7 +15,7 @@ from mugen.core.gateway.storage.media.object import ObjectMediaStorageGateway
 class DefaultMediaStorageGateway(IMediaStorageGateway):
     """Config-driven media gateway that delegates to a concrete backend."""
 
-    _default_media_backend: str = "filesystem"
+    _default_media_backend: str = "object"
     _default_media_storage_path: str = "data/web_media"
     _default_media_object_cache_path: str = "data/web_media_object_cache"
 
@@ -81,6 +81,11 @@ class DefaultMediaStorageGateway(IMediaStorageGateway):
         ).strip().lower()
 
         if backend in {"filesystem", "fs", "local"}:
+            if self._is_production_environment():
+                raise RuntimeError(
+                    "web.media.backend=filesystem is not allowed in production. "
+                    "Use object backend."
+                )
             storage_path = self._resolve_str_config(
                 ("web", "media", "storage", "path"),
                 self._default_media_storage_path,
@@ -105,6 +110,13 @@ class DefaultMediaStorageGateway(IMediaStorageGateway):
             )
 
         raise ValueError("web.media.backend must be one of: filesystem, object.")
+
+    def _is_production_environment(self) -> bool:
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+            or ""
+        ).strip().lower()
+        return environment == "production"
 
     def _resolve_storage_path(self, configured_path: str) -> str:
         if os.path.isabs(configured_path):

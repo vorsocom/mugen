@@ -9,6 +9,17 @@ Audience: Core and downstream plugin teams
 This document explains how to treat ACP and ACP-derived core plugins as a
 shared service control plane for downstream orchestration.
 
+## Core Architecture Boundary Contract
+
+The following layer rules are considered hard constraints for `mugen/core`:
+
+- Domain/use-case code stays pure and cannot import adapters, DI, runtime/bootstrap orchestration, or Quart.
+- Contracts define ports and cannot import implementation packages.
+- Bootstrap/orchestration composes domain + contracts + DI, but does not directly import concrete adapters.
+- Adapter layers (clients/gateways) cannot import the API layer.
+
+These rules are enforced by architecture-boundary tests and should be preserved during service changes.
+
 ## ACP as the Control Plane
 
 `acp` is the foundational service layer for core plugins. It provides:

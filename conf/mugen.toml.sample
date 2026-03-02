@@ -191,7 +191,7 @@ contrib = "mugen.core.plugin.whatsapp.wacapi.contrib"
 [[mugen.modules.core.plugins]]
 type = "fw"
 token = "core.fw.web"
-enabled = false
+enabled = true
 name = "com.vorsocomputing.mugen.web"
 namespace = "com.vorsocomputing.mugen.web"
 models = "mugen.core.plugin.web.model"
@@ -397,7 +397,7 @@ security.device_trust.mode = "strict_known"
 storage.olm.path = "/absolute/path/to/data/.olmstore"
 
 [security.secrets]
-# Required in production when Matrix platform is enabled.
+# Required whenever Matrix platform is enabled.
 encryption_key = "<set-secret-encryption-key>"
 
 # === Qdrant ===
@@ -407,7 +407,6 @@ api.url = ""
 api.timeout_seconds = 10.0
 api.max_retries = 2
 api.retry_backoff_seconds = 0.5
-encoder.preload = false
 encoder.max_concurrency = 4
 
 # === Quart ===
@@ -524,8 +523,8 @@ sse.cross_instance_poll_seconds = 1.0
 queue.poll_interval_seconds = 0.25
 queue.processing_lease_seconds = 30
 queue.max_pending_jobs = 2000
-media.backend = "filesystem"
-media.storage.path = "/absolute/path/to/data/web_media"
+media.backend = "object"
+media.storage.path = "data/web_media"
 media.max_upload_bytes = 20971520
 # Max attachments per structured message payload.
 media.max_attachments_per_message = 10
@@ -537,5 +536,5 @@ media.allowed_mimetypes = [
 ]
 media.download_token_ttl_seconds = 900
 media.retention_seconds = 86400
-media.object.cache_path = "/absolute/path/to/data/web_media_object_cache"
+media.object.cache_path = "data/web_media_object_cache"
 media.object.key_prefix = "web:media:object"

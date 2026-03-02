@@ -244,7 +244,8 @@ class SemanticChecker:  # pylint: disable=too-few-public-methods
 
         # Type-check each component
         for key_name, expr in comps:
-            assert key_name is not None
+            if key_name is None:
+                raise SemanticError("Named key component is required.")
             prop = t.properties.get(key_name)
             if not prop:
                 raise SemanticError(

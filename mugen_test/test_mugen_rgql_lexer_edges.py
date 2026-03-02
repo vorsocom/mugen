@@ -63,6 +63,11 @@ class TestMugenRGQLLexerEdges(unittest.TestCase):
         with self.assertRaises(ValueError):
             RGQLLexer("'abc").tokenize()
 
+    def test_string_reader_requires_opening_quote(self) -> None:
+        lexer = RGQLLexer("abc")
+        with self.assertRaisesRegex(ValueError, "Expected string quote"):
+            lexer._read_string()  # pylint: disable=protected-access
+
     def test_json_reader_handles_escape_nested_mismatch_and_invalid_payload(self) -> None:
         escaped = RGQLLexer('{"k":"a\\\"b"}').tokenize()
         self.assertEqual(escaped[0].kind, TokenKind.JSON_LITERAL)

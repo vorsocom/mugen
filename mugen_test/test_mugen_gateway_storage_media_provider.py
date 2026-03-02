@@ -5,12 +5,74 @@ from __future__ import annotations
 import os
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 from mugen.core.gateway.storage.media.provider import DefaultMediaStorageGateway
+from mugen.core.gateway.storage.media.filesystem import FilesystemMediaStorageGateway
+from mugen.core.gateway.storage.media.object import ObjectMediaStorageGateway
 
 
 class TestMediaProviderHelpers(unittest.TestCase):
     """Cover path resolution branches in media gateway provider."""
+
+    def test_default_backend_is_object_storage(self) -> None:
+        gateway = DefaultMediaStorageGateway(
+            config=SimpleNamespace(
+                basedir="/tmp/base",
+                mugen=SimpleNamespace(environment="development"),
+                web=SimpleNamespace(
+                    media=SimpleNamespace(
+                        storage=SimpleNamespace(path="web_media"),
+                        object=SimpleNamespace(
+                            cache_path="web_media_object_cache",
+                            key_prefix="web:media:object",
+                        ),
+                    )
+                ),
+            ),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+        )
+
+        self.assertIsInstance(gateway._backend, ObjectMediaStorageGateway)  # pylint: disable=protected-access
+
+    def test_production_rejects_filesystem_backend(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "web.media.backend=filesystem is not allowed in production",
+        ):
+            DefaultMediaStorageGateway(
+                config=SimpleNamespace(
+                    basedir="/tmp/base",
+                    mugen=SimpleNamespace(environment="production"),
+                    web=SimpleNamespace(
+                        media=SimpleNamespace(
+                            backend="filesystem",
+                            storage=SimpleNamespace(path="web_media"),
+                        )
+                    ),
+                ),
+                keyval_storage_gateway=Mock(),
+                logging_gateway=Mock(),
+            )
+
+    def test_development_allows_filesystem_backend(self) -> None:
+        gateway = DefaultMediaStorageGateway(
+            config=SimpleNamespace(
+                basedir="/tmp/base",
+                mugen=SimpleNamespace(environment="development"),
+                web=SimpleNamespace(
+                    media=SimpleNamespace(
+                        backend="filesystem",
+                        storage=SimpleNamespace(path="web_media"),
+                    )
+                ),
+            ),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+        )
+
+        self.assertIsInstance(gateway._backend, FilesystemMediaStorageGateway)  # pylint: disable=protected-access
 
     def test_resolve_storage_path_preserves_absolute_path(self) -> None:
         gateway = DefaultMediaStorageGateway.__new__(DefaultMediaStorageGateway)

@@ -18,7 +18,6 @@ def _make_config(
     timeout_seconds: object = 2.5,
     max_retries: object = 1,
     retry_backoff_seconds: object = 0.0,
-    encoder_preload: object = False,
     encoder_max_concurrency: object = 2,
 ) -> SimpleNamespace:
     return SimpleNamespace(
@@ -32,7 +31,6 @@ def _make_config(
                 retry_backoff_seconds=retry_backoff_seconds,
             ),
             encoder=SimpleNamespace(
-                preload=encoder_preload,
                 max_concurrency=encoder_max_concurrency,
             ),
         ),
@@ -139,32 +137,10 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         ):
             await gateway.check_readiness()
 
-        self.assertEqual(timeout_values, [5.0])
-
-    def test_constructor_ignores_encoder_preload_and_warns(self) -> None:
-        config = _make_config(encoder_preload="yes")
-        logging_gateway = Mock()
-        fake_client = SimpleNamespace(count=AsyncMock(), search=AsyncMock())
-
-        with (
-            patch(
-                "mugen.core.gateway.knowledge.qdrant.AsyncQdrantClient",
-                return_value=fake_client,
-            ),
-            patch("mugen.core.gateway.knowledge.qdrant.SentenceTransformer") as transformer,
-        ):
-            gateway = QdrantKnowledgeGateway(config, logging_gateway)
-
-        self.assertIsNone(gateway._encoder)  # pylint: disable=protected-access
-        transformer.assert_not_called()
-        warnings = [str(call.args[0]) for call in logging_gateway.warning.call_args_list]
-        self.assertIn(
-            "QdrantKnowledgeGateway: encoder preload is ignored; using async lazy initialization.",
-            warnings,
-        )
+        self.assertEqual(timeout_values, [5.0, 5.0])
 
     def test_build_encoder_constructs_sentence_transformer(self) -> None:
-        config = _make_config(encoder_preload=False)
+        config = _make_config()
         gateway, _, _, _ = _build_gateway(config=config)
         with patch("mugen.core.gateway.knowledge.qdrant.SentenceTransformer") as transformer:
             built = gateway._build_encoder()  # pylint: disable=protected-access
@@ -189,35 +165,17 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
             gateway._default_encoder_model,  # pylint: disable=protected-access
         )
 
-    async def test_check_readiness_schedules_async_encoder_warmup(self) -> None:
+    async def test_check_readiness_blocks_on_encoder_initialization(self) -> None:
         gateway, _, _, _ = _build_gateway(config=_make_config())
-        gateway._schedule_encoder_warmup = Mock()  # pylint: disable=protected-access
+        gateway._get_encoder = AsyncMock(return_value=object())  # pylint: disable=protected-access
         await gateway.check_readiness()
-        gateway._schedule_encoder_warmup.assert_called_once_with()  # pylint: disable=protected-access
+        gateway._get_encoder.assert_awaited_once_with()  # pylint: disable=protected-access
 
-    async def test_run_encoder_warmup_logs_failures(self) -> None:
-        gateway, _, logger, _ = _build_gateway(config=_make_config())
-        gateway._get_encoder = AsyncMock(side_effect=RuntimeError("encoder failed"))  # pylint: disable=protected-access
-        await gateway._run_encoder_warmup()  # pylint: disable=protected-access
-        warning_messages = [str(call.args[0]) for call in logger.warning.call_args_list]
-        self.assertTrue(
-            any("async encoder warmup failed" in message for message in warning_messages)
-        )
-
-    async def test_schedule_encoder_warmup_noops_when_task_already_running(self) -> None:
+    async def test_check_readiness_raises_when_encoder_init_fails(self) -> None:
         gateway, _, _, _ = _build_gateway(config=_make_config())
-
-        async def _never_finishes() -> None:
-            await asyncio.sleep(60)
-
-        existing_task = asyncio.create_task(_never_finishes())
-        gateway._encoder_warmup_task = existing_task  # pylint: disable=protected-access
-        try:
-            gateway._schedule_encoder_warmup()  # pylint: disable=protected-access
-            self.assertIs(gateway._encoder_warmup_task, existing_task)  # pylint: disable=protected-access
-        finally:
-            existing_task.cancel()
-            await asyncio.gather(existing_task, return_exceptions=True)
+        gateway._get_encoder = AsyncMock(side_effect=RuntimeError("encoder failed"))  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "encoder initialization failed"):
+            await gateway.check_readiness()
 
     async def test_aclose_handles_missing_sync_and_async_client_close(self) -> None:
         gateway, _, _, _ = _build_gateway(config=_make_config())
@@ -242,33 +200,9 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await gateway.aclose())
         self.assertEqual(close_calls, ["sync", "async"])
 
-    async def test_aclose_cancels_inflight_encoder_warmup(self) -> None:
-        gateway, _, _, _ = _build_gateway(config=_make_config())
-
-        async def _never_finishes() -> None:
-            await asyncio.sleep(60)
-
-        warmup_task = asyncio.create_task(_never_finishes())
-        gateway._encoder_warmup_task = warmup_task  # pylint: disable=protected-access
-        gateway._client = SimpleNamespace(close=AsyncMock())  # pylint: disable=protected-access
-
-        await gateway.aclose()
-
-        self.assertTrue(warmup_task.done())
-        gateway._client.close.assert_awaited_once_with()  # pylint: disable=protected-access
-
     def test_parse_helpers_cover_invalid_and_edge_values(self) -> None:
         config = _make_config()
         gateway, _, logging_gateway, _ = _build_gateway(config=config)
-
-        gateway._config.qdrant.encoder.preload = "off"  # pylint: disable=protected-access
-        self.assertFalse(gateway._resolve_encoder_preload())  # pylint: disable=protected-access
-        gateway._config.qdrant.encoder.preload = "unexpected"  # pylint: disable=protected-access
-        self.assertFalse(gateway._resolve_encoder_preload())  # pylint: disable=protected-access
-        gateway._config.qdrant.encoder.preload = True  # pylint: disable=protected-access
-        self.assertTrue(gateway._resolve_encoder_preload())  # pylint: disable=protected-access
-        gateway._config.qdrant.encoder.preload = object()  # pylint: disable=protected-access
-        self.assertFalse(gateway._resolve_encoder_preload())  # pylint: disable=protected-access
 
         gateway._config.qdrant.encoder.max_concurrency = "bad"  # pylint: disable=protected-access
         self.assertEqual(
@@ -374,7 +308,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_get_encoder_builds_once_and_reuses_encoder(self) -> None:
-        config = _make_config(encoder_preload=False)
+        config = _make_config()
         gateway, _, _, _ = _build_gateway(config=config)
         built_encoder = object()
         with (
@@ -394,7 +328,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         self.assertIs(to_thread.await_args.args[0], build_encoder)
 
     async def test_get_encoder_concurrent_first_calls_use_single_build(self) -> None:
-        config = _make_config(encoder_preload=False)
+        config = _make_config()
         gateway, _, _, _ = _build_gateway(config=config)
         built_encoder = object()
 
@@ -420,7 +354,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         to_thread.assert_awaited_once()
 
     async def test_get_encoder_handles_encoder_set_while_waiting_for_lock(self) -> None:
-        config = _make_config(encoder_preload=False)
+        config = _make_config()
         gateway, _, _, _ = _build_gateway(config=config)
         sentinel_encoder = object()
         gateway._encoder = None  # pylint: disable=protected-access
@@ -438,7 +372,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         self.assertIs(resolved, sentinel_encoder)
 
     async def test_encode_search_term_supports_vector_shapes(self) -> None:
-        config = _make_config(encoder_preload=False)
+        config = _make_config()
         gateway, _, _, _ = _build_gateway(config=config)
 
         gateway._encoder = SimpleNamespace(encode=lambda _term: _VectorLike())  # pylint: disable=protected-access

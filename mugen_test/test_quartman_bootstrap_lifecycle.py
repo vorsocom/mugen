@@ -119,6 +119,38 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(phase_b_runner.await_count, 0)
         await quartman.app.shutdown()
 
+    async def test_phase_a_failure_preserves_existing_non_empty_error(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        async def _bootstrap_then_fail(_app: Quart) -> None:
+            state = quartman._bootstrap_state()
+            state[quartman.PHASE_A_ERROR_KEY] = "pre-existing phase_a error"
+            raise ExtensionLoadError("phase_a failed")
+
+        phase_b_runner = unittest.mock.AsyncMock()
+
+        with (
+            unittest.mock.patch.object(
+                quartman,
+                "bootstrap_app",
+                new=_bootstrap_then_fail,
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "run_platform_clients",
+                new=phase_b_runner,
+            ),
+            self.assertRaises(ExtensionLoadError),
+        ):
+            await quartman.app.startup()
+
+        state = quartman._bootstrap_state()
+        self.assertEqual(state[quartman.PHASE_A_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+        self.assertEqual(state[quartman.PHASE_A_ERROR_KEY], "pre-existing phase_a error")
+        self.assertEqual(phase_b_runner.await_count, 0)
+        await quartman.app.shutdown()
+
     async def test_startup_marks_phase_a_degraded_for_degraded_capabilities(self) -> None:
         app = Quart("quartman_test")
         quartman = _import_quartman_with_app(app)

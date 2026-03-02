@@ -255,7 +255,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client = object.__new__(DefaultMatrixClient)
         client._config = SimpleNamespace(
             mugen=SimpleNamespace(
-                environment="production",
+                environment="development",
                 platforms=[" Matrix ", "web"],
             )
         )
@@ -269,11 +269,11 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AttributeError):
             _ = client.non_existent_attr
 
-    def test_init_requires_encryption_key_for_matrix_in_production(self) -> None:
+    def test_init_requires_encryption_key_for_matrix_enabled_platform(self) -> None:
         config = SimpleNamespace(
             basedir="/tmp",
             mugen=SimpleNamespace(
-                environment="production",
+                environment="development",
                 platforms=[" Matrix "],
             ),
             matrix=SimpleNamespace(
@@ -741,10 +741,10 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             123,
         )
 
-    def test_init_requires_secret_encryption_key_in_production(self) -> None:
+    def test_init_requires_secret_encryption_key_when_matrix_enabled(self) -> None:
         config = SimpleNamespace(
             basedir="/tmp",
-            mugen=SimpleNamespace(environment="production", platforms=["matrix"]),
+            mugen=SimpleNamespace(environment="development", platforms=["matrix"]),
             matrix=SimpleNamespace(
                 homeserver="https://matrix.example.com",
                 client=SimpleNamespace(user="@assistant:example.com"),
@@ -1046,22 +1046,20 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client._keyval_storage_gateway.put_text.await_count, 3)
         client.load_store.assert_called_once_with()
 
-    async def test_aenter_password_login_without_cipher_skips_persistence(self) -> None:
+    async def test_aenter_password_login_without_cipher_raises(self) -> None:
         client = self._client()
         client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
         client.login = AsyncMock(
             return_value=_FakeLoginResponse("access", "device-1", "@user:example.com")
         )
 
-        with patch.object(matrix_mod, "LoginResponse", _FakeLoginResponse):
-            result = await client.__aenter__()
+        with (
+            patch.object(matrix_mod, "LoginResponse", _FakeLoginResponse),
+            self.assertRaisesRegex(RuntimeError, "Cannot persist client_access_token"),
+        ):
+            await client.__aenter__()
 
-        self.assertIs(result, client)
         client._keyval_storage_gateway.put_text.assert_not_awaited()
-        warning_messages = [str(call.args[0]) for call in client._logging_gateway.warning.call_args_list]
-        self.assertTrue(
-            any("credentials were not persisted" in message for message in warning_messages)
-        )
 
     async def test_aenter_password_login_failure_raises_runtime_error(self) -> None:
         client = self._client()

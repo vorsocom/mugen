@@ -158,7 +158,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
         if self._matrix_secrets_encryption_required() and self._secret_cipher is None:
             raise RuntimeError(
-                "Matrix secret encryption key is required in production. "
+                "Matrix secret encryption key is required when matrix platform is enabled. "
                 "Set security.secrets.encryption_key."
             )
 
@@ -318,33 +318,27 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 self._logging_gateway.debug("Password login successful.")
                 self._logging_gateway.debug("Saving credentials.")
 
-                if getattr(self, "_secret_cipher", None) is None:
-                    self._logging_gateway.warning(
-                        "Matrix credentials were not persisted because "
-                        "security.secrets.encryption_key is not configured."
-                    )
-                else:
-                    await self._keyval_storage_gateway.put_text(
-                        self._client_access_token_key,
-                        self._encode_secret_value(
-                            resp.access_token,
-                            field_name="client_access_token",
-                        ),
-                    )
-                    await self._keyval_storage_gateway.put_text(
-                        self._client_device_id_key,
-                        self._encode_secret_value(
-                            resp.device_id,
-                            field_name="client_device_id",
-                        ),
-                    )
-                    await self._keyval_storage_gateway.put_text(
-                        self._client_user_id_key,
-                        self._encode_secret_value(
-                            resp.user_id,
-                            field_name="client_user_id",
-                        ),
-                    )
+                await self._keyval_storage_gateway.put_text(
+                    self._client_access_token_key,
+                    self._encode_secret_value(
+                        resp.access_token,
+                        field_name="client_access_token",
+                    ),
+                )
+                await self._keyval_storage_gateway.put_text(
+                    self._client_device_id_key,
+                    self._encode_secret_value(
+                        resp.device_id,
+                        field_name="client_device_id",
+                    ),
+                )
+                await self._keyval_storage_gateway.put_text(
+                    self._client_user_id_key,
+                    self._encode_secret_value(
+                        resp.user_id,
+                        field_name="client_user_id",
+                    ),
+                )
                 self.access_token = resp.access_token
                 self.device_id = resp.device_id
                 self.user_id = resp.user_id
@@ -500,13 +494,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         return raw_key
 
     def _matrix_secrets_encryption_required(self) -> bool:
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-        ).strip().lower()
         platforms = normalize_platforms(
             getattr(getattr(self._config, "mugen", SimpleNamespace()), "platforms", [])
         )
-        return environment == "production" and "matrix" in platforms
+        return "matrix" in platforms
 
     def _build_secret_cipher(self) -> Fernet | None:
         security_cfg = getattr(getattr(self._config, "security", SimpleNamespace()), "secrets", None)

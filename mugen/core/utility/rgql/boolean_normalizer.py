@@ -60,7 +60,8 @@ def _is_bool_literal(expr: Expr) -> bool:
 
 
 def _bool_value(expr: Expr) -> bool:
-    assert _is_bool_literal(expr)
+    if _is_bool_literal(expr) is not True:
+        raise ValueError("Expected boolean literal expression.")
     return bool(expr.value)
 
 

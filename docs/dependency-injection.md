@@ -10,6 +10,19 @@ This note documents the core DI structure in `mugen/core/di/__init__.py` and the
 
 Keep `logging_gateway` as the bootstrap provider and keep the remaining providers in `_PROVIDER_BUILD_ORDER` dependency-safe order.
 
+## Layering Contract
+
+Core DI participates in a strict clean-architecture contract that is enforced by tests:
+
+- `mugen.core.domain.use_case` must remain infrastructure-free:
+  - no imports from Quart, DI container, clients, gateways, services, runtime/bootstrap adapters.
+- `mugen.core.contract.*` defines ports only:
+  - no imports from concrete implementation packages.
+- Bootstrap/orchestration (`mugen/__init__.py`, `quartman.py`) coordinates contracts + DI and should not directly import concrete clients/gateways/services.
+- Adapters (`mugen.core.client.*`, `mugen.core.gateway.*`) must not import API-layer modules.
+
+When changing DI/provider wiring, maintain these boundaries first, then update implementation.
+
 ## Extension Services
 
 - Extension service keys used by ACP are core-owned constants in `mugen/core/di/__init__.py`:

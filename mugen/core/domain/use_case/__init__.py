@@ -6,6 +6,9 @@ __all__ = [
     "PhaseBHealthInput",
     "PhaseBHealthResult",
     "QueueJobLifecycleUseCase",
+    "RuntimeCapabilityInput",
+    "RuntimeCapabilityResult",
+    "evaluate_runtime_capabilities",
     "evaluate_phase_b_health",
 ]
 
@@ -19,3 +22,8 @@ from mugen.core.domain.use_case.phase_b_health import (
     evaluate_phase_b_health,
 )
 from mugen.core.domain.use_case.queue_job_lifecycle import QueueJobLifecycleUseCase
+from mugen.core.domain.use_case.runtime_capability import (
+    RuntimeCapabilityInput,
+    RuntimeCapabilityResult,
+    evaluate_runtime_capabilities,
+)

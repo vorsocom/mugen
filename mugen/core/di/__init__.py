@@ -416,8 +416,8 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
     if unsupported_platforms:
         unsupported_platforms_text = ", ".join(unsupported_platforms)
         logger.error(
-            "Unsupported platform configuration detected: %s.",
-            unsupported_platforms_text,
+            "Unsupported platform configuration detected: "
+            f"{unsupported_platforms_text}."
         )
         raise RuntimeError(
             "Unsupported platform configuration: "

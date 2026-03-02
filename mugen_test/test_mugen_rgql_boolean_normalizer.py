@@ -6,6 +6,7 @@ from mugen.core.utility.rgql.ast import BinaryOp, Identifier, Literal, UnaryOp
 from mugen.core.utility.rgql.boolean_normalizer import (
     _dnf_from_nnf,
     _nnf,
+    _bool_value,
     dnf_clauses_to_ast,
     simplify_boolean,
     to_dnf_clauses,
@@ -133,3 +134,7 @@ class TestMugenRgqlBooleanNormalizer(unittest.TestCase):
             dnf_clauses_to_ast([[], [a]]),
             BinaryOp("or", Literal(True), a),
         )
+
+    def test_bool_value_rejects_non_boolean_literal(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Expected boolean literal expression"):
+            _bool_value(Literal("not-boolean"))

@@ -8,6 +8,10 @@ from mugen.core.domain.use_case.normalize_composed_message import (
     NormalizeComposedMessageUseCase,
 )
 from mugen.core.domain.use_case.queue_job_lifecycle import QueueJobLifecycleUseCase
+from mugen.core.domain.use_case.runtime_capability import (
+    RuntimeCapabilityInput,
+    evaluate_runtime_capabilities,
+)
 
 
 class TestDomainEntitiesAndUseCases(unittest.TestCase):
@@ -234,6 +238,63 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             use_case.complete(job="bad", now_iso="2026-01-01T00:03:00+00:00")
+
+    def test_runtime_capability_use_case(self) -> None:
+        healthy = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["web", "matrix"],
+                messaging_handler_platforms=[[]],
+                has_web_fw_extension=True,
+                has_web_client_runtime_path=True,
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertTrue(healthy.healthy)
+        self.assertEqual(healthy.statuses["messaging.mh.web"], "healthy")
+        self.assertEqual(healthy.statuses["messaging.mh.matrix"], "healthy")
+        self.assertEqual(healthy.statuses["web.fw_extension"], "healthy")
+
+        degraded = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["web", "whatsapp"],
+                messaging_handler_platforms=[["web"]],
+                has_web_fw_extension=False,
+                has_web_client_runtime_path=False,
+                container_ready=True,
+                provider_ready=False,
+            )
+        )
+        self.assertFalse(degraded.healthy)
+        self.assertIn("provider_readiness", degraded.failed_capabilities)
+        self.assertIn("messaging.mh.whatsapp", degraded.failed_capabilities)
+        self.assertIn("web.fw_extension", degraded.failed_capabilities)
+        self.assertIn("web.client_runtime_path", degraded.failed_capabilities)
+
+    def test_runtime_capability_use_case_normalizes_edge_inputs(self) -> None:
+        non_collection_platforms = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms="web",  # type: ignore[arg-type]
+                messaging_handler_platforms="bad",  # type: ignore[arg-type]
+                has_web_fw_extension=True,
+                has_web_client_runtime_path=True,
+            )
+        )
+        self.assertEqual(
+            set(non_collection_platforms.statuses.keys()),
+            {"container_readiness", "provider_readiness"},
+        )
+
+        mixed_scopes = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["unknown", "whatsapp", " WHATSAPP ", ""],
+                messaging_handler_platforms=[None, object(), ["whatsapp"]],
+                has_web_fw_extension=True,
+                has_web_client_runtime_path=True,
+            )
+        )
+        self.assertTrue(mixed_scopes.healthy)
+        self.assertEqual(mixed_scopes.statuses["messaging.mh.whatsapp"], "healthy")
 
 
 if __name__ == "__main__":
