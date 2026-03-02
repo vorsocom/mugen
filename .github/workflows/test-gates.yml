@@ -39,15 +39,16 @@ jobs:
       - name: Install Poetry
         run: pip install poetry
 
-      - name: Cache Poetry Dependencies
+      - name: Cache Poetry Download Artifacts
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/pypoetry
+            ~/.cache/pypoetry/artifacts
+            ~/.cache/pypoetry/cache
             ~/.cache/pip
-          key: ${{ runner.os }}-py312-poetry-${{ hashFiles('poetry.lock') }}
+          key: ${{ runner.os }}-py312-poetry-cache-v2-${{ hashFiles('poetry.lock') }}
           restore-keys: |
-            ${{ runner.os }}-py312-poetry-
+            ${{ runner.os }}-py312-poetry-cache-v2-
 
       - name: Install Dependencies
         run: poetry install --with dev --no-interaction --no-root
@@ -118,15 +119,16 @@ jobs:
       - name: Install Poetry
         run: pip install poetry
 
-      - name: Cache Poetry Dependencies
+      - name: Cache Poetry Download Artifacts
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/pypoetry
+            ~/.cache/pypoetry/artifacts
+            ~/.cache/pypoetry/cache
             ~/.cache/pip
-          key: ${{ runner.os }}-py312-poetry-${{ hashFiles('poetry.lock') }}
+          key: ${{ runner.os }}-py312-poetry-cache-v2-${{ hashFiles('poetry.lock') }}
           restore-keys: |
-            ${{ runner.os }}-py312-poetry-
+            ${{ runner.os }}-py312-poetry-cache-v2-
 
       - name: Install Dependencies
         run: poetry install --with dev --no-interaction --no-root
