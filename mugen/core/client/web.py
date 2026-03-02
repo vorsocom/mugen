@@ -721,13 +721,12 @@ class DefaultWebClient(IWebClient):
         stream_generation: str,
         after_event_id: int,
     ) -> dict[str, Any]:
-        async with self._storage_lock:
-            batch = await self._runtime_store().tail_events_since(
-                conversation_id=conversation_id,
-                stream_generation=stream_generation,
-                after_event_id=after_event_id,
-                limit=self._sse_replay_max_events,
-            )
+        batch = await self._runtime_store().tail_events_since(
+            conversation_id=conversation_id,
+            stream_generation=stream_generation,
+            after_event_id=after_event_id,
+            limit=self._sse_replay_max_events,
+        )
         return {
             "stream_generation": batch.stream_generation,
             "max_event_id": batch.max_event_id,

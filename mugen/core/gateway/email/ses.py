@@ -45,6 +45,16 @@ class SESEmailGateway(IEmailGateway):
             raise RuntimeError("Amazon SES gateway configuration is unavailable.")
         if self._client is None:
             raise RuntimeError("Amazon SES gateway client is unavailable.")
+        probe = getattr(self._client, "get_send_quota", None)
+        if callable(probe) is not True:
+            raise RuntimeError("Amazon SES gateway readiness probe is unavailable.")
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(probe),
+                timeout=5.0,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError("Amazon SES gateway readiness probe failed.") from exc
 
     async def send_email(self, request: EmailSendRequest) -> EmailSendResult:
         if not isinstance(request, EmailSendRequest):

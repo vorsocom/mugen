@@ -104,6 +104,139 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         ):
             return BedrockCompletionGateway(config or _make_config(), Mock())
 
+    async def test_check_readiness_accepts_probe_validation_error(self) -> None:
+        config = _make_config()
+        config.aws.bedrock.api.dict["classification"] = dict(
+            config.aws.bedrock.api.dict["completion"]
+        )
+        bedrock_client = Mock()
+        bedrock_client.invoke_model.side_effect = ClientError(
+            {
+                "Error": {
+                    "Code": "ValidationException",
+                    "Message": "ValidationException: malformed request body",
+                }
+            },
+            operation_name="InvokeModel",
+        )
+        gateway = self._build_gateway(config=config, bedrock_client=bedrock_client)
+
+        await gateway.check_readiness()
+
+        bedrock_client.invoke_model.assert_called_once()
+
+    async def test_check_readiness_raises_for_non_validation_probe_error(self) -> None:
+        config = _make_config()
+        config.aws.bedrock.api.dict["classification"] = dict(
+            config.aws.bedrock.api.dict["completion"]
+        )
+        bedrock_client = Mock()
+        bedrock_client.invoke_model.side_effect = ClientError(
+            {
+                "Error": {
+                    "Code": "AccessDeniedException",
+                    "Message": "Access denied",
+                }
+            },
+            operation_name="InvokeModel",
+        )
+        gateway = self._build_gateway(config=config, bedrock_client=bedrock_client)
+
+        with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
+            await gateway.check_readiness()
+
+    async def test_check_readiness_raises_when_probe_model_missing(self) -> None:
+        config = _make_config()
+        config.aws.bedrock.api.dict["completion"]["model"] = ""
+        config.aws.bedrock.api.dict["classification"] = {"model": ""}
+        gateway = self._build_gateway(config=config)
+
+        with self.assertRaisesRegex(RuntimeError, "probe model is missing"):
+            await gateway.check_readiness()
+
+    async def test_check_readiness_defaults_timeout_when_nonpositive(self) -> None:
+        config = _make_config()
+        config.aws.bedrock.api.dict["classification"] = dict(
+            config.aws.bedrock.api.dict["completion"]
+        )
+        bedrock_client = Mock()
+        bedrock_client.invoke_model.side_effect = ClientError(
+            {
+                "Error": {
+                    "Code": "ValidationException",
+                    "Message": "ValidationException: malformed request body",
+                }
+            },
+            operation_name="InvokeModel",
+        )
+        gateway = self._build_gateway(config=config, bedrock_client=bedrock_client)
+        gateway._read_timeout_seconds = 0  # pylint: disable=protected-access
+
+        timeout_values: list[float] = []
+
+        async def _wait_for(awaitable, timeout):
+            timeout_values.append(float(timeout))
+            return await awaitable
+
+        with patch(
+            "mugen.core.gateway.completion.bedrock.asyncio.wait_for",
+            side_effect=_wait_for,
+        ):
+            await gateway.check_readiness()
+
+        self.assertEqual(timeout_values, [10.0])
+
+    async def test_check_readiness_uses_configured_positive_timeout(self) -> None:
+        config = _make_config()
+        config.aws.bedrock.api.dict["classification"] = dict(
+            config.aws.bedrock.api.dict["completion"]
+        )
+        bedrock_client = Mock()
+        bedrock_client.invoke_model.side_effect = ClientError(
+            {
+                "Error": {
+                    "Code": "ValidationException",
+                    "Message": "ValidationException: malformed request body",
+                }
+            },
+            operation_name="InvokeModel",
+        )
+        gateway = self._build_gateway(config=config, bedrock_client=bedrock_client)
+        gateway._read_timeout_seconds = 4.0  # pylint: disable=protected-access
+
+        timeout_values: list[float] = []
+
+        async def _wait_for(awaitable, timeout):
+            timeout_values.append(float(timeout))
+            return await awaitable
+
+        with patch(
+            "mugen.core.gateway.completion.bedrock.asyncio.wait_for",
+            side_effect=_wait_for,
+        ):
+            await gateway.check_readiness()
+
+        self.assertEqual(timeout_values, [4.0])
+
+    async def test_check_readiness_wraps_non_client_errors(self) -> None:
+        config = _make_config()
+        config.aws.bedrock.api.dict["classification"] = dict(
+            config.aws.bedrock.api.dict["completion"]
+        )
+        gateway = self._build_gateway(config=config, bedrock_client=Mock())
+
+        async def _wait_for(awaitable, timeout):
+            _ = timeout
+            await awaitable
+            raise RuntimeError("probe boom")
+
+        with patch(
+            "mugen.core.gateway.completion.bedrock.asyncio.wait_for",
+            side_effect=_wait_for,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
+                await gateway.check_readiness()
+
     async def test_get_completion_builds_messages_and_returns_trimmed_content(
         self,
     ) -> None:

@@ -15,6 +15,7 @@ MatrixMetadataValue: TypeAlias = (
     | dict[str, "MatrixMetadataValue"]
     | list["MatrixMetadataValue"]
 )
+MatrixJSONValue: TypeAlias = MatrixMetadataValue
 
 
 class IMatrixSyncSignal(Protocol):

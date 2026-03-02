@@ -57,7 +57,11 @@ from nio.responses import (
 
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.matrix_event_hook import MatrixEventHookPayload
-from mugen.core.contract.client.matrix_types import MatrixPresence, MatrixProfile
+from mugen.core.contract.client.matrix_types import (
+    MatrixJSONValue,
+    MatrixPresence,
+    MatrixProfile,
+)
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
@@ -557,7 +561,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         return parsed
 
     @staticmethod
-    def _normalize_event_dict(value: object) -> dict[str, object] | None:
+    def _normalize_event_dict(value: object) -> dict[str, MatrixJSONValue] | None:
         if not isinstance(value, dict):
             return None
         try:
@@ -577,7 +581,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         event: object = None,
         room: MatrixRoom | MatrixInvitedRoom | None = None,
         reason: str = _callback_skip_reason_dm_scope,
-    ) -> dict[str, object]:
+    ) -> dict[str, MatrixJSONValue]:
         room_id = self._coerce_optional_string(getattr(room, "room_id", None))
         payload = MatrixEventHookPayload(
             version=self._matrix_event_hook_payload_version,

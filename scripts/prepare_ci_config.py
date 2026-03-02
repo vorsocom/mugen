@@ -14,6 +14,10 @@ from werkzeug.security import generate_password_hash
 
 _WEB_PLATFORM = "web"
 _WEB_FRAMEWORK_PLUGIN_PATH = "mugen.core.plugin.web.fw_ext:WebFWExtension"
+_CI_COMPLETION_GATEWAY_PATH = (
+    "mugen.core.gateway.completion.sambanova:SambaNovaCompletionGateway"
+)
+_CI_COMPLETION_MODEL = "ci-model"
 
 
 def _generate_ed25519_private_pem() -> str:
@@ -128,6 +132,13 @@ def main() -> int:
     doc["aws"]["bedrock"]["api"]["region"] = args.aws_region
     doc["rdbms"]["alembic"]["url"] = args.rdbms_url
     doc["rdbms"]["sqlalchemy"]["url"] = args.rdbms_url
+
+    # CI should use a completion provider whose readiness checks are deterministic
+    # without requiring external Bedrock credentials/services.
+    doc["mugen"]["modules"]["core"]["gateway"]["completion"] = _CI_COMPLETION_GATEWAY_PATH
+    doc["sambanova"]["api"]["key"] = "ci-sambanova-key"
+    doc["sambanova"]["api"]["classification"]["model"] = _CI_COMPLETION_MODEL
+    doc["sambanova"]["api"]["completion"]["model"] = _CI_COMPLETION_MODEL
 
     doc["quart"]["secret_key"] = args.quart_secret_key
 

@@ -181,7 +181,16 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         )
         if not isinstance(url, str) or url.strip() == "":
             raise RuntimeError("Qdrant knowledge gateway requires qdrant.api.url.")
-        _ = self._client
+        probe = getattr(self._client, "get_collections", None)
+        if callable(probe) is not True:
+            raise RuntimeError("Qdrant knowledge gateway readiness probe is unavailable.")
+        timeout_seconds = self._api_timeout_seconds
+        if timeout_seconds is None or timeout_seconds <= 0:
+            timeout_seconds = 5.0
+        try:
+            await asyncio.wait_for(probe(), timeout=timeout_seconds)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError("Qdrant knowledge gateway readiness probe failed.") from exc
 
     async def _get_encoder(self) -> SentenceTransformer:
         if self._encoder is not None:

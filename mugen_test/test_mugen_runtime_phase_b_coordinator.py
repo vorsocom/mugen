@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -31,3 +32,124 @@ class TestPhaseBCoordinator(unittest.TestCase):
                     validate_phase_b_runtime_config=lambda **_kwargs: ([], [], True),
                     validate_web_relational_runtime_config=lambda **_kwargs: None,
                 )
+
+    def test_start_phase_b_runtime_starts_task_and_waits_for_critical_health(self) -> None:
+        startup_plan = PhaseBStartupPlan(
+            active_platforms=["web"],
+            critical_platforms=["web"],
+            degrade_on_critical_exit=True,
+            readiness_grace_seconds=0.0,
+            startup_timeout_seconds=30.0,
+        )
+
+        async def _runner(_app) -> None:
+            return None
+
+        wait_for_critical_startup = unittest.mock.AsyncMock(return_value=None)
+
+        async def _run() -> tuple[PhaseBStartupPlan, asyncio.Task]:
+            with patch.object(
+                phase_b_coordinator,
+                "prepare_phase_b_startup_plan",
+                return_value=startup_plan,
+            ):
+                return await phase_b_coordinator.start_phase_b_runtime(
+                    app=object(),
+                    config=object(),
+                    bootstrap_state={},
+                    logger=object(),
+                    run_platform_clients=_runner,
+                    wait_for_critical_startup=wait_for_critical_startup,
+                    validate_phase_b_runtime_config=lambda **_kwargs: (["web"], ["web"], True),
+                    validate_web_relational_runtime_config=lambda **_kwargs: None,
+                    task_name="mugen.test.phase_b",
+                )
+
+        plan, task = asyncio.run(_run())
+        self.assertEqual(plan, startup_plan)
+        self.assertEqual(task.get_name(), "mugen.test.phase_b")
+        wait_for_critical_startup.assert_awaited_once_with(
+            {},
+            critical_platforms=["web"],
+            startup_timeout_seconds=30.0,
+        )
+
+    def test_start_phase_b_runtime_cancels_runner_task_on_wait_failure(self) -> None:
+        startup_plan = PhaseBStartupPlan(
+            active_platforms=["web"],
+            critical_platforms=["web"],
+            degrade_on_critical_exit=True,
+            readiness_grace_seconds=0.0,
+            startup_timeout_seconds=30.0,
+        )
+        cancellation_seen = {"value": False}
+        runner_started = asyncio.Event()
+
+        async def _runner(_app) -> None:
+            try:
+                runner_started.set()
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancellation_seen["value"] = True
+                raise
+
+        async def _wait_for_critical_startup(*_args, **_kwargs) -> None:
+            await runner_started.wait()
+            raise RuntimeError("critical startup timeout")
+
+        wait_for_critical_startup = unittest.mock.AsyncMock(
+            side_effect=_wait_for_critical_startup
+        )
+
+        async def _run() -> None:
+            with patch.object(
+                phase_b_coordinator,
+                "prepare_phase_b_startup_plan",
+                return_value=startup_plan,
+            ):
+                await phase_b_coordinator.start_phase_b_runtime(
+                    app=object(),
+                    config=object(),
+                    bootstrap_state={},
+                    logger=object(),
+                    run_platform_clients=_runner,
+                    wait_for_critical_startup=wait_for_critical_startup,
+                    validate_phase_b_runtime_config=lambda **_kwargs: (["web"], ["web"], True),
+                    validate_web_relational_runtime_config=lambda **_kwargs: None,
+                )
+
+        with self.assertRaisesRegex(RuntimeError, "critical startup timeout"):
+            asyncio.run(_run())
+        self.assertTrue(cancellation_seen["value"])
+
+    def test_start_phase_b_runtime_rejects_missing_startup_timeout(self) -> None:
+        startup_plan = PhaseBStartupPlan(
+            active_platforms=["web"],
+            critical_platforms=["web"],
+            degrade_on_critical_exit=True,
+            readiness_grace_seconds=0.0,
+            startup_timeout_seconds=None,
+        )
+
+        async def _runner(_app) -> None:
+            return None
+
+        async def _run() -> None:
+            with patch.object(
+                phase_b_coordinator,
+                "prepare_phase_b_startup_plan",
+                return_value=startup_plan,
+            ):
+                await phase_b_coordinator.start_phase_b_runtime(
+                    app=object(),
+                    config=object(),
+                    bootstrap_state={},
+                    logger=object(),
+                    run_platform_clients=_runner,
+                    wait_for_critical_startup=unittest.mock.AsyncMock(return_value=None),
+                    validate_phase_b_runtime_config=lambda **_kwargs: (["web"], ["web"], True),
+                    validate_web_relational_runtime_config=lambda **_kwargs: None,
+                )
+
+        with self.assertRaisesRegex(RuntimeError, "startup timeout is required"):
+            asyncio.run(_run())

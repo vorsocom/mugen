@@ -50,6 +50,7 @@ def _build_gateway(
     client = fake_client or SimpleNamespace(
         count=AsyncMock(),
         search=AsyncMock(),
+        get_collections=AsyncMock(return_value=SimpleNamespace(collections=[])),
     )
     with (
         patch(
@@ -97,12 +98,47 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
     """Covers timeout parsing, retry behavior, and search flow branches."""
 
     async def test_check_readiness_requires_qdrant_url(self) -> None:
-        gateway, _, _, _ = _build_gateway(config=_make_config())
+        gateway, client, _, _ = _build_gateway(config=_make_config())
         await gateway.check_readiness()
+        client.get_collections.assert_awaited_once_with()
 
         gateway._config.qdrant.api.url = ""  # pylint: disable=protected-access
         with self.assertRaisesRegex(RuntimeError, "requires qdrant.api.url"):
             await gateway.check_readiness()
+
+    async def test_check_readiness_raises_when_probe_missing_or_failing(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config())
+        gateway._client = SimpleNamespace()  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "probe is unavailable"):
+            await gateway.check_readiness()
+
+        failing_client = SimpleNamespace(
+            get_collections=AsyncMock(side_effect=RuntimeError("probe failed"))
+        )
+        failing_gateway, _, _, _ = _build_gateway(
+            config=_make_config(),
+            fake_client=failing_client,
+        )
+        with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
+            await failing_gateway.check_readiness()
+
+    async def test_check_readiness_defaults_timeout_when_nonpositive(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config(timeout_seconds=2.5))
+        gateway._api_timeout_seconds = 0  # pylint: disable=protected-access
+
+        timeout_values: list[float] = []
+
+        async def _wait_for(awaitable, timeout):
+            timeout_values.append(float(timeout))
+            return await awaitable
+
+        with patch(
+            "mugen.core.gateway.knowledge.qdrant.asyncio.wait_for",
+            side_effect=_wait_for,
+        ):
+            await gateway.check_readiness()
+
+        self.assertEqual(timeout_values, [5.0])
 
     def test_constructor_ignores_encoder_preload_and_warns(self) -> None:
         config = _make_config(encoder_preload="yes")

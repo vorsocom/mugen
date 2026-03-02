@@ -615,17 +615,23 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         cfg = _test_config(platforms=[])
         register_extensions_mock = unittest.mock.AsyncMock()
+        readiness_mock = unittest.mock.AsyncMock()
 
         with unittest.mock.patch.object(
             mugen_mod,
             "register_extensions",
             new=register_extensions_mock,
+        ), unittest.mock.patch.object(
+            mugen_mod.di,
+            "ensure_container_readiness_async",
+            new=readiness_mock,
         ):
             await bootstrap_app(
                 app,
                 config_provider=lambda: cfg,
             )
 
+        readiness_mock.assert_awaited_once()
         register_extensions_mock.assert_awaited_once()
         self.assertIn("api", app.blueprints)
         self.assertIs(app.blueprints["api"], mugen_mod.api)

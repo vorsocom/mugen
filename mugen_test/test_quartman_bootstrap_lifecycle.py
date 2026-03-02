@@ -19,7 +19,6 @@ from mugen import (
     BootstrapConfigError,
     ExtensionLoadError,
 )
-from mugen.core.runtime.phase_b_bootstrap import PhaseBStartupPlan
 from mugen.core.runtime.phase_b_controls import (
     resolve_phase_b_runtime_controls,
     resolve_phase_b_startup_timeout_seconds,
@@ -533,13 +532,6 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 ),
             )
         )
-        phase_b_plan = PhaseBStartupPlan(
-            active_platforms=[],
-            critical_platforms=[],
-            degrade_on_critical_exit=True,
-            readiness_grace_seconds=0.0,
-            startup_timeout_seconds=None,
-        )
 
         with (
             unittest.mock.patch.object(quartman.di, "container", container),
@@ -550,8 +542,12 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch.object(
                 quartman,
-                "prepare_phase_b_startup_plan",
-                return_value=phase_b_plan,
+                "start_phase_b_runtime",
+                new=unittest.mock.AsyncMock(
+                    side_effect=RuntimeError(
+                        "Invalid runtime configuration: startup timeout is required."
+                    )
+                ),
             ),
             unittest.mock.patch.object(
                 quartman,

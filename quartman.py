@@ -42,7 +42,7 @@ from mugen.core.runtime.phase_b_bootstrap import (
     PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY as _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY,
     PHASE_B_STARTUP_PLAN_KEY as _PHASE_B_STARTUP_PLAN_KEY,
 )
-from mugen.core.runtime.phase_b_coordinator import prepare_phase_b_startup_plan
+from mugen.core.runtime.phase_b_coordinator import start_phase_b_runtime
 from mugen.core.runtime.phase_b_controls import (
     parse_bool,
 )
@@ -157,49 +157,31 @@ async def startup():
     if runtime_config is None:
         raise BootstrapConfigError("Configuration unavailable.")
 
+    phase_b_started_at = perf_counter()
+    app.logger.info("Bootstrap phase_b starting.")
     try:
-        phase_b_plan = prepare_phase_b_startup_plan(
+        _, task = await start_phase_b_runtime(
+            app=app,
             config=runtime_config,
             bootstrap_state=state,
             logger=app.logger,
+            run_platform_clients=run_platform_clients,
+            wait_for_critical_startup=wait_for_critical_startup,
             validate_phase_b_runtime_config=validate_phase_b_runtime_config,
             validate_web_relational_runtime_config=validate_web_relational_runtime_config,
+            task_name="mugen.platform_clients",
         )
-    except RuntimeError as exc:
-        raise BootstrapConfigError(str(exc)) from exc
-
-    startup_timeout_seconds = phase_b_plan.startup_timeout_seconds
-    if startup_timeout_seconds is None:
-        raise BootstrapConfigError("Invalid runtime configuration: startup timeout is required.")
-
-    phase_b_started_at = perf_counter()
-    app.logger.info("Bootstrap phase_b starting.")
-    loop = asyncio.get_running_loop()
-    task = loop.create_task(
-        run_platform_clients(app),
-        name="mugen.platform_clients",
-    )
-    task.add_done_callback(
-        lambda done_task: _on_platform_clients_done(done_task, phase_b_started_at)
-    )
-    state[_PLATFORM_CLIENTS_TASK_KEY] = task
-    try:
-        await wait_for_critical_startup(
-            state,
-            critical_platforms=phase_b_plan.critical_platforms,
-            startup_timeout_seconds=startup_timeout_seconds,
+        task.add_done_callback(
+            lambda done_task: _on_platform_clients_done(done_task, phase_b_started_at)
         )
+        state[_PLATFORM_CLIENTS_TASK_KEY] = task
     except RuntimeError as exc:
         state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
         state[PHASE_B_ERROR_KEY] = str(exc)
         app.logger.error(
-            "Bootstrap phase_b startup check failed timeout_seconds=%.3f error=%s",
-            startup_timeout_seconds,
+            "Bootstrap phase_b startup check failed error=%s",
             exc,
         )
-        if not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
         state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
         state.pop(_PHASE_B_STARTUP_PLAN_KEY, None)
         raise BootstrapConfigError(str(exc)) from exc
