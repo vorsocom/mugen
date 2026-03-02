@@ -23,6 +23,18 @@ require_cmd() {
   fi
 }
 
+env_truthy() {
+  local value="${1:-}"
+  case "${value,,}" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 replace_placeholders() {
   local json_payload="$1"
   local rv="$2"
@@ -116,6 +128,10 @@ hypercorn_cmd="$(echo "$spec_json" | jq -r '.runtime.hypercorn_cmd // empty')"
 health_url="$(echo "$spec_json" | jq -r '.runtime.health_url // (.base_url + "/auth/.well-known/jwks.json")')"
 spec_startup_timeout_secs="$(echo "$spec_json" | jq -r '.runtime.startup_timeout_secs // 30')"
 startup_timeout_secs="${ACP_E2E_STARTUP_TIMEOUT_SECS:-$spec_startup_timeout_secs}"
+external_server=0
+if env_truthy "${ACP_E2E_EXTERNAL_SERVER:-0}"; then
+  external_server=1
+fi
 
 if [[ ! "$startup_timeout_secs" =~ ^[0-9]+$ || "$startup_timeout_secs" -le 0 ]]; then
   echo "ERROR: invalid startup timeout: $startup_timeout_secs" >&2
@@ -152,7 +168,7 @@ cleanup_server() {
 }
 trap cleanup_server EXIT
 
-if [[ "$spawn_hypercorn" == "true" ]]; then
+if [[ "$spawn_hypercorn" == "true" && "$external_server" -ne 1 ]]; then
   if [[ -z "$hypercorn_cmd" ]]; then
     echo "ERROR: runtime.hypercorn_cmd is required when runtime.spawn_hypercorn=true" >&2
     exit 1
@@ -184,6 +200,8 @@ if [[ "$spawn_hypercorn" == "true" ]]; then
     tail -n 120 "$log_file" >&2 || true
     exit 1
   fi
+elif [[ "$spawn_hypercorn" == "true" && "$external_server" -eq 1 ]]; then
+  echo "USING EXTERNAL SERVER: ACP_E2E_EXTERNAL_SERVER=1"
 fi
 
 jwks_code="$(curl -sk -o /tmp/acp_http_e2e_jwks.json -w "%{http_code}" "$base_url/auth/.well-known/jwks.json")"
