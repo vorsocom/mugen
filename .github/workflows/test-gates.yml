@@ -43,15 +43,20 @@ jobs:
           mkdir -p .tmp/ci
           poetry run python scripts/prepare_ci_config.py \
             --sample conf/mugen.toml.sample \
-            --output mugen.toml \
+            --output mugen.e2e.toml \
             --rdbms-url postgresql+psycopg://mugen:mugen@127.0.0.1:5432/mugen \
             --aws-region us-east-1 \
             --enable-web-platform
-          poetry run python scripts/run_migration_tracks.py upgrade head
+          MUGEN_CONFIG_FILE=mugen.e2e.toml \
+            poetry run python scripts/run_migration_tracks.py \
+              --config-file mugen.e2e.toml \
+              upgrade head
 
       - name: Run Pre-Push Quality Gates
         env:
           ACP_E2E_STARTUP_TIMEOUT_SECS: "90"
+          MUGEN_E2E_CONFIG_FILE: mugen.e2e.toml
+          MUGEN_CONFIG_FILE: mugen.e2e.toml
         run: |
           gate_python="$(poetry run which python)"
           bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh \
