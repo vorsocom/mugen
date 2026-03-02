@@ -711,27 +711,3 @@ class DefaultMessagingService(IMessagingService):
             kind="rpp",
             critical=critical,
         )
-
-    def register_cp_extension(self, ext: ICPExtension) -> None:
-        """Legacy alias for composition-driven bind_cp_extension."""
-        self.bind_cp_extension(ext, critical=False)
-
-    def register_ct_extension(self, ext: ICTExtension) -> None:
-        """Legacy alias for composition-driven bind_ct_extension."""
-        self.bind_ct_extension(ext, critical=False)
-
-    def register_ctx_extension(self, ext: ICTXExtension) -> None:
-        """Legacy alias for composition-driven bind_ctx_extension."""
-        self.bind_ctx_extension(ext, critical=False)
-
-    def register_mh_extension(self, ext: IMHExtension) -> None:
-        """Legacy alias for composition-driven bind_mh_extension."""
-        self.bind_mh_extension(ext, critical=False)
-
-    def register_rag_extension(self, ext: IRAGExtension) -> None:
-        """Legacy alias for composition-driven bind_rag_extension."""
-        self.bind_rag_extension(ext, critical=False)
-
-    def register_rpp_extension(self, ext: IRPPExtension) -> None:
-        """Legacy alias for composition-driven bind_rpp_extension."""
-        self.bind_rpp_extension(ext, critical=False)

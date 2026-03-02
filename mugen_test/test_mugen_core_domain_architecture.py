@@ -91,6 +91,49 @@ class TestCoreDomainArchitecture(unittest.TestCase):
         self.assertNotIn("_resolve_failed_platforms", function_names)
         self.assertNotIn("_phase_b_starting_within_grace", function_names)
 
+    def test_extension_registry_avoids_legacy_binding_fallbacks(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        registry_path = repo_root / "mugen" / "core" / "bootstrap" / "extensions.py"
+        registry_source = registry_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("register_ipc_extension", registry_source)
+        self.assertNotIn("register_cp_extension", registry_source)
+        self.assertNotIn("register_ct_extension", registry_source)
+        self.assertNotIn("register_ctx_extension", registry_source)
+        self.assertNotIn("register_mh_extension", registry_source)
+        self.assertNotIn("register_rag_extension", registry_source)
+        self.assertNotIn("register_rpp_extension", registry_source)
+        self.assertNotIn('f"bind_{extension_type}_extension"', registry_source)
+
+    def test_service_contracts_expose_extension_bind_operations(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        ipc_contract = repo_root / "mugen" / "core" / "contract" / "service" / "ipc.py"
+        messaging_contract = (
+            repo_root / "mugen" / "core" / "contract" / "service" / "messaging.py"
+        )
+
+        ipc_tree = ast.parse(ipc_contract.read_text(encoding="utf-8"))
+        messaging_tree = ast.parse(messaging_contract.read_text(encoding="utf-8"))
+
+        ipc_function_names = {
+            node.name
+            for node in ast.walk(ipc_tree)
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        }
+        messaging_function_names = {
+            node.name
+            for node in ast.walk(messaging_tree)
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        }
+
+        self.assertIn("bind_ipc_extension", ipc_function_names)
+        self.assertIn("bind_cp_extension", messaging_function_names)
+        self.assertIn("bind_ct_extension", messaging_function_names)
+        self.assertIn("bind_ctx_extension", messaging_function_names)
+        self.assertIn("bind_mh_extension", messaging_function_names)
+        self.assertIn("bind_rag_extension", messaging_function_names)
+        self.assertIn("bind_rpp_extension", messaging_function_names)
+
     def test_core_platform_allow_list_excludes_telnet(self) -> None:
         self.assertEqual(set(SUPPORTED_CORE_PLATFORMS), {"matrix", "web", "whatsapp"})
         self.assertNotIn("telnet", SUPPORTED_CORE_PLATFORMS)

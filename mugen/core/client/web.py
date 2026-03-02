@@ -498,13 +498,11 @@ class DefaultWebClient(IWebClient):
                 log.get("generation"),
                 fallback=self._new_stream_generation(),
             )
-            max_event_id = max(int(log["next_event_id"]) - 1, 0)
 
             cursor = self._resolve_stream_cursor(
                 conversation_id=conversation,
                 incoming_last_event_id=last_event_id,
                 stream_generation=stream_generation,
-                max_event_id=max_event_id,
             )
             replay_events = [
                 event
@@ -2237,7 +2235,6 @@ class DefaultWebClient(IWebClient):
         conversation_id: str,
         incoming_last_event_id: str | None,
         stream_generation: str,
-        max_event_id: int,
     ) -> dict[str, Any]:
         parsed_cursor = self._parse_stream_cursor(incoming_last_event_id)
 
@@ -2252,8 +2249,6 @@ class DefaultWebClient(IWebClient):
                 reset_reason = "cursor_event_log_version_mismatch"
             elif parsed_cursor.get("stream_generation") != stream_generation:
                 reset_reason = "cursor_stream_generation_mismatch"
-        elif incoming_event_id is not None and incoming_event_id > max_event_id:
-            reset_reason = "legacy_cursor_ahead_of_stream"
 
         if reset_reason is None:
             return {
@@ -2321,12 +2316,7 @@ class DefaultWebClient(IWebClient):
             parsed["event_id"] = stream_event_id
             return parsed
 
-        parsed_event_id = self._parse_event_id(raw_cursor)
-        if parsed_event_id is None:
-            parsed["invalid"] = True
-            return parsed
-
-        parsed["event_id"] = parsed_event_id
+        parsed["invalid"] = True
         return parsed
 
     def _format_stream_cursor_id(

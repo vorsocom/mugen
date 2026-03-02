@@ -16,6 +16,30 @@ from mugen.core.contract.extension.rpp import IRPPExtension
 class IMessagingService(ABC):
     """An abstract base class for messaging services."""
 
+    @abstractmethod
+    def bind_cp_extension(self, ext: ICPExtension, *, critical: bool = False) -> None:
+        """Bind a CP extension to the service runtime."""
+
+    @abstractmethod
+    def bind_ct_extension(self, ext: ICTExtension, *, critical: bool = False) -> None:
+        """Bind a CT extension to the service runtime."""
+
+    @abstractmethod
+    def bind_ctx_extension(self, ext: ICTXExtension, *, critical: bool = False) -> None:
+        """Bind a CTX extension to the service runtime."""
+
+    @abstractmethod
+    def bind_mh_extension(self, ext: IMHExtension, *, critical: bool = False) -> None:
+        """Bind an MH extension to the service runtime."""
+
+    @abstractmethod
+    def bind_rag_extension(self, ext: IRAGExtension, *, critical: bool = False) -> None:
+        """Bind a RAG extension to the service runtime."""
+
+    @abstractmethod
+    def bind_rpp_extension(self, ext: IRPPExtension, *, critical: bool = False) -> None:
+        """Bind an RPP extension to the service runtime."""
+
     @property
     @abstractmethod
     def cp_extensions(self) -> list[ICPExtension]:

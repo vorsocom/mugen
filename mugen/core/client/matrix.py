@@ -318,28 +318,33 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 self._logging_gateway.debug("Password login successful.")
                 self._logging_gateway.debug("Saving credentials.")
 
-                # Save credentials.
-                await self._keyval_storage_gateway.put_text(
-                    self._client_access_token_key,
-                    self._encode_secret_value(
-                        resp.access_token,
-                        field_name="client_access_token",
-                    ),
-                )
-                await self._keyval_storage_gateway.put_text(
-                    self._client_device_id_key,
-                    self._encode_secret_value(
-                        resp.device_id,
-                        field_name="client_device_id",
-                    ),
-                )
-                await self._keyval_storage_gateway.put_text(
-                    self._client_user_id_key,
-                    self._encode_secret_value(
-                        resp.user_id,
-                        field_name="client_user_id",
-                    ),
-                )
+                if getattr(self, "_secret_cipher", None) is None:
+                    self._logging_gateway.warning(
+                        "Matrix credentials were not persisted because "
+                        "security.secrets.encryption_key is not configured."
+                    )
+                else:
+                    await self._keyval_storage_gateway.put_text(
+                        self._client_access_token_key,
+                        self._encode_secret_value(
+                            resp.access_token,
+                            field_name="client_access_token",
+                        ),
+                    )
+                    await self._keyval_storage_gateway.put_text(
+                        self._client_device_id_key,
+                        self._encode_secret_value(
+                            resp.device_id,
+                            field_name="client_device_id",
+                        ),
+                    )
+                    await self._keyval_storage_gateway.put_text(
+                        self._client_user_id_key,
+                        self._encode_secret_value(
+                            resp.user_id,
+                            field_name="client_user_id",
+                        ),
+                    )
                 self.access_token = resp.access_token
                 self.device_id = resp.device_id
                 self.user_id = resp.user_id
@@ -516,7 +521,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     def _encode_secret_value(self, value: str, *, field_name: str) -> str:
         cipher = getattr(self, "_secret_cipher", None)
         if cipher is None:
-            return value
+            raise RuntimeError(
+                f"Cannot persist {field_name}: "
+                "security.secrets.encryption_key is not configured."
+            )
         if not isinstance(value, str):
             raise RuntimeError(f"Expected string value for {field_name}.")
         encrypted = cipher.encrypt(value.encode("utf-8")).decode("utf-8")
@@ -529,11 +537,17 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             return None
 
         if value.startswith(self._encrypted_secret_prefix) is not True:
-            return value
+            raise RuntimeError(
+                f"Persisted value for {field_name} must be encrypted. "
+                "Clear stored matrix credentials and restart with "
+                "security.secrets.encryption_key configured."
+            )
         cipher = getattr(self, "_secret_cipher", None)
         if cipher is None:
             raise RuntimeError(
-                f"Encrypted value for {field_name} found but no encryption key is configured."
+                f"Encrypted persisted value for {field_name} cannot be decrypted: "
+                "security.secrets.encryption_key is not configured. "
+                "Configure the matching key or clear stored matrix credentials."
             )
 
         encrypted_payload = value[len(self._encrypted_secret_prefix) :]
@@ -541,7 +555,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             decoded = cipher.decrypt(encrypted_payload.encode("utf-8"))
         except InvalidToken as exc:
             raise RuntimeError(
-                f"Encrypted value for {field_name} could not be decrypted."
+                f"Encrypted persisted value for {field_name} could not be decrypted "
+                "with the configured security.secrets.encryption_key. "
+                "Use the original key or clear stored matrix credentials."
             ) from exc
         return decoded.decode("utf-8")
 

@@ -769,7 +769,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertIn("api", app.blueprints)
         self.assertIs(app.blueprints["api"], mugen_mod.api)
 
-    async def test_bootstrap_app_marks_phase_a_degraded_when_provider_readiness_fails(
+    async def test_bootstrap_app_fails_fast_when_provider_readiness_fails(
         self,
     ) -> None:
         app = Quart("test_app")
@@ -789,6 +789,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 "register_extensions",
                 new=register_extensions_mock,
             ),
+            self.assertRaises(BootstrapConfigError),
         ):
             await bootstrap_app(
                 app,
@@ -802,6 +803,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             PHASE_STATUS_DEGRADED,
         )
         self.assertIn("provider down", str(state[mugen_mod.PHASE_A_ERROR_KEY]))
+        register_extensions_mock.assert_not_awaited()
 
     def test_platform_state_helpers_cover_edge_branches(self) -> None:
         self.assertTrue(

@@ -126,7 +126,6 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
     async def test_check_readiness_defaults_timeout_when_nonpositive(self) -> None:
         gateway, _, _, _ = _build_gateway(config=_make_config(timeout_seconds=2.5))
         gateway._api_timeout_seconds = 0  # pylint: disable=protected-access
-        gateway._encoder = Mock()  # pylint: disable=protected-access
 
         timeout_values: list[float] = []
 
@@ -140,7 +139,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         ):
             await gateway.check_readiness()
 
-        self.assertEqual(timeout_values, [5.0, 5.0])
+        self.assertEqual(timeout_values, [5.0])
 
     def test_constructor_ignores_encoder_preload_and_warns(self) -> None:
         config = _make_config(encoder_preload="yes")
@@ -190,11 +189,35 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
             gateway._default_encoder_model,  # pylint: disable=protected-access
         )
 
-    async def test_check_readiness_wraps_encoder_probe_failures(self) -> None:
+    async def test_check_readiness_schedules_async_encoder_warmup(self) -> None:
         gateway, _, _, _ = _build_gateway(config=_make_config())
+        gateway._schedule_encoder_warmup = Mock()  # pylint: disable=protected-access
+        await gateway.check_readiness()
+        gateway._schedule_encoder_warmup.assert_called_once_with()  # pylint: disable=protected-access
+
+    async def test_run_encoder_warmup_logs_failures(self) -> None:
+        gateway, _, logger, _ = _build_gateway(config=_make_config())
         gateway._get_encoder = AsyncMock(side_effect=RuntimeError("encoder failed"))  # pylint: disable=protected-access
-        with self.assertRaisesRegex(RuntimeError, "encoder readiness probe failed"):
-            await gateway.check_readiness()
+        await gateway._run_encoder_warmup()  # pylint: disable=protected-access
+        warning_messages = [str(call.args[0]) for call in logger.warning.call_args_list]
+        self.assertTrue(
+            any("async encoder warmup failed" in message for message in warning_messages)
+        )
+
+    async def test_schedule_encoder_warmup_noops_when_task_already_running(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config())
+
+        async def _never_finishes() -> None:
+            await asyncio.sleep(60)
+
+        existing_task = asyncio.create_task(_never_finishes())
+        gateway._encoder_warmup_task = existing_task  # pylint: disable=protected-access
+        try:
+            gateway._schedule_encoder_warmup()  # pylint: disable=protected-access
+            self.assertIs(gateway._encoder_warmup_task, existing_task)  # pylint: disable=protected-access
+        finally:
+            existing_task.cancel()
+            await asyncio.gather(existing_task, return_exceptions=True)
 
     async def test_aclose_handles_missing_sync_and_async_client_close(self) -> None:
         gateway, _, _, _ = _build_gateway(config=_make_config())
@@ -218,6 +241,21 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         gateway._client = SimpleNamespace(close=_async_close)  # pylint: disable=protected-access
         self.assertIsNone(await gateway.aclose())
         self.assertEqual(close_calls, ["sync", "async"])
+
+    async def test_aclose_cancels_inflight_encoder_warmup(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config())
+
+        async def _never_finishes() -> None:
+            await asyncio.sleep(60)
+
+        warmup_task = asyncio.create_task(_never_finishes())
+        gateway._encoder_warmup_task = warmup_task  # pylint: disable=protected-access
+        gateway._client = SimpleNamespace(close=AsyncMock())  # pylint: disable=protected-access
+
+        await gateway.aclose()
+
+        self.assertTrue(warmup_task.done())
+        gateway._client.close.assert_awaited_once_with()  # pylint: disable=protected-access
 
     def test_parse_helpers_cover_invalid_and_edge_values(self) -> None:
         config = _make_config()

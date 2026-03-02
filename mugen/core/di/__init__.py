@@ -39,6 +39,7 @@ from mugen.core.contract.service.nlp import INLPService
 from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.contract.service.user import IUserService
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
+from mugen.core.runtime.bootstrap_contract import parse_runtime_bootstrap_settings
 from mugen.core.utility.collection.namespace import NamespaceConfig, to_namespace
 from mugen.core.utility.platforms import normalize_platforms, unknown_platforms
 
@@ -387,37 +388,13 @@ def _normalize_platforms(values: list[str] | None) -> list[str]:
 
 
 def _resolve_runtime_profile_override(config: dict) -> str:
-    runtime_cfg = config.get("mugen", {}).get("runtime")
-    if not isinstance(runtime_cfg, dict):
-        raise RuntimeError(
-            "Invalid runtime profile configuration: "
-            "mugen.runtime.profile is required and must be a string."
-        )
-    if "profile" not in runtime_cfg:
-        raise RuntimeError(
-            "Invalid runtime profile configuration: "
-            "mugen.runtime.profile is required and must be one of "
-            "api_only|web_only|platform_full."
-        )
-    raw_profile = runtime_cfg.get("profile")
-    if not isinstance(raw_profile, str):
-        raise RuntimeError(
-            "Invalid runtime profile configuration: mugen.runtime.profile must be a string."
-        )
-
-    normalized = raw_profile.strip().lower()
-    if normalized in {"", "auto"}:
-        raise RuntimeError(
-            "Invalid runtime profile configuration: mugen.runtime.profile must be "
-            "explicitly set to one of api_only|web_only|platform_full."
-        )
-
-    if normalized not in {"api_only", "web_only", "platform_full"}:
-        raise RuntimeError(
-            "Invalid runtime profile configuration: "
-            "mugen.runtime.profile must be one of api_only|web_only|platform_full."
-        )
-    return normalized
+    settings = parse_runtime_bootstrap_settings(
+        config,
+        require_profile=True,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=False,
+    )
+    return str(settings.profile)
 
 
 def _infer_runtime_profile(config: dict) -> str:
@@ -792,8 +769,14 @@ def _configured_token_for_spec(config: dict, spec: _ProviderSpec) -> object:
 
 def _resolve_readiness_provider_names(config: dict) -> list[str]:
     """Resolve providers that must pass readiness before bootstrap succeeds."""
-    profile = _infer_runtime_profile(config)
-    active_platforms = _normalize_platforms(_get_active_platforms(config))
+    settings = parse_runtime_bootstrap_settings(
+        config,
+        require_profile=True,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=False,
+    )
+    profile = str(settings.profile)
+    active_platforms = list(settings.active_platforms)
     web_active = profile in {"web_only", "platform_full"} and "web" in active_platforms
 
     readiness_provider_names: list[str] = [
@@ -849,30 +832,13 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
 
 
 def _resolve_provider_readiness_timeout_seconds(config: dict) -> float:
-    raw_value = _config_path_value(
+    settings = parse_runtime_bootstrap_settings(
         config,
-        "mugen",
-        "runtime",
-        "provider_readiness_timeout_seconds",
+        require_profile=False,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=True,
     )
-    if raw_value in [None, ""]:
-        raise RuntimeError(
-            "Invalid runtime configuration: "
-            "mugen.runtime.provider_readiness_timeout_seconds is required."
-        )
-    try:
-        timeout_seconds = float(raw_value)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(
-            "Invalid runtime configuration: "
-            "mugen.runtime.provider_readiness_timeout_seconds must be a positive number."
-        ) from exc
-    if timeout_seconds <= 0:
-        raise RuntimeError(
-            "Invalid runtime configuration: "
-            "mugen.runtime.provider_readiness_timeout_seconds must be greater than 0."
-        )
-    return timeout_seconds
+    return float(settings.provider_readiness_timeout_seconds)
 
 
 async def _await_readiness_probe_async(

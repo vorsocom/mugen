@@ -10,6 +10,7 @@ __all__ = [
 
 from abc import ABC, abstractmethod
 
+from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.service.ipc_model import (
     IPCCommandRequest,
     IPCHandlerResult,
@@ -20,6 +21,15 @@ from mugen.core.contract.service.ipc_model import (
 
 class IIPCService(ABC):
     """An ABC for IPC services."""
+
+    @abstractmethod
+    def bind_ipc_extension(
+        self,
+        ext: IIPCExtension,
+        *,
+        critical: bool = False,
+    ) -> None:
+        """Bind an IPC extension to the service runtime."""
 
     @abstractmethod
     async def handle_ipc_request(

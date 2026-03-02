@@ -55,6 +55,13 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         self.assertFalse(di._config_path_exists({"mugen": {}}, "mugen", "modules"))
         self.assertTrue(di._config_path_exists({"mugen": {"modules": {}}}, "mugen", "modules"))
 
+    def test_config_path_value_returns_none_for_missing_paths(self) -> None:
+        self.assertIsNone(di._config_path_value({"mugen": {}}, "mugen", "runtime", "profile"))
+        self.assertEqual(
+            di._config_path_value({"mugen": {"runtime": {"profile": "api_only"}}}, "mugen", "runtime", "profile"),
+            "api_only",
+        )
+
     def test_get_active_platforms_requires_list(self) -> None:
         self.assertIsNone(di._get_active_platforms({"mugen": {"platforms": "matrix"}}))
         self.assertEqual(di._get_active_platforms({"mugen": {"platforms": ["matrix"]}}), ["matrix"])

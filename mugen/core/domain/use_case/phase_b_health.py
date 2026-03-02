@@ -26,8 +26,6 @@ class PhaseBHealthInput:
     phase_b_started_at: object
     readiness_grace_seconds: float
     include_starting_failures: bool = False
-    preserve_reported_degraded: bool = False
-    default_critical_platforms_to_statuses: bool = True
     now_monotonic: float | None = None
 
 
@@ -47,8 +45,6 @@ def evaluate_phase_b_health(phase: PhaseBHealthInput) -> PhaseBHealthResult:
     platform_statuses = _normalize_platform_statuses(phase.platform_statuses)
     platform_errors = _normalize_platform_errors(phase.platform_errors)
     critical_platforms = _normalize_platform_list(phase.critical_platforms)
-    if not critical_platforms and phase.default_critical_platforms_to_statuses:
-        critical_platforms = list(platform_statuses.keys())
 
     reported_status = _normalize_status(phase.phase_b_status)
     ignore_starting = _phase_b_starting_within_grace(
@@ -103,14 +99,6 @@ def evaluate_phase_b_health(phase: PhaseBHealthInput) -> PhaseBHealthResult:
         )
     elif starting:
         aggregate_status = PHASE_STATUS_STARTING
-
-    if (
-        phase.preserve_reported_degraded
-        and reported_status == PHASE_STATUS_DEGRADED
-        and aggregate_status != PHASE_STATUS_DEGRADED
-    ):
-        aggregate_status = PHASE_STATUS_DEGRADED
-        aggregate_error = _string_or_none(phase.phase_b_error) or aggregate_error or "phase_b degraded"
 
     failed_platforms, reasons = _resolve_failed_platforms(
         critical_platforms=critical_platforms,

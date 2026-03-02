@@ -355,7 +355,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             updated = await session.execute(
                 web_sql_text(
                     "UPDATE mugen.web_queue_job "
-                    "SET status = CAST(:status AS mugen.citext), "
+                    "SET status = :status, "
                     "attempts = :attempts, "
                     "updated_at = :updated_at, "
                     "lease_expires_at = :lease_expires_at, "
@@ -433,7 +433,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                     "SET lease_expires_at = :lease_expires_at, "
                     "updated_at = :updated_at "
                     "WHERE job_id = :job_id "
-                    "AND status = CAST(:current_status AS mugen.citext)"
+                    "AND status = :current_status "
                     "AND (:expected_attempt IS NULL OR attempts = :expected_attempt)"
                 ),
                 {
@@ -852,7 +852,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             )
             update_sql = (
                 "UPDATE mugen.web_queue_job "
-                "SET status = CAST(:status AS mugen.citext), "
+                "SET status = :status, "
                 "lease_expires_at = NULL, "
                 "updated_at = :updated_at, "
                 "error_message = :error_message, "
@@ -875,7 +875,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             if normalized_status in {"done", "failed"}:
                 update_sql += (
                     "WHERE job_id = :job_id "
-                    "AND status = CAST(:current_status AS mugen.citext) "
+                    "AND status = :current_status "
                     "AND attempts = :expected_attempt"
                 )
                 update_params["current_status"] = "processing"

@@ -565,7 +565,7 @@ run_sse_request \
   "$replay_headers_file" \
   "$replay_body_file" \
   -H "$auth_header" \
-  -H "Last-Event-ID: 1" \
+  -H "Last-Event-ID: $ack_event_id" \
   "$events_url&last_event_id=0"
 
 replay_status_code="$(extract_http_status "$replay_headers_file")"

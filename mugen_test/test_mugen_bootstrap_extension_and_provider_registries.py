@@ -134,7 +134,6 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
     async def test_default_registry_register_branches(self) -> None:
         messaging_service = SimpleNamespace(
             bind_cp_extension=lambda ext, **kwargs: None,
-            register_cp_extension=lambda ext: None,
         )
         ipc_service = SimpleNamespace(bind_ipc_extension=lambda ext, **kwargs: None)
         platform_service = SimpleNamespace(extension_supported=lambda ext: True)
@@ -179,12 +178,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(supported)
         fw.setup.assert_awaited_once()
 
-    async def test_default_registry_ipc_and_messaging_binding_fallbacks(self) -> None:
-        # IPC bind fallback on TypeError.
-        ipc_calls: list[tuple] = []
-
+    async def test_default_registry_requires_strict_bind_contracts(self) -> None:
         def _ipc_bind_without_critical(ext):  # noqa: ANN001
-            ipc_calls.append((ext,))
+            _ = ext
 
         registry = ext_mod.DefaultExtensionRegistry(
             messaging_service=SimpleNamespace(),
@@ -192,36 +188,19 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             platform_service=SimpleNamespace(extension_supported=lambda ext: True),
             logging_gateway=Mock(),
         )
-        await registry.register(
-            app=object(),
-            extension_type="ipc",
-            extension=_DummyIPCExt(),
-            token="ipc.tok",
-            critical=True,
-        )
-        self.assertEqual(len(ipc_calls), 1)
+        with self.assertRaises(TypeError):
+            await registry.register(
+                app=object(),
+                extension_type="ipc",
+                extension=_DummyIPCExt(),
+                token="ipc.tok",
+                critical=True,
+            )
 
-        # IPC register fallback branch.
-        registered_ipc: list[object] = []
-        registry = ext_mod.DefaultExtensionRegistry(
-            messaging_service=SimpleNamespace(),
-            ipc_service=SimpleNamespace(register_ipc_extension=lambda ext: registered_ipc.append(ext)),
-            platform_service=SimpleNamespace(extension_supported=lambda ext: True),
-            logging_gateway=Mock(),
-        )
-        await registry.register(
-            app=object(),
-            extension_type="ipc",
-            extension=_DummyIPCExt(),
-            token="ipc.tok",
-            critical=False,
-        )
-        self.assertEqual(len(registered_ipc), 1)
-
-        with self.assertRaisesRegex(RuntimeError, "IPC extension binding is unavailable"):
+        with self.assertRaisesRegex(AttributeError, "bind_ipc_extension"):
             registry = ext_mod.DefaultExtensionRegistry(
                 messaging_service=SimpleNamespace(),
-                ipc_service=SimpleNamespace(),
+                ipc_service=SimpleNamespace(register_ipc_extension=lambda ext: ext),
                 platform_service=SimpleNamespace(extension_supported=lambda ext: True),
                 logging_gateway=Mock(),
             )
@@ -233,46 +212,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 critical=False,
             )
 
-        # Messaging bind fallback on TypeError and register fallback.
-        bind_calls: list[tuple] = []
-        register_calls: list[object] = []
-
-        def _bind_without_critical(ext):  # noqa: ANN001
-            bind_calls.append((ext,))
-
-        registry = ext_mod.DefaultExtensionRegistry(
-            messaging_service=SimpleNamespace(bind_cp_extension=_bind_without_critical),
-            ipc_service=SimpleNamespace(),
-            platform_service=SimpleNamespace(extension_supported=lambda ext: True),
-            logging_gateway=Mock(),
-        )
-        await registry.register(
-            app=object(),
-            extension_type="cp",
-            extension=_DummyCPExt(),
-            token="cp.tok",
-            critical=True,
-        )
-        self.assertEqual(len(bind_calls), 1)
-
-        registry = ext_mod.DefaultExtensionRegistry(
-            messaging_service=SimpleNamespace(register_cp_extension=lambda ext: register_calls.append(ext)),
-            ipc_service=SimpleNamespace(),
-            platform_service=SimpleNamespace(extension_supported=lambda ext: True),
-            logging_gateway=Mock(),
-        )
-        await registry.register(
-            app=object(),
-            extension_type="cp",
-            extension=_DummyCPExt(),
-            token="cp.tok",
-            critical=False,
-        )
-        self.assertEqual(len(register_calls), 1)
-
-        with self.assertRaisesRegex(RuntimeError, "Messaging extension binding is unavailable"):
+        with self.assertRaisesRegex(AttributeError, "bind_cp_extension"):
             registry = ext_mod.DefaultExtensionRegistry(
-                messaging_service=SimpleNamespace(),
+                messaging_service=SimpleNamespace(register_cp_extension=lambda ext: ext),
                 ipc_service=SimpleNamespace(),
                 platform_service=SimpleNamespace(extension_supported=lambda ext: True),
                 logging_gateway=Mock(),
@@ -321,6 +263,47 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(messaging_calls), 1)
         self.assertTrue(ipc_calls[0][1])
         self.assertTrue(messaging_calls[0][1])
+
+    def test_bind_messaging_extension_dispatches_all_contract_methods(self) -> None:
+        bind_calls: list[tuple[str, bool]] = []
+
+        def _bind(kind: str):
+            def _impl(_ext, *, critical: bool = False):  # noqa: ANN001
+                bind_calls.append((kind, critical))
+
+            return _impl
+
+        registry = ext_mod.DefaultExtensionRegistry(
+            messaging_service=SimpleNamespace(
+                bind_cp_extension=_bind("cp"),
+                bind_ct_extension=_bind("ct"),
+                bind_ctx_extension=_bind("ctx"),
+                bind_mh_extension=_bind("mh"),
+                bind_rag_extension=_bind("rag"),
+                bind_rpp_extension=_bind("rpp"),
+            ),
+            ipc_service=SimpleNamespace(bind_ipc_extension=lambda _ext, **_kwargs: None),
+            platform_service=SimpleNamespace(extension_supported=lambda ext: True),
+            logging_gateway=Mock(),
+        )
+
+        for kind in ("ct", "ctx", "mh", "rag", "rpp"):
+            registry._bind_messaging_extension(  # pylint: disable=protected-access
+                extension_type=kind,
+                extension=object(),
+                critical=True,
+            )
+
+        self.assertEqual(
+            bind_calls,
+            [("ct", True), ("ctx", True), ("mh", True), ("rag", True), ("rpp", True)],
+        )
+        with self.assertRaisesRegex(RuntimeError, "binding is unavailable"):
+            registry._bind_messaging_extension(  # pylint: disable=protected-access
+                extension_type="unknown",
+                extension=object(),
+                critical=False,
+            )
 
     def test_configured_extensions_shape_validation(self) -> None:
         config = SimpleNamespace(

@@ -66,28 +66,28 @@ class TestMugenServiceIPC(unittest.IsolatedAsyncioTestCase):
                 response={"ok": "b"},
             )
 
-        svc.register_ipc_extension(
+        svc.bind_ipc_extension(
             _DummyIpcExt(
                 platforms=["matrix"],
                 ipc_commands=["ping"],
                 processor=handler_a,
             )
         )
-        svc.register_ipc_extension(
+        svc.bind_ipc_extension(
             _DummyIpcExt(
                 platforms=[],
                 ipc_commands=["ping"],
                 processor=handler_b,
             )
         )
-        svc.register_ipc_extension(
+        svc.bind_ipc_extension(
             _DummyIpcExt(
                 platforms=["whatsapp"],
                 ipc_commands=["ping"],
                 processor=handler_b,
             )
         )
-        svc.register_ipc_extension(
+        svc.bind_ipc_extension(
             _DummyIpcExt(
                 platforms=["matrix"],
                 ipc_commands=["other"],
@@ -115,7 +115,7 @@ class TestMugenServiceIPC(unittest.IsolatedAsyncioTestCase):
         async def crash(_request):
             raise RuntimeError("boom")
 
-        svc.register_ipc_extension(
+        svc.bind_ipc_extension(
             _DummyIpcExt(
                 platforms=["matrix"],
                 ipc_commands=["ping"],
@@ -144,7 +144,7 @@ class TestMugenServiceIPC(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(60)
             return IPCHandlerResult(handler="unused", response={})
 
-        svc.register_ipc_extension(
+        svc.bind_ipc_extension(
             _DummyIpcExt(
                 platforms=["matrix"],
                 ipc_commands=["ping"],
@@ -182,10 +182,10 @@ class TestMugenServiceIPC(unittest.IsolatedAsyncioTestCase):
             ipc_commands=["ping"],
             processor=handler,
         )
-        svc.register_ipc_extension(ext)
+        svc.bind_ipc_extension(ext)
 
         with self.assertRaises(ValueError):
-            svc.register_ipc_extension(ext)
+            svc.bind_ipc_extension(ext)
 
     async def test_logical_duplicate_registration_is_rejected(self) -> None:
         svc = self._new_service()
@@ -203,10 +203,10 @@ class TestMugenServiceIPC(unittest.IsolatedAsyncioTestCase):
             ipc_commands=["ping"],
             processor=handler,
         )
-        svc.register_ipc_extension(first_ext)
+        svc.bind_ipc_extension(first_ext)
 
         with self.assertRaises(ValueError):
-            svc.register_ipc_extension(second_ext)
+            svc.bind_ipc_extension(second_ext)
 
     async def test_bind_ipc_extension_tracks_critical_handlers(self) -> None:
         svc = self._new_service()
@@ -335,14 +335,14 @@ class TestMugenServiceIPC(unittest.IsolatedAsyncioTestCase):
                 ok=False,
             )
 
-        svc.register_ipc_extension(
+        svc.bind_ipc_extension(
             _DummyIpcExt(
                 platforms=["matrix"],
                 ipc_commands=["ping"],
                 processor=invalid_result,
             )
         )
-        svc.register_ipc_extension(
+        svc.bind_ipc_extension(
             _DummyIpcExt(
                 platforms=[],
                 ipc_commands=["ping"],

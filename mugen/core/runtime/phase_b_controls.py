@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
+from mugen.core.runtime.bootstrap_contract import parse_runtime_bootstrap_settings
 from mugen.core.utility.platforms import normalize_platforms
 
 
@@ -41,51 +40,25 @@ def normalize_platform_list(values: object) -> list[str]:
 
 def resolve_phase_b_runtime_controls(config: object) -> tuple[float, list[str], bool]:
     """Resolve readiness grace, critical platforms, and degrade policy."""
-    mugen_cfg = getattr(config, "mugen", SimpleNamespace())
-    runtime_cfg = getattr(mugen_cfg, "runtime", SimpleNamespace())
-    phase_b_cfg = getattr(runtime_cfg, "phase_b", SimpleNamespace())
-
-    readiness_grace = parse_nonnegative_float(
-        getattr(phase_b_cfg, "readiness_grace_seconds", 0.0),
-        default=0.0,
+    settings = parse_runtime_bootstrap_settings(
+        config,
+        require_profile=False,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=False,
     )
-    degrade_on_critical_exit = parse_bool(
-        getattr(phase_b_cfg, "degrade_on_critical_exit", True),
-        default=True,
+    return (
+        settings.readiness_grace_seconds,
+        list(settings.critical_platforms),
+        settings.degrade_on_critical_exit,
     )
-
-    critical_platforms = normalize_platform_list(
-        getattr(phase_b_cfg, "critical_platforms", None)
-    )
-    if critical_platforms:
-        return readiness_grace, critical_platforms, degrade_on_critical_exit
-
-    active_platforms = normalize_platform_list(getattr(mugen_cfg, "platforms", []))
-    return readiness_grace, active_platforms, degrade_on_critical_exit
 
 
 def resolve_phase_b_startup_timeout_seconds(config: object) -> float:
     """Resolve required phase-B startup timeout as a positive float."""
-    mugen_cfg = getattr(config, "mugen", None)
-    runtime_cfg = getattr(mugen_cfg, "runtime", None)
-    phase_b_cfg = getattr(runtime_cfg, "phase_b", None)
-    if phase_b_cfg is None or not hasattr(phase_b_cfg, "startup_timeout_seconds"):
-        raise RuntimeError(
-            f"Invalid runtime configuration: {_STARTUP_TIMEOUT_KEY} is required."
-        )
-
-    raw_timeout = getattr(phase_b_cfg, "startup_timeout_seconds")
-    try:
-        timeout_seconds = float(raw_timeout)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(
-            "Invalid runtime configuration: "
-            f"{_STARTUP_TIMEOUT_KEY} must be a positive number."
-        ) from exc
-
-    if timeout_seconds <= 0:
-        raise RuntimeError(
-            "Invalid runtime configuration: "
-            f"{_STARTUP_TIMEOUT_KEY} must be greater than 0."
-        )
-    return timeout_seconds
+    settings = parse_runtime_bootstrap_settings(
+        config,
+        require_profile=False,
+        require_startup_timeout_seconds=True,
+        require_provider_readiness_timeout_seconds=False,
+    )
+    return float(settings.startup_timeout_seconds)
