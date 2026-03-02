@@ -109,7 +109,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     _matrix_event_hook_payload_version: int = 1
 
     _default_matrix_ipc_queue_size: int = 256
-    _default_matrix_ipc_enqueue_timeout_seconds: float = 2.0
 
     _sync_key: str = "matrix_client_sync_next_batch"
     _encrypted_secret_prefix: str = "enc:v1:"
@@ -141,9 +140,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._user_service = user_service
         self._direct_room_ids: set[str] = set()
         self._matrix_ipc_queue_size = self._resolve_matrix_ipc_queue_size()
-        self._matrix_ipc_enqueue_timeout_seconds = (
-            self._resolve_matrix_ipc_enqueue_timeout_seconds()
-        )
         self._matrix_ipc_queue: asyncio.Queue | None = None
         self._matrix_ipc_worker_task: asyncio.Task | None = None
         self._matrix_ipc_worker_stop = asyncio.Event()
@@ -296,86 +292,97 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     async def __aenter__(self) -> "DefaultMatrixClient":
         """Initialisation."""
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
-        self._ensure_credential_keys_initialized()
-        self._start_matrix_ipc_worker()
-        stored_access_token = await self._keyval_storage_gateway.get_text(
-            self._client_access_token_key
-        )
-        stored_access_token = self._decode_secret_value(
-            stored_access_token,
-            field_name="client_access_token",
-        )
-        if stored_access_token is None:
-            # Load password and device name from storage.
-            pw = self._config.matrix.client.password
-            dn = self._config.matrix.client.device
+        try:
+            self._ensure_credential_keys_initialized()
+            stored_access_token = await self._keyval_storage_gateway.get_text(
+                self._client_access_token_key
+            )
+            stored_access_token = self._decode_secret_value(
+                stored_access_token,
+                field_name="client_access_token",
+            )
+            if stored_access_token is None:
+                # Load password and device name from storage.
+                pw = self._config.matrix.client.password
+                dn = self._config.matrix.client.device
 
-            # Attempt  password login.
-            resp = await self.login(pw, dn)
+                # Attempt  password login.
+                resp = await self.login(pw, dn)
 
-            # check login successful
-            if isinstance(resp, LoginResponse):
-                self._logging_gateway.debug("Password login successful.")
-                self._logging_gateway.debug("Saving credentials.")
+                # check login successful
+                if isinstance(resp, LoginResponse):
+                    self._logging_gateway.debug("Password login successful.")
+                    self._logging_gateway.debug("Saving credentials.")
 
-                await self._keyval_storage_gateway.put_text(
-                    self._client_access_token_key,
-                    self._encode_secret_value(
-                        resp.access_token,
-                        field_name="client_access_token",
-                    ),
-                )
-                await self._keyval_storage_gateway.put_text(
-                    self._client_device_id_key,
-                    self._encode_secret_value(
-                        resp.device_id,
-                        field_name="client_device_id",
-                    ),
-                )
-                await self._keyval_storage_gateway.put_text(
-                    self._client_user_id_key,
-                    self._encode_secret_value(
-                        resp.user_id,
-                        field_name="client_user_id",
-                    ),
-                )
-                self.access_token = resp.access_token
-                self.device_id = resp.device_id
-                self.user_id = resp.user_id
-                self.load_store()
-                self._sync_token = await self._keyval_storage_gateway.get_text(
-                    self._sync_key
-                )
-                return self
-            else:
+                    await self._keyval_storage_gateway.put_text(
+                        self._client_access_token_key,
+                        self._encode_secret_value(
+                            resp.access_token,
+                            field_name="client_access_token",
+                        ),
+                    )
+                    await self._keyval_storage_gateway.put_text(
+                        self._client_device_id_key,
+                        self._encode_secret_value(
+                            resp.device_id,
+                            field_name="client_device_id",
+                        ),
+                    )
+                    await self._keyval_storage_gateway.put_text(
+                        self._client_user_id_key,
+                        self._encode_secret_value(
+                            resp.user_id,
+                            field_name="client_user_id",
+                        ),
+                    )
+                    self.access_token = resp.access_token
+                    self.device_id = resp.device_id
+                    self.user_id = resp.user_id
+                    self.load_store()
+                    self._sync_token = await self._keyval_storage_gateway.get_text(
+                        self._sync_key
+                    )
+                    return self
                 self._logging_gateway.error("Password login failed.")
                 raise RuntimeError("Matrix password login failed.")
 
-        # Otherwise the config file exists, so we'll use the stored credentials.
-        self._logging_gateway.debug("Login using saved credentials.")
-        # open the file in read-only mode.
-        self.access_token = stored_access_token
-        self.device_id = self._decode_secret_value(
-            await self._keyval_storage_gateway.get_text(self._client_device_id_key),
-            field_name="client_device_id",
-        )
-        self.user_id = self._decode_secret_value(
-            await self._keyval_storage_gateway.get_text(self._client_user_id_key),
-            field_name="client_user_id",
-        )
-        self._sync_token = await self._keyval_storage_gateway.get_text(self._sync_key)
-        self.load_store()
-        return self
+            # Otherwise the config file exists, so we'll use the stored credentials.
+            self._logging_gateway.debug("Login using saved credentials.")
+            # open the file in read-only mode.
+            self.access_token = stored_access_token
+            self.device_id = self._decode_secret_value(
+                await self._keyval_storage_gateway.get_text(self._client_device_id_key),
+                field_name="client_device_id",
+            )
+            self.user_id = self._decode_secret_value(
+                await self._keyval_storage_gateway.get_text(self._client_user_id_key),
+                field_name="client_user_id",
+            )
+            self._sync_token = await self._keyval_storage_gateway.get_text(self._sync_key)
+            self.load_store()
+            return self
+        except Exception:
+            await self.close()
+            raise
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
         """Finalisation."""
         self._logging_gateway.debug("DefaultMatrixClient.__aexit__")
+        await self.close()
+        return False
+
+    async def close(self) -> None:
+        """Close Matrix IPC worker and vendor client session safely."""
         await self._stop_matrix_ipc_worker()
+        session = self.client_session
+        if session is None:
+            return
+        if getattr(session, "closed", False) is True:
+            return
         try:
-            await self.client_session.close()
+            await session.close()
         except AttributeError:
             ...
-        return False
 
     async def sync_forever(
         self,
@@ -661,21 +668,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             parsed = self._default_matrix_ipc_queue_size
         if parsed <= 0:
             return self._default_matrix_ipc_queue_size
-        return parsed
-
-    def _resolve_matrix_ipc_enqueue_timeout_seconds(self) -> float:
-        raw_value = getattr(
-            getattr(getattr(self._config, "matrix", SimpleNamespace()), "ipc", None),
-            "enqueue_timeout_seconds",
-            self._default_matrix_ipc_enqueue_timeout_seconds,
-        )
-        try:
-            parsed = float(raw_value)
-        except (TypeError, ValueError):
-            return self._default_matrix_ipc_enqueue_timeout_seconds
-
-        if parsed <= 0:
-            return self._default_matrix_ipc_enqueue_timeout_seconds
         return parsed
 
     def _start_matrix_ipc_worker(self) -> None:
@@ -1109,51 +1101,22 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._start_matrix_ipc_worker()
         if self._matrix_ipc_queue is None:
             self._logging_gateway.warning(
-                "Matrix IPC queue unavailable; dispatching inline."
+                "Matrix IPC queue unavailable; dropping event."
                 f" callback={callback_name}"
                 f" event={event_type}"
             )
-            try:
-                await self._dispatch_matrix_ipc_request(payload)
-                self._increment_matrix_metric("matrix.ipc.dispatch.inline_no_queue_success")
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                self._increment_matrix_metric("matrix.ipc.dispatch.inline_no_queue_failed")
-                self._logging_gateway.warning(
-                    "Matrix event extension dispatch failed."
-                    f" callback={callback_name}"
-                    f" event={event_type}"
-                    f" error={type(exc).__name__}: {exc}"
-                )
+            self._increment_matrix_metric("matrix.ipc.dispatch.queue_unavailable_drop_new")
             return
 
         try:
-            await asyncio.wait_for(
-                self._matrix_ipc_queue.put(payload),
-                timeout=self._matrix_ipc_enqueue_timeout_seconds,
-            )
-        except asyncio.TimeoutError:
-            self._increment_matrix_metric("matrix.ipc.dispatch.enqueue_timeout")
+            self._matrix_ipc_queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            self._increment_matrix_metric("matrix.ipc.dispatch.queue_full_drop_new")
             self._logging_gateway.warning(
-                "Matrix event extension enqueue timed out; dispatching inline."
+                "Matrix event extension queue full; dropping event."
                 f" callback={callback_name}"
                 f" event={event_type}"
-                f" enqueue_timeout_seconds={self._matrix_ipc_enqueue_timeout_seconds}"
             )
-            try:
-                await self._dispatch_matrix_ipc_request(payload)
-                self._increment_matrix_metric(
-                    "matrix.ipc.dispatch.fallback_inline_success"
-                )
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                self._increment_matrix_metric(
-                    "matrix.ipc.dispatch.fallback_inline_failed"
-                )
-                self._logging_gateway.warning(
-                    "Matrix event extension inline fallback dispatch failed."
-                    f" callback={callback_name}"
-                    f" event={event_type}"
-                    f" error={type(exc).__name__}: {exc}"
-                )
 
     async def _handle_non_core_event_callback(
         self,

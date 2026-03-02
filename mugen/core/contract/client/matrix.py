@@ -29,6 +29,10 @@ class IMatrixClient(ABC):
     ) -> bool:
         """Finalisation routine."""
 
+    @abstractmethod
+    async def close(self) -> None:
+        """Perform deterministic shutdown cleanup."""
+
     @property
     @abstractmethod
     def sync_token(self) -> str:
