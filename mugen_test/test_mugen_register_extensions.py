@@ -157,6 +157,71 @@ class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 logger_provider=lambda: app.logger,
             )
 
+    async def test_extension_load_error_with_gateway_logger_no_exception_method(
+        self,
+    ) -> None:
+        """Extension-load failures must not assume logger.exception exists."""
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions=[
+                        SimpleNamespace(
+                            type="ct",
+                            path="ct_ext:MissingCTExtension",
+                        )
+                    ],
+                )
+            )
+        )
+
+        class GatewayLogger:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, str]] = []
+
+            def critical(self, message: str):
+                self.messages.append(("critical", message))
+
+            def debug(self, message: str):
+                self.messages.append(("debug", message))
+
+            def error(self, message: str):
+                self.messages.append(("error", message))
+
+            def info(self, message: str):
+                self.messages.append(("info", message))
+
+            def warning(self, message: str):
+                self.messages.append(("warning", message))
+
+        logger = GatewayLogger()
+
+        with (
+            unittest.mock.patch.dict(
+                "sys.modules",
+                {
+                    "ct_ext": unittest.mock.Mock(),
+                },
+            ),
+            unittest.mock.patch(
+                target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
+                return_value=[],
+            ),
+            self.assertRaises(ExtensionLoadError),
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                logger_provider=lambda: logger,
+            )
+
+        self.assertTrue(
+            any(
+                level == "error" and "Extension class resolution failed:" in message
+                for level, message in logger.messages
+            )
+        )
+
     async def test_plugin_config_unavailable(self) -> None:
         """Test effects of missing plugins configuration."""
         # Create dummy app to get context.
