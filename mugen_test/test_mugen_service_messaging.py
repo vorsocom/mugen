@@ -41,14 +41,33 @@ class _DummyMhExt:
 class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
     """Tests message handler fanout and extension registration."""
 
-    def _new_service(self) -> DefaultMessagingService:
+    def _new_service(
+        self,
+        *,
+        mh_mode: str = "optional",
+        completion_content: str = "core-response",
+    ) -> DefaultMessagingService:
+        keyval_storage_gateway = Mock()
+        keyval_storage_gateway.get_json = AsyncMock(return_value={"messages": []})
+        keyval_storage_gateway.get_entry = AsyncMock(return_value=None)
+        keyval_storage_gateway.put_json = AsyncMock(return_value=None)
+
+        completion_gateway = Mock()
+        completion_gateway.get_completion = AsyncMock(
+            return_value=SimpleNamespace(content=completion_content)
+        )
+
         svc = DefaultMessagingService(
             config=SimpleNamespace(
                 mugen=SimpleNamespace(
-                    messaging=SimpleNamespace(extension_timeout_seconds=10.0)
+                    messaging=SimpleNamespace(
+                        extension_timeout_seconds=10.0,
+                        mh_mode=mh_mode,
+                    )
                 )
             ),
-            keyval_storage_gateway=Mock(),
+            completion_gateway=completion_gateway,
+            keyval_storage_gateway=keyval_storage_gateway,
             logging_gateway=Mock(),
             user_service=Mock(),
         )
@@ -59,6 +78,77 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
         svc._rag_extensions = []
         svc._rpp_extensions = []
         return svc
+
+    def test_init_supports_dict_messaging_config(self) -> None:
+        completion_gateway = Mock()
+        completion_gateway.get_completion = AsyncMock(
+            return_value=SimpleNamespace(content="ok")
+        )
+
+        svc = DefaultMessagingService(
+            config=SimpleNamespace(
+                mugen=SimpleNamespace(
+                    messaging={
+                        "mh_mode": "required",
+                        "extension_timeout_seconds": 10.0,
+                    }
+                )
+            ),
+            completion_gateway=completion_gateway,
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            user_service=Mock(),
+        )
+
+        self.assertEqual(svc._mh_mode, "required")  # pylint: disable=protected-access
+
+    def test_init_rejects_invalid_mh_mode(self) -> None:
+        completion_gateway = Mock()
+        completion_gateway.get_completion = AsyncMock(
+            return_value=SimpleNamespace(content="ok")
+        )
+
+        with self.assertRaisesRegex(ValueError, "mugen.messaging.mh_mode"):
+            DefaultMessagingService(
+                config=SimpleNamespace(
+                    mugen=SimpleNamespace(
+                        messaging=SimpleNamespace(
+                            mh_mode="invalid",
+                            extension_timeout_seconds=10.0,
+                        )
+                    )
+                ),
+                completion_gateway=completion_gateway,
+                keyval_storage_gateway=Mock(),
+                logging_gateway=Mock(),
+                user_service=Mock(),
+            )
+
+    def test_init_wraps_builtin_pipeline_import_error(self) -> None:
+        completion_gateway = Mock()
+        completion_gateway.get_completion = AsyncMock(
+            return_value=SimpleNamespace(content="ok")
+        )
+
+        with unittest.mock.patch(
+            "mugen.core.service.messaging.importlib.import_module",
+            side_effect=ImportError("boom"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "built-in text messaging pipeline"):
+                DefaultMessagingService(
+                    config=SimpleNamespace(
+                        mugen=SimpleNamespace(
+                            messaging=SimpleNamespace(
+                                mh_mode="optional",
+                                extension_timeout_seconds=10.0,
+                            )
+                        )
+                    ),
+                    completion_gateway=completion_gateway,
+                    keyval_storage_gateway=Mock(),
+                    logging_gateway=Mock(),
+                    user_service=Mock(),
+                )
 
     async def test_handle_text_message_returns_unsupported_when_no_match(self) -> None:
         svc = self._new_service()
@@ -79,8 +169,22 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             result,
-            [{"type": "text", "content": "Unsupported message type: text."}],
+            [{"type": "text", "content": "core-response"}],
         )
+        svc._completion_gateway.get_completion.assert_awaited_once()  # pylint: disable=protected-access
+
+    async def test_handle_text_message_raises_when_mode_required_and_no_mh_available(
+        self,
+    ) -> None:
+        svc = self._new_service(mh_mode="required")
+
+        with self.assertRaisesRegex(RuntimeError, "mugen.messaging.mh_mode='required'"):
+            await svc.handle_text_message(
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message="hello",
+            )
 
     async def test_handle_text_message_aggregates_matching_handler_responses(self) -> None:
         svc = self._new_service()
