@@ -5,6 +5,7 @@ import decimal
 import uuid
 import unittest
 
+import mugen.core.utility.rgql.semantic as semantic_mod
 from mugen.core.utility.rgql.apply_parser import (
     AggregateExpression,
     AggregateTransform,
@@ -365,6 +366,31 @@ class TestMugenRgqlSemantic(unittest.TestCase):
             ).is_collection,
             False,
         )
+
+    def test_apply_key_rejects_none_named_component_guard(self) -> None:
+        customer_type = self.model.get_type("NS.Customer")
+        customer_type.key_properties = ("Id", None)  # type: ignore[assignment]
+        segment = RGQLPathSegment(
+            name="Customers",
+            key_components=[
+                KeyComponent(name="Id", expr=Literal(uuid.uuid4())),
+                KeyComponent(name=None, expr=Literal(uuid.uuid4())),
+            ],
+        )
+
+        with (
+            unittest.mock.patch.object(
+                semantic_mod,
+                "any",
+                return_value=False,
+                create=True,
+            ),
+            self.assertRaisesRegex(SemanticError, "Named key component is required"),
+        ):
+            self.checker._apply_key(  # pylint: disable=protected-access
+                ValueType("NS.Customer", is_collection=True),
+                segment,
+            )
 
     def test_query_options_and_compute_checks(self) -> None:
         q = RGQLQueryOptions(

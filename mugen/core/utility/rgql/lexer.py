@@ -358,7 +358,8 @@ class RGQLLexer:  # pylint: disable=too-few-public-methods
 
     def _read_string(self) -> Token:
         start = self.pos
-        assert self._advance_char() == "'"
+        if self._advance_char() != "'":
+            raise ValueError(f"Expected string quote at position {start}")
         buf: List[str] = []
 
         while True:

@@ -3,6 +3,7 @@
 import unittest
 
 from mugen.core.utility.rgql.search_parser import (
+    _SearchLexer,
     SearchBinary,
     SearchNot,
     SearchParseError,
@@ -56,3 +57,11 @@ class TestMugenRgqlSearchParser(unittest.TestCase):
             parse_rgql_search(")")
         with self.assertRaises(SearchParseError):
             parse_rgql_search("alpha )")
+
+    def test_phrase_reader_requires_opening_quote(self) -> None:
+        lexer = _SearchLexer("alpha")
+        with self.assertRaisesRegex(
+            SearchParseError,
+            "Expected opening quote for phrase",
+        ):
+            lexer._read_phrase()  # pylint: disable=protected-access

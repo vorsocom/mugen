@@ -841,6 +841,54 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 return chunk
         self.fail("Timed out waiting for non-ping SSE chunk.")
 
+    def test_init_defaults_media_backend_to_object_when_unset(self) -> None:
+        config = _build_config(basedir=self.tmpdir.name)
+        config.web.media.backend = None
+        client = DefaultWebClient(
+            config=config,
+            ipc_service=Mock(),
+            media_storage_gateway=_build_media_gateway(
+                config=config,
+                keyval_storage_gateway=self.keyval,
+                logging_gateway=self.logger,
+            ),
+            web_runtime_store=_build_runtime_store(
+                config=config,
+                relational_storage_gateway=self.relational,
+                logging_gateway=self.logger,
+            ),
+            logging_gateway=self.logger,
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        self.assertEqual(client._media_backend, "object")  # pylint: disable=protected-access
+
+    def test_init_rejects_filesystem_media_backend_in_production(self) -> None:
+        config = _build_config(basedir=self.tmpdir.name)
+        config.mugen = SimpleNamespace(environment="production")
+        config.web.media.backend = "filesystem"
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "web.media.backend=filesystem is not allowed in production",
+        ):
+            DefaultWebClient(
+                config=config,
+                ipc_service=Mock(),
+                media_storage_gateway=_build_media_gateway(
+                    config=config,
+                    keyval_storage_gateway=self.keyval,
+                    logging_gateway=self.logger,
+                ),
+                web_runtime_store=_build_runtime_store(
+                    config=config,
+                    relational_storage_gateway=self.relational,
+                    logging_gateway=self.logger,
+                ),
+                logging_gateway=self.logger,
+                messaging_service=self.messaging,
+                user_service=Mock(),
+            )
+
     async def test_queue_enqueue_and_process_text_message(self) -> None:
         payload = await self.client.enqueue_message(
             auth_user="user-1",
@@ -2848,8 +2896,13 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
 
         reset_chunk = await self._next_non_ping(stream)
-        self.assertIn('"reason":"poll_generation_changed"', reset_chunk)
+        self.assertTrue(
+            '"reason":"poll_generation_changed"' in reset_chunk
+            or '"reason":"live_generation_changed"' in reset_chunk
+        )
         polled_chunk = await self._next_non_ping(stream)
+        if '"signal":"stream_reset"' in polled_chunk:
+            polled_chunk = await self._next_non_ping(stream)
         self.assertIn(":poll-gen:1", polled_chunk)
         keepalive_chunk = await stream.__anext__()
         self.assertEqual(keepalive_chunk, ": ping\n\n")
@@ -3035,6 +3088,74 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertIn(":dup-gen:2", second_chunk)
         self.assertNotIn("duplicate", second_chunk)
         await stream.aclose()
+
+    async def test_stream_events_share_single_cross_instance_poller_per_conversation(
+        self,
+    ) -> None:
+        self.client._sse_keepalive_seconds = 60.0  # pylint: disable=protected-access
+        self.client._sse_cross_instance_poll_seconds = 0.001  # pylint: disable=protected-access
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-shared-poller",
+            message_type="text",
+            text="seed",
+        )
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+                "conv-shared-poller",
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "shared-gen",
+                    "next_event_id": 1,
+                    "events": [],
+                },
+            )
+
+        self.client._tail_events_since = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={
+                "stream_generation": "shared-gen",
+                "events": [],
+            }
+        )
+
+        stream_a = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-shared-poller",
+        )
+        stream_b = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-shared-poller",
+        )
+
+        next_a = asyncio.create_task(stream_a.__anext__())
+        next_b = asyncio.create_task(stream_b.__anext__())
+        await self.client._publish_event(  # pylint: disable=protected-access
+            "conv-shared-poller",
+            {
+                "id": "1",
+                "event": "system",
+                "data": {"message": "fanout"},
+                "stream_generation": "shared-gen",
+                "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+            },
+        )
+        await asyncio.wait_for(next_a, timeout=1.0)
+        await asyncio.wait_for(next_b, timeout=1.0)
+
+        self.assertEqual(
+            len(self.client._sse_cross_instance_pollers),  # pylint: disable=protected-access
+            1,
+        )
+        await asyncio.sleep(0.01)
+        self.assertGreater(self.client._tail_events_since.await_count, 0)  # pylint: disable=protected-access
+
+        await stream_a.aclose()
+        await stream_b.aclose()
+        await asyncio.sleep(0)
+        self.assertEqual(
+            len(self.client._sse_cross_instance_pollers),  # pylint: disable=protected-access
+            0,
+        )
 
     async def test_stream_events_resets_stale_cursor_and_emits_low_live_ids(self) -> None:
         await self.client.enqueue_message(
@@ -5753,3 +5874,225 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
 
         self.client._on_worker_task_done(task)  # pylint: disable=protected-access
         self.assertIsNone(self.client._worker_failure)  # pylint: disable=protected-access
+
+    async def test_stream_events_early_timeout_without_ping_branch(self) -> None:
+        self.client._sse_keepalive_seconds = 60.0  # pylint: disable=protected-access
+        stream_generation = "timeout-gen"
+
+        original_wait_for = web_mod.asyncio.wait_for
+        first_timeout = {"pending": True}
+
+        async def _early_timeout_once(awaitable, timeout):
+            if first_timeout["pending"] is True:
+                first_timeout["pending"] = False
+                close_fn = getattr(awaitable, "close", None)
+                if callable(close_fn):
+                    close_fn()
+                raise asyncio.TimeoutError()
+            return await original_wait_for(awaitable, timeout)
+
+        with (
+            patch.object(
+                self.client,
+                "_ensure_conversation_owner_unlocked",
+                new=AsyncMock(return_value="user-1"),
+            ),
+            patch.object(
+                self.client,
+                "_read_event_log_unlocked",
+                new=AsyncMock(
+                    return_value={
+                        "version": self.client._event_log_version,  # pylint: disable=protected-access
+                        "generation": stream_generation,
+                        "next_event_id": 1,
+                        "events": [],
+                    }
+                ),
+            ),
+            patch.object(
+                self.client,
+                "_ensure_cross_instance_poller",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(web_mod.asyncio, "wait_for", new=_early_timeout_once),
+        ):
+            async def _next_non_ping_local(stream_obj):
+                for _ in range(10):
+                    chunk = await stream_obj.__anext__()
+                    if chunk != ": ping\n\n":
+                        return chunk
+                self.fail("Timed out waiting for non-ping SSE chunk.")
+
+            stream = await self.client.stream_events(
+                auth_user="user-1",
+                conversation_id="conv-timeout-no-ping",
+            )
+            next_chunk = asyncio.create_task(_next_non_ping_local(stream))
+            await asyncio.sleep(0)
+            await self.client._publish_event(  # pylint: disable=protected-access
+                "conv-timeout-no-ping",
+                {
+                    "id": "1",
+                    "event": "system",
+                    "data": {"message": "after-timeout"},
+                    "stream_generation": stream_generation,
+                    "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                },
+            )
+            chunk = await asyncio.wait_for(next_chunk, timeout=1.0)
+            self.assertIn("after-timeout", chunk)
+            await stream.aclose()
+
+    async def test_ensure_cross_instance_poller_reuses_active_pending_task(self) -> None:
+        blocker = asyncio.Event()
+        pending_task = asyncio.create_task(blocker.wait())
+        self.client._sse_cross_instance_pollers["conv-active"] = (  # pylint: disable=protected-access
+            pending_task,
+            asyncio.Event(),
+        )
+
+        with patch.object(
+            self.client,
+            "_resolve_cross_instance_poll_cursor",
+            new=AsyncMock(),
+        ) as resolve_cursor:
+            await self.client._ensure_cross_instance_poller(  # pylint: disable=protected-access
+                "conv-active"
+            )
+            resolve_cursor.assert_not_called()
+
+        pending_task.cancel()
+        await asyncio.gather(pending_task, return_exceptions=True)
+        self.client._sse_cross_instance_pollers.clear()  # pylint: disable=protected-access
+
+    async def test_ensure_cross_instance_poller_restarts_when_existing_task_done(
+        self,
+    ) -> None:
+        finished_task = asyncio.create_task(asyncio.sleep(0))
+        await finished_task
+        self.client._sse_cross_instance_pollers["conv-restart"] = (  # pylint: disable=protected-access
+            finished_task,
+            asyncio.Event(),
+        )
+
+        with (
+            patch.object(
+                self.client,
+                "_resolve_cross_instance_poll_cursor",
+                new=AsyncMock(return_value=("restart-gen", 3)),
+            ) as resolve_cursor,
+            patch.object(
+                self.client,
+                "_cross_instance_poller_loop",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            await self.client._ensure_cross_instance_poller(  # pylint: disable=protected-access
+                "conv-restart"
+            )
+            resolve_cursor.assert_awaited_once_with("conv-restart")
+
+        new_task, _stop_event = self.client._sse_cross_instance_pollers["conv-restart"]  # pylint: disable=protected-access
+        await asyncio.gather(new_task, return_exceptions=True)
+        self.client._sse_cross_instance_pollers.clear()  # pylint: disable=protected-access
+
+    async def test_cross_instance_poller_loop_stop_event_paths(self) -> None:
+        # Cover wait-for-stop continue path.
+        self.client._sse_cross_instance_poll_seconds = 60.0  # pylint: disable=protected-access
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(
+            self.client._cross_instance_poller_loop(  # pylint: disable=protected-access
+                conversation_id="conv-stop-wait",
+                initial_stream_generation="gen",
+                initial_highest_event_id=0,
+                stop_event=stop_event,
+            )
+        )
+        await asyncio.sleep(0)
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1.0)
+
+        # Cover pre-set stop condition and current-task cleanup pop path.
+        preset_stop_event = asyncio.Event()
+        preset_stop_event.set()
+        current_task = asyncio.current_task()
+        self.assertIsNotNone(current_task)
+        self.client._sse_cross_instance_pollers["conv-current-task"] = (  # pylint: disable=protected-access
+            current_task,
+            preset_stop_event,
+        )
+        await self.client._cross_instance_poller_loop(  # pylint: disable=protected-access
+            conversation_id="conv-current-task",
+            initial_stream_generation="gen",
+            initial_highest_event_id=0,
+            stop_event=preset_stop_event,
+        )
+        self.assertNotIn(
+            "conv-current-task",
+            self.client._sse_cross_instance_pollers,  # pylint: disable=protected-access
+        )
+
+    async def test_cross_instance_poller_loop_keeps_mapping_for_foreign_task(self) -> None:
+        foreign_task = asyncio.create_task(asyncio.sleep(0))
+        await foreign_task
+        stop_event = asyncio.Event()
+        stop_event.set()
+        self.client._sse_cross_instance_pollers["conv-foreign-task"] = (  # pylint: disable=protected-access
+            foreign_task,
+            stop_event,
+        )
+
+        await self.client._cross_instance_poller_loop(  # pylint: disable=protected-access
+            conversation_id="conv-foreign-task",
+            initial_stream_generation="gen",
+            initial_highest_event_id=0,
+            stop_event=stop_event,
+        )
+        self.assertIn(
+            "conv-foreign-task",
+            self.client._sse_cross_instance_pollers,  # pylint: disable=protected-access
+        )
+        self.client._sse_cross_instance_pollers.clear()  # pylint: disable=protected-access
+
+    async def test_stop_cross_instance_poller_handles_missing_and_done_tasks(self) -> None:
+        await self.client._stop_cross_instance_poller("conv-missing")  # pylint: disable=protected-access
+
+        done_task = asyncio.create_task(asyncio.sleep(0))
+        await done_task
+        self.client._sse_cross_instance_pollers["conv-done"] = (  # pylint: disable=protected-access
+            done_task,
+            asyncio.Event(),
+        )
+        await self.client._stop_cross_instance_poller("conv-done")  # pylint: disable=protected-access
+        self.assertNotIn(
+            "conv-done",
+            self.client._sse_cross_instance_pollers,  # pylint: disable=protected-access
+        )
+
+    async def test_stop_all_cross_instance_pollers_cleans_done_and_pending_tasks(
+        self,
+    ) -> None:
+        blocker = asyncio.Event()
+        pending_task = asyncio.create_task(blocker.wait())
+        done_task = asyncio.create_task(asyncio.sleep(0))
+        await done_task
+        self.client._sse_cross_instance_pollers = {  # pylint: disable=protected-access
+            "conv-pending": (pending_task, asyncio.Event()),
+            "conv-done": (done_task, asyncio.Event()),
+        }
+
+        await self.client._stop_all_cross_instance_pollers()  # pylint: disable=protected-access
+        self.assertEqual(
+            self.client._sse_cross_instance_pollers,  # pylint: disable=protected-access
+            {},
+        )
+        self.assertTrue(pending_task.done())
+
+    def test_enforce_media_backend_policy_rejects_filesystem_in_production(self) -> None:
+        self.client._media_backend = "filesystem"  # pylint: disable=protected-access
+        self.client._config.mugen = SimpleNamespace(environment="production")  # pylint: disable=protected-access
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "web.media.backend=filesystem is not allowed in production",
+        ):
+            self.client._enforce_media_backend_policy()  # pylint: disable=protected-access

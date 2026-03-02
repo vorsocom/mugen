@@ -6,6 +6,7 @@ from time import perf_counter
 from quart import Quart
 
 from mugen import (
+    PHASE_A_CAPABILITY_STATUSES_KEY,
     PHASE_A_CAPABILITY_ERRORS_KEY,
     PHASE_A_ERROR_KEY,
     PHASE_A_STATUS_KEY,
@@ -308,7 +309,15 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertFalse(payload["ready"])
-        self.assertIn("phase_a.container_readiness: backend unavailable", payload["reasons"])
+        self.assertEqual(
+            payload["phase_a_capability_reasons"],
+            {"container_readiness": "backend unavailable"},
+        )
+        self.assertEqual(payload["phase_a_failed_capabilities"], ["container_readiness"])
+        self.assertEqual(
+            payload["reasons"].get("phase_a.container_readiness"),
+            "backend unavailable",
+        )
 
     async def test_ready_endpoint_prefers_phase_a_error_reason_string(self) -> None:
         state = self._bootstrap_state()
@@ -328,7 +337,7 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertFalse(payload["ready"])
-        self.assertIn("phase_a: phase_a bootstrap failed", payload["reasons"])
+        self.assertEqual(payload["reasons"].get("phase_a"), "phase_a bootstrap failed")
 
     async def test_ready_endpoint_skips_phase_a_capabilities_when_not_dict(self) -> None:
         state = self._bootstrap_state()
@@ -347,6 +356,72 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 503)
         self.assertFalse(payload["ready"])
         self.assertEqual(payload["reasons"], {})
+
+    async def test_ready_endpoint_skips_non_string_and_blank_phase_a_capability_names(
+        self,
+    ) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        state[PHASE_A_ERROR_KEY] = None
+        state[PHASE_A_CAPABILITY_ERRORS_KEY] = {
+            1: "invalid",
+            "   ": "blank",
+            "valid": "ok",
+        }
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_HEALTHY}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(payload["phase_a_capability_reasons"], {"valid": "ok"})
+
+    async def test_ready_endpoint_normalizes_phase_a_capability_status_map(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_A_CAPABILITY_STATUSES_KEY] = {
+            1: "healthy",
+            "   ": "healthy",
+            "valid": " degraded ",
+            "bad-type": 1,
+            "blank": "   ",
+        }
+        state[PHASE_A_CAPABILITY_ERRORS_KEY] = {}
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_HEALTHY}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["phase_a_capability_statuses"], {"valid": "degraded"})
+
+    async def test_ready_endpoint_skips_phase_a_capability_statuses_when_not_dict(
+        self,
+    ) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_A_CAPABILITY_STATUSES_KEY] = ["not", "a", "dict"]
+        state[PHASE_A_CAPABILITY_ERRORS_KEY] = {}
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_HEALTHY}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["phase_a_capability_statuses"], {})
 
     async def test_ready_endpoint_treats_stopped_critical_as_non_failed_when_degrade_disabled(
         self,

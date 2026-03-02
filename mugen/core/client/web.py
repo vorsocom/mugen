@@ -177,8 +177,9 @@ class DefaultWebClient(IWebClient):
 
         self._media_backend = self._resolve_str_config(
             ("web", "media", "backend"),
-            "filesystem",
+            "object",
         ).strip().lower()
+        self._enforce_media_backend_policy()
         self._media_storage_path = self._resolve_storage_path(
             self._resolve_str_config(
                 ("web", "media", "storage", "path"),
@@ -189,6 +190,8 @@ class DefaultWebClient(IWebClient):
         self._storage_lock = asyncio.Lock()
         self._subscriber_lock = asyncio.Lock()
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
+        self._sse_poller_lock = asyncio.Lock()
+        self._sse_cross_instance_pollers: dict[str, tuple[asyncio.Task, asyncio.Event]] = {}
         self._web_metrics: dict[str, int] = {}
 
         self._worker_task: asyncio.Task | None = None
@@ -334,6 +337,7 @@ class DefaultWebClient(IWebClient):
 
         async with self._subscriber_lock:
             self._subscribers.clear()
+        await self._stop_all_cross_instance_pollers()
 
         try:
             await self._media_storage_gateway.close()
@@ -516,15 +520,12 @@ class DefaultWebClient(IWebClient):
 
         subscriber_queue: asyncio.Queue = asyncio.Queue(maxsize=self._sse_queue_size)
         await self._register_subscriber(conversation, subscriber_queue)
+        await self._ensure_cross_instance_poller(conversation)
 
         async def _event_stream() -> AsyncIterator[str]:
             highest_event_id = int(cursor["effective_last_event_id"])
             active_generation = stream_generation
             next_ping_at = asyncio.get_running_loop().time() + self._sse_keepalive_seconds
-            next_poll_at = (
-                asyncio.get_running_loop().time()
-                + self._sse_cross_instance_poll_seconds
-            )
             try:
                 reset_event = cursor.get("reset_event")
                 if isinstance(reset_event, dict):
@@ -574,10 +575,7 @@ class DefaultWebClient(IWebClient):
 
                 while True:
                     loop_now = asyncio.get_running_loop().time()
-                    wait_timeout = min(
-                        max(next_ping_at - loop_now, 0.0),
-                        max(next_poll_at - loop_now, 0.0),
-                    )
+                    wait_timeout = max(next_ping_at - loop_now, 0.0)
                     try:
                         event = await asyncio.wait_for(
                             subscriber_queue.get(),
@@ -585,65 +583,9 @@ class DefaultWebClient(IWebClient):
                         )
                     except asyncio.TimeoutError:
                         now = asyncio.get_running_loop().time()
-                        if now >= next_poll_at:
-                            self._increment_web_metric("web.sse.poll.cycles")
-                            try:
-                                tail_batch = await self._tail_events_since(
-                                    conversation_id=conversation,
-                                    stream_generation=active_generation,
-                                    after_event_id=highest_event_id,
-                                )
-                            except Exception as exc:  # pylint: disable=broad-exception-caught
-                                self._increment_web_metric("web.sse.poll.errors")
-                                self._logging_gateway.warning(
-                                    "Web SSE cross-instance tail poll failed "
-                                    f"conversation_id={conversation} "
-                                    f"error_type={type(exc).__name__} error={exc}"
-                                )
-                                tail_batch = None
-
-                            if tail_batch is not None:
-                                batch_generation = self._normalize_stream_generation(
-                                    tail_batch.get("stream_generation"),
-                                    fallback=active_generation,
-                                )
-                                if batch_generation != active_generation:
-                                    self._log_sse_diagnostic(
-                                        conversation_id=conversation,
-                                        incoming_event_id=None,
-                                        last_event_id=highest_event_id,
-                                        reason="poll_generation_changed",
-                                    )
-                                    active_generation = batch_generation
-                                    highest_event_id = 0
-                                    yield self._format_sse_event(
-                                        self._build_stream_reset_event(
-                                            conversation_id=conversation,
-                                            reason="poll_generation_changed",
-                                            incoming_last_event_id=last_event_id,
-                                            incoming_event_id=None,
-                                            stream_generation=active_generation,
-                                        )
-                                    )
-
-                                for polled_event in tail_batch.get("events", []):
-                                    event_id = self._parse_event_id(polled_event.get("id"))
-                                    if event_id is not None and event_id <= highest_event_id:
-                                        continue
-                                    if event_id is not None:
-                                        highest_event_id = event_id
-                                    self._increment_web_metric("web.sse.poll.events")
-                                    yield self._format_sse_event(
-                                        self._build_stream_sse_event(
-                                            event=polled_event,
-                                            stream_generation=active_generation,
-                                        )
-                                    )
-
                         if now >= next_ping_at:
                             yield ": ping\n\n"
                             next_ping_at = now + self._sse_keepalive_seconds
-                        next_poll_at = now + self._sse_cross_instance_poll_seconds
                         continue
 
                     if event is self._sse_disconnect_sentinel:
@@ -709,6 +651,7 @@ class DefaultWebClient(IWebClient):
                     next_ping_at = now + self._sse_keepalive_seconds
             finally:
                 await self._unregister_subscriber(conversation, subscriber_queue)
+                await self._stop_cross_instance_poller_if_unused(conversation)
 
         return _event_stream()
 
@@ -740,6 +683,158 @@ class DefaultWebClient(IWebClient):
                 for event in batch.events
             ],
         }
+
+    async def _ensure_cross_instance_poller(self, conversation_id: str) -> None:
+        async with self._sse_poller_lock:
+            existing = self._sse_cross_instance_pollers.get(conversation_id)
+            if existing is not None:
+                existing_task, _existing_stop = existing
+                if existing_task.done() is not True:
+                    return
+
+            stream_generation, highest_event_id = (
+                await self._resolve_cross_instance_poll_cursor(conversation_id)
+            )
+            stop_event = asyncio.Event()
+            task = asyncio.create_task(
+                self._cross_instance_poller_loop(
+                    conversation_id=conversation_id,
+                    initial_stream_generation=stream_generation,
+                    initial_highest_event_id=highest_event_id,
+                    stop_event=stop_event,
+                ),
+                name=f"mugen.web.sse_poller.{conversation_id}",
+            )
+            self._sse_cross_instance_pollers[conversation_id] = (task, stop_event)
+
+    async def _resolve_cross_instance_poll_cursor(
+        self,
+        conversation_id: str,
+    ) -> tuple[str, int]:
+        async with self._storage_lock:
+            log = await self._read_event_log_unlocked(conversation_id)
+
+        stream_generation = self._normalize_stream_generation(
+            log.get("generation"),
+            fallback=self._new_stream_generation(),
+        )
+        highest_event_id = 0
+        for event in list(log.get("events", [])):
+            event_id = self._parse_event_id(event.get("id"))
+            if event_id is None:
+                continue
+            if event_id > highest_event_id:
+                highest_event_id = event_id
+        return stream_generation, highest_event_id
+
+    async def _cross_instance_poller_loop(
+        self,
+        *,
+        conversation_id: str,
+        initial_stream_generation: str,
+        initial_highest_event_id: int,
+        stop_event: asyncio.Event,
+    ) -> None:
+        stream_generation = initial_stream_generation
+        highest_event_id = initial_highest_event_id
+        try:
+            while stop_event.is_set() is not True:
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(),
+                        timeout=self._sse_cross_instance_poll_seconds,
+                    )
+                    continue
+                except asyncio.TimeoutError:
+                    ...
+
+                self._increment_web_metric("web.sse.poll.cycles")
+                try:
+                    tail_batch = await self._tail_events_since(
+                        conversation_id=conversation_id,
+                        stream_generation=stream_generation,
+                        after_event_id=highest_event_id,
+                    )
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    self._increment_web_metric("web.sse.poll.errors")
+                    self._logging_gateway.warning(
+                        "Web SSE cross-instance tail poll failed "
+                        f"conversation_id={conversation_id} "
+                        f"error_type={type(exc).__name__} error={exc}"
+                    )
+                    continue
+
+                batch_generation = self._normalize_stream_generation(
+                    tail_batch.get("stream_generation"),
+                    fallback=stream_generation,
+                )
+                if batch_generation != stream_generation:
+                    self._log_sse_diagnostic(
+                        conversation_id=conversation_id,
+                        incoming_event_id=None,
+                        last_event_id=highest_event_id,
+                        reason="poll_generation_changed",
+                    )
+                    stream_generation = batch_generation
+                    highest_event_id = 0
+                    await self._publish_event(
+                        conversation_id,
+                        self._build_stream_reset_event(
+                            conversation_id=conversation_id,
+                            reason="poll_generation_changed",
+                            incoming_last_event_id=None,
+                            incoming_event_id=None,
+                            stream_generation=stream_generation,
+                        ),
+                    )
+
+                for polled_event in tail_batch.get("events", []):
+                    event_id = self._parse_event_id(polled_event.get("id"))
+                    if event_id is not None and event_id <= highest_event_id:
+                        continue
+                    if event_id is not None:
+                        highest_event_id = event_id
+                    self._increment_web_metric("web.sse.poll.events")
+                    await self._publish_event(conversation_id, polled_event)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            async with self._sse_poller_lock:
+                existing = self._sse_cross_instance_pollers.get(conversation_id)
+                if existing is None:
+                    return
+                existing_task, _existing_stop = existing
+                if existing_task is asyncio.current_task():
+                    self._sse_cross_instance_pollers.pop(conversation_id, None)
+
+    async def _stop_cross_instance_poller_if_unused(self, conversation_id: str) -> None:
+        async with self._subscriber_lock:
+            subscribers = self._subscribers.get(conversation_id)
+            if subscribers:
+                return
+        await self._stop_cross_instance_poller(conversation_id)
+
+    async def _stop_cross_instance_poller(self, conversation_id: str) -> None:
+        async with self._sse_poller_lock:
+            existing = self._sse_cross_instance_pollers.pop(conversation_id, None)
+        if existing is None:
+            return
+
+        task, stop_event = existing
+        stop_event.set()
+        if task.done() is not True:
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _stop_all_cross_instance_pollers(self) -> None:
+        async with self._sse_poller_lock:
+            active = list(self._sse_cross_instance_pollers.items())
+            self._sse_cross_instance_pollers = {}
+        for _conversation_id, (task, stop_event) in active:
+            stop_event.set()
+            if task.done() is not True:
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def resolve_media_download(
         self,
@@ -1992,6 +2087,23 @@ class DefaultWebClient(IWebClient):
     def _ensure_media_directory(self) -> None:
         if self._media_backend in {"filesystem", "fs", "local"}:
             os.makedirs(self._media_storage_path, exist_ok=True)
+
+    def _enforce_media_backend_policy(self) -> None:
+        if self._media_backend not in {"filesystem", "fs", "local"}:
+            return
+        if self._is_production_environment() is not True:
+            return
+        raise RuntimeError(
+            "web.media.backend=filesystem is not allowed in production. "
+            "Use object backend."
+        )
+
+    def _is_production_environment(self) -> bool:
+        environment = str(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
+            or ""
+        ).strip().lower()
+        return environment == "production"
 
     def _resolve_float_config(
         self,

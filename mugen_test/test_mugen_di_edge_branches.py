@@ -381,8 +381,8 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
 
         self.assertTrue(
             any(
-                call.args[0] == "Unsupported platform configuration detected: %s."
-                and call.args[1] == "unknown"
+                call.args[0]
+                == "Unsupported platform configuration detected: unknown."
                 for call in logger.error.call_args_list
             )
         )

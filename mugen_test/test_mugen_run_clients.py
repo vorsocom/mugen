@@ -40,6 +40,7 @@ def _test_config(*, platforms: list[str]) -> SimpleNamespace:
     if "web" in platforms:
         mugen_cfg.modules = SimpleNamespace(
             core=SimpleNamespace(
+                client=SimpleNamespace(web="default"),
                 gateway=SimpleNamespace(
                     storage=SimpleNamespace(
                         relational="configured",
@@ -804,6 +805,244 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("provider down", str(state[mugen_mod.PHASE_A_ERROR_KEY]))
         register_extensions_mock.assert_not_awaited()
+
+    async def test_bootstrap_app_fails_when_active_platform_lacks_mh_capability(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=["matrix"])
+        register_extensions_mock = unittest.mock.AsyncMock(return_value={})
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=register_extensions_mock,
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_messaging_provider",
+                return_value=SimpleNamespace(mh_extensions=[]),
+            ),
+            self.assertRaises(BootstrapConfigError),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
+        errors = state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY]
+        self.assertEqual(statuses["messaging.mh.matrix"], PHASE_STATUS_DEGRADED)
+        self.assertIn("Missing message handler capability", errors["messaging.mh.matrix"])
+
+    async def test_bootstrap_app_fails_when_web_framework_capability_missing(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=["web"])
+        register_extensions_mock = unittest.mock.AsyncMock(return_value={"fw": []})
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=register_extensions_mock,
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_messaging_provider",
+                return_value=SimpleNamespace(
+                    mh_extensions=[SimpleNamespace(platforms=["web"])]
+                ),
+            ),
+            unittest.mock.patch.object(mugen_mod, "_web_provider", return_value=object()),
+            self.assertRaises(BootstrapConfigError),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
+        self.assertEqual(statuses["web.fw_extension"], PHASE_STATUS_DEGRADED)
+
+    async def test_bootstrap_app_marks_required_capabilities_healthy_when_satisfied(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=["web", "matrix"])
+        register_extensions_mock = unittest.mock.AsyncMock(
+            return_value={"fw": ["core.fw.web"]}
+        )
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=register_extensions_mock,
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_messaging_provider",
+                return_value=SimpleNamespace(
+                    mh_extensions=[SimpleNamespace(platforms=[])]
+                ),
+            ),
+            unittest.mock.patch.object(mugen_mod, "_web_provider", return_value=object()),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
+        self.assertEqual(statuses["messaging.mh.web"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["messaging.mh.matrix"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["web.fw_extension"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["web.client_runtime_path"], PHASE_STATUS_HEALTHY)
+
+    async def test_bootstrap_app_normalizes_non_dict_phase_a_capability_state(self) -> None:
+        app = Quart("test_app")
+        state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
+        state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY] = "invalid"
+        state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY] = "invalid"
+        cfg = _test_config(platforms=[])
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=unittest.mock.AsyncMock(return_value={}),
+            ),
+            unittest.mock.patch.object(mugen_mod, "_messaging_provider", return_value=None),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        self.assertIsInstance(state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY], dict)
+        self.assertIsInstance(state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY], dict)
+
+    async def test_bootstrap_app_reuses_existing_phase_a_capability_dict_state(self) -> None:
+        app = Quart("test_app")
+        state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
+        existing_statuses = {"seed": PHASE_STATUS_HEALTHY}
+        existing_errors = {"seed": None}
+        state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY] = existing_statuses
+        state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY] = existing_errors
+        cfg = _test_config(platforms=[])
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=unittest.mock.AsyncMock(return_value={}),
+            ),
+            unittest.mock.patch.object(mugen_mod, "_messaging_provider", return_value=None),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        self.assertIs(state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY], existing_statuses)
+        self.assertIs(state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY], existing_errors)
+        self.assertEqual(existing_statuses["container_readiness"], PHASE_STATUS_HEALTHY)
+
+    async def test_bootstrap_app_handles_non_dict_extension_report_and_non_list_handlers(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=["matrix"])
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=unittest.mock.AsyncMock(return_value="invalid-report"),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_messaging_provider",
+                return_value=SimpleNamespace(mh_extensions="invalid"),
+            ),
+            self.assertRaises(BootstrapConfigError),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+    async def test_bootstrap_app_uses_fallback_message_for_missing_capability_reason(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=[])
+
+        fake_result = SimpleNamespace(
+            statuses={"container_readiness": PHASE_STATUS_HEALTHY},
+            errors={"missing": None},
+            failed_capabilities=["missing"],
+            healthy=False,
+        )
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=unittest.mock.AsyncMock(return_value={}),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "evaluate_runtime_capabilities",
+                return_value=fake_result,
+            ),
+            self.assertRaisesRegex(BootstrapConfigError, "capability unavailable"),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
 
     def test_platform_state_helpers_cover_edge_branches(self) -> None:
         self.assertTrue(

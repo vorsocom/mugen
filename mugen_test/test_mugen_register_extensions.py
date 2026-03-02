@@ -160,3 +160,22 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
             )
+
+    async def test_register_extensions_returns_grouped_registered_tokens(self) -> None:
+        app = Quart("test_app")
+        config = _base_cfg(
+            [
+                SimpleNamespace(type="cp", token="core.cp.clear_history"),
+                SimpleNamespace(type="cp", token="core.cp.clear_history"),
+            ]
+        )
+        registry = _RegistryStub(result=True)
+
+        report = await register_extensions(
+            app=app,
+            config_provider=lambda: config,
+            logger_provider=lambda: app.logger,
+            extension_registry_provider=lambda: registry,
+        )
+
+        self.assertEqual(report, {"cp": ["core.cp.clear_history"]})

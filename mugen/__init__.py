@@ -73,6 +73,10 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
+from mugen.core.domain.use_case import (
+    RuntimeCapabilityInput,
+    evaluate_runtime_capabilities,
+)
 from mugen.core.runtime.phase_b_bootstrap import (
     PHASE_B_CRITICAL_PLATFORMS_KEY as _PHASE_B_CRITICAL_PLATFORMS_KEY,
     PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY as _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY,
@@ -498,9 +502,16 @@ async def bootstrap_app(
 ) -> None:
     """Phase A bootstrap for app extensions and API registration."""
     _ = logger_provider
+    config: SimpleNamespace = config_provider()
     bootstrap_state = get_bootstrap_state(app)
-    capability_statuses = bootstrap_state.setdefault(PHASE_A_CAPABILITY_STATUSES_KEY, {})
-    capability_errors = bootstrap_state.setdefault(PHASE_A_CAPABILITY_ERRORS_KEY, {})
+    capability_statuses = bootstrap_state.get(PHASE_A_CAPABILITY_STATUSES_KEY)
+    if not isinstance(capability_statuses, dict):
+        capability_statuses = {}
+    bootstrap_state[PHASE_A_CAPABILITY_STATUSES_KEY] = capability_statuses
+    capability_errors = bootstrap_state.get(PHASE_A_CAPABILITY_ERRORS_KEY)
+    if not isinstance(capability_errors, dict):
+        capability_errors = {}
+    bootstrap_state[PHASE_A_CAPABILITY_ERRORS_KEY] = capability_errors
 
     try:
         await di.ensure_container_readiness_async()
@@ -516,7 +527,65 @@ async def bootstrap_app(
 
     # Discover and register core plugins and
     # third-party extensions.
-    await register_extensions(app, config_provider=config_provider)
+    extension_tokens_by_type = await register_extensions(app, config_provider=config_provider)
+    if not isinstance(extension_tokens_by_type, dict):
+        extension_tokens_by_type = {}
+
+    messaging_service: IMessagingService | None = _messaging_provider()
+    mh_extension_platforms: list[object] = []
+    if messaging_service is not None:
+        mh_extensions = getattr(messaging_service, "mh_extensions", [])
+        if isinstance(mh_extensions, list):
+            mh_extension_platforms = [
+                getattr(extension, "platforms", None) for extension in mh_extensions
+            ]
+
+    active_platforms = _normalize_platform_list(
+        getattr(getattr(config, "mugen", SimpleNamespace()), "platforms", [])
+    )
+    registered_fw_tokens = extension_tokens_by_type.get("fw", [])
+    has_web_fw_extension = (
+        isinstance(registered_fw_tokens, list)
+        and "core.fw.web" in registered_fw_tokens
+    )
+    has_web_client_runtime_path = (
+        _config_path_exists(config, "mugen", "modules", "core", "client", "web")
+        and _web_provider() is not None
+    )
+
+    capability_result = evaluate_runtime_capabilities(
+        RuntimeCapabilityInput(
+            active_platforms=active_platforms,
+            messaging_handler_platforms=mh_extension_platforms,
+            has_web_fw_extension=has_web_fw_extension,
+            has_web_client_runtime_path=has_web_client_runtime_path,
+            container_ready=(
+                capability_statuses.get("container_readiness") == PHASE_STATUS_HEALTHY
+            ),
+            provider_ready=(
+                capability_statuses.get("container_readiness") == PHASE_STATUS_HEALTHY
+            ),
+        )
+    )
+    for capability_name, status in capability_result.statuses.items():
+        capability_statuses[capability_name] = status
+    for capability_name, error in capability_result.errors.items():
+        capability_errors[capability_name] = error
+
+    if capability_result.healthy is not True:
+        failed_messages: list[str] = []
+        for capability_name in capability_result.failed_capabilities:
+            capability_error = capability_result.errors.get(capability_name)
+            if isinstance(capability_error, str) and capability_error.strip() != "":
+                failed_messages.append(f"{capability_name}: {capability_error.strip()}")
+                continue
+            failed_messages.append(f"{capability_name}: capability unavailable")
+        message = (
+            "Runtime capability requirements failed: "
+            + "; ".join(failed_messages)
+        )
+        bootstrap_state[PHASE_A_ERROR_KEY] = message
+        raise BootstrapConfigError(message)
 
     # Register blueprints after extensions have been loaded.
     # This allows extensions to hack the api.
@@ -869,7 +938,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
     messaging_provider=_messaging_provider,
     platform_provider=_platform_provider,
     extension_registry_provider=None,
-) -> None:
+) -> dict[str, list[str]]:
     """Register core plugins and third party extensions."""
     config: SimpleNamespace = config_provider()
     ipc_service: IIPCService = ipc_provider()
@@ -891,6 +960,8 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
         )
     else:
         extension_registry = extension_registry_provider()
+
+    registered_tokens_by_type: dict[str, set[str]] = {}
 
     for ext_cfg in extensions:
         ext_started_at = perf_counter()
@@ -950,6 +1021,9 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
             logger.debug(
                 f"Registered {resolved_type.upper()} extension: {token}."
             )
+            if resolved_type not in registered_tokens_by_type:
+                registered_tokens_by_type[resolved_type] = set()
+            registered_tokens_by_type[resolved_type].add(token)
         else:
             logger.debug(
                 f"Skipped unsupported extension: {token} ({resolved_type})."
@@ -960,6 +1034,10 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
         f" total_extensions={len(extensions)}"
         f" elapsed_seconds={perf_counter() - sweep_started_at:.3f}"
     )
+    return {
+        ext_type: sorted(tokens)
+        for ext_type, tokens in registered_tokens_by_type.items()
+    }
 
 
 async def run_matrix_client(

@@ -143,7 +143,9 @@ async def startup():
         await bootstrap_app(app)
     except BootstrapError:
         state[PHASE_A_STATUS_KEY] = PHASE_STATUS_DEGRADED
-        state[PHASE_A_ERROR_KEY] = "phase_a bootstrap failed"
+        current_error = state.get(PHASE_A_ERROR_KEY)
+        if not isinstance(current_error, str) or current_error.strip() == "":
+            state[PHASE_A_ERROR_KEY] = "phase_a bootstrap failed"
         app.logger.error(
             "Bootstrap phase_a failed elapsed_seconds=%.3f",
             perf_counter() - phase_a_started_at,

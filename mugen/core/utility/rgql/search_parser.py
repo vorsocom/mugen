@@ -157,7 +157,8 @@ class _SearchLexer:  # pylint: disable=too-few-public-methods
         return self._read_word()
 
     def _read_phrase(self) -> _SearchToken:
-        assert self._advance() == '"'
+        if self._advance() != '"':
+            raise SearchParseError("Expected opening quote for phrase")
         buf: List[str] = []
         while True:
             ch = self._peek()
