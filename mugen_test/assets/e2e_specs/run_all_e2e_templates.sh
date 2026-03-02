@@ -12,7 +12,14 @@ Options:
   --print-config       Validate rendered specs only (no HTTP execution).
   --only <substring>   Run only specs whose path contains substring.
   --continue-on-error  Continue executing remaining specs after a failure.
+  --ephemeral-db       Start a disposable Postgres instance (default).
+  --no-ephemeral-db    Disable disposable Postgres for this run.
   -h, --help           Show this help message.
+
+Config resolution order:
+  1. MUGEN_E2E_CONFIG_FILE
+  2. MUGEN_CONFIG_FILE
+  3. mugen.e2e.toml (repository root)
 EOF2
 }
 
@@ -22,6 +29,20 @@ require_cmd() {
     echo "ERROR: required command not found: $cmd" >&2
     exit 1
   fi
+}
+
+find_bin() {
+  local name="$1"
+  local fallback="${2:-}"
+  if command -v "$name" >/dev/null 2>&1; then
+    command -v "$name"
+    return
+  fi
+  if [[ -n "$fallback" && -x "$fallback" ]]; then
+    echo "$fallback"
+    return
+  fi
+  echo ""
 }
 
 resolve_python_bin() {
@@ -59,6 +80,120 @@ escape_sed_replacement() {
   printf '%s' "$1" | sed -e 's/[&|]/\\&/g'
 }
 
+resolve_e2e_config_file() {
+  local candidate=""
+
+  if [[ -n "${MUGEN_E2E_CONFIG_FILE:-}" ]]; then
+    candidate="$MUGEN_E2E_CONFIG_FILE"
+  elif [[ -n "${MUGEN_CONFIG_FILE:-}" ]]; then
+    candidate="$MUGEN_CONFIG_FILE"
+  else
+    candidate="mugen.e2e.toml"
+  fi
+
+  if [[ "$candidate" = /* ]]; then
+    echo "$candidate"
+  else
+    echo "$REPO_ROOT/$candidate"
+  fi
+}
+
+setup_ephemeral_db() {
+  local source_config="$1"
+  local python_bin="$2"
+  local initdb_bin
+  local pg_ctl_bin
+  local createdb_bin
+
+  initdb_bin="$(find_bin initdb /usr/lib/postgresql/16/bin/initdb)"
+  pg_ctl_bin="$(find_bin pg_ctl /usr/lib/postgresql/16/bin/pg_ctl)"
+  createdb_bin="$(find_bin createdb)"
+
+  if [[ -z "$initdb_bin" || -z "$pg_ctl_bin" || -z "$createdb_bin" ]]; then
+    echo "ERROR: --ephemeral-db requires initdb, pg_ctl, and createdb." >&2
+    exit 1
+  fi
+
+  EPHEMERAL_PG_CTL_BIN="$pg_ctl_bin"
+  EPHEMERAL_TMP_DIR="$(mktemp -d /tmp/mugen_e2e_ephemeral_db_XXXXXX)"
+  EPHEMERAL_PGDATA="$EPHEMERAL_TMP_DIR/pgdata"
+  EPHEMERAL_LOG="$EPHEMERAL_TMP_DIR/postgres.log"
+  EPHEMERAL_CONFIG_FILE="$EPHEMERAL_TMP_DIR/mugen.e2e.toml"
+  mkdir -p "$EPHEMERAL_PGDATA"
+
+  "$initdb_bin" -D "$EPHEMERAL_PGDATA" -A trust >/dev/null
+
+  EPHEMERAL_PORT=""
+  for candidate_port in $(seq 55432 55450); do
+    if "$pg_ctl_bin" \
+      -D "$EPHEMERAL_PGDATA" \
+      -o "-p $candidate_port -c listen_addresses='' -c unix_socket_directories='/tmp'" \
+      -l "$EPHEMERAL_LOG" \
+      start >/dev/null 2>&1; then
+      EPHEMERAL_PORT="$candidate_port"
+      break
+    fi
+  done
+
+  if [[ -z "$EPHEMERAL_PORT" ]]; then
+    echo "ERROR: could not start disposable Postgres (ports 55432-55450)." >&2
+    if [[ -f "$EPHEMERAL_LOG" ]]; then
+      tail -n 120 "$EPHEMERAL_LOG" >&2 || true
+    fi
+    exit 1
+  fi
+
+  EPHEMERAL_DB_NAME="mugen_e2e_${EPHEMERAL_PORT}_$$"
+  "$createdb_bin" -h /tmp -p "$EPHEMERAL_PORT" "$EPHEMERAL_DB_NAME"
+  EPHEMERAL_DB_URL="postgresql+psycopg://$(id -un)@/${EPHEMERAL_DB_NAME}?host=%2Ftmp&port=${EPHEMERAL_PORT}"
+
+  "$python_bin" - "$source_config" "$EPHEMERAL_CONFIG_FILE" "$EPHEMERAL_DB_URL" <<'PY'
+import sys
+
+import tomlkit
+
+source_config = sys.argv[1]
+target_config = sys.argv[2]
+db_url = sys.argv[3]
+
+with open(source_config, "r", encoding="utf8") as handle:
+    doc = tomlkit.parse(handle.read())
+
+if "rdbms" not in doc:
+    doc["rdbms"] = tomlkit.table()
+rdbms = doc["rdbms"]
+
+if "alembic" not in rdbms:
+    rdbms["alembic"] = tomlkit.table()
+if "sqlalchemy" not in rdbms:
+    rdbms["sqlalchemy"] = tomlkit.table()
+
+rdbms["alembic"]["url"] = db_url
+rdbms["sqlalchemy"]["url"] = db_url
+
+with open(target_config, "w", encoding="utf8") as handle:
+    handle.write(tomlkit.dumps(doc))
+PY
+
+  echo "E2E EPHEMERAL DB: $EPHEMERAL_DB_NAME (port $EPHEMERAL_PORT)"
+  echo "E2E EPHEMERAL CONFIG: $EPHEMERAL_CONFIG_FILE"
+  echo "E2E MIGRATIONS: upgrade head"
+  MUGEN_CONFIG_FILE="$EPHEMERAL_CONFIG_FILE" \
+    "$python_bin" "$REPO_ROOT/scripts/run_migration_tracks.py" \
+      --python "$python_bin" \
+      --config-file "$EPHEMERAL_CONFIG_FILE" \
+      upgrade head
+}
+
+teardown_ephemeral_db() {
+  if [[ -n "${EPHEMERAL_PG_CTL_BIN:-}" && -n "${EPHEMERAL_PGDATA:-}" && -d "${EPHEMERAL_PGDATA:-}" ]]; then
+    "$EPHEMERAL_PG_CTL_BIN" -D "$EPHEMERAL_PGDATA" -m fast stop >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${EPHEMERAL_TMP_DIR:-}" && -d "${EPHEMERAL_TMP_DIR:-}" ]]; then
+    rm -rf "$EPHEMERAL_TMP_DIR" >/dev/null 2>&1 || true
+  fi
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ACP_RUNNER="$REPO_ROOT/.codex/skills/acp-http-e2e-tester/scripts/run_acp_http_e2e.sh"
@@ -68,6 +203,7 @@ ACP_INVITE_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/acp/run_acp_invitation
 PRINT_CONFIG=0
 ONLY_FILTER=""
 CONTINUE_ON_ERROR=0
+USE_EPHEMERAL_DB=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -81,6 +217,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --continue-on-error)
       CONTINUE_ON_ERROR=1
+      shift
+      ;;
+    --ephemeral-db)
+      USE_EPHEMERAL_DB=1
+      shift
+      ;;
+    --no-ephemeral-db)
+      USE_EPHEMERAL_DB=0
       shift
       ;;
     -h|--help)
@@ -119,7 +263,23 @@ E2E_PYTHONPATH="$REPO_ROOT"
 if [[ -n "${PYTHONPATH:-}" ]]; then
   E2E_PYTHONPATH="$REPO_ROOT:$PYTHONPATH"
 fi
-HYPERCORN_CMD="$(shell_join_quoted env "PYTHONPATH=$E2E_PYTHONPATH" "$E2E_PYTHON_BIN" -m hypercorn --bind 127.0.0.1:8081 quartman)"
+E2E_CONFIG_FILE="$(resolve_e2e_config_file)"
+if [[ ! -f "$E2E_CONFIG_FILE" ]]; then
+  echo "ERROR: e2e config file not found: $E2E_CONFIG_FILE" >&2
+  echo "Set MUGEN_E2E_CONFIG_FILE (or MUGEN_CONFIG_FILE) or create mugen.e2e.toml." >&2
+  exit 1
+fi
+
+trap teardown_ephemeral_db EXIT
+
+if [[ "$USE_EPHEMERAL_DB" -eq 1 && "$PRINT_CONFIG" -ne 1 ]]; then
+  setup_ephemeral_db "$E2E_CONFIG_FILE" "$E2E_PYTHON_BIN"
+  E2E_CONFIG_FILE="$EPHEMERAL_CONFIG_FILE"
+fi
+
+echo "E2E CONFIG: $E2E_CONFIG_FILE"
+
+HYPERCORN_CMD="$(shell_join_quoted env "PYTHONPATH=$E2E_PYTHONPATH" "MUGEN_CONFIG_FILE=$E2E_CONFIG_FILE" "$E2E_PYTHON_BIN" -m hypercorn --bind 127.0.0.1:8081 quartman)"
 HYPERCORN_CMD_ESCAPED="$(escape_sed_replacement "$HYPERCORN_CMD")"
 
 declare -a SPECS=(
@@ -246,7 +406,9 @@ for spec_rel in "${SPECS[@]}"; do
     runner="$ACP_INVITE_RUNNER"
   fi
 
-  if bash "$runner" --spec "$rendered_spec" "${RUNNER_ARGS[@]}"; then
+  if MUGEN_E2E_CONFIG_FILE="$E2E_CONFIG_FILE" \
+    MUGEN_CONFIG_FILE="$E2E_CONFIG_FILE" \
+    bash "$runner" --spec "$rendered_spec" "${RUNNER_ARGS[@]}"; then
     ((pass_count += 1))
   else
     run_exit_code="$?"

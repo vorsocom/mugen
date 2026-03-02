@@ -13,6 +13,11 @@ Requirements:
   - jq
   - bash
   - python (or set ACP_E2E_PYTHON_BIN)
+
+Config source resolution order:
+  1. MUGEN_E2E_CONFIG_FILE
+  2. MUGEN_CONFIG_FILE
+  3. mugen.e2e.toml (repository root)
 EOF
 }
 
@@ -200,6 +205,29 @@ if [[ ! -f "$SMTP_SINK" ]]; then
   exit 1
 fi
 
+resolve_repo_path() {
+  local candidate="$1"
+  if [[ "$candidate" = /* ]]; then
+    echo "$candidate"
+  else
+    echo "$REPO_ROOT/$candidate"
+  fi
+}
+
+resolve_source_config_file() {
+  if [[ -n "${MUGEN_E2E_CONFIG_FILE:-}" ]]; then
+    resolve_repo_path "$MUGEN_E2E_CONFIG_FILE"
+    return
+  fi
+
+  if [[ -n "${MUGEN_CONFIG_FILE:-}" ]]; then
+    resolve_repo_path "$MUGEN_CONFIG_FILE"
+    return
+  fi
+
+  echo "$REPO_ROOT/mugen.e2e.toml"
+}
+
 spec_json="$(cat "$spec_path")"
 if [[ "$print_config" -eq 1 ]]; then
   echo "$spec_json" | jq .
@@ -378,11 +406,13 @@ if [[ ! "$smtp_port" =~ ^[0-9]+$ || "$smtp_port" -le 0 ]]; then
 fi
 echo "SMTP SINK PORT: $smtp_port"
 
-source_config="$REPO_ROOT/mugen.toml"
+source_config="$(resolve_source_config_file)"
 if [[ ! -f "$source_config" ]]; then
   echo "ERROR: source config not found: $source_config" >&2
+  echo "Set MUGEN_E2E_CONFIG_FILE (or MUGEN_CONFIG_FILE) or create mugen.e2e.toml." >&2
   exit 1
 fi
+echo "SOURCE CONFIG: $source_config"
 
 "$python_bin" - "$source_config" "$temp_config_file" "$smtp_port" \
   "$invite_base_url" "$invite_ttl_seconds" <<'PY'

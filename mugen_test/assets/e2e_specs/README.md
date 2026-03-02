@@ -8,6 +8,28 @@ To run the whole template suite with automatic unique placeholder injection:
 
 `bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh`
 
+Runtime config selection order for E2E Hypercorn startup:
+
+1. `MUGEN_E2E_CONFIG_FILE` (if set)
+2. `MUGEN_CONFIG_FILE` (if set)
+3. `mugen.e2e.toml` in repository root
+
+Recommended local setup:
+
+`cp conf/mugen.toml.sample mugen.e2e.toml`
+
+By default, `run_all_e2e_templates.sh` uses an isolated disposable database.
+
+To disable disposable DB for one run:
+
+`bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh --no-ephemeral-db`
+
+By default, pre-push quality gates use an isolated disposable database.
+
+To disable disposable DB for one run:
+
+`bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh --python <python> --no-ephemeral-db`
+
 ## Plugin Coverage
 
 - `acp`:

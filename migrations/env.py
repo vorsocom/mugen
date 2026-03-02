@@ -46,6 +46,17 @@ def _load_mugen_config(config_file: str) -> dict:
         sys.exit(1)
 
 
+def _resolve_mugen_config_file() -> str:
+    """Resolve runtime config file from environment with sane defaults."""
+    config_file = os.getenv("MUGEN_CONFIG_FILE", "mugen.toml")
+    if not isinstance(config_file, str):
+        return "mugen.toml"
+    config_file = config_file.strip()
+    if config_file == "":
+        return "mugen.toml"
+    return config_file
+
+
 def _import_extension_models(cfg: dict) -> None:
     """Import extension declarative models to make alembic aware of them."""
     explicit_modules = _get_explicit_model_modules()
@@ -157,7 +168,7 @@ def get_url(cfg: dict) -> str:
     return cfg["rdbms"]["alembic"]["url"]
 
 
-_mugen_cfg = _load_mugen_config("mugen.toml")
+_mugen_cfg = _load_mugen_config(_resolve_mugen_config_file())
 
 _RUNTIME_SCHEMA = _get_identifier_from_env("MUGEN_ALEMBIC_SCHEMA", "mugen")
 _VERSION_TABLE = _get_identifier_from_env(
