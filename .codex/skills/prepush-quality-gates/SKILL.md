@@ -20,6 +20,16 @@ bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh \
   --update-coverage-badge
 ```
 
+Disposable database isolation is enabled by default.
+
+To disable disposable DB for one run:
+
+```bash
+bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh \
+  --python /home/sando/.cache/pypoetry/virtualenvs/mugen-9ZxLq8_f-py3.12/bin/python \
+  --no-ephemeral-db
+```
+
 If `--python` is omitted, the script uses `python`.
 
 ## Operating Rules

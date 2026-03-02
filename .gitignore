@@ -180,6 +180,7 @@ cython_debug/
 hypercorn.toml
 hypercorn.e2e.toml
 mugen.toml
+mugen.e2e.toml
 
 data/fb.allow.list.txt
 data/storage.*
