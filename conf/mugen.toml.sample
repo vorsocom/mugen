@@ -217,7 +217,7 @@ path = "mugen.core.plugin.message_handler.text.mh_ext:DefaultTextMHExtension"
 # Optional WACAPI IPC extension.
 # [[mugen.modules.core.plugins]]
 # type = "ipc"
-# path = "mugen.core.plugin.whatsapp.wacapi.ipc_ext:WACAPIIPCExtension"
+# path = "mugen.core.plugin.whatsapp.wacapi.ipc_ext:WhatsAppWACAPIIPCExtension"
 
 # Downstream extensions.
 # [[mugen.modules.extensions]]

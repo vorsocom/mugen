@@ -994,9 +994,9 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
             else:
                 raise ExtensionLoadError(f"Unknown extension type: {ext_type}.")
         except TypeError as exc:
-            logger.exception(
-                "Incomplete subclass implementation for extension: %s.",
-                ext_path,
+            logger.error(
+                "Incomplete subclass implementation for extension: "
+                f"{ext_path}. {exc}"
             )
             logger.error(
                 "Extension bootstrap failed"
@@ -1006,8 +1006,8 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
             raise ExtensionLoadError(
                 f"Incomplete subclass implementation for extension: {ext_path}."
             ) from exc
-        except ExtensionLoadError:
-            logger.exception("Extension class resolution failed: %s.", ext_path)
+        except ExtensionLoadError as exc:
+            logger.error(f"Extension class resolution failed: {ext_path}. {exc}")
             logger.error(
                 "Extension bootstrap failed"
                 f" type={ext_type} path={ext_path}"
