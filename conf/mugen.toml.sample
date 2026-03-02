@@ -524,7 +524,7 @@ queue.poll_interval_seconds = 0.25
 queue.processing_lease_seconds = 30
 queue.max_pending_jobs = 2000
 media.backend = "object"
-media.storage.path = "/absolute/path/to/data/web_media"
+media.storage.path = "data/web_media"
 media.max_upload_bytes = 20971520
 # Max attachments per structured message payload.
 media.max_attachments_per_message = 10
@@ -536,5 +536,5 @@ media.allowed_mimetypes = [
 ]
 media.download_token_ttl_seconds = 900
 media.retention_seconds = 86400
-media.object.cache_path = "/absolute/path/to/data/web_media_object_cache"
+media.object.cache_path = "data/web_media_object_cache"
 media.object.key_prefix = "web:media:object"

@@ -92,6 +92,11 @@ def _parse_args() -> argparse.Namespace:
         help="Path for web.media.storage.path when --enable-web-platform is set.",
     )
     parser.add_argument(
+        "--web-media-object-cache-path",
+        default=".tmp/ci/web_media_object_cache",
+        help="Path for web.media.object.cache_path when --enable-web-platform is set.",
+    )
+    parser.add_argument(
         "--enable-web-platform",
         action="store_true",
         help=(
@@ -157,6 +162,9 @@ def main() -> int:
         _ensure_platform_enabled(doc, _WEB_PLATFORM)
         _enable_web_framework_plugin(doc)
         doc["web"]["media"]["storage"]["path"] = args.web_media_storage_path
+        doc["web"]["media"]["object"]["cache_path"] = (
+            args.web_media_object_cache_path
+        )
 
     output_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
     return 0
