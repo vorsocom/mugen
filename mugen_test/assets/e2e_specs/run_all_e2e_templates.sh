@@ -11,6 +11,9 @@ Usage:
 Options:
   --print-config       Validate rendered specs only (no HTTP execution).
   --only <substring>   Run only specs whose path contains substring.
+  --suite <full|smoke> Select spec suite (default: full).
+  --server-mode <shared|isolated>
+                       Hypercorn lifecycle for ACP/Web specs (default: shared).
   --continue-on-error  Continue executing remaining specs after a failure.
   --ephemeral-db       Start a disposable Postgres instance (default).
   --no-ephemeral-db    Disable disposable Postgres for this run.
@@ -27,6 +30,15 @@ require_cmd() {
   local cmd="$1"
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "ERROR: required command not found: $cmd" >&2
+    exit 1
+  fi
+}
+
+require_positive_int() {
+  local value="$1"
+  local field_name="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ || "$value" -le 0 ]]; then
+    echo "ERROR: $field_name must be a positive integer (got: $value)" >&2
     exit 1
   fi
 }
@@ -185,7 +197,62 @@ PY
       upgrade head
 }
 
-teardown_ephemeral_db() {
+start_shared_server() {
+  if [[ -n "${SHARED_HYPERCORN_PID:-}" ]] && kill -0 "${SHARED_HYPERCORN_PID}" >/dev/null 2>&1; then
+    return
+  fi
+
+  local startup_timeout_secs="${ACP_E2E_STARTUP_TIMEOUT_SECS:-30}"
+  local health_url="http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json"
+  local started=0
+
+  require_positive_int "$startup_timeout_secs" "ACP_E2E_STARTUP_TIMEOUT_SECS"
+
+  SHARED_HYPERCORN_LOG="$(mktemp /tmp/mugen_e2e_shared_hypercorn_XXXXXX.log)"
+  SHARED_HYPERCORN_CMD="$(shell_join_quoted env "PYTHONPATH=$E2E_PYTHONPATH" "MUGEN_CONFIG_FILE=$E2E_CONFIG_FILE" "$E2E_PYTHON_BIN" -m hypercorn --bind 127.0.0.1:8081 quartman)"
+
+  echo "E2E SHARED HYPERCORN: $SHARED_HYPERCORN_CMD"
+  bash -lc "$SHARED_HYPERCORN_CMD" >"$SHARED_HYPERCORN_LOG" 2>&1 &
+  SHARED_HYPERCORN_PID="$!"
+  echo "E2E SHARED HYPERCORN PID: $SHARED_HYPERCORN_PID"
+
+  for _ in $(seq 1 "$startup_timeout_secs"); do
+    if ! kill -0 "$SHARED_HYPERCORN_PID" >/dev/null 2>&1; then
+      echo "ERROR: shared Hypercorn exited before becoming healthy." >&2
+      echo "See log: $SHARED_HYPERCORN_LOG" >&2
+      tail -n 120 "$SHARED_HYPERCORN_LOG" >&2 || true
+      exit 1
+    fi
+    health_code="$(curl -sk -o /dev/null -w "%{http_code}" "$health_url" || true)"
+    if [[ "$health_code" == "200" ]]; then
+      started=1
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ "$started" -ne 1 ]]; then
+    echo "ERROR: shared Hypercorn did not become healthy within ${startup_timeout_secs}s" >&2
+    echo "See log: $SHARED_HYPERCORN_LOG" >&2
+    tail -n 120 "$SHARED_HYPERCORN_LOG" >&2 || true
+    exit 1
+  fi
+}
+
+stop_shared_server() {
+  if [[ -n "${SHARED_HYPERCORN_PID:-}" ]]; then
+    kill "$SHARED_HYPERCORN_PID" >/dev/null 2>&1 || true
+    wait "$SHARED_HYPERCORN_PID" >/dev/null 2>&1 || true
+    SHARED_HYPERCORN_PID=""
+  fi
+  if [[ -n "${SHARED_HYPERCORN_LOG:-}" && -f "${SHARED_HYPERCORN_LOG:-}" ]]; then
+    rm -f "$SHARED_HYPERCORN_LOG" >/dev/null 2>&1 || true
+    SHARED_HYPERCORN_LOG=""
+  fi
+}
+
+teardown_runtime() {
+  stop_shared_server
   if [[ -n "${EPHEMERAL_PG_CTL_BIN:-}" && -n "${EPHEMERAL_PGDATA:-}" && -d "${EPHEMERAL_PGDATA:-}" ]]; then
     "$EPHEMERAL_PG_CTL_BIN" -D "$EPHEMERAL_PGDATA" -m fast stop >/dev/null 2>&1 || true
   fi
@@ -203,6 +270,8 @@ ACP_INVITE_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/acp/run_acp_invitation
 PRINT_CONFIG=0
 ONLY_FILTER=""
 CONTINUE_ON_ERROR=0
+SUITE="full"
+SERVER_MODE="shared"
 USE_EPHEMERAL_DB=1
 
 while [[ $# -gt 0 ]]; do
@@ -213,6 +282,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --only)
       ONLY_FILTER="$2"
+      shift 2
+      ;;
+    --suite)
+      SUITE="$2"
+      if [[ "$SUITE" != "full" && "$SUITE" != "smoke" ]]; then
+        echo "ERROR: --suite must be one of: full, smoke" >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --server-mode)
+      SERVER_MODE="$2"
+      if [[ "$SERVER_MODE" != "shared" && "$SERVER_MODE" != "isolated" ]]; then
+        echo "ERROR: --server-mode must be one of: shared, isolated" >&2
+        exit 1
+      fi
       shift 2
       ;;
     --continue-on-error)
@@ -240,6 +325,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_cmd bash
+require_cmd curl
 require_cmd sed
 require_cmd mktemp
 
@@ -270,7 +356,7 @@ if [[ ! -f "$E2E_CONFIG_FILE" ]]; then
   exit 1
 fi
 
-trap teardown_ephemeral_db EXIT
+trap teardown_runtime EXIT
 
 if [[ "$USE_EPHEMERAL_DB" -eq 1 && "$PRINT_CONFIG" -ne 1 ]]; then
   setup_ephemeral_db "$E2E_CONFIG_FILE" "$E2E_PYTHON_BIN"
@@ -278,11 +364,13 @@ if [[ "$USE_EPHEMERAL_DB" -eq 1 && "$PRINT_CONFIG" -ne 1 ]]; then
 fi
 
 echo "E2E CONFIG: $E2E_CONFIG_FILE"
+echo "E2E SUITE: $SUITE"
+echo "E2E SERVER MODE: $SERVER_MODE"
 
 HYPERCORN_CMD="$(shell_join_quoted env "PYTHONPATH=$E2E_PYTHONPATH" "MUGEN_CONFIG_FILE=$E2E_CONFIG_FILE" "$E2E_PYTHON_BIN" -m hypercorn --bind 127.0.0.1:8081 quartman)"
 HYPERCORN_CMD_ESCAPED="$(escape_sed_replacement "$HYPERCORN_CMD")"
 
-declare -a SPECS=(
+declare -a FULL_SPECS=(
   "mugen_test/assets/e2e_specs/acp/acp-tenant-invitation-redeem.template.json"
   "mugen_test/assets/e2e_specs/acp/acp-e2e-dedup-ledger.template.json"
   "mugen_test/assets/e2e_specs/acp/acp-e2e-schema-registry.template.json"
@@ -305,6 +393,23 @@ declare -a SPECS=(
   "mugen_test/assets/e2e_specs/channel_orchestration/channel-orchestration-e2e-blocklist.template.json"
   "mugen_test/assets/e2e_specs/web/web-e2e-rest-sse-core.template.json"
 )
+
+declare -a SMOKE_SPECS=(
+  "mugen_test/assets/e2e_specs/acp/acp-e2e-dedup-ledger.template.json"
+  "mugen_test/assets/e2e_specs/acp/acp-tenant-invitation-redeem.template.json"
+  "mugen_test/assets/e2e_specs/ops_workflow/ops-workflow-e2e-definition-smoke.template.json"
+  "mugen_test/assets/e2e_specs/ops_metering/ops-metering-e2e-meter-definition-smoke.template.json"
+  "mugen_test/assets/e2e_specs/billing/billing-e2e-account-product-smoke.template.json"
+  "mugen_test/assets/e2e_specs/knowledge_pack/knowledge-pack-e2e-pack-smoke.template.json"
+  "mugen_test/assets/e2e_specs/web/web-e2e-rest-sse-core.template.json"
+)
+
+declare -a SPECS=()
+if [[ "$SUITE" == "smoke" ]]; then
+  SPECS=("${SMOKE_SPECS[@]}")
+else
+  SPECS=("${FULL_SPECS[@]}")
+fi
 
 render_spec() {
   local template="$1"
@@ -400,14 +505,32 @@ for spec_rel in "${SPECS[@]}"; do
   echo "rendered: $rendered_spec"
 
   runner="$ACP_RUNNER"
+  declare -a runner_extra_env=()
+  use_shared_server_for_runner=0
   if [[ "$spec_rel" == *"/web/"* ]]; then
     runner="$WEB_RUNNER"
   elif [[ "$spec_rel" == *"/acp/acp-tenant-invitation-redeem.template.json" ]]; then
     runner="$ACP_INVITE_RUNNER"
   fi
 
-  if MUGEN_E2E_CONFIG_FILE="$E2E_CONFIG_FILE" \
+  if [[ "$SERVER_MODE" == "shared" && "$PRINT_CONFIG" -ne 1 && "$runner" != "$ACP_INVITE_RUNNER" ]]; then
+    use_shared_server_for_runner=1
+    start_shared_server
+  elif [[ "$SERVER_MODE" == "shared" && "$PRINT_CONFIG" -ne 1 && "$runner" == "$ACP_INVITE_RUNNER" ]]; then
+    # Invitation flow owns SMTP + Hypercorn lifecycle and must run isolated.
+    stop_shared_server
+  fi
+
+  if [[ "$use_shared_server_for_runner" -eq 1 && "$runner" == "$ACP_RUNNER" ]]; then
+    runner_extra_env=("ACP_E2E_EXTERNAL_SERVER=1")
+  elif [[ "$use_shared_server_for_runner" -eq 1 && "$runner" == "$WEB_RUNNER" ]]; then
+    runner_extra_env=("WEB_E2E_EXTERNAL_SERVER=1")
+  fi
+
+  if env \
+    MUGEN_E2E_CONFIG_FILE="$E2E_CONFIG_FILE" \
     MUGEN_CONFIG_FILE="$E2E_CONFIG_FILE" \
+    "${runner_extra_env[@]}" \
     bash "$runner" --spec "$rendered_spec" "${RUNNER_ARGS[@]}"; then
     ((pass_count += 1))
   else

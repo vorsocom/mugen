@@ -201,6 +201,10 @@ if [[ "$print_config" -eq 1 ]]; then
 fi
 
 strict_mode="$(resolve_strict_mode)"
+external_server=0
+if env_truthy "${WEB_E2E_EXTERNAL_SERVER:-0}"; then
+  external_server=1
+fi
 
 spawn_hypercorn="$(echo "$spec_json" | jq -r '.runtime.spawn_hypercorn // false')"
 hypercorn_cmd="$(echo "$spec_json" | jq -r '.runtime.hypercorn_cmd // empty')"
@@ -272,7 +276,7 @@ trap cleanup_server EXIT
 
 echo "STRICT MODE: $strict_mode"
 
-if [[ "$spawn_hypercorn" == "true" ]]; then
+if [[ "$spawn_hypercorn" == "true" && "$external_server" -ne 1 ]]; then
   if [[ -z "$hypercorn_cmd" ]]; then
     echo "ERROR: runtime.hypercorn_cmd is required when runtime.spawn_hypercorn=true" >&2
     exit 1
@@ -309,6 +313,8 @@ if [[ "$spawn_hypercorn" == "true" ]]; then
     tail -n 120 "$log_file" >&2 || true
     exit 1
   fi
+elif [[ "$spawn_hypercorn" == "true" && "$external_server" -eq 1 ]]; then
+  echo "USING EXTERNAL SERVER: WEB_E2E_EXTERNAL_SERVER=1"
 fi
 
 jwks_out="$(mktemp /tmp/web_http_e2e_jwks_XXXXXX.json)"

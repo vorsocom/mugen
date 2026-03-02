@@ -8,6 +8,14 @@ To run the whole template suite with automatic unique placeholder injection:
 
 `bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh`
 
+To run only smoke templates:
+
+`bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh --suite smoke`
+
+To force per-spec Hypercorn lifecycle:
+
+`bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh --server-mode isolated`
+
 Runtime config selection order for E2E Hypercorn startup:
 
 1. `MUGEN_E2E_CONFIG_FILE` (if set)
@@ -18,17 +26,23 @@ Recommended local setup:
 
 `cp conf/mugen.toml.sample mugen.e2e.toml`
 
-By default, `run_all_e2e_templates.sh` uses an isolated disposable database.
+By default, `run_all_e2e_templates.sh` uses a shared Hypercorn server and an
+isolated disposable database.
 
 To disable disposable DB for one run:
 
 `bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh --no-ephemeral-db`
 
-By default, pre-push quality gates use an isolated disposable database.
+By default, pre-push quality gates run in `--mode full` and use an isolated
+disposable database.
 
 To disable disposable DB for one run:
 
 `bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh --python <python> --no-ephemeral-db`
+
+To run fast inner-loop pre-push checks (coverage + smoke E2E):
+
+`bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh --python <python> --mode fast`
 
 ## Plugin Coverage
 

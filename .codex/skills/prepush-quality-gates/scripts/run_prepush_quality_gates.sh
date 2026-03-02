@@ -6,10 +6,11 @@ usage() {
 Run full pre-push quality gates for mugen.
 
 Usage:
-  run_prepush_quality_gates.sh [--python <path>] [--ephemeral-db|--no-ephemeral-db] [--update-coverage-badge] [--check-coverage-badge]
+  run_prepush_quality_gates.sh [--python <path>] [--mode <full|fast>] [--ephemeral-db|--no-ephemeral-db] [--update-coverage-badge] [--check-coverage-badge]
 
 Options:
   --python <path>          Python interpreter to use (default: python)
+  --mode <full|fast>       Gate mode (default: full)
   --ephemeral-db           Start a disposable Postgres instance (default)
   --no-ephemeral-db        Disable disposable Postgres for this run
   --update-coverage-badge  Update README coverage badge after coverage gate
@@ -154,12 +155,21 @@ teardown_ephemeral_db() {
 
 PYTHON_BIN="python"
 COVERAGE_BADGE_MODE="skip"
+GATE_MODE="full"
 USE_EPHEMERAL_DB=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --python)
       PYTHON_BIN="$2"
+      shift 2
+      ;;
+    --mode)
+      GATE_MODE="$2"
+      if [[ "$GATE_MODE" != "full" && "$GATE_MODE" != "fast" ]]; then
+        echo "ERROR: --mode must be one of: full, fast" >&2
+        exit 1
+      fi
       shift 2
       ;;
     --ephemeral-db)
@@ -219,9 +229,6 @@ fi
 
 echo "==> Runtime config: $TEST_CONFIG_FILE"
 
-echo "==> Full unit test suite"
-MUGEN_CONFIG_FILE="$TEST_CONFIG_FILE" "$PYTHON_BIN" -m pytest mugen_test -q
-
 echo "==> Coverage gate (100%)"
 "$PYTHON_BIN" -m coverage erase
 MUGEN_CONFIG_FILE="$TEST_CONFIG_FILE" "$PYTHON_BIN" -m coverage run -m pytest mugen_test -q
@@ -241,10 +248,18 @@ elif [[ "$COVERAGE_BADGE_MODE" == "check" ]]; then
   "$PYTHON_BIN" scripts/update_coverage_badge.py --coverage "$coverage_total" --check
 fi
 
-echo "==> Full E2E template validation"
+e2e_suite="full"
+if [[ "$GATE_MODE" == "fast" ]]; then
+  e2e_suite="smoke"
+fi
+
+echo "==> ${e2e_suite^} E2E template validation"
 ACP_E2E_PYTHON_BIN="$PYTHON_BIN" \
 MUGEN_E2E_CONFIG_FILE="$TEST_CONFIG_FILE" \
 MUGEN_CONFIG_FILE="$TEST_CONFIG_FILE" \
-bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh
+bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh \
+  --suite "$e2e_suite" \
+  --server-mode shared \
+  --no-ephemeral-db
 
 echo "All pre-push quality gates passed."
