@@ -15,6 +15,106 @@ from werkzeug.security import generate_password_hash
 _WEB_PLATFORM = "web"
 _WEB_FRAMEWORK_PLUGIN_TOKEN = "core.fw.web"
 _CI_COMPLETION_GATEWAY_TOKEN = "deterministic"
+_CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
+    {
+        "token": "core.fw.acp",
+        "name": "com.vorsocomputing.mugen.acp",
+        "namespace": "com.vorsocomputing.mugen.acp",
+        "models": "mugen.core.plugin.acp.model",
+        "contrib": "mugen.core.plugin.acp.contrib",
+    },
+    {
+        "token": "core.fw.audit",
+        "name": "com.vorsocomputing.mugen.audit",
+        "namespace": "com.vorsocomputing.mugen.audit",
+        "models": "mugen.core.plugin.audit.model",
+        "contrib": "mugen.core.plugin.audit.contrib",
+    },
+    {
+        "token": "core.fw.ops_vpn",
+        "name": "com.vorsocomputing.mugen.ops_vpn",
+        "namespace": "com.vorsocomputing.mugen.ops_vpn",
+        "models": "mugen.core.plugin.ops_vpn.model",
+        "contrib": "mugen.core.plugin.ops_vpn.contrib",
+    },
+    {
+        "token": "core.fw.ops_case",
+        "name": "com.vorsocomputing.mugen.ops_case",
+        "namespace": "com.vorsocomputing.mugen.ops_case",
+        "models": "mugen.core.plugin.ops_case.model",
+        "contrib": "mugen.core.plugin.ops_case.contrib",
+    },
+    {
+        "token": "core.fw.ops_sla",
+        "name": "com.vorsocomputing.mugen.ops_sla",
+        "namespace": "com.vorsocomputing.mugen.ops_sla",
+        "models": "mugen.core.plugin.ops_sla.model",
+        "contrib": "mugen.core.plugin.ops_sla.contrib",
+    },
+    {
+        "token": "core.fw.ops_metering",
+        "name": "com.vorsocomputing.mugen.ops_metering",
+        "namespace": "com.vorsocomputing.mugen.ops_metering",
+        "models": "mugen.core.plugin.ops_metering.model",
+        "contrib": "mugen.core.plugin.ops_metering.contrib",
+    },
+    {
+        "token": "core.fw.ops_workflow",
+        "name": "com.vorsocomputing.mugen.ops_workflow",
+        "namespace": "com.vorsocomputing.mugen.ops_workflow",
+        "models": "mugen.core.plugin.ops_workflow.model",
+        "contrib": "mugen.core.plugin.ops_workflow.contrib",
+    },
+    {
+        "token": "core.fw.ops_governance",
+        "name": "com.vorsocomputing.mugen.ops_governance",
+        "namespace": "com.vorsocomputing.mugen.ops_governance",
+        "models": "mugen.core.plugin.ops_governance.model",
+        "contrib": "mugen.core.plugin.ops_governance.contrib",
+    },
+    {
+        "token": "core.fw.ops_reporting",
+        "name": "com.vorsocomputing.mugen.ops_reporting",
+        "namespace": "com.vorsocomputing.mugen.ops_reporting",
+        "models": "mugen.core.plugin.ops_reporting.model",
+        "contrib": "mugen.core.plugin.ops_reporting.contrib",
+    },
+    {
+        "token": "core.fw.ops_connector",
+        "name": "com.vorsocomputing.mugen.ops_connector",
+        "namespace": "com.vorsocomputing.mugen.ops_connector",
+        "models": "mugen.core.plugin.ops_connector.model",
+        "contrib": "mugen.core.plugin.ops_connector.contrib",
+    },
+    {
+        "token": "core.fw.billing",
+        "name": "com.vorsocomputing.mugen.billing",
+        "namespace": "com.vorsocomputing.mugen.billing",
+        "models": "mugen.core.plugin.billing.model",
+        "contrib": "mugen.core.plugin.billing.contrib",
+    },
+    {
+        "token": "core.fw.knowledge_pack",
+        "name": "com.vorsocomputing.mugen.knowledge_pack",
+        "namespace": "com.vorsocomputing.mugen.knowledge_pack",
+        "models": "mugen.core.plugin.knowledge_pack.model",
+        "contrib": "mugen.core.plugin.knowledge_pack.contrib",
+    },
+    {
+        "token": "core.fw.channel_orchestration",
+        "name": "com.vorsocomputing.mugen.channel_orchestration",
+        "namespace": "com.vorsocomputing.mugen.channel_orchestration",
+        "models": "mugen.core.plugin.channel_orchestration.model",
+        "contrib": "mugen.core.plugin.channel_orchestration.contrib",
+    },
+    {
+        "token": "core.fw.web",
+        "name": "com.vorsocomputing.mugen.web",
+        "namespace": "com.vorsocomputing.mugen.web",
+        "models": "mugen.core.plugin.web.model",
+        "contrib": "mugen.core.plugin.web.contrib",
+    },
+)
 
 
 def _generate_ed25519_private_pem() -> str:
@@ -113,27 +213,57 @@ def _ensure_platform_enabled(doc: tomlkit.TOMLDocument, platform: str) -> None:
         platforms.append(platform)
 
 
-def _enable_web_framework_plugin(doc: tomlkit.TOMLDocument) -> None:
+def _ensure_framework_extension(
+    doc: tomlkit.TOMLDocument,
+    *,
+    token: str,
+    name: str,
+    namespace: str,
+    models: str,
+    contrib: str,
+) -> None:
     modules = doc["mugen"]["modules"]
-    if "extensions" not in modules:
+    if "extensions" not in modules or not isinstance(modules.get("extensions"), list):
         modules["extensions"] = tomlkit.aot()
     extensions = modules["extensions"]
 
+    normalized_token = token.strip().lower()
     for extension in extensions:
         if (
             str(extension.get("type", "")).strip().lower() == "fw"
-            and str(extension.get("token", "")).strip().lower()
-            == _WEB_FRAMEWORK_PLUGIN_TOKEN
+            and str(extension.get("token", "")).strip().lower() == normalized_token
         ):
+            extension["type"] = "fw"
+            extension["token"] = token
             extension["enabled"] = True
+            extension["name"] = name
+            extension["namespace"] = namespace
+            extension["models"] = models
+            extension["contrib"] = contrib
             return
 
-    # CI requires web framework routes when web platform is enabled.
+    # CI requires deterministic extension metadata for migration seeding.
     extension = tomlkit.table()
     extension["type"] = "fw"
-    extension["token"] = _WEB_FRAMEWORK_PLUGIN_TOKEN
+    extension["token"] = token
     extension["enabled"] = True
+    extension["name"] = name
+    extension["namespace"] = namespace
+    extension["models"] = models
+    extension["contrib"] = contrib
     extensions.append(extension)
+
+
+def _enable_ci_framework_plugins(doc: tomlkit.TOMLDocument) -> None:
+    for extension in _CI_REQUIRED_FRAMEWORK_EXTENSIONS:
+        _ensure_framework_extension(
+            doc,
+            token=extension["token"],
+            name=extension["name"],
+            namespace=extension["namespace"],
+            models=extension["models"],
+            contrib=extension["contrib"],
+        )
 
 
 def main() -> int:
@@ -171,7 +301,7 @@ def main() -> int:
 
     if args.enable_web_platform:
         _ensure_platform_enabled(doc, _WEB_PLATFORM)
-        _enable_web_framework_plugin(doc)
+        _enable_ci_framework_plugins(doc)
         doc["web"]["media"]["storage"]["path"] = args.web_media_storage_path
         doc["web"]["media"]["object"]["cache_path"] = (
             args.web_media_object_cache_path
