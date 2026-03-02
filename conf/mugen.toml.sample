@@ -305,11 +305,11 @@ api.access_key_id = "<aws-access-key-id>"
 # anthropic.*, meta.*, amazon.titan-text*, amazon.nova*, ai21.j2*,
 # ai21.jamba*, cohere.*, mistral.*, deepseek.*, openai.*, writer.*
 api.classification.model = "placeholder-model"
-api.classification.max_tokens = 1024
+api.classification.max_completion_tokens = 1024
 api.classification.temp = 0.0
 api.classification.top_p = 0.9
 api.completion.model = "placeholder-model"
-api.completion.max_tokens = 1024
+api.completion.max_completion_tokens = 1024
 api.completion.temp = 0.0
 api.completion.top_p = 0.9
 api.region = ""
@@ -352,7 +352,7 @@ api.key = "<groq-api-key>"
 # - "responses"
 # Per-request override remains available through
 # CompletionRequest.vendor_params["openai_api"].
-# max_completion_tokens is preferred. max_tokens remains as compatibility alias.
+# max_completion_tokens is the canonical token-limit field.
 # stream behavior and provider-specific extras can be overridden per request
 # through CompletionRequest vendor_params.
 api.classification.model = ""
@@ -360,13 +360,11 @@ api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
 api.classification.max_completion_tokens = 1024
-api.classification.max_tokens = 1024
 api.completion.model = ""
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
 api.completion.max_completion_tokens = 1024
-api.completion.max_tokens = 1024
 api.base_url = ""
 api.timeout_seconds = 30.0
 api.key = "<openai-api-key>"
@@ -455,24 +453,16 @@ version_table_schema = "mugen"
 # === SambaNova ===
 [sambanova]
 # Operation defaults for SambaNova chat completions.
-# auth_scheme: bearer (default) or basic (legacy environments).
-# token_limit_field: max_tokens (default) or max_completion_tokens.
-# max_completion_tokens/max_tokens: fallback token limits when request
-# inference does not set them; keep both values aligned for compatibility.
+# max_completion_tokens: fallback token limits when request inference does not
+# set one.
 # stop: default stop sequences used only when request inference.stop is unset.
 # Repeat these operation knobs for both classification and completion.
 api.classification.model = ""
-api.classification.auth_scheme = "bearer"
-api.classification.token_limit_field = "max_tokens"
 api.classification.max_completion_tokens = 1024
-api.classification.max_tokens = 1024
 api.classification.temp = 0.0
 api.classification.stop = []
 api.completion.model = ""
-api.completion.auth_scheme = "bearer"
-api.completion.token_limit_field = "max_tokens"
 api.completion.max_completion_tokens = 1024
-api.completion.max_tokens = 1024
 api.completion.temp = 0.0
 api.completion.stop = []
 api.endpoint = ""

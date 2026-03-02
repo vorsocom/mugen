@@ -2,6 +2,7 @@
 
 # https://console.groq.com/docs/api-reference#chat
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
@@ -29,7 +30,11 @@ class GroqCompletionGateway(ICompletionGateway):
 
     _env_prefix = "groq"
     _provider = "groq"
-    _legacy_max_tokens_vendor_flag = "use_legacy_max_tokens"
+    _removed_legacy_vendor_param_keys = (
+        "use_legacy_max_tokens",
+        "stream",
+        "stream_options",
+    )
     _vendor_passthrough_keys = (
         "citation_options",
         "compound_custom",
@@ -104,13 +109,33 @@ class GroqCompletionGateway(ICompletionGateway):
         _ = self._api
         self._resolve_operation_config("classification")
         self._resolve_operation_config("completion")
+        models_api = getattr(self._api, "models", None)
+        list_models = getattr(models_api, "list", None)
+        if callable(list_models) is not True:
+            raise RuntimeError(
+                "Groq completion gateway readiness probe unavailable: models.list."
+            )
+        timeout_seconds = self._timeout_seconds
+        if timeout_seconds is None or timeout_seconds <= 0:
+            timeout_seconds = 5.0
+        try:
+            try:
+                readiness_probe = list_models(limit=1)
+            except TypeError:
+                readiness_probe = list_models()
+            await asyncio.wait_for(
+                readiness_probe,
+                timeout=timeout_seconds,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError("Groq completion gateway readiness probe failed.") from exc
 
     async def get_completion(
         self,
         request: CompletionRequest,
-        operation: str = "completion",
     ) -> CompletionResponse:
         completion_request = request
+        self._validate_removed_legacy_vendor_params(completion_request)
         operation_config = self._resolve_operation_config(completion_request.operation)
         model, kwargs = self._serialize_create_kwargs(
             completion_request,
@@ -175,12 +200,6 @@ class GroqCompletionGateway(ICompletionGateway):
             value=request.inference.stream,
             field_name="inference.stream",
         )
-        if "stream" in request.vendor_params:
-            stream = self._parse_bool_like(
-                request=request,
-                value=request.vendor_params["stream"],
-                field_name="vendor_params.stream",
-            )
 
         kwargs: dict[str, Any] = {
             "messages": [message.to_dict() for message in request.messages],
@@ -191,44 +210,22 @@ class GroqCompletionGateway(ICompletionGateway):
         }
 
         stream_options = request.inference.stream_options
-        if not stream_options and "stream_options" in request.vendor_params:
-            stream_options = request.vendor_params["stream_options"]
         if kwargs["stream"] and isinstance(stream_options, dict) and stream_options:
             kwargs["stream_options"] = stream_options
 
         if request.inference.stop:
             kwargs["stop"] = request.inference.stop
-        max_tokens = request.inference.effective_max_tokens
+        max_tokens = request.inference.max_completion_tokens
+        if max_tokens is None and "max_completion_tokens" in operation_config:
+            max_tokens = int(operation_config["max_completion_tokens"])
         if max_tokens is not None:
-            if self._resolve_vendor_bool(
-                request,
-                key=self._legacy_max_tokens_vendor_flag,
-                default=False,
-            ):
-                kwargs["max_tokens"] = int(max_tokens)
-            else:
-                kwargs["max_completion_tokens"] = int(max_tokens)
+            kwargs["max_completion_tokens"] = int(max_tokens)
 
         for key in self._vendor_passthrough_keys:
             if key in request.vendor_params:
                 kwargs[key] = request.vendor_params[key]
 
         return model, kwargs
-
-    def _resolve_vendor_bool(
-        self,
-        request: CompletionRequest,
-        *,
-        key: str,
-        default: bool,
-    ) -> bool:
-        if key not in request.vendor_params:
-            return default
-        return self._parse_bool_like(
-            request=request,
-            value=request.vendor_params[key],
-            field_name=f"vendor_params.{key}",
-        )
 
     def _parse_bool_like(
         self,
@@ -381,8 +378,34 @@ class GroqCompletionGateway(ICompletionGateway):
                 operation=operation,
                 message=f"Groq operation '{operation}' is missing model.",
             )
+        if "max_tokens" in cfg:
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=operation,
+                message=(
+                    f"Groq operation '{operation}' includes removed legacy key "
+                    "'max_tokens'. Use 'max_completion_tokens'."
+                ),
+            )
 
         return cfg
+
+    def _validate_removed_legacy_vendor_params(
+        self,
+        request: CompletionRequest,
+    ) -> None:
+        for key in self._removed_legacy_vendor_param_keys:
+            if key not in request.vendor_params:
+                continue
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=request.operation,
+                message=(
+                    "GroqCompletionGateway: Removed legacy vendor param "
+                    f"'{key}' is not supported."
+                ),
+                timeout_applied=self._timeout_seconds,
+            )
 
     @staticmethod
     def _usage_from_response(chat_completion: Any) -> CompletionUsage | None:

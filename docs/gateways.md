@@ -13,17 +13,15 @@ and email gateway implementations in muGen.
 
 Completion gateways implement:
 
-- `ICompletionGateway.get_completion(request, operation="completion")`
+- `ICompletionGateway.get_completion(request)`
 
 Request and response payloads are normalized by
 `mugen/core/contract/gateway/completion.py`:
 
 - `CompletionMessage(role, content)`
   - `content` supports string, object, list-of-objects, or null.
-- `CompletionInferenceConfig(max_completion_tokens, max_tokens, temperature, top_p, stop, stream, stream_options)`
-  - `max_completion_tokens` is preferred.
-  - `max_tokens` is a compatibility alias.
-  - `effective_max_tokens` applies precedence: `max_completion_tokens` then `max_tokens`.
+- `CompletionInferenceConfig(max_completion_tokens, temperature, top_p, stop, stream, stream_options)`
+  - `max_completion_tokens` is the canonical token-limit field.
 - `CompletionRequest(messages, operation, model, inference, vendor_params)`
 - `CompletionResponse(content, model, stop_reason, message, tool_calls, usage, vendor_fields, raw)`
   - `content` may be structured (not string-only).
@@ -31,9 +29,6 @@ Request and response payloads are normalized by
 - `CompletionUsage(input_tokens, output_tokens, total_tokens, vendor_fields)`
   - `vendor_fields` carries provider-specific usage/timing metadata.
 - `CompletionGatewayError(provider, operation, message, cause)`
-
-Legacy list-of-dicts context payloads are still accepted through
-`normalise_completion_request(...)`.
 
 ## Email Gateway Contract
 
@@ -71,6 +66,13 @@ Runtime mode is controlled per request by
 In all modes, the default model and inference values come from
 `[aws.bedrock] api.<operation>.*` in `mugen.toml` when not overridden in
 `CompletionRequest`.
+
+#### Bedrock Readiness Behavior
+
+- Validates both `classification` and `completion` operation configs.
+- Executes a bounded `invoke_model` probe at startup.
+- Treats expected Bedrock validation probe errors as reachable/authenticated.
+- Fails readiness on auth/network/provider failures.
 
 #### Built-in `InvokeModel` Family Support
 
@@ -128,8 +130,7 @@ Module: `mugen.core.gateway.completion.groqq`
 
 Supports normalized inference fields:
 
-- `max_completion_tokens` (preferred token-limit field)
-- `max_tokens` compatibility alias (used only when explicitly requested)
+- `max_completion_tokens`
 - `temperature`
 - `top_p`
 - `stop`
@@ -168,13 +169,11 @@ Groq-specific optional keys are forwarded from
 - `user`
 - `verbosity`
 
-Groq compatibility notes:
+#### Groq Readiness Behavior
 
-- By default, muGen sends `max_completion_tokens`.
-- To force deprecated `max_tokens` serialization for compatibility, set
-  `vendor_params["use_legacy_max_tokens"] = true`.
-- Non-stream and stream responses both preserve structured assistant payloads,
-  tool calls, and usage metadata in normalized response fields.
+- Validates both `classification` and `completion` operation configs.
+- Executes a bounded `models.list` probe at startup.
+- Fails readiness on missing probe hooks, timeouts, or provider/network errors.
 
 ### OpenAI
 
@@ -190,8 +189,7 @@ OpenAI surface routing:
 
 Supports normalized inference fields:
 
-- `max_completion_tokens` (preferred request field)
-- `max_tokens` compatibility alias
+- `max_completion_tokens`
 - `temperature`
 - `top_p`
 - `stop` (chat mode only)
@@ -254,8 +252,6 @@ OpenAI compatibility notes:
   messages are sent as `input`.
 - In Responses mode, token limit is sent as `max_output_tokens`.
 - In Chat Completions mode, token limit defaults to `max_completion_tokens`.
-- To force deprecated `max_tokens` serialization for compatibility, set
-  `vendor_params["use_legacy_max_tokens"] = true` (chat mode only).
 - Responses-mode validation/API failures are fail-fast; there is no implicit
   fallback to Chat Completions.
 - API key resolution is config-only (`[openai] api.key`).
@@ -264,13 +260,20 @@ OpenAI compatibility notes:
 - Non-stream and stream responses preserve tool calls, usage metadata, and
   structured output blocks in normalized response fields.
 
+#### OpenAI Readiness Behavior
+
+- Validates both `classification` and `completion` operation configs.
+- Executes a bounded `models.list` probe at startup.
+- Supports SDK signature differences (`list(limit=1)` fallback to `list()`).
+- Fails readiness on missing probe hooks, timeouts, or provider/network errors.
+
 ### SambaNova
 
 Module: `mugen.core.gateway.completion.sambanova`
 
 Supports normalized inference fields:
 
-- `max_completion_tokens` / `max_tokens` via `effective_max_tokens`
+- `max_completion_tokens`
 - `temperature`
 - `top_p`
 - `stop`
@@ -298,18 +301,17 @@ SambaNova-specific optional keys are forwarded from
 
 SambaNova compatibility notes:
 
-- Authorization defaults to `Bearer` token.
-- For legacy environments that still require `Basic`, set
-  `vendor_params["sambanova_auth_scheme"] = "basic"` (or set
-  `auth_scheme = "basic"` in operation config).
-- Token-limit field defaults to `max_tokens`.
-- To emit `max_completion_tokens`, set
-  `vendor_params["sambanova_token_limit_field"] = "max_completion_tokens"`.
-- To emit both fields in the same request, set
-  `vendor_params["sambanova_emit_legacy_max_tokens"] = true`.
-- Streaming uses contract fields first (`inference.stream`,
-  `inference.stream_options`) and keeps legacy `vendor_params["stream"]` and
-  `vendor_params["include_usage"]` as compatibility fallbacks.
+- Authorization uses `Bearer` token.
+- Token limit is serialized from `max_completion_tokens`.
+- Streaming uses contract fields (`inference.stream`, `inference.stream_options`).
+
+#### SambaNova Readiness Behavior
+
+- Validates both `classification` and `completion` operation configs.
+- Executes a bounded HTTP probe against the configured completion endpoint.
+- Treats explicit validation-style probe responses (`400`/`422`) as reachable.
+- Fails readiness on auth errors (`401`/`403`), provider errors (`5xx`), or
+  transport failures.
 
 ## Email Provider Gateways
 

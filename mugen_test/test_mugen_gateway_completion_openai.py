@@ -315,7 +315,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             operation="completion",
             messages=[CompletionMessage(role="user", content="hello")],
             inference=CompletionInferenceConfig(
-                max_tokens=42,
+                max_completion_tokens=42,
                 temperature=0.8,
                 top_p=0.4,
                 stop=["<END>"],
@@ -380,10 +380,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         request = CompletionRequest(
             operation="completion",
             messages=[CompletionMessage(role="user", content="hello")],
-            inference=CompletionInferenceConfig(
-                max_completion_tokens=64,
-                max_tokens=16,
-            ),
+            inference=CompletionInferenceConfig(max_completion_tokens=64),
         )
         await gateway.get_completion(request)
 
@@ -396,7 +393,9 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             max_completion_tokens=64,
         )
 
-    async def test_get_completion_uses_legacy_max_tokens_when_requested(self) -> None:
+    async def test_get_completion_rejects_removed_legacy_max_tokens_vendor_param(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         response_payload = SimpleNamespace(
@@ -428,18 +427,13 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             inference=CompletionInferenceConfig(max_completion_tokens=64),
             vendor_params={"use_legacy_max_tokens": True},
         )
-        await gateway.get_completion(request)
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "Removed legacy vendor param 'use_legacy_max_tokens'",
+        ):
+            await gateway.get_completion(request)
 
-        api.chat.completions.create.assert_awaited_once_with(
-            messages=[{"role": "user", "content": "hello"}],
-            model="gpt-4o-mini",
-            temperature=0.1,
-            top_p=0.8,
-            stream=False,
-            max_tokens=64,
-        )
-
-    async def test_get_completion_uses_vendor_stream_overrides(self) -> None:
+    async def test_get_completion_uses_inference_stream_fields(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
         chunks = [
@@ -466,7 +460,10 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         request = CompletionRequest(
             operation="completion",
             messages=[CompletionMessage(role="user", content="hello")],
-            vendor_params={"stream": True, "stream_options": {"include_usage": True}},
+            inference=CompletionInferenceConfig(
+                stream=True,
+                stream_options={"include_usage": True},
+            ),
         )
         await gateway.get_completion(request)
 
@@ -479,23 +476,13 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             stream_options={"include_usage": True},
         )
 
-    async def test_get_completion_vendor_stream_parses_string_false(self) -> None:
+    async def test_get_completion_rejects_removed_vendor_stream_override(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
-        response_payload = SimpleNamespace(
-            model="gpt-4o-mini",
-            choices=[
-                SimpleNamespace(
-                    finish_reason="stop",
-                    message=SimpleNamespace(content="hello"),
-                )
-            ],
-            usage=None,
-        )
         api = SimpleNamespace(
             chat=SimpleNamespace(
                 completions=SimpleNamespace(
-                    create=AsyncMock(return_value=response_payload),
+                    create=AsyncMock(),
                 ),
             ),
         )
@@ -510,15 +497,11 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             messages=[CompletionMessage(role="user", content="hello")],
             vendor_params={"stream": "false"},
         )
-        await gateway.get_completion(request)
-
-        api.chat.completions.create.assert_awaited_once_with(
-            messages=[{"role": "user", "content": "hello"}],
-            model="gpt-4o-mini",
-            temperature=0.1,
-            top_p=0.8,
-            stream=False,
-        )
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "Removed legacy vendor param 'stream'",
+        ):
+            await gateway.get_completion(request)
 
     async def test_get_completion_rejects_invalid_vendor_stream_boolean(self) -> None:
         config = _make_config()
@@ -543,7 +526,34 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaisesRegex(
             CompletionGatewayError,
-            "Invalid boolean value for vendor_params.stream",
+            "Removed legacy vendor param 'stream'",
+        ):
+            await gateway.get_completion(request)
+
+    async def test_get_completion_rejects_invalid_inference_stream_boolean(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(),
+                ),
+            ),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(stream="definitely"),  # type: ignore[arg-type]
+        )
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "Invalid boolean value for inference.stream",
         ):
             await gateway.get_completion(request)
 
@@ -585,10 +595,11 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
-            await gateway.get_completion(_simple_request())
-
-        _, kwargs = api.chat.completions.create.await_args
-        self.assertEqual(kwargs["max_completion_tokens"], 17)
+            with self.assertRaisesRegex(
+                CompletionGatewayError,
+                "includes removed legacy key 'max_tokens'",
+            ):
+                await gateway.get_completion(_simple_request())
 
     async def test_get_completion_omits_temp_and_top_p_when_not_configured(
         self,
@@ -1164,7 +1175,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
                 CompletionMessage(role="assistant", content="history"),
             ],
             inference=CompletionInferenceConfig(
-                max_tokens=111,
+                max_completion_tokens=111,
                 temperature=0.7,
                 top_p=0.6,
                 stream=True,
@@ -1191,7 +1202,6 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
                 "tools": [{"type": "function", "name": "lookup"}],
                 "top_logprobs": 2,
                 "user": "u-1",
-                "use_legacy_max_tokens": True,
             },
         )
         response = await gateway.get_completion(request)
@@ -1575,7 +1585,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
         api.chat.completions.create.assert_not_called()
 
-    async def test_get_completion_responses_uses_max_output_tokens_with_legacy_flag(
+    async def test_get_completion_responses_rejects_removed_legacy_max_tokens_vendor_param(
         self,
     ) -> None:
         config = _make_config()
@@ -1619,12 +1629,11 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
                 "use_legacy_max_tokens": True,
             },
         )
-        await gateway.get_completion(request)
-
-        _, kwargs = api.responses.create.await_args
-        self.assertEqual(kwargs["max_output_tokens"], 64)
-        self.assertNotIn("max_completion_tokens", kwargs)
-        self.assertNotIn("max_tokens", kwargs)
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "Removed legacy vendor param 'use_legacy_max_tokens'",
+        ):
+            await gateway.get_completion(request)
 
     async def test_get_completion_wraps_openai_error(self) -> None:
         config = _make_config()
@@ -1828,7 +1837,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             request,
             {"model": "gpt-4o-mini", "max_tokens": "23"},
         )
-        self.assertEqual(kwargs["max_output_tokens"], 23)
+        self.assertNotIn("max_output_tokens", kwargs)
 
         invalid_surface_request = CompletionRequest(
             operation="completion",

@@ -48,7 +48,127 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         gateway = SambaNovaCompletionGateway(config, logging_gateway)
 
-        await gateway.check_readiness()
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(400, '{"error":{"message":"validation error"}}'),
+        ):
+            await gateway.check_readiness()
+
+    async def test_check_readiness_returns_on_success_status(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["classification"] = dict(
+            config.sambanova.api.dict["completion"]
+        )
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, '{"ok": true}'),
+        ):
+            await gateway.check_readiness()
+
+    async def test_check_readiness_raises_when_probe_model_missing(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["completion"]["model"] = ""
+        config.sambanova.api.dict["classification"] = {"model": ""}
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+
+        with self.assertRaisesRegex(RuntimeError, "probe model is missing"):
+            await gateway.check_readiness()
+
+    async def test_check_readiness_fails_on_auth_errors(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["classification"] = dict(
+            config.sambanova.api.dict["completion"]
+        )
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(401, '{"error":{"message":"Unauthorized"}}'),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "authentication error"):
+                await gateway.check_readiness()
+
+    async def test_check_readiness_wraps_transport_failures(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["classification"] = dict(
+            config.sambanova.api.dict["completion"]
+        )
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            side_effect=RuntimeError("transport down"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
+                await gateway.check_readiness()
+
+    async def test_check_readiness_fails_on_provider_unavailable_status(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["classification"] = dict(
+            config.sambanova.api.dict["completion"]
+        )
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(503, '{"error":{"message":"unavailable"}}'),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "provider unavailable"):
+                await gateway.check_readiness()
+
+    async def test_check_readiness_fails_on_unexpected_status(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["classification"] = dict(
+            config.sambanova.api.dict["completion"]
+        )
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(418, '{"error":{"message":"teapot"}}'),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
+                await gateway.check_readiness()
+
+    async def test_check_readiness_uses_configured_positive_timeout(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["classification"] = dict(
+            config.sambanova.api.dict["completion"]
+        )
+        config.sambanova.api.read_timeout_seconds = 4.0
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        timeout_values: list[float] = []
+
+        async def _wait_for(awaitable, timeout):
+            timeout_values.append(float(timeout))
+            return await awaitable
+
+        with (
+            patch.object(
+                SambaNovaCompletionGateway,
+                "_perform_request",
+                return_value=(400, '{"error":{"message":"validation error"}}'),
+            ),
+            patch("mugen.core.gateway.completion.sambanova.asyncio.wait_for", side_effect=_wait_for),
+        ):
+            await gateway.check_readiness()
+
+        self.assertEqual(timeout_values, [4.0])
 
     async def test_get_completion_parses_non_stream_response(self) -> None:
         config = _make_config()
@@ -88,7 +208,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         request = CompletionRequest(
             messages=[CompletionMessage(role="user", content="hello")],
             operation="completion",
-            vendor_params={"stream": True},
+            inference=CompletionInferenceConfig(stream=True),
         )
 
         with patch.object(
@@ -126,7 +246,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             operation="completion",
             messages=[CompletionMessage(role="user", content="hello")],
             inference=CompletionInferenceConfig(
-                max_tokens=42,
+                max_completion_tokens=42,
                 temperature=0.8,
                 top_p=0.3,
                 stop=["<END>"],
@@ -152,7 +272,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         _, kwargs = perform_request.call_args
         body = kwargs["body"]
         self.assertEqual(body["top_p"], 0.3)
-        self.assertEqual(body["max_tokens"], 42)
+        self.assertEqual(body["max_completion_tokens"], 42)
         self.assertEqual(body["frequency_penalty"], 0.2)
         self.assertEqual(body["presence_penalty"], 0.3)
         self.assertEqual(body["response_format"], {"type": "json_object"})
@@ -178,7 +298,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         headers = kwargs["headers"]
         self.assertIn("Authorization: Bearer basic_key", headers)
 
-    async def test_get_completion_supports_basic_auth_compat_override(self) -> None:
+    async def test_get_completion_rejects_removed_legacy_auth_vendor_param(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
         gateway = SambaNovaCompletionGateway(config, logging_gateway)
@@ -193,14 +313,14 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             SambaNovaCompletionGateway,
             "_perform_request",
             return_value=(200, payload),
-        ) as perform_request:
-            await gateway.get_completion(request)
+        ):
+            with self.assertRaisesRegex(
+                CompletionGatewayError,
+                "Removed legacy vendor param 'sambanova_auth_scheme'",
+            ):
+                await gateway.get_completion(request)
 
-        _, kwargs = perform_request.call_args
-        headers = kwargs["headers"]
-        self.assertIn("Authorization: Basic basic_key", headers)
-
-    async def test_get_completion_uses_effective_max_tokens_precedence(self) -> None:
+    async def test_get_completion_uses_max_completion_tokens(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
         gateway = SambaNovaCompletionGateway(config, logging_gateway)
@@ -208,10 +328,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         request = CompletionRequest(
             operation="completion",
             messages=[CompletionMessage(role="user", content="hello")],
-            inference=CompletionInferenceConfig(
-                max_completion_tokens=64,
-                max_tokens=12,
-            ),
+            inference=CompletionInferenceConfig(max_completion_tokens=64),
         )
 
         with patch.object(
@@ -223,9 +340,11 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
 
         _, kwargs = perform_request.call_args
         body = kwargs["body"]
-        self.assertEqual(body["max_tokens"], 64)
+        self.assertEqual(body["max_completion_tokens"], 64)
 
-    async def test_get_completion_supports_max_completion_tokens_field(self) -> None:
+    async def test_get_completion_rejects_removed_legacy_token_limit_vendor_params(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         gateway = SambaNovaCompletionGateway(config, logging_gateway)
@@ -244,13 +363,12 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             SambaNovaCompletionGateway,
             "_perform_request",
             return_value=(200, payload),
-        ) as perform_request:
-            await gateway.get_completion(request)
-
-        _, kwargs = perform_request.call_args
-        body = kwargs["body"]
-        self.assertEqual(body["max_completion_tokens"], 50)
-        self.assertEqual(body["max_tokens"], 50)
+        ):
+            with self.assertRaisesRegex(
+                CompletionGatewayError,
+                "Removed legacy vendor param 'sambanova_token_limit_field'",
+            ):
+                await gateway.get_completion(request)
 
     async def test_get_completion_uses_contract_stream_controls(self) -> None:
         config = _make_config()
@@ -350,7 +468,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
 
         _, kwargs = perform_request.call_args
         body = kwargs["body"]
-        self.assertEqual(body["max_tokens"], 21)
+        self.assertEqual(body["max_completion_tokens"], 21)
 
         del config.sambanova.api.dict["completion"]["max_completion_tokens"]
         config.sambanova.api.dict["completion"]["max_tokens"] = "17"
@@ -359,12 +477,12 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             SambaNovaCompletionGateway,
             "_perform_request",
             return_value=(200, payload),
-        ) as perform_request:
-            await gateway.get_completion(_simple_request())
-
-        _, kwargs = perform_request.call_args
-        body = kwargs["body"]
-        self.assertEqual(body["max_tokens"], 17)
+        ):
+            with self.assertRaisesRegex(
+                CompletionGatewayError,
+                "includes removed legacy key 'max_tokens'",
+            ):
+                await gateway.get_completion(_simple_request())
 
     async def test_get_completion_uses_operation_stop_default(self) -> None:
         config = _make_config()
@@ -687,63 +805,18 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
     def test_resolve_helpers(self) -> None:
         gateway = SambaNovaCompletionGateway(_make_config(), Mock())
         self.assertEqual(
-            SambaNovaCompletionGateway._resolve_auth_scheme(
-                CompletionRequest(
-                    messages=[CompletionMessage(role="user", content="x")],
-                    vendor_params={"sambanova_auth_scheme": 1},
-                ),
-                operation_config={},
-            ),
-            "bearer",
-        )
-        self.assertEqual(
-            SambaNovaCompletionGateway._resolve_token_limit_field(
-                CompletionRequest(messages=[CompletionMessage(role="user", content="x")]),
-                operation_config={},
-            ),
-            "max_tokens",
-        )
-        self.assertEqual(
-            SambaNovaCompletionGateway._resolve_token_limit_field(
-                CompletionRequest(
-                    messages=[CompletionMessage(role="user", content="x")],
-                    vendor_params={"sambanova_token_limit_field": 1},
-                ),
-                operation_config={},
-            ),
-            "max_tokens",
-        )
-        self.assertEqual(
-            SambaNovaCompletionGateway._resolve_token_limit_field(
-                CompletionRequest(
-                    messages=[CompletionMessage(role="user", content="x")],
-                    vendor_params={"sambanova_token_limit_field": "max_completion_tokens"},
-                ),
-                operation_config={},
-            ),
-            "max_completion_tokens",
-        )
-        self.assertEqual(
             gateway._resolve_stream_options(  # pylint: disable=protected-access
                 CompletionRequest(messages=[CompletionMessage(role="user", content="x")])
             ),
             {"include_usage": False},
         )
-        self.assertFalse(
-            gateway._resolve_vendor_bool(  # pylint: disable=protected-access
-                CompletionRequest(messages=[CompletionMessage(role="user", content="x")]),
-                key="include_usage",
-                default=False,
-            )
-        )
         self.assertEqual(
             gateway._resolve_stream_options(  # pylint: disable=protected-access
                 CompletionRequest(
                     messages=[CompletionMessage(role="user", content="x")],
-                    vendor_params={
-                        "stream_options": {"include_usage": True},
-                        "include_usage": False,
-                    },
+                    inference=CompletionInferenceConfig(
+                        stream_options={"include_usage": True},
+                    ),
                 )
             ),
             {"include_usage": True},
@@ -771,8 +844,26 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             SambaNovaCompletionGateway._normalize_list_of_dicts([{"a": 1}, 1]),
             [{"a": 1}],
         )
+        self.assertTrue(
+            SambaNovaCompletionGateway._is_expected_probe_validation_response(
+                400,
+                '{"error":{"message":"validation failed"}}',
+            )
+        )
+        self.assertFalse(
+            SambaNovaCompletionGateway._is_expected_probe_validation_response(
+                401,
+                '{"error":{"message":"unauthorized"}}',
+            )
+        )
+        self.assertFalse(
+            SambaNovaCompletionGateway._is_expected_probe_validation_response(
+                400,
+                '""',
+            )
+        )
 
-    async def test_get_completion_vendor_stream_parses_string_false(self) -> None:
+    async def test_get_completion_rejects_removed_vendor_stream_override(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
         gateway = SambaNovaCompletionGateway(config, logging_gateway)
@@ -787,12 +878,12 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             SambaNovaCompletionGateway,
             "_perform_request",
             return_value=(200, payload),
-        ) as perform_request:
-            await gateway.get_completion(request)
-
-        _, kwargs = perform_request.call_args
-        body = kwargs["body"]
-        self.assertFalse(body["stream"])
+        ):
+            with self.assertRaisesRegex(
+                CompletionGatewayError,
+                "Removed legacy vendor param 'stream'",
+            ):
+                await gateway.get_completion(request)
 
     async def test_get_completion_rejects_invalid_include_usage_boolean(self) -> None:
         config = _make_config()
@@ -812,7 +903,29 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaisesRegex(
                 CompletionGatewayError,
-                "Invalid boolean value for vendor_params.include_usage",
+                "Removed legacy vendor param 'include_usage'",
+            ):
+                await gateway.get_completion(request)
+
+    async def test_get_completion_rejects_invalid_inference_stream_boolean(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(stream="definitely"),  # type: ignore[arg-type]
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ):
+            with self.assertRaisesRegex(
+                CompletionGatewayError,
+                "Invalid boolean value for inference.stream",
             ):
                 await gateway.get_completion(request)
 

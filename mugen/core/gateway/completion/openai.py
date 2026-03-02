@@ -31,7 +31,11 @@ class OpenAICompletionGateway(ICompletionGateway):
     _chat_surface = "chat_completions"
     _responses_surface = "responses"
     _surface_vendor_param = "openai_api"
-    _legacy_max_tokens_vendor_flag = "use_legacy_max_tokens"
+    _removed_legacy_vendor_param_keys = (
+        "use_legacy_max_tokens",
+        "stream",
+        "stream_options",
+    )
 
     _chat_vendor_passthrough_keys = (
         "audio",
@@ -186,9 +190,9 @@ class OpenAICompletionGateway(ICompletionGateway):
     async def get_completion(
         self,
         request: CompletionRequest,
-        operation: str = "completion",
     ) -> CompletionResponse:
         completion_request = request
+        self._validate_removed_legacy_vendor_params(completion_request)
         operation_config = self._resolve_operation_config(completion_request.operation)
 
         try:
@@ -293,14 +297,7 @@ class OpenAICompletionGateway(ICompletionGateway):
             operation_config=operation_config,
         )
         if max_tokens is not None:
-            if self._resolve_vendor_bool(
-                request,
-                key=self._legacy_max_tokens_vendor_flag,
-                default=False,
-            ):
-                kwargs["max_tokens"] = int(max_tokens)
-            else:
-                kwargs["max_completion_tokens"] = int(max_tokens)
+            kwargs["max_completion_tokens"] = int(max_tokens)
 
         for key in self._chat_vendor_passthrough_keys:
             if key in request.vendor_params:
@@ -686,6 +683,15 @@ class OpenAICompletionGateway(ICompletionGateway):
                 operation=operation,
                 message=f"OpenAI operation '{operation}' is missing model.",
             )
+        if "max_tokens" in cfg:
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=operation,
+                message=(
+                    f"OpenAI operation '{operation}' includes removed legacy key "
+                    "'max_tokens'. Use 'max_completion_tokens'."
+                ),
+            )
 
         return cfg
 
@@ -745,32 +751,10 @@ class OpenAICompletionGateway(ICompletionGateway):
         return top_p
 
     def _resolve_stream(self, request: CompletionRequest) -> bool:
-        stream = self._parse_bool_like(
+        return self._parse_bool_like(
             request=request,
             value=request.inference.stream,
             field_name="inference.stream",
-        )
-        if "stream" in request.vendor_params:
-            stream = self._parse_bool_like(
-                request=request,
-                value=request.vendor_params["stream"],
-                field_name="vendor_params.stream",
-            )
-        return stream
-
-    def _resolve_vendor_bool(
-        self,
-        request: CompletionRequest,
-        *,
-        key: str,
-        default: bool,
-    ) -> bool:
-        if key not in request.vendor_params:
-            return default
-        return self._parse_bool_like(
-            request=request,
-            value=request.vendor_params[key],
-            field_name=f"vendor_params.{key}",
         )
 
     def _parse_bool_like(
@@ -798,9 +782,6 @@ class OpenAICompletionGateway(ICompletionGateway):
     @staticmethod
     def _resolve_stream_options(request: CompletionRequest) -> dict[str, Any] | None:
         stream_options = request.inference.stream_options
-        if not stream_options and "stream_options" in request.vendor_params:
-            stream_options = request.vendor_params["stream_options"]
-
         if isinstance(stream_options, dict) and stream_options:
             return stream_options
 
@@ -812,11 +793,9 @@ class OpenAICompletionGateway(ICompletionGateway):
         *,
         operation_config: dict[str, Any],
     ) -> int | None:
-        max_tokens = request.inference.effective_max_tokens
+        max_tokens = request.inference.max_completion_tokens
         if max_tokens is None and "max_completion_tokens" in operation_config:
             max_tokens = int(operation_config["max_completion_tokens"])
-        if max_tokens is None and "max_tokens" in operation_config:
-            max_tokens = int(operation_config["max_tokens"])
         return max_tokens
 
     @staticmethod
@@ -825,14 +804,29 @@ class OpenAICompletionGateway(ICompletionGateway):
         *,
         operation_config: dict[str, Any],
     ) -> int | None:
-        max_tokens = request.inference.effective_max_tokens
+        max_tokens = request.inference.max_completion_tokens
         if max_tokens is None and "max_output_tokens" in operation_config:
             max_tokens = int(operation_config["max_output_tokens"])
         if max_tokens is None and "max_completion_tokens" in operation_config:
             max_tokens = int(operation_config["max_completion_tokens"])
-        if max_tokens is None and "max_tokens" in operation_config:
-            max_tokens = int(operation_config["max_tokens"])
         return max_tokens
+
+    def _validate_removed_legacy_vendor_params(
+        self,
+        request: CompletionRequest,
+    ) -> None:
+        for key in self._removed_legacy_vendor_param_keys:
+            if key not in request.vendor_params:
+                continue
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=request.operation,
+                message=(
+                    "OpenAICompletionGateway: Removed legacy vendor param "
+                    f"'{key}' is not supported."
+                ),
+                timeout_applied=self._timeout_seconds,
+            )
 
     @classmethod
     def _serialize_responses_input(
