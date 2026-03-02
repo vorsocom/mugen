@@ -28,8 +28,6 @@ class DefaultMessagingService(IMessagingService):
     _thread_list_version: int = 1
 
     _default_extension_timeout_seconds: float = 10.0
-    _extension_failure_policy_fail_open = "fail_open"
-    _extension_failure_policy_fail_closed = "fail_closed"
 
     # pylint: disable=too-many-arguments
     # pylint: disable=too-many-positional-arguments
@@ -57,9 +55,9 @@ class DefaultMessagingService(IMessagingService):
         self._mh_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._rag_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._rpp_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+        self._critical_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._normalize_composed_message_use_case = NormalizeComposedMessageUseCase()
         self._extension_timeout_seconds = self._resolve_extension_timeout_seconds()
-        self._extension_failure_policy = self._resolve_extension_failure_policy()
         self._extension_metrics: dict[str, int] = {}
 
     def _increment_extension_metric(self, metric_name: str, amount: int = 1) -> None:
@@ -119,54 +117,25 @@ class DefaultMessagingService(IMessagingService):
             return None
         return timeout_seconds
 
-    def _resolve_extension_failure_policy(self) -> str:
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-        ).strip().lower()
-        default_policy = (
-            self._extension_failure_policy_fail_closed
-            if environment == "production"
-            else self._extension_failure_policy_fail_open
-        )
-        raw_policy = getattr(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "messaging", None),
-            "extension_failure_policy",
-            None,
-        )
-        if raw_policy in [None, ""]:
-            return default_policy
-        if not isinstance(raw_policy, str):
-            self._logging_gateway.warning(
-                "Invalid extension failure policy configuration; "
-                f"using default {default_policy}."
-            )
-            return default_policy
-        normalized_policy = raw_policy.strip().lower()
-        if normalized_policy in {
-            self._extension_failure_policy_fail_open,
-            self._extension_failure_policy_fail_closed,
-        }:
-            return normalized_policy
-
-        self._logging_gateway.warning(
-            "Unsupported extension failure policy configuration; "
-            f"using default {default_policy}."
-        )
-        return default_policy
-
-    def _should_fail_closed(self) -> bool:
-        return self._extension_failure_policy == self._extension_failure_policy_fail_closed
+    def _is_critical_extension(self, extension: Any, *, kind: str) -> bool:
+        key = self._extension_logical_key(extension, kind=kind)
+        return key in self._critical_extension_keys
 
     def _handle_extension_handler_failure(
         self,
         *,
         extension_name: str,
+        extension: Any,
+        kind: str,
         message: str,
         cause: Exception | None = None,
     ) -> None:
-        _ = extension_name
-        if self._should_fail_closed():
+        if self._is_critical_extension(extension, kind=kind):
             self._increment_extension_metric("messaging.extensions.fail_closed")
+            self._logging_gateway.error(
+                "Critical messaging extension failed "
+                f"(extension={extension_name} kind={kind})."
+            )
             if cause is None:
                 raise RuntimeError(message)
             raise RuntimeError(message) from cause
@@ -202,6 +171,8 @@ class DefaultMessagingService(IMessagingService):
                 self._increment_extension_metric("messaging.extensions.exception")
                 self._handle_extension_handler_failure(
                     extension_name=extension_name,
+                    extension=extension,
+                    kind="mh",
                     message=(
                         "Messaging extension handler failed "
                         f"(extension={extension_name} "
@@ -217,6 +188,8 @@ class DefaultMessagingService(IMessagingService):
             self._increment_extension_metric("messaging.extensions.timeout")
             self._handle_extension_handler_failure(
                 extension_name=extension_name,
+                extension=extension,
+                kind="mh",
                 message=(
                     "Messaging extension handler timed out "
                     f"(extension={extension_name} "
@@ -231,6 +204,8 @@ class DefaultMessagingService(IMessagingService):
             self._increment_extension_metric("messaging.extensions.exception")
             self._handle_extension_handler_failure(
                 extension_name=extension_name,
+                extension=extension,
+                kind="mh",
                 message=(
                     "Messaging extension handler failed "
                     f"(extension={extension_name} "
@@ -659,50 +634,104 @@ class DefaultMessagingService(IMessagingService):
     def rpp_extensions(self) -> list[IRPPExtension]:
         return self._rpp_extensions
 
-    def register_cp_extension(self, ext: ICPExtension) -> None:
+    def _bind_extension_with_criticality(
+        self,
+        *,
+        ext: Any,
+        ext_list: list,
+        ext_keys: set[tuple[str, str, tuple[str, ...]]],
+        kind: str,
+        critical: bool,
+    ) -> None:
+        logical_key = self._extension_logical_key(ext, kind=kind)
         self._register_extension(
+            ext=ext,
+            ext_list=ext_list,
+            ext_keys=ext_keys,
+            logical_key=logical_key,
+        )
+        if critical:
+            self._critical_extension_keys.add(logical_key)
+
+    def bind_cp_extension(self, ext: ICPExtension, *, critical: bool = False) -> None:
+        self._bind_extension_with_criticality(
             ext=ext,
             ext_list=self._cp_extensions,
             ext_keys=self._cp_extension_keys,
-            logical_key=self._extension_logical_key(ext, kind="cp"),
+            kind="cp",
+            critical=critical,
         )
 
-    def register_ct_extension(self, ext: ICTExtension) -> None:
-        self._register_extension(
+    def bind_ct_extension(self, ext: ICTExtension, *, critical: bool = False) -> None:
+        self._bind_extension_with_criticality(
             ext=ext,
             ext_list=self._ct_extensions,
             ext_keys=self._ct_extension_keys,
-            logical_key=self._extension_logical_key(ext, kind="ct"),
+            kind="ct",
+            critical=critical,
         )
 
-    def register_ctx_extension(self, ext: ICTXExtension) -> None:
-        self._register_extension(
+    def bind_ctx_extension(
+        self,
+        ext: ICTXExtension,
+        *,
+        critical: bool = False,
+    ) -> None:
+        self._bind_extension_with_criticality(
             ext=ext,
             ext_list=self._ctx_extensions,
             ext_keys=self._ctx_extension_keys,
-            logical_key=self._extension_logical_key(ext, kind="ctx"),
+            kind="ctx",
+            critical=critical,
         )
 
-    def register_mh_extension(self, ext: IMHExtension) -> None:
-        self._register_extension(
+    def bind_mh_extension(self, ext: IMHExtension, *, critical: bool = False) -> None:
+        self._bind_extension_with_criticality(
             ext=ext,
             ext_list=self._mh_extensions,
             ext_keys=self._mh_extension_keys,
-            logical_key=self._extension_logical_key(ext, kind="mh"),
+            kind="mh",
+            critical=critical,
         )
 
-    def register_rag_extension(self, ext: IRAGExtension) -> None:
-        self._register_extension(
+    def bind_rag_extension(self, ext: IRAGExtension, *, critical: bool = False) -> None:
+        self._bind_extension_with_criticality(
             ext=ext,
             ext_list=self._rag_extensions,
             ext_keys=self._rag_extension_keys,
-            logical_key=self._extension_logical_key(ext, kind="rag"),
+            kind="rag",
+            critical=critical,
         )
 
-    def register_rpp_extension(self, ext: IRPPExtension) -> None:
-        self._register_extension(
+    def bind_rpp_extension(self, ext: IRPPExtension, *, critical: bool = False) -> None:
+        self._bind_extension_with_criticality(
             ext=ext,
             ext_list=self._rpp_extensions,
             ext_keys=self._rpp_extension_keys,
-            logical_key=self._extension_logical_key(ext, kind="rpp"),
+            kind="rpp",
+            critical=critical,
         )
+
+    def register_cp_extension(self, ext: ICPExtension) -> None:
+        """Legacy alias for composition-driven bind_cp_extension."""
+        self.bind_cp_extension(ext, critical=False)
+
+    def register_ct_extension(self, ext: ICTExtension) -> None:
+        """Legacy alias for composition-driven bind_ct_extension."""
+        self.bind_ct_extension(ext, critical=False)
+
+    def register_ctx_extension(self, ext: ICTXExtension) -> None:
+        """Legacy alias for composition-driven bind_ctx_extension."""
+        self.bind_ctx_extension(ext, critical=False)
+
+    def register_mh_extension(self, ext: IMHExtension) -> None:
+        """Legacy alias for composition-driven bind_mh_extension."""
+        self.bind_mh_extension(ext, critical=False)
+
+    def register_rag_extension(self, ext: IRAGExtension) -> None:
+        """Legacy alias for composition-driven bind_rag_extension."""
+        self.bind_rag_extension(ext, critical=False)
+
+    def register_rpp_extension(self, ext: IRPPExtension) -> None:
+        """Legacy alias for composition-driven bind_rpp_extension."""
+        self.bind_rpp_extension(ext, critical=False)

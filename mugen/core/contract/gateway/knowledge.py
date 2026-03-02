@@ -48,5 +48,9 @@ class IKnowledgeGateway(ABC):  # pylint: disable=too-few-public-methods
         """Validate provider readiness for startup fail-fast checks."""
 
     @abstractmethod
+    async def aclose(self) -> None:
+        """Close provider resources asynchronously."""
+
+    @abstractmethod
     async def search(self, params: VendorParams) -> KnowledgeSearchResult:
         """Perform knwoledge lookup."""

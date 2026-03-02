@@ -129,7 +129,7 @@ class TestDIBuildWebClient(unittest.TestCase):
                 self.assertEqual(logger.records[0].name, "root")
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (web_client).",
+                    "ERROR:root:Invalid configuration (web_client): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             self.fail("Exception raised unexpectedly.")
@@ -180,7 +180,7 @@ class TestDIBuildWebClient(unittest.TestCase):
                     self.assertEqual(logger.records[0].name, "root")
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (web_client).",
+                        "ERROR:root:Invalid configuration (web_client): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             self.fail("Exception raised unexpectedly.")
@@ -282,6 +282,10 @@ class TestDIBuildWebClient(unittest.TestCase):
                             "mugen.core.contract.client.web.IWebClient.__subclasses__"
                         ),
                         return_value=[DummyWebClientClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyWebClientClass,
                     ),
                 ):
                     di._build_provider(config, injector, provider_name="web_client")

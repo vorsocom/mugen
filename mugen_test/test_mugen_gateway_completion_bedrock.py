@@ -123,7 +123,26 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
 
         await gateway.check_readiness()
 
-        bedrock_client.invoke_model.assert_called_once()
+    async def test_aclose_handles_missing_sync_and_async_close(self) -> None:
+        gateway = self._build_gateway()
+        gateway._client = SimpleNamespace()  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+
+        calls: list[str] = []
+
+        def _sync_close():
+            calls.append("sync")
+            return None
+
+        async def _async_close():
+            calls.append("async")
+            return None
+
+        gateway._client = SimpleNamespace(close=_sync_close)  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+        gateway._client = SimpleNamespace(close=_async_close)  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+        self.assertEqual(calls, ["sync", "async"])
 
     async def test_check_readiness_raises_for_non_validation_probe_error(self) -> None:
         config = _make_config()

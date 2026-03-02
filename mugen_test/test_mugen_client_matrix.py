@@ -985,11 +985,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     async def test_aenter_uses_saved_credentials_when_access_token_exists(self) -> None:
         client = self._client()
+        client._ensure_credential_keys_initialized()  # pylint: disable=protected-access
 
         values = {
-            "client_access_token": "tok",
-            "client_device_id": "dev",
-            "client_user_id": "@assistant:example.com",
+            client._client_access_token_key: "tok",  # pylint: disable=protected-access
+            client._client_device_id_key: "dev",  # pylint: disable=protected-access
+            client._client_user_id_key: "@assistant:example.com",  # pylint: disable=protected-access
         }
         client._keyval_storage_gateway.get_text = AsyncMock(
             side_effect=lambda key, *_: values.get(key)

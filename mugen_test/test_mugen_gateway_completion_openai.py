@@ -186,6 +186,37 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
                 await gateway.check_readiness()
 
+    async def test_aclose_handles_missing_sync_and_async_close(self) -> None:
+        config = _make_config()
+        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
+            responses=SimpleNamespace(create=AsyncMock()),
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+        )
+        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        gateway._api = SimpleNamespace()  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+
+        calls: list[str] = []
+
+        def _sync_close():
+            calls.append("sync")
+            return None
+
+        async def _async_close():
+            calls.append("async")
+            return None
+
+        gateway._api = SimpleNamespace(close=_sync_close)  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+        gateway._api = SimpleNamespace(close=_async_close)  # pylint: disable=protected-access
+        self.assertIsNone(await gateway.aclose())
+        self.assertEqual(calls, ["sync", "async"])
+
     def test_constructor_builds_client_with_optional_settings(self) -> None:
         config = _make_config()
         logging_gateway = Mock()

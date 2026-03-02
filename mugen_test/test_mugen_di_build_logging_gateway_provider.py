@@ -72,7 +72,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (logging_gateway).",
+                    "ERROR:root:Invalid configuration (logging_gateway): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -89,7 +89,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "logging": "valid_logging_module:DummyLoggingGatewayClass",
+                                    "logging": "standard",
                                 }
                             }
                         }
@@ -196,7 +196,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     # subclass of ILoggingGateway would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (logging_gateway).",
+                        "ERROR:root:Invalid configuration (logging_gateway): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -259,6 +259,10 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.logging.ILoggingGateway.__subclasses__",
                         return_value=[DummyLoggingGatewayClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyLoggingGatewayClass,
                     ),
                 ):
                     # Attempt to build the logging gateway.

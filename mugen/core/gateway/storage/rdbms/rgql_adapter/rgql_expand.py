@@ -24,8 +24,8 @@ from mugen.core.utility.string.case_conversion_helper import (
 )
 from mugen.core.utility.rgql.model import EdmModel, EdmType
 from mugen.core.utility.rgql.url_parser import ExpandItem, RGQLQueryOptions
-from mugen.core.utility.rgql_helper.error import RGQLExpandError
-from mugen.core.utility.rgql_helper.rgql_to_relational import (
+from mugen.core.gateway.storage.rdbms.rgql_adapter.error import RGQLExpandError
+from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_to_relational import (
     RGQLToRelationalAdapter,
 )
 

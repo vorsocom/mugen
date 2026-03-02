@@ -135,7 +135,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (platform_service).",
+                    "ERROR:root:Invalid configuration (platform_service): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -203,7 +203,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (platform_service).",
+                        "ERROR:root:Invalid configuration (platform_service): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -271,6 +271,10 @@ class TestDIBuildPlatformService(unittest.TestCase):
                             "mugen.core.contract.service.platform.IPlatformService.__subclasses__"
                         ),
                         return_value=[DummyPlatformServiceClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyPlatformServiceClass,
                     ),
                 ):
                     # Attempt to build the Platform service.

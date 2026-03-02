@@ -14,7 +14,6 @@ __all__ = [
 ]
 
 import asyncio
-from importlib import import_module
 import inspect
 import logging
 import os
@@ -44,6 +43,7 @@ from mugen.core.utility.collection.namespace import NamespaceConfig, to_namespac
 from mugen.core.utility.platforms import normalize_platforms, unknown_platforms
 
 from .injector import DependencyInjector
+from .provider_registry import resolve_provider_class
 
 EXT_SERVICE_ADMIN_REGISTRY = "admin_registry"
 EXT_SERVICE_ADMIN_SANDBOX_ENFORCER = "admin_sandbox_enforcer"
@@ -100,34 +100,6 @@ def _build_shared_relational_runtime(injector: DependencyInjector) -> None:
     injector.relational_runtime = SharedSQLAlchemyRuntime.from_config(injector.config)
 
 
-def _split_class_path(
-    raw_value: object,
-    *,
-    provider_name: str,
-) -> tuple[str, str]:
-    """Parse mandatory module:Class provider path."""
-    if not isinstance(raw_value, str):
-        raise RuntimeError(
-            "Invalid configuration "
-            f"({provider_name}): expected module:Class string."
-        )
-    normalized = raw_value.strip()
-    if ":" not in normalized:
-        raise RuntimeError(
-            "Invalid configuration "
-            f"({provider_name}): module-only paths are not supported; use module:Class."
-        )
-    module_name, class_name = normalized.split(":", 1)
-    module_name = module_name.strip()
-    class_name = class_name.strip()
-    if module_name == "" or class_name == "":
-        raise RuntimeError(
-            "Invalid configuration "
-            f"({provider_name}): expected non-empty module and class in module:Class."
-        )
-    return module_name, class_name
-
-
 def _config_path_exists(config: dict, *path: str) -> bool:
     """Check whether a nested key path exists in the dict configuration."""
     node: dict | object = config
@@ -149,48 +121,251 @@ def _config_path_value(config: dict, *path: str):
     return node
 
 
-def _validate_removed_legacy_paths(
-    config: dict,
-    logger: ILoggingGateway | logging.Logger,
+def _ensure_only_known_keys(
+    section: dict,
+    *,
+    path: str,
+    allowed: set[str],
 ) -> None:
-    keyval_module = _config_path_value(
-        config,
-        "mugen",
-        "modules",
-        "core",
-        "gateway",
-        "storage",
-        "keyval",
+    unknown = sorted(set(section.keys()) - allowed)
+    if unknown:
+        unknown_text = ", ".join(unknown)
+        raise RuntimeError(
+            f"Invalid configuration: unknown key(s) at {path}: {unknown_text}."
+        )
+
+
+def _validate_extension_entry_schema(
+    entry: object,
+    *,
+    path: str,
+) -> None:
+    if not isinstance(entry, dict):
+        raise RuntimeError(f"Invalid configuration: {path} entries must be tables.")
+    _ensure_only_known_keys(
+        entry,
+        path=path,
+        allowed={
+            "type",
+            "token",
+            "enabled",
+            "critical",
+            "name",
+            "namespace",
+            "models",
+            "contrib",
+        },
     )
-    if str(keyval_module).strip() == "mugen.core.gateway.storage.keyval.dbm":
-        logger.error(
-            "Removed legacy keyval backend configured: mugen.core.gateway.storage.keyval.dbm"
-        )
+    token = entry.get("token")
+    if not isinstance(token, str) or token.strip() == "":
         raise RuntimeError(
-            "Legacy keyval DBM backend is no longer supported. "
-            "Use mugen.core.gateway.storage.keyval.relational."
+            f"Invalid configuration: {path}.token is required and must be a string."
+        )
+    if ":" in token:
+        raise RuntimeError(
+            f"Invalid configuration: {path}.token must be a token (module:Class unsupported)."
         )
 
-    if _config_path_exists(
-        config,
-        "mugen",
-        "storage",
-        "keyval",
-        "legacy_import",
+    ext_type = entry.get("type")
+    if ext_type is not None and not isinstance(ext_type, str):
+        raise RuntimeError(
+            f"Invalid configuration: {path}.type must be a string when provided."
+        )
+
+
+def _validate_core_module_schema(config: dict) -> None:
+    mugen_cfg = config.get("mugen")
+    if not isinstance(mugen_cfg, dict):
+        raise RuntimeError("Invalid configuration: [mugen] section is required.")
+    _ensure_only_known_keys(
+        mugen_cfg,
+        path="mugen",
+        allowed={
+            "assistant",
+            "beta",
+            "commands",
+            "debug_conversation",
+            "environment",
+            "logger",
+            "messaging",
+            "modules",
+            "platforms",
+            "runtime",
+            "storage",
+        },
+    )
+
+    runtime_cfg = mugen_cfg.get("runtime")
+    if not isinstance(runtime_cfg, dict):
+        raise RuntimeError("Invalid configuration: mugen.runtime must be a table.")
+    _ensure_only_known_keys(
+        runtime_cfg,
+        path="mugen.runtime",
+        allowed={"phase_b", "profile", "provider_readiness_timeout_seconds"},
+    )
+
+    phase_b_cfg = runtime_cfg.get("phase_b")
+    if not isinstance(phase_b_cfg, dict):
+        raise RuntimeError("Invalid configuration: mugen.runtime.phase_b must be a table.")
+    _ensure_only_known_keys(
+        phase_b_cfg,
+        path="mugen.runtime.phase_b",
+        allowed={
+            "critical_platforms",
+            "degrade_on_critical_exit",
+            "readiness_grace_seconds",
+            "startup_timeout_seconds",
+            "supervisor_max_restarts",
+            "supervisor_backoff_base_seconds",
+            "supervisor_backoff_max_seconds",
+        },
+    )
+
+    messaging_cfg = mugen_cfg.get("messaging")
+    if isinstance(messaging_cfg, dict):
+        _ensure_only_known_keys(
+            messaging_cfg,
+            path="mugen.messaging",
+            allowed={
+                "ct_trigger_prefilter_enabled",
+                "extension_timeout_seconds",
+                "history_max_messages",
+                "history_save_cas_retries",
+            },
+        )
+
+    modules_cfg = mugen_cfg.get("modules")
+    if not isinstance(modules_cfg, dict):
+        raise RuntimeError("Invalid configuration: mugen.modules must be a table.")
+    _ensure_only_known_keys(
+        modules_cfg,
+        path="mugen.modules",
+        allowed={"core", "extensions"},
+    )
+
+    core_cfg = modules_cfg.get("core")
+    if not isinstance(core_cfg, dict):
+        raise RuntimeError("Invalid configuration: mugen.modules.core must be a table.")
+    _ensure_only_known_keys(
+        core_cfg,
+        path="mugen.modules.core",
+        allowed={"client", "gateway", "plugins", "service"},
+    )
+
+    for section_name, allowed_keys in (
+        ("client", {"matrix", "whatsapp", "web"}),
+        ("service", {"ipc", "messaging", "nlp", "platform", "user"}),
     ):
-        logger.error(
-            "Removed keyval legacy import configuration detected: mugen.storage.keyval.legacy_import"
+        section = core_cfg.get(section_name)
+        if not isinstance(section, dict):
+            raise RuntimeError(
+                f"Invalid configuration: mugen.modules.core.{section_name} must be a table."
+            )
+        _ensure_only_known_keys(
+            section,
+            path=f"mugen.modules.core.{section_name}",
+            allowed=allowed_keys,
         )
+        for provider_key, provider_token in section.items():
+            if not isinstance(provider_token, str) or provider_token.strip() == "":
+                raise RuntimeError(
+                    "Invalid configuration: "
+                    f"mugen.modules.core.{section_name}.{provider_key} must be a token string."
+                )
+            if ":" in provider_token:
+                raise RuntimeError(
+                    "Invalid configuration: "
+                    f"mugen.modules.core.{section_name}.{provider_key} must be a token "
+                    "(module:Class unsupported)."
+                )
+
+    gateway_cfg = core_cfg.get("gateway")
+    if not isinstance(gateway_cfg, dict):
+        raise RuntimeError("Invalid configuration: mugen.modules.core.gateway must be a table.")
+    _ensure_only_known_keys(
+        gateway_cfg,
+        path="mugen.modules.core.gateway",
+        allowed={"completion", "email", "knowledge", "logging", "storage"},
+    )
+
+    storage_cfg = gateway_cfg.get("storage")
+    if not isinstance(storage_cfg, dict):
         raise RuntimeError(
-            "Legacy keyval startup import is no longer supported. "
-            "Remove mugen.storage.keyval.legacy_import from configuration."
+            "Invalid configuration: mugen.modules.core.gateway.storage must be a table."
+        )
+    _ensure_only_known_keys(
+        storage_cfg,
+        path="mugen.modules.core.gateway.storage",
+        allowed={"keyval", "media", "relational", "web_runtime"},
+    )
+
+    for provider_key in ("completion", "logging"):
+        provider_token = gateway_cfg.get(provider_key)
+        if not isinstance(provider_token, str) or provider_token.strip() == "":
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"mugen.modules.core.gateway.{provider_key} must be a token string."
+            )
+        if ":" in provider_token:
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"mugen.modules.core.gateway.{provider_key} must be a token "
+                "(module:Class unsupported)."
+            )
+
+    for provider_key, provider_token in storage_cfg.items():
+        if not isinstance(provider_token, str) or provider_token.strip() == "":
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"mugen.modules.core.gateway.storage.{provider_key} must be a token string."
+            )
+        if ":" in provider_token:
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"mugen.modules.core.gateway.storage.{provider_key} must be a token "
+                "(module:Class unsupported)."
+            )
+
+    for optional_key in ("email", "knowledge"):
+        optional_token = gateway_cfg.get(optional_key)
+        if optional_token is None:
+            continue
+        if not isinstance(optional_token, str) or optional_token.strip() == "":
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"mugen.modules.core.gateway.{optional_key} must be a token string."
+            )
+        if ":" in optional_token:
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"mugen.modules.core.gateway.{optional_key} must be a token "
+                "(module:Class unsupported)."
+            )
+
+    plugins_cfg = core_cfg.get("plugins")
+    if plugins_cfg is None:
+        plugins_cfg = []
+    if not isinstance(plugins_cfg, list):
+        raise RuntimeError(
+            "Invalid configuration: mugen.modules.core.plugins must be an array."
+        )
+    for index, entry in enumerate(plugins_cfg):
+        _validate_extension_entry_schema(
+            entry,
+            path=f"mugen.modules.core.plugins[{index}]",
         )
 
-    if _config_path_exists(config, "mugen", "modules", "core", "client", "telnet"):
-        logger.error("Removed core telnet client configuration detected.")
+    ext_cfg = modules_cfg.get("extensions")
+    if ext_cfg is None:
+        ext_cfg = []
+    if not isinstance(ext_cfg, list):
         raise RuntimeError(
-            "Core telnet client is no longer supported. "
-            "Use the dev/test telnet harness module instead of core runtime wiring."
+            "Invalid configuration: mugen.modules.extensions must be an array."
+        )
+    for index, entry in enumerate(ext_cfg):
+        _validate_extension_entry_schema(
+            entry,
+            path=f"mugen.modules.extensions[{index}]",
         )
 
 
@@ -260,8 +435,6 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
     logger = injector.logging_gateway
     if logger is None:
         logger = logging.getLogger()
-
-    _validate_removed_legacy_paths(config, logger)
 
     if unsupported_platforms:
         unsupported_platforms_text = ", ".join(unsupported_platforms)
@@ -369,30 +542,19 @@ def _resolve_provider_class(
     interface: type,
     invalid_config_exceptions: tuple[type[Exception], ...] = (KeyError,),
 ) -> type:
-    """Resolve provider class from mandatory module:Class configuration."""
+    """Resolve provider class from strict provider token configuration."""
     try:
-        class_path_value = config
+        provider_token = config
         for key in module_path:
-            class_path_value = class_path_value[key]
+            provider_token = provider_token[key]
     except invalid_config_exceptions as exc:
         raise RuntimeError(f"Invalid configuration ({provider_name}).") from exc
 
-    module_name, class_name = _split_class_path(
-        class_path_value,
+    return resolve_provider_class(
         provider_name=provider_name,
+        token=provider_token,
+        interface=interface,
     )
-    try:
-        module = import_module(name=module_name)
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(f"Could not import module ({provider_name}).") from exc
-
-    provider_class = getattr(module, class_name, None)
-    if not isinstance(provider_class, type):
-        raise RuntimeError(f"Valid subclass not found ({provider_name}).")
-    if not issubclass(provider_class, interface):
-        raise RuntimeError(f"Valid subclass not found ({provider_name}).")
-
-    return provider_class
 
 
 @dataclass(frozen=True)
@@ -624,7 +786,7 @@ _PROVIDER_BUILD_ORDER = (
 )
 
 
-def _configured_class_path_for_spec(config: dict, spec: _ProviderSpec) -> object:
+def _configured_token_for_spec(config: dict, spec: _ProviderSpec) -> object:
     return _config_path_value(config, *spec.module_path)
 
 
@@ -717,13 +879,13 @@ async def _await_readiness_probe_async(
     maybe_awaitable,
     *,
     provider_name: str,
-    configured_class_path: object,
+    configured_token: object,
     timeout_seconds: float,
 ) -> None:
     if inspect.isawaitable(maybe_awaitable) is not True:
         raise ProviderBootstrapError(
             "Provider readiness failed "
-            f"({provider_name}) class_path={configured_class_path!r} stage=readiness: "
+            f"({provider_name}) token={configured_token!r} stage=readiness: "
             "check_readiness must return an awaitable."
         )
     try:
@@ -731,7 +893,7 @@ async def _await_readiness_probe_async(
     except asyncio.TimeoutError as exc:
         raise ProviderBootstrapError(
             "Provider readiness failed "
-            f"({provider_name}) class_path={configured_class_path!r} stage=readiness: "
+            f"({provider_name}) token={configured_token!r} stage=readiness: "
             f"TimeoutError: readiness timed out after {timeout_seconds:.2f}s"
         ) from exc
 
@@ -744,12 +906,12 @@ async def _ensure_injector_readiness_async(
     timeout_seconds = _resolve_provider_readiness_timeout_seconds(config)
     for provider_name in _resolve_readiness_provider_names(config):
         spec = _PROVIDER_SPECS[provider_name]
-        configured_class_path = _configured_class_path_for_spec(config, spec)
+        configured_token = _configured_token_for_spec(config, spec)
         provider = getattr(injector, spec.injector_attr, None)
         if provider is None:
             raise ProviderBootstrapError(
                 "Provider readiness failed "
-                f"({provider_name}) class_path={configured_class_path!r} stage=readiness: "
+                f"({provider_name}) token={configured_token!r} stage=readiness: "
                 "provider instance is unavailable."
             )
 
@@ -757,7 +919,7 @@ async def _ensure_injector_readiness_async(
         if callable(check_readiness) is not True:
             raise ProviderBootstrapError(
                 "Provider readiness failed "
-                f"({provider_name}) class_path={configured_class_path!r} stage=readiness: "
+                f"({provider_name}) token={configured_token!r} stage=readiness: "
                 "check_readiness is unavailable."
             )
 
@@ -765,7 +927,7 @@ async def _ensure_injector_readiness_async(
             await _await_readiness_probe_async(
                 check_readiness(),
                 provider_name=provider_name,
-                configured_class_path=configured_class_path,
+                configured_token=configured_token,
                 timeout_seconds=timeout_seconds,
             )
         except ProviderBootstrapError:
@@ -773,7 +935,7 @@ async def _ensure_injector_readiness_async(
         except Exception as exc:  # pylint: disable=broad-exception-caught
             raise ProviderBootstrapError(
                 "Provider readiness failed "
-                f"({provider_name}) class_path={configured_class_path!r} stage=readiness: "
+                f"({provider_name}) token={configured_token!r} stage=readiness: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
 
@@ -829,7 +991,7 @@ def _build_provider_from_spec(
         logger.error(f"Invalid configuration ({spec.provider_name}).")
         return
 
-    configured_class_path = _config_path_value(config, *spec.module_path)
+    configured_token = _config_path_value(config, *spec.module_path)
 
     try:
         provider_class = _resolve_provider_class(
@@ -843,7 +1005,7 @@ def _build_provider_from_spec(
         if raise_errors:
             message = (
                 f"Provider bootstrap failed ({spec.provider_name}) "
-                f"class_path={configured_class_path!r} stage=build: {exc}"
+                f"token={configured_token!r} stage=build: {exc}"
             )
             raise ProviderBootstrapError(message) from exc
         if spec.required:
@@ -861,6 +1023,24 @@ def _build_provider_from_spec(
         logger.error(message)
         return
 
+    requires_relational_runtime = any(
+        injector_attr == "relational_runtime"
+        for _arg_name, injector_attr in spec.constructor_bindings
+    )
+    if requires_relational_runtime and getattr(injector, "relational_runtime", None) is None:
+        try:
+            _build_shared_relational_runtime(injector)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            message = (
+                f"Provider bootstrap failed ({spec.provider_name}) "
+                f"token={configured_token!r} stage=build: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            if raise_errors:
+                raise ProviderBootstrapError(message) from exc
+            logger.error(message)
+            return
+
     try:
         provider_kwargs = {
             arg_name: getattr(injector, injector_attr)
@@ -876,7 +1056,7 @@ def _build_provider_from_spec(
     except Exception as exc:  # pylint: disable=broad-exception-caught
         message = (
             f"Provider construction failed ({spec.provider_name}) "
-            f"class_path={configured_class_path!r} stage=build: "
+            f"token={configured_token!r} stage=build: "
             f"{type(exc).__name__}: {exc}"
         )
         if raise_errors:
@@ -958,10 +1138,10 @@ def _build_container() -> DependencyInjector:
     Order is important.
     """
     config = _load_config(_resolve_config_file())
+    _validate_core_module_schema(config)
     injector = DependencyInjector()
 
     _build_config_provider(config, injector)
-    _build_shared_relational_runtime(injector)
 
     _build_provider(
         config,

@@ -135,7 +135,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (nlp_service).",
+                    "ERROR:root:Invalid configuration (nlp_service): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -201,7 +201,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (nlp_service).",
+                        "ERROR:root:Invalid configuration (nlp_service): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -266,6 +266,10 @@ class TestDIBuildNLPService(unittest.TestCase):
                             "mugen.core.contract.service.nlp.INLPService.__subclasses__"
                         ),
                         return_value=[DummyNLPServiceClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyNLPServiceClass,
                     ),
                 ):
                     # Attempt to build the NLP service.

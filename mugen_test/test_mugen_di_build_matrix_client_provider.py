@@ -217,7 +217,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (matrix_client).",
+                    "ERROR:root:Invalid configuration (matrix_client): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -284,7 +284,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (matrix_client).",
+                        "ERROR:root:Invalid configuration (matrix_client): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -392,6 +392,10 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                             "mugen.core.contract.client.matrix.IMatrixClient.__subclasses__"
                         ),
                         return_value=[DummyMatrixClientClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyMatrixClientClass,
                     ),
                 ):
                     # Attempt to build the Matrix service.

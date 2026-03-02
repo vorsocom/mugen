@@ -3,6 +3,7 @@
 # https://aws.amazon.com/bedrock/
 
 import asyncio
+import inspect
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -150,6 +151,16 @@ class BedrockCompletionGateway(ICompletionGateway):
             raise RuntimeError("Bedrock completion gateway readiness probe failed.") from exc
         except Exception as exc:  # pylint: disable=broad-exception-caught
             raise RuntimeError("Bedrock completion gateway readiness probe failed.") from exc
+
+    async def aclose(self) -> None:
+        close = getattr(self._client, "close", None)
+        if callable(close) is not True:
+            return None
+        maybe_awaitable = close()
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
+            return None
+        return None
 
     @staticmethod
     def _is_expected_probe_validation_error(error: ClientError) -> bool:

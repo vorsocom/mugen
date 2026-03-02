@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from quart import Quart
 
 import mugen as mugen_mod
+from mugen.core.bootstrap.extensions import ExtensionTokenSpec
 from mugen.core.contract.extension.cp import ICPExtension
 
 
@@ -52,7 +53,7 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 modules=SimpleNamespace(
-                    extensions=[SimpleNamespace(type="cp", path="cp_ext:_DummyCPExt")]
+                    extensions=[SimpleNamespace(type="cp", token="test.cp.ping")]
                 )
             )
         )
@@ -60,7 +61,10 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
         ipc_service = SimpleNamespace(register_ipc_extension=Mock())
         platform_service = SimpleNamespace(extension_supported=Mock(return_value=True))
 
-        with patch.dict("sys.modules", {"cp_ext": Mock(_DummyCPExt=_DummyCPExt)}):
+        with patch(
+            "mugen.resolve_extension_spec",
+            return_value=ExtensionTokenSpec("cp", ICPExtension, _DummyCPExt),
+        ):
             await mugen_mod.register_extensions(
                 app=app,
                 config_provider=lambda: config,
@@ -85,7 +89,7 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
             mugen=SimpleNamespace(
                 modules=SimpleNamespace(
                     core=SimpleNamespace(),
-                    extensions=[SimpleNamespace(type="cp", path="cp_ext:_DummyCPExt")],
+                    extensions=[SimpleNamespace(type="cp", token="test.cp.ping")],
                 )
             )
         )
@@ -94,7 +98,10 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
         platform_service = SimpleNamespace(extension_supported=Mock(return_value=False))
 
         with (
-            patch.dict("sys.modules", {"cp_ext": Mock(_DummyCPExt=_DummyCPExt)}),
+            patch(
+                "mugen.resolve_extension_spec",
+                return_value=ExtensionTokenSpec("cp", ICPExtension, _DummyCPExt),
+            ),
             self.assertLogs("test_app", level="WARNING") as logger,
         ):
             await mugen_mod.register_extensions(
@@ -109,6 +116,6 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
         platform_service.extension_supported.assert_called_once()
         messaging_service.register_cp_extension.assert_not_called()
         self.assertIn(
-            "WARNING:test_app:Extension not supported by active platforms: cp_ext:_DummyCPExt.",
+            "WARNING:test_app:Extension not supported by active platforms: test.cp.ping.",
             logger.output,
         )

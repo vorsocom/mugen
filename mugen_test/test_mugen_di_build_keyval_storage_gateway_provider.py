@@ -143,7 +143,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (keyval_storage_gateway).",
+                    "ERROR:root:Invalid configuration (keyval_storage_gateway): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -211,7 +211,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (keyval_storage_gateway).",
+                        "ERROR:root:Invalid configuration (keyval_storage_gateway): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -337,6 +337,10 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.storage.keyval.IKeyValStorageGateway.__subclasses__",  # pylint: disable=line-too-long
                         return_value=[DummyKeyValStorageGatewayClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyKeyValStorageGatewayClass,
                     ),
                 ):
                     # Attempt to build the key-value storage gateway.

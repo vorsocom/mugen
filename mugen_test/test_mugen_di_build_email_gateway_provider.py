@@ -97,7 +97,7 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                     logger.output,
                 )
                 self.assertIn(
-                    "WARNING:root:Could not import module (email_gateway).",
+                    "WARNING:root:Invalid configuration (email_gateway): module:Class paths are not supported.",
                     logger.output,
                 )
         except:  # pylint: disable=bare-except
@@ -149,7 +149,7 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                         logger.output,
                     )
                     self.assertIn(
-                        "WARNING:root:Valid subclass not found (email_gateway).",
+                        "WARNING:root:Invalid configuration (email_gateway): module:Class paths are not supported.",
                         logger.output,
                     )
         except:  # pylint: disable=bare-except
@@ -206,6 +206,10 @@ class TestDIBuildEmailGateway(unittest.TestCase):
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.email.IEmailGateway.__subclasses__",  # pylint: disable=line-too-long
                         return_value=[DummyEmailGatewayClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyEmailGatewayClass,
                     ),
                 ):
                     di._build_provider(config, injector, provider_name="email_gateway")

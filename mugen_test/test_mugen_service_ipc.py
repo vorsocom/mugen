@@ -208,6 +208,20 @@ class TestMugenServiceIPC(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             svc.register_ipc_extension(second_ext)
 
+    async def test_bind_ipc_extension_tracks_critical_handlers(self) -> None:
+        svc = self._new_service()
+
+        async def handler(_request):
+            return IPCHandlerResult(handler="x", response={})
+
+        ext = _DummyIpcExt(
+            platforms=["matrix"],
+            ipc_commands=["ping"],
+            processor=handler,
+        )
+        svc.bind_ipc_extension(ext, critical=True)
+        self.assertIn("_DummyIpcExt", svc._ipc_critical_handlers)  # pylint: disable=protected-access
+
     async def test_timeout_setting_resolution_paths(self) -> None:
         config = SimpleNamespace(
             ipc=SimpleNamespace(

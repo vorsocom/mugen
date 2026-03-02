@@ -86,6 +86,9 @@ class TestDependencyInjector(unittest.TestCase):
             async def check_readiness(self):
                 pass
 
+            async def aclose(self):
+                pass
+
             async def get_completion(self, request):
                 pass
 
@@ -387,6 +390,9 @@ class TestDependencyInjector(unittest.TestCase):
                 pass
 
             async def check_readiness(self):
+                pass
+
+            async def aclose(self):
                 pass
 
             async def search(  # pylint: disable=too-many-arguments

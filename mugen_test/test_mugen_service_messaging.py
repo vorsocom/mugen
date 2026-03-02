@@ -697,61 +697,21 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             expected,
         )
 
-    def test_extension_failure_policy_resolution_defaults_and_validation(self) -> None:
+    def test_bind_mh_extension_marks_critical_key(self) -> None:
         svc = self._new_service()
-        self.assertEqual(
-            svc._resolve_extension_failure_policy(),  # pylint: disable=protected-access
-            "fail_open",
+        ext = _DummyMhExt(
+            platforms=["web"],
+            message_types=["text"],
+            callback=lambda **_kwargs: [],
         )
-
-        svc._config = SimpleNamespace(  # pylint: disable=protected-access
-            mugen=SimpleNamespace(
-                environment="production",
-                messaging=SimpleNamespace(extension_failure_policy=None),
-            )
-        )
-        self.assertEqual(
-            svc._resolve_extension_failure_policy(),  # pylint: disable=protected-access
-            "fail_closed",
-        )
-
-        svc._config = SimpleNamespace(  # pylint: disable=protected-access
-            mugen=SimpleNamespace(
-                environment="testing",
-                messaging=SimpleNamespace(extension_failure_policy="fail_closed"),
-            )
-        )
-        self.assertEqual(
-            svc._resolve_extension_failure_policy(),  # pylint: disable=protected-access
-            "fail_closed",
-        )
-
-        svc._config = SimpleNamespace(  # pylint: disable=protected-access
-            mugen=SimpleNamespace(
-                environment="testing",
-                messaging=SimpleNamespace(extension_failure_policy=object()),
-            )
-        )
-        self.assertEqual(
-            svc._resolve_extension_failure_policy(),  # pylint: disable=protected-access
-            "fail_open",
-        )
-
-        svc._config = SimpleNamespace(  # pylint: disable=protected-access
-            mugen=SimpleNamespace(
-                environment="testing",
-                messaging=SimpleNamespace(extension_failure_policy="unsupported"),
-            )
-        )
-        self.assertEqual(
-            svc._resolve_extension_failure_policy(),  # pylint: disable=protected-access
-            "fail_open",
+        svc.bind_mh_extension(ext, critical=True)
+        self.assertTrue(
+            svc._is_critical_extension(ext, kind="mh")  # pylint: disable=protected-access
         )
 
     async def test_invoke_message_handler_fail_closed_raises_on_timeout(self) -> None:
         svc = self._new_service()
         svc._extension_timeout_seconds = 0.01  # pylint: disable=protected-access
-        svc._extension_failure_policy = "fail_closed"  # pylint: disable=protected-access
 
         async def _slow(**_kwargs):
             await asyncio.sleep(0.1)
@@ -762,6 +722,7 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             message_types=["text"],
             callback=_slow,
         )
+        svc.bind_mh_extension(ext, critical=True)
 
         with self.assertRaises(RuntimeError):
             await svc._invoke_message_handler(  # pylint: disable=protected-access
@@ -775,7 +736,6 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
     async def test_invoke_message_handler_fail_closed_raises_on_handler_error(self) -> None:
         svc = self._new_service()
         svc._extension_timeout_seconds = None  # pylint: disable=protected-access
-        svc._extension_failure_policy = "fail_closed"  # pylint: disable=protected-access
 
         async def _boom(**_kwargs):
             raise RuntimeError("extension blew up")
@@ -785,6 +745,7 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             message_types=["text"],
             callback=_boom,
         )
+        svc.bind_mh_extension(ext, critical=True)
 
         with self.assertRaises(RuntimeError):
             await svc._invoke_message_handler(  # pylint: disable=protected-access
@@ -797,11 +758,18 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
 
     def test_handle_extension_handler_failure_fail_closed_without_cause(self) -> None:
         svc = self._new_service()
-        svc._extension_failure_policy = "fail_closed"  # pylint: disable=protected-access
+        ext = _DummyMhExt(
+            platforms=[],
+            message_types=["text"],
+            callback=lambda **_kwargs: [],
+        )
+        svc.bind_mh_extension(ext, critical=True)
 
         with self.assertRaisesRegex(RuntimeError, "explicit failure"):
             svc._handle_extension_handler_failure(  # pylint: disable=protected-access
                 extension_name="mugen.test.Extension",
+                extension=ext,
+                kind="mh",
                 message="explicit failure",
                 cause=None,
             )

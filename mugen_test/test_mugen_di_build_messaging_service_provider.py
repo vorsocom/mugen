@@ -135,7 +135,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (messaging_service).",
+                    "ERROR:root:Invalid configuration (messaging_service): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -203,7 +203,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (messaging_service).",
+                        "ERROR:root:Invalid configuration (messaging_service): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -367,6 +367,10 @@ class TestDIBuildMessagingService(unittest.TestCase):
                             "mugen.core.contract.service.messaging.IMessagingService.__subclasses__"
                         ),
                         return_value=[DummyMessagingServiceClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyMessagingServiceClass,
                     ),
                 ):
                     # Attempt to build the Messaging service.

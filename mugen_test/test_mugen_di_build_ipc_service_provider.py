@@ -135,7 +135,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (ipc_service).",
+                    "ERROR:root:Invalid configuration (ipc_service): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -201,7 +201,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (ipc_service).",
+                        "ERROR:root:Invalid configuration (ipc_service): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -269,6 +269,10 @@ class TestDIBuildIPCService(unittest.TestCase):
                             "mugen.core.contract.service.ipc.IIPCService.__subclasses__"
                         ),
                         return_value=[DummyIPCServiceClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyIPCServiceClass,
                     ),
                 ):
                     # Attempt to build the IPC service.

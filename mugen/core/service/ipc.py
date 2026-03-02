@@ -36,6 +36,7 @@ class DefaultIPCService(IIPCService):
         self._ipc_extension_keys: set[tuple[str, tuple[str, ...], tuple[str, ...]]] = (
             set()
         )
+        self._ipc_critical_handlers: set[str] = set()
         self._timeout_seconds = self._resolve_timeout_setting(
             ("ipc", "dispatch", "timeout_seconds"),
             self._default_timeout_seconds,
@@ -219,7 +220,12 @@ class DefaultIPCService(IIPCService):
             errors=errors,
         )
 
-    def register_ipc_extension(self, ext: IIPCExtension) -> None:
+    def bind_ipc_extension(
+        self,
+        ext: IIPCExtension,
+        *,
+        critical: bool = False,
+    ) -> None:
         if ext in self._ipc_extensions:
             raise ValueError("IPC extension already registered (instance duplicate).")
         ext_key = self._extension_key(ext)
@@ -229,3 +235,9 @@ class DefaultIPCService(IIPCService):
             )
         self._ipc_extension_keys.add(ext_key)
         self._ipc_extensions.append(ext)
+        if critical:
+            self._ipc_critical_handlers.add(self._normalize_handler_name(ext))
+
+    def register_ipc_extension(self, ext: IIPCExtension) -> None:
+        """Legacy alias for composition-driven bind_ipc_extension."""
+        self.bind_ipc_extension(ext, critical=False)

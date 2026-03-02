@@ -44,12 +44,39 @@ class _FakeSessionMaker:
 
 
 class _FakeConn:
-    def __init__(self):
-        self.executed = []
+    def __init__(
+        self,
+        *,
+        columns: dict[str, set[str]] | None = None,
+        constraints: dict[str, set[str]] | None = None,
+        indexes: dict[str, set[str]] | None = None,
+    ):
+        self.executed: list[str] = []
+        self._columns = columns or {}
+        self._constraints = constraints or {}
+        self._indexes = indexes or {}
 
-    async def execute(self, stmt):
-        self.executed.append(str(stmt))
-        return None
+    async def execute(self, stmt, params=None):
+        sql = str(stmt)
+        self.executed.append(sql)
+        params = params or {}
+        table_name = params.get("table_name")
+        if "information_schema.columns" in sql:
+            return [
+                SimpleNamespace(column_name=name)
+                for name in sorted(self._columns.get(table_name, set()))
+            ]
+        if "information_schema.table_constraints" in sql:
+            return [
+                SimpleNamespace(constraint_name=name)
+                for name in sorted(self._constraints.get(table_name, set()))
+            ]
+        if "FROM pg_indexes" in sql:
+            return [
+                SimpleNamespace(indexname=name)
+                for name in sorted(self._indexes.get(table_name, set()))
+            ]
+        return []
 
 
 class _FakeEngine:
@@ -76,7 +103,7 @@ class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
             metadata,
             Column("id", Integer, primary_key=True),
         )
-        self.config = SimpleNamespace()
+        self.config = SimpleNamespace(mugen=SimpleNamespace(platforms=[]))
         self.runtime = SimpleNamespace(engine="engine", session_maker="session-maker")
 
     def test_init_and_register_tables(self) -> None:
@@ -158,12 +185,79 @@ class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
                 relational_runtime=self.runtime,
             )
 
-        conn = _FakeConn()
+        required = gateway._required_schema_checks()  # pylint: disable=protected-access
+        columns = {name: set(meta["columns"]) for name, meta in required.items()}
+        constraints = {name: set(meta["constraints"]) for name, meta in required.items()}
+        indexes = {name: set(meta["indexes"]) for name, meta in required.items()}
+        conn = _FakeConn(columns=columns, constraints=constraints, indexes=indexes)
         gateway._engine = _FakeEngine(conn)  # pylint: disable=protected-access
 
         await gateway.check_readiness()
 
-        self.assertEqual(conn.executed, ["SELECT 1"])
+        self.assertIn("SELECT 1", conn.executed[0])
+
+    async def test_check_readiness_raises_for_missing_schema_elements(self) -> None:
+        with patch.object(
+            sqla_gateway,
+            "build_table_registry_from_base",
+            return_value={"widgets": self.widgets},
+        ):
+            gateway = SQLAlchemyRelationalStorageGateway(
+                config=self.config,
+                logging_gateway=SimpleNamespace(),
+                relational_runtime=self.runtime,
+            )
+
+        required = gateway._required_schema_checks()  # pylint: disable=protected-access
+        columns = {name: set(meta["columns"]) for name, meta in required.items()}
+        constraints = {name: set(meta["constraints"]) for name, meta in required.items()}
+        indexes = {name: set(meta["indexes"]) for name, meta in required.items()}
+        table_name = next(iter(required.keys()))
+
+        columns[table_name] = set()
+        gateway._engine = _FakeEngine(  # pylint: disable=protected-access
+            _FakeConn(columns=columns, constraints=constraints, indexes=indexes)
+        )
+        with self.assertRaisesRegex(RuntimeError, "missing column"):
+            await gateway.check_readiness()
+
+        columns[table_name] = set(required[table_name]["columns"])
+        constraints[table_name] = set()
+        gateway._engine = _FakeEngine(  # pylint: disable=protected-access
+            _FakeConn(columns=columns, constraints=constraints, indexes=indexes)
+        )
+        with self.assertRaisesRegex(RuntimeError, "missing constraint"):
+            await gateway.check_readiness()
+
+        constraints[table_name] = set(required[table_name]["constraints"])
+        indexes[table_name] = set()
+        gateway._engine = _FakeEngine(  # pylint: disable=protected-access
+            _FakeConn(columns=columns, constraints=constraints, indexes=indexes)
+        )
+        with self.assertRaisesRegex(RuntimeError, "missing index"):
+            await gateway.check_readiness()
+
+    def test_required_schema_checks_include_web_tables_only_when_web_enabled(self) -> None:
+        with patch.object(
+            sqla_gateway,
+            "build_table_registry_from_base",
+            return_value={"widgets": self.widgets},
+        ):
+            gateway = SQLAlchemyRelationalStorageGateway(
+                config=SimpleNamespace(mugen=SimpleNamespace(platforms=[])),
+                logging_gateway=SimpleNamespace(),
+                relational_runtime=self.runtime,
+            )
+        checks = gateway._required_schema_checks()  # pylint: disable=protected-access
+        self.assertIn("core_keyval_entry", checks)
+        self.assertNotIn("web_queue_job", checks)
+
+        gateway._config = SimpleNamespace(mugen=SimpleNamespace(platforms=["web"]))  # pylint: disable=protected-access
+        checks = gateway._required_schema_checks()  # pylint: disable=protected-access
+        self.assertIn("web_queue_job", checks)
+        self.assertIn("web_conversation_state", checks)
+        self.assertIn("web_conversation_event", checks)
+        self.assertIn("web_media_token", checks)
 
 
 class TestSharedSQLAlchemyRuntime(unittest.TestCase):
