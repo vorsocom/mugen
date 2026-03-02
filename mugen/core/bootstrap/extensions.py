@@ -21,6 +21,8 @@ from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
 
 _KNOWN_EXTENSION_TYPES = {"cp", "ct", "ctx", "fw", "ipc", "mh", "rag", "rpp"}
+_PLUGIN_EXTENSION_REGISTRY_MODULE = "mugen.core.plugin.token_registry"
+_PLUGIN_EXTENSION_REGISTRY_FUNC = "get_plugin_extension_token_registry"
 
 
 def parse_bool(value: object, *, default: bool) -> bool:
@@ -53,32 +55,25 @@ class _ExtensionClassRef:
     class_name: str
 
 
-_EXTENSION_TOKEN_REGISTRY: dict[str, _ExtensionClassRef] = {
-    "core.fw.acp": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.acp.fw_ext", "AdminFWExtension"),
-    "core.fw.audit": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.audit.fw_ext", "AuditFWExtension"),
-    "core.fw.ops_vpn": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.ops_vpn.fw_ext", "OpsVpnFWExtension"),
-    "core.fw.ops_case": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.ops_case.fw_ext", "OpsCaseFWExtension"),
-    "core.fw.ops_sla": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.ops_sla.fw_ext", "OpsSlaFWExtension"),
-    "core.fw.ops_metering": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.ops_metering.fw_ext", "OpsMeteringFWExtension"),
-    "core.fw.ops_workflow": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.ops_workflow.fw_ext", "OpsWorkflowFWExtension"),
-    "core.fw.ops_governance": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.ops_governance.fw_ext", "OpsGovernanceFWExtension"),
-    "core.fw.ops_reporting": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.ops_reporting.fw_ext", "OpsReportingFWExtension"),
-    "core.fw.ops_connector": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.ops_connector.fw_ext", "OpsConnectorFWExtension"),
-    "core.fw.billing": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.billing.fw_ext", "BillingFWExtension"),
-    "core.fw.knowledge_pack": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.knowledge_pack.fw_ext", "KnowledgePackFWExtension"),
-    "core.fw.channel_orchestration": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.channel_orchestration.fw_ext", "ChannelOrchestrationFWExtension"),
-    "core.fw.whatsapp_wacapi": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.whatsapp.wacapi.fw_ext", "WACAPIFWExtension"),
-    "core.fw.web": _ExtensionClassRef("fw", IFWExtension, "mugen.core.plugin.web.fw_ext", "WebFWExtension"),
-    "core.ipc.whatsapp_wacapi": _ExtensionClassRef("ipc", IIPCExtension, "mugen.core.plugin.whatsapp.wacapi.ipc_ext", "WhatsAppWACAPIIPCExtension"),
-    "core.ipc.matrix_room_management": _ExtensionClassRef("ipc", IIPCExtension, "mugen.core.plugin.matrix.manager.room_ipc_ext", "RoomManagementIPCExtension"),
-    "core.ipc.matrix_device_management": _ExtensionClassRef("ipc", IIPCExtension, "mugen.core.plugin.matrix.manager.device_ipc_ext", "DeviceManagementIPCExtension"),
-    "core.ctx.system_persona": _ExtensionClassRef("ctx", ICTXExtension, "mugen.core.plugin.context.persona.ctx_ext", "SystemPersonaCTXExtension"),
-    "core.cp.clear_history": _ExtensionClassRef("cp", ICPExtension, "mugen.core.plugin.command.clear_history.cp_ext", "ClearChatHistoryICPExtension"),
+_CORE_EXTENSION_TOKEN_REGISTRY: dict[str, _ExtensionClassRef] = {
+    "core.ctx.system_persona": _ExtensionClassRef(
+        "ctx",
+        ICTXExtension,
+        "mugen.core.extension.ctx.system_persona",
+        "SystemPersonaCTXExtension",
+    ),
+    "core.cp.clear_history": _ExtensionClassRef(
+        "cp",
+        ICPExtension,
+        "mugen.core.extension.cp.clear_history",
+        "ClearChatHistoryICPExtension",
+    ),
 }
 
+_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE: dict[str, _ExtensionClassRef] | None = None
 
-def resolve_extension_spec(token: object) -> ExtensionTokenSpec:
-    """Resolve extension token to explicit class/interface metadata."""
+
+def _normalize_extension_token(token: object) -> str:
     if not isinstance(token, str):
         raise RuntimeError("Invalid extension token: expected a string.")
     normalized = token.strip().lower()
@@ -86,13 +81,73 @@ def resolve_extension_spec(token: object) -> ExtensionTokenSpec:
         raise RuntimeError("Invalid extension token: token must be non-empty.")
     if ":" in normalized:
         raise RuntimeError("Invalid extension token: module:Class paths are not supported.")
+    return normalized
 
-    class_ref = _EXTENSION_TOKEN_REGISTRY.get(normalized)
+
+def _parse_plugin_extension_class_ref(
+    token: str,
+    raw_ref: object,
+) -> _ExtensionClassRef:
+    if (
+        not isinstance(raw_ref, tuple)
+        or len(raw_ref) != 4
+        or not isinstance(raw_ref[0], str)
+        or not isinstance(raw_ref[1], type)
+        or not isinstance(raw_ref[2], str)
+        or not isinstance(raw_ref[3], str)
+    ):
+        raise RuntimeError(
+            "Invalid plugin extension class binding "
+            f"for token: {token!r}."
+        )
+
+    return _ExtensionClassRef(
+        extension_type=raw_ref[0],
+        interface=raw_ref[1],
+        module_path=raw_ref[2],
+        class_name=raw_ref[3],
+    )
+
+
+def _plugin_extension_token_registry() -> dict[str, _ExtensionClassRef]:
+    global _PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE
+    if _PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE is not None:
+        return _PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE
+
+    try:
+        module = importlib.import_module(_PLUGIN_EXTENSION_REGISTRY_MODULE)
+        provider = getattr(module, _PLUGIN_EXTENSION_REGISTRY_FUNC)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise RuntimeError("Invalid plugin extension token registry configuration.") from exc
+
+    if callable(provider) is not True:
+        raise RuntimeError("Invalid plugin extension token registry configuration.")
+
+    raw_registry = provider()
+    if not isinstance(raw_registry, dict):
+        raise RuntimeError("Invalid plugin extension token registry configuration.")
+
+    parsed_registry: dict[str, _ExtensionClassRef] = {}
+    for raw_token, raw_ref in raw_registry.items():
+        token = _normalize_extension_token(raw_token)
+        parsed_registry[token] = _parse_plugin_extension_class_ref(token, raw_ref)
+
+    _PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE = parsed_registry
+    return parsed_registry
+
+
+def _resolve_extension_spec_from_registry(
+    *,
+    token: str,
+    registry: dict[str, _ExtensionClassRef],
+) -> ExtensionTokenSpec:
+    class_ref = registry.get(token)
     if class_ref is None:
-        known_tokens = ", ".join(sorted(_EXTENSION_TOKEN_REGISTRY.keys()))
+        known_tokens = ", ".join(sorted(registry.keys()))
         raise RuntimeError(
             f"Unknown extension token: {token!r}. Known tokens: {known_tokens}."
         )
+
     try:
         module = importlib.import_module(class_ref.module_path)
         extension_class = getattr(module, class_ref.class_name)
@@ -100,14 +155,43 @@ def resolve_extension_spec(token: object) -> ExtensionTokenSpec:
         raise RuntimeError(
             f"Invalid extension class binding for token: {token!r}."
         ) from exc
+
     if not isinstance(extension_class, type):
         raise RuntimeError(f"Invalid extension class binding for token: {token!r}.")
     if not issubclass(extension_class, class_ref.interface):
         raise RuntimeError(f"Invalid extension class binding for token: {token!r}.")
+
     return ExtensionTokenSpec(
         extension_type=class_ref.extension_type,
         interface=class_ref.interface,
         extension_class=extension_class,
+    )
+
+
+def resolve_extension_spec(
+    token: object,
+    *,
+    scope: str = "any",
+) -> ExtensionTokenSpec:
+    """Resolve extension token to explicit class/interface metadata."""
+    normalized_token = _normalize_extension_token(token)
+    normalized_scope = str(scope or "").strip().lower()
+
+    if normalized_scope == "core":
+        registry = _CORE_EXTENSION_TOKEN_REGISTRY
+    elif normalized_scope == "plugin":
+        registry = _plugin_extension_token_registry()
+    elif normalized_scope == "any":
+        registry = {
+            **_CORE_EXTENSION_TOKEN_REGISTRY,
+            **_plugin_extension_token_registry(),
+        }
+    else:
+        raise RuntimeError("Invalid extension token scope.")
+
+    return _resolve_extension_spec_from_registry(
+        token=normalized_token,
+        registry=registry,
     )
 
 
@@ -196,8 +280,8 @@ class DefaultExtensionRegistry(IExtensionRegistry):
         )
 
 
-def configured_extensions(config: SimpleNamespace) -> list[SimpleNamespace]:
-    """Return merged core and downstream extension configuration rows."""
+def configured_core_extensions(config: SimpleNamespace) -> list[SimpleNamespace]:
+    """Return core-owned extension configuration rows."""
     modules_config = getattr(
         getattr(config, "mugen", SimpleNamespace()),
         "modules",
@@ -205,16 +289,23 @@ def configured_extensions(config: SimpleNamespace) -> list[SimpleNamespace]:
     )
     core_modules_config = getattr(modules_config, "core", SimpleNamespace())
 
-    merged: list[SimpleNamespace] = []
-    core_plugins = getattr(core_modules_config, "plugins", [])
-    if core_plugins is None:
-        core_plugins = []
-    if not isinstance(core_plugins, list):
+    core_extensions = getattr(core_modules_config, "extensions", [])
+    if core_extensions is None:
+        core_extensions = []
+    if not isinstance(core_extensions, list):
         raise RuntimeError(
-            "Invalid extension configuration: mugen.modules.core.plugins must be a list."
+            "Invalid extension configuration: mugen.modules.core.extensions must be a list."
         )
-    merged += list(core_plugins)
+    return list(core_extensions)
 
+
+def configured_downstream_extensions(config: SimpleNamespace) -> list[SimpleNamespace]:
+    """Return plugin/downstream extension configuration rows."""
+    modules_config = getattr(
+        getattr(config, "mugen", SimpleNamespace()),
+        "modules",
+        SimpleNamespace(),
+    )
     downstream_extensions = getattr(modules_config, "extensions", [])
     if downstream_extensions is None:
         downstream_extensions = []
@@ -222,5 +313,12 @@ def configured_extensions(config: SimpleNamespace) -> list[SimpleNamespace]:
         raise RuntimeError(
             "Invalid extension configuration: mugen.modules.extensions must be a list."
         )
-    merged += list(downstream_extensions)
-    return merged
+    return list(downstream_extensions)
+
+
+def configured_extensions(config: SimpleNamespace) -> list[SimpleNamespace]:
+    """Return merged extension configuration rows."""
+    return (
+        configured_core_extensions(config)
+        + configured_downstream_extensions(config)
+    )

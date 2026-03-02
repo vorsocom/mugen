@@ -30,6 +30,7 @@ _bootstrap_namespace_packages()
 
 # noqa: E402
 # pylint: disable=wrong-import-position
+from mugen.core.plugin.acp.api import foundation as foundation_mod
 from mugen.core.plugin.acp.api.foundation import (
     acquire_idempotency,
     commit_idempotency_failure,
@@ -386,4 +387,16 @@ class TestMugenAcpApiFoundation(unittest.IsolatedAsyncioTestCase):
                     schema_registry=SimpleNamespace(enforce_bindings=True)
                 )
             ),
+        )
+
+    async def test_enforce_bindings_enabled_returns_false_on_config_provider_error(
+        self,
+    ) -> None:
+        def _boom_provider():
+            raise RuntimeError("config unavailable")
+
+        self.assertFalse(
+            foundation_mod._enforce_bindings_enabled(  # pylint: disable=protected-access
+                config_provider=_boom_provider
+            )
         )

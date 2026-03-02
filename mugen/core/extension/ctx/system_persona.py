@@ -2,20 +2,17 @@
 
 __all__ = ["SystemPersonaCTXExtension"]
 
+from types import SimpleNamespace
+
 from mugen.core.contract.extension.ctx import ICTXExtension
-from mugen.core import di
-
-
-def _config_provider():
-    return di.container.config
 
 
 # pylint: disable=too-few-public-methods
 class SystemPersonaCTXExtension(ICTXExtension):
     """An implementation of ICTXExtension to provide system persona."""
 
-    def __init__(self, config=None) -> None:
-        self._config = config if config is not None else _config_provider()
+    def __init__(self, config: SimpleNamespace) -> None:
+        self._config = config
 
     @property
     def platforms(self) -> list[str]:

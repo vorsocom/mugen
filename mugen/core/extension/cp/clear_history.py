@@ -8,15 +8,6 @@ from types import SimpleNamespace
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.keyval_model import KeyValConflictError
-from mugen.core import di
-
-
-def _config_provider():
-    return di.container.config
-
-
-def _keyval_storage_gateway_provider():
-    return di.container.keyval_storage_gateway
 
 
 class ClearChatHistoryICPExtension(ICPExtension):
@@ -26,15 +17,11 @@ class ClearChatHistoryICPExtension(ICPExtension):
 
     def __init__(  # pylint: disable=too-many-arguments
         self,
-        config: SimpleNamespace | None = None,
-        keyval_storage_gateway: IKeyValStorageGateway | None = None,
+        config: SimpleNamespace,
+        keyval_storage_gateway: IKeyValStorageGateway,
     ) -> None:
-        self._config = config if config is not None else _config_provider()
-        self._keyval_storage_gateway = (
-            keyval_storage_gateway
-            if keyval_storage_gateway is not None
-            else _keyval_storage_gateway_provider()
-        )
+        self._config = config
+        self._keyval_storage_gateway = keyval_storage_gateway
         self._history_save_cas_retries = self._resolve_history_save_cas_retries()
 
     @property

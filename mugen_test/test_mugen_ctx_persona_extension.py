@@ -1,9 +1,9 @@
-"""Unit tests for mugen.core.plugin.context.persona.ctx_ext."""
+"""Unit tests for mugen.core.extension.ctx.system_persona."""
 
 from types import SimpleNamespace
 import unittest
 
-from mugen.core.plugin.context.persona.ctx_ext import SystemPersonaCTXExtension
+from mugen.core.extension.ctx.system_persona import SystemPersonaCTXExtension
 
 
 class TestMugenCtxPersonaExtension(unittest.TestCase):

@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
-from mugen.core.gateway.storage.media.filesystem import FilesystemMediaStorageGateway
 from mugen.core.gateway.storage.media.object import ObjectMediaStorageGateway
 
 
@@ -16,7 +15,6 @@ class DefaultMediaStorageGateway(IMediaStorageGateway):
     """Config-driven media gateway that delegates to a concrete backend."""
 
     _default_media_backend: str = "object"
-    _default_media_storage_path: str = "data/web_media"
     _default_media_object_cache_path: str = "data/web_media_object_cache"
 
     def __init__(
@@ -80,43 +78,22 @@ class DefaultMediaStorageGateway(IMediaStorageGateway):
             self._default_media_backend,
         ).strip().lower()
 
-        if backend in {"filesystem", "fs", "local"}:
-            if self._is_production_environment():
-                raise RuntimeError(
-                    "web.media.backend=filesystem is not allowed in production. "
-                    "Use object backend."
-                )
-            storage_path = self._resolve_str_config(
-                ("web", "media", "storage", "path"),
-                self._default_media_storage_path,
-            )
-            return FilesystemMediaStorageGateway(
-                base_path=self._resolve_storage_path(storage_path)
-            )
+        if backend != "object":
+            raise ValueError("web.media.backend must be 'object'.")
 
-        if backend in {"object", "object_storage", "keyval"}:
-            raw_cache_path = self._resolve_str_config(
-                ("web", "media", "object", "cache_path"),
-                self._default_media_object_cache_path,
-            )
-            raw_key_prefix = self._resolve_str_config(
-                ("web", "media", "object", "key_prefix"),
-                "web:media:object",
-            )
-            return ObjectMediaStorageGateway(
-                keyval_storage_gateway=self._keyval_storage_gateway,
-                cache_path=self._resolve_storage_path(raw_cache_path),
-                key_prefix=raw_key_prefix,
-            )
-
-        raise ValueError("web.media.backend must be one of: filesystem, object.")
-
-    def _is_production_environment(self) -> bool:
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-            or ""
-        ).strip().lower()
-        return environment == "production"
+        raw_cache_path = self._resolve_str_config(
+            ("web", "media", "object", "cache_path"),
+            self._default_media_object_cache_path,
+        )
+        raw_key_prefix = self._resolve_str_config(
+            ("web", "media", "object", "key_prefix"),
+            "web:media:object",
+        )
+        return ObjectMediaStorageGateway(
+            keyval_storage_gateway=self._keyval_storage_gateway,
+            cache_path=self._resolve_storage_path(raw_cache_path),
+            key_prefix=raw_key_prefix,
+        )
 
     def _resolve_storage_path(self, configured_path: str) -> str:
         if os.path.isabs(configured_path):

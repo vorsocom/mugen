@@ -53,8 +53,29 @@ def _test_config(*, platforms: list[str], mh_mode: str = "optional") -> SimpleNa
     return SimpleNamespace(mugen=mugen_cfg)
 
 
+class _ReadyProvider:  # pylint: disable=too-few-public-methods
+    def check_readiness(self) -> None:
+        return None
+
+
 class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
     """Unit tests for mugen.run_platform_clients."""
+
+    def setUp(self) -> None:
+        self._container_patch = unittest.mock.patch.object(
+            mugen_mod.di,
+            "container",
+            SimpleNamespace(
+                messaging_service=None,
+                whatsapp_client=None,
+                web_client=object(),
+                relational_storage_gateway=_ReadyProvider(),
+                web_runtime_store=_ReadyProvider(),
+                get_readiness_report=lambda: None,
+            ),
+        )
+        self._container_patch.start()
+        self.addCleanup(self._container_patch.stop)
 
     async def test_platforms_configuration_unavailable(self) -> None:
         """Test effects of missing platforms configuration."""
@@ -924,6 +945,61 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(statuses["messaging.mh.mode"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["messaging.mh.availability"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["web.client_runtime_path"], PHASE_STATUS_HEALTHY)
+
+    async def test_bootstrap_app_passes_optional_provider_failures_to_capability_eval(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=["matrix"], mh_mode="optional")
+        captured_input = {}
+
+        def _capture_capability_input(capability_input):
+            captured_input["value"] = capability_input
+            return SimpleNamespace(
+                statuses={},
+                errors={},
+                failed_capabilities=[],
+                healthy=True,
+            )
+
+        readiness_report = mugen_mod.di.ProviderReadinessReport(
+            successful_providers=("completion_gateway",),
+            required_failures={},
+            optional_failures={"email_gateway": "smtp unavailable"},
+        )
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "get_container_readiness_report",
+                return_value=readiness_report,
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=unittest.mock.AsyncMock(return_value={}),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "evaluate_runtime_capabilities",
+                side_effect=_capture_capability_input,
+            ),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        runtime_input = captured_input["value"]
+        self.assertEqual(
+            runtime_input.optional_provider_failures,
+            {"email_gateway": "smtp unavailable"},
+        )
 
     async def test_bootstrap_app_normalizes_non_dict_phase_a_capability_state(self) -> None:
         app = Quart("test_app")

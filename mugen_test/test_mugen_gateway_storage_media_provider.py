@@ -8,7 +8,6 @@ import unittest
 from unittest.mock import Mock
 
 from mugen.core.gateway.storage.media.provider import DefaultMediaStorageGateway
-from mugen.core.gateway.storage.media.filesystem import FilesystemMediaStorageGateway
 from mugen.core.gateway.storage.media.object import ObjectMediaStorageGateway
 
 
@@ -36,15 +35,15 @@ class TestMediaProviderHelpers(unittest.TestCase):
 
         self.assertIsInstance(gateway._backend, ObjectMediaStorageGateway)  # pylint: disable=protected-access
 
-    def test_production_rejects_filesystem_backend(self) -> None:
+    def test_rejects_non_object_backend(self) -> None:
         with self.assertRaisesRegex(
-            RuntimeError,
-            "web.media.backend=filesystem is not allowed in production",
+            ValueError,
+            "web.media.backend must be 'object'",
         ):
             DefaultMediaStorageGateway(
                 config=SimpleNamespace(
                     basedir="/tmp/base",
-                    mugen=SimpleNamespace(environment="production"),
+                    mugen=SimpleNamespace(environment="development"),
                     web=SimpleNamespace(
                         media=SimpleNamespace(
                             backend="filesystem",
@@ -55,24 +54,6 @@ class TestMediaProviderHelpers(unittest.TestCase):
                 keyval_storage_gateway=Mock(),
                 logging_gateway=Mock(),
             )
-
-    def test_development_allows_filesystem_backend(self) -> None:
-        gateway = DefaultMediaStorageGateway(
-            config=SimpleNamespace(
-                basedir="/tmp/base",
-                mugen=SimpleNamespace(environment="development"),
-                web=SimpleNamespace(
-                    media=SimpleNamespace(
-                        backend="filesystem",
-                        storage=SimpleNamespace(path="web_media"),
-                    )
-                ),
-            ),
-            keyval_storage_gateway=Mock(),
-            logging_gateway=Mock(),
-        )
-
-        self.assertIsInstance(gateway._backend, FilesystemMediaStorageGateway)  # pylint: disable=protected-access
 
     def test_resolve_storage_path_preserves_absolute_path(self) -> None:
         gateway = DefaultMediaStorageGateway.__new__(DefaultMediaStorageGateway)

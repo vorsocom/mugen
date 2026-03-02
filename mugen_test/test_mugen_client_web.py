@@ -33,6 +33,9 @@ class _InMemoryKeyVal:
     def close(self) -> None:
         pass
 
+    async def check_readiness(self) -> None:
+        return None
+
     def get(self, key: str, decode: bool = True) -> str | bytes | None:  # noqa: ARG002
         return self._store.get(key)
 
@@ -747,7 +750,7 @@ def _build_config(*, basedir: str, replay_max_events: int = 5) -> SimpleNamespac
                 max_pending_jobs=100,
             ),
             media=SimpleNamespace(
-                backend="filesystem",
+                backend="object",
                 storage=SimpleNamespace(path="web_media"),
                 object=SimpleNamespace(
                     cache_path="web_media_object_cache",
@@ -861,15 +864,14 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             messaging_service=self.messaging,
             user_service=Mock(),
         )
-        self.assertEqual(client._media_backend, "object")  # pylint: disable=protected-access
+        self.assertTrue(client._media_storage_path.endswith("web_media"))  # pylint: disable=protected-access
 
-    def test_init_rejects_filesystem_media_backend_in_production(self) -> None:
+    def test_init_rejects_non_object_media_backend(self) -> None:
         config = _build_config(basedir=self.tmpdir.name)
-        config.mugen = SimpleNamespace(environment="production")
         config.web.media.backend = "filesystem"
         with self.assertRaisesRegex(
-            RuntimeError,
-            "web.media.backend=filesystem is not allowed in production",
+            ValueError,
+            "web.media.backend must be 'object'",
         ):
             DefaultWebClient(
                 config=config,
@@ -879,6 +881,27 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                     keyval_storage_gateway=self.keyval,
                     logging_gateway=self.logger,
                 ),
+                web_runtime_store=_build_runtime_store(
+                    config=config,
+                    relational_storage_gateway=self.relational,
+                    logging_gateway=self.logger,
+                ),
+                logging_gateway=self.logger,
+                messaging_service=self.messaging,
+                user_service=Mock(),
+            )
+
+    def test_init_rejects_non_object_media_backend_in_client_guard(self) -> None:
+        config = _build_config(basedir=self.tmpdir.name)
+        config.web.media.backend = "filesystem"
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "web.media.backend must be 'object'",
+        ):
+            DefaultWebClient(
+                config=config,
+                ipc_service=Mock(),
+                media_storage_gateway=Mock(),
                 web_runtime_store=_build_runtime_store(
                     config=config,
                     relational_storage_gateway=self.relational,
@@ -1048,7 +1071,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_media_backend_raises(self) -> None:
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "bad-backend"
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "web.media.backend must be 'object'"):
             relational = _InMemoryWebRelationalGateway()
             logger = Mock()
             DefaultWebClient(
@@ -1380,10 +1403,10 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             str(self.logger.warning.call_args.args[0]),
         )
 
-    async def test_ensure_media_directory_skips_for_object_backend(self) -> None:
+    async def test_ensure_media_directory_creates_storage_path(self) -> None:
         cfg = _build_config(basedir=self.tmpdir.name)
         cfg.web.media.backend = "object"
-        cfg.web.media.storage.path = "object-media-ignored"
+        cfg.web.media.storage.path = "object-media-path"
         relational = _InMemoryWebRelationalGateway()
         logger = Mock()
         client = DefaultWebClient(
@@ -1404,8 +1427,8 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             user_service=Mock(),
         )
         client._ensure_media_directory()  # pylint: disable=protected-access
-        expected_media_path = Path(self.tmpdir.name) / "object-media-ignored"
-        self.assertFalse(expected_media_path.exists())
+        expected_media_path = Path(self.tmpdir.name) / "object-media-path"
+        self.assertTrue(expected_media_path.exists())
         await client.close()
 
     async def test_queue_enqueue_and_process_file_message(self) -> None:
@@ -2531,18 +2554,30 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(expired)
 
     async def test_media_cleanup_removes_expired_tokens_and_old_files(self) -> None:
-        media_dir = Path(self.client._media_storage_path)  # pylint: disable=protected-access
-        media_dir.mkdir(parents=True, exist_ok=True)
+        old_ref = await self.client._media_storage_gateway.store_bytes(  # pylint: disable=protected-access
+            b"x",
+            filename_hint="old.bin",
+        )
+        active_ref = await self.client._media_storage_gateway.store_bytes(  # pylint: disable=protected-access
+            b"y",
+            filename_hint="active.bin",
+        )
+        assert isinstance(old_ref, str)
+        assert isinstance(active_ref, str)
 
-        old_file = media_dir / "old.bin"
-        old_file.write_bytes(b"x")
+        old_file = await self.client._media_storage_gateway.materialize(old_ref)  # pylint: disable=protected-access
+        active_file = await self.client._media_storage_gateway.materialize(active_ref)  # pylint: disable=protected-access
+        assert isinstance(old_file, str)
+        assert isinstance(active_file, str)
         os.utime(old_file, (0, 0))
-
-        active_file = media_dir / "active.bin"
-        active_file.write_bytes(b"y")
+        old_object_id = old_ref.split("object:", maxsplit=1)[1]
+        await self.keyval.put_json(
+            f"web:media:object:meta:{old_object_id}",
+            {"created_at": 0.0, "extension": ".bin"},
+        )
 
         token_payload = await self.client._create_media_token_payload(  # pylint: disable=protected-access
-            file_path=str(active_file),
+            file_path=active_ref,
             owner_user_id="user-1",
             conversation_id="conv-clean",
             mime_type="application/octet-stream",
@@ -2553,7 +2588,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             "token": "expired",
             "owner_user_id": "user-1",
             "conversation_id": "conv-clean",
-            "file_path": str(old_file),
+            "file_path": old_ref,
             "mime_type": "application/octet-stream",
             "filename": "old.bin",
             "expires_at": self.client._to_utc_datetime(0),  # pylint: disable=protected-access
@@ -2563,15 +2598,23 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
 
         self.assertNotIn("expired", self.relational._state.media_tokens)  # pylint: disable=protected-access
-        self.assertFalse(old_file.exists())
-        self.assertTrue(active_file.exists())
+        self.assertFalse(Path(old_file).exists())
+        self.assertTrue(Path(active_file).exists())
 
     async def test_media_cleanup_keeps_pending_queue_media_refs_until_terminal(self) -> None:
-        media_dir = Path(self.client._media_storage_path)  # pylint: disable=protected-access
-        media_dir.mkdir(parents=True, exist_ok=True)
-        queued_file = media_dir / "queued.bin"
-        queued_file.write_bytes(b"x")
+        queued_ref = await self.client._media_storage_gateway.store_bytes(  # pylint: disable=protected-access
+            b"x",
+            filename_hint="queued.bin",
+        )
+        assert isinstance(queued_ref, str)
+        queued_file = await self.client._media_storage_gateway.materialize(queued_ref)  # pylint: disable=protected-access
+        assert isinstance(queued_file, str)
         os.utime(queued_file, (0, 0))
+        queued_object_id = queued_ref.split("object:", maxsplit=1)[1]
+        await self.keyval.put_json(
+            f"web:media:object:meta:{queued_object_id}",
+            {"created_at": 0.0, "extension": ".bin"},
+        )
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
             await self.client._write_queue_state_unlocked(  # pylint: disable=protected-access
@@ -2581,14 +2624,14 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                         {
                             "id": "job-pending-media",
                             "status": "pending",
-                            "file_path": str(queued_file.resolve()),
+                            "file_path": queued_ref,
                         }
                     ],
                 }
             )
 
         await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
-        self.assertTrue(queued_file.exists())
+        self.assertTrue(Path(queued_file).exists())
 
         async with self.client._storage_lock:  # pylint: disable=protected-access
             queue_state = await self.client._read_queue_state_unlocked()  # pylint: disable=protected-access
@@ -2596,7 +2639,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             await self.client._write_queue_state_unlocked(queue_state)  # pylint: disable=protected-access
 
         await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
-        self.assertFalse(queued_file.exists())
+        self.assertFalse(Path(queued_file).exists())
 
     async def test_media_cleanup_keeps_processing_composed_attachment_refs(self) -> None:
         media_dir = Path(self.client._media_storage_path)  # pylint: disable=protected-access
@@ -3888,9 +3931,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(resolved_buffer_audio)
         self.assertEqual(resolved_buffer_audio["mime_type"], "audio/mpeg")
-        self.assertTrue(
-            resolved_buffer_audio["file_path"].endswith(".mp3"),
-        )
+        self.assertTrue(os.path.exists(resolved_buffer_audio["file_path"]))
         with open(resolved_buffer_audio["file_path"], "rb") as handle:
             self.assertEqual(handle.read(), b"buffer-audio-bytes")
 
@@ -4792,7 +4833,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.keyval.list_keys = AsyncMock()
         await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
 
-        self.keyval.list_keys.assert_not_called()
+        self.keyval.list_keys.assert_called()
 
     async def test_runtime_store_helper_raises_when_store_missing(self) -> None:
         self.client._web_runtime_store = None  # pylint: disable=protected-access
@@ -5064,9 +5105,11 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                 await self.client.resolve_media_download(auth_user="u1", token="t3")
             )
 
-        valid_file = Path(self.client._media_storage_path) / "ok.bin"  # pylint: disable=protected-access
-        valid_file.parent.mkdir(parents=True, exist_ok=True)
-        valid_file.write_bytes(b"x")
+        valid_ref = await self.client._media_storage_gateway.store_bytes(  # pylint: disable=protected-access
+            b"x",
+            filename_hint="ok.bin",
+        )
+        assert isinstance(valid_ref, str)
         success_session = _SequenceSession(
             [
                 _SequenceResult(
@@ -5074,7 +5117,7 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                         {
                             "token": "t4",
                             "owner_user_id": "u1",
-                            "file_path": str(valid_file),
+                            "file_path": valid_ref,
                             "mime_type": "application/octet-stream",
                             "filename": "ok.bin",
                             "expires_at": self.client._to_utc_datetime(now + 10),  # pylint: disable=protected-access
@@ -5085,7 +5128,8 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         )
         _force_relational_session(self.client, success_session)
         resolved = await self.client.resolve_media_download(auth_user="u1", token="t4")
-        self.assertEqual(resolved["file_path"], str(valid_file.resolve()))
+        self.assertTrue(isinstance(resolved, dict))
+        self.assertTrue(os.path.exists(str(resolved["file_path"])))
 
     async def test_claim_next_job_relational_branches(self) -> None:
         none_session = _SequenceSession(
@@ -5479,14 +5523,27 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         self.assertIn("object:attach-b", active_refs)
 
     async def test_relational_queue_owner_cleanup_and_event_log_helpers(self) -> None:
-        media_dir = Path(self.client._media_storage_path)  # pylint: disable=protected-access
-        media_dir.mkdir(parents=True, exist_ok=True)
-        active_file = media_dir / "active.bin"
-        stale_file = media_dir / "stale.bin"
-        active_file.write_bytes(b"a")
-        stale_file.write_bytes(b"s")
+        stale_ref = await self.client._media_storage_gateway.store_bytes(  # pylint: disable=protected-access
+            b"s",
+            filename_hint="stale.bin",
+        )
+        active_ref = await self.client._media_storage_gateway.store_bytes(  # pylint: disable=protected-access
+            b"a",
+            filename_hint="active.bin",
+        )
+        assert isinstance(stale_ref, str)
+        assert isinstance(active_ref, str)
+        stale_file = await self.client._media_storage_gateway.materialize(stale_ref)  # pylint: disable=protected-access
+        active_file = await self.client._media_storage_gateway.materialize(active_ref)  # pylint: disable=protected-access
+        assert isinstance(stale_file, str)
+        assert isinstance(active_file, str)
         old = self.client._epoch_now() - 3600  # pylint: disable=protected-access
         os.utime(stale_file, (old, old))
+        stale_object_id = stale_ref.split("object:", maxsplit=1)[1]
+        await self.keyval.put_json(
+            f"web:media:object:meta:{stale_object_id}",
+            {"created_at": 0.0, "extension": ".bin"},
+        )
 
         cleanup_session = _SequenceSession(
             [
@@ -5494,12 +5551,12 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                     rows=[
                         {
                             "token": "expired",
-                            "file_path": str(stale_file),
+                            "file_path": stale_ref,
                             "expires_at": self.client._to_utc_datetime(old),  # pylint: disable=protected-access
                         },
                         {
                             "token": "active",
-                            "file_path": str(active_file),
+                            "file_path": active_ref,
                             "expires_at": self.client._to_utc_datetime(old + 7200),  # pylint: disable=protected-access
                         },
                         {
@@ -5515,8 +5572,8 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         )
         _force_relational_session(self.client, cleanup_session)
         await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
-        self.assertTrue(active_file.exists())
-        self.assertFalse(stale_file.exists())
+        self.assertTrue(Path(active_file).exists())
+        self.assertFalse(Path(stale_file).exists())
 
         mark_session = _SequenceSession(
             [
@@ -6088,11 +6145,8 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(pending_task.done())
 
-    def test_enforce_media_backend_policy_rejects_filesystem_in_production(self) -> None:
-        self.client._media_backend = "filesystem"  # pylint: disable=protected-access
-        self.client._config.mugen = SimpleNamespace(environment="production")  # pylint: disable=protected-access
-        with self.assertRaisesRegex(
-            RuntimeError,
-            "web.media.backend=filesystem is not allowed in production",
-        ):
-            self.client._enforce_media_backend_policy()  # pylint: disable=protected-access
+    def test_ensure_media_directory_creates_storage_path(self) -> None:
+        temp_dir = os.path.join(self.tmpdir.name, "media-test")
+        self.client._media_storage_path = temp_dir  # pylint: disable=protected-access
+        self.client._ensure_media_directory()  # pylint: disable=protected-access
+        self.assertTrue(os.path.isdir(temp_dir))

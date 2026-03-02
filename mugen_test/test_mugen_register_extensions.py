@@ -21,12 +21,16 @@ class _RegistryStub:
         return self._result
 
 
-def _base_cfg(extensions: list[SimpleNamespace]) -> SimpleNamespace:
+def _base_cfg(
+    core_extensions: list[SimpleNamespace],
+    *,
+    plugin_extensions: list[SimpleNamespace] | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         mugen=SimpleNamespace(
             modules=SimpleNamespace(
-                core=SimpleNamespace(plugins=[]),
-                extensions=extensions,
+                core=SimpleNamespace(extensions=core_extensions),
+                extensions=[] if plugin_extensions is None else plugin_extensions,
             )
         )
     )
@@ -179,3 +183,47 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(report, {"cp": ["core.cp.clear_history"]})
+
+    async def test_build_core_extension_instance_supports_varargs_kwargs(self) -> None:
+        class _CoreExtWithVarArgs:  # pylint: disable=too-few-public-methods
+            def __init__(self, config, *args, **kwargs):  # noqa: ANN001
+                self.config = config
+                self.args = args
+                self.kwargs = kwargs
+
+        config = SimpleNamespace(marker="ok")
+        ext = mugen_mod._build_core_extension_instance(  # pylint: disable=protected-access
+            extension_class=_CoreExtWithVarArgs,
+            config=config,
+            keyval_storage_gateway_provider=lambda: object(),
+        )
+        self.assertIs(ext.config, config)
+        self.assertEqual(ext.args, ())
+        self.assertEqual(ext.kwargs, {})
+
+    async def test_build_core_extension_instance_rejects_unsupported_dependency(self) -> None:
+        class _CoreExtUnsupported:  # pylint: disable=too-few-public-methods
+            def __init__(self, unsupported_dep):  # noqa: ANN001
+                self.unsupported_dep = unsupported_dep
+
+        with self.assertRaisesRegex(ExtensionLoadError, "constructor dependency is unsupported"):
+            mugen_mod._build_core_extension_instance(  # pylint: disable=protected-access
+                extension_class=_CoreExtUnsupported,
+                config=SimpleNamespace(),
+                keyval_storage_gateway_provider=lambda: object(),
+            )
+
+    async def test_build_core_extension_instance_allows_optional_unknown_dependency(self) -> None:
+        class _CoreExtOptionalUnknown:  # pylint: disable=too-few-public-methods
+            def __init__(self, config, optional_unknown="default"):  # noqa: ANN001
+                self.config = config
+                self.optional_unknown = optional_unknown
+
+        config = SimpleNamespace(marker="ok")
+        ext = mugen_mod._build_core_extension_instance(  # pylint: disable=protected-access
+            extension_class=_CoreExtOptionalUnknown,
+            config=config,
+            keyval_storage_gateway_provider=lambda: object(),
+        )
+        self.assertIs(ext.config, config)
+        self.assertEqual(ext.optional_unknown, "default")

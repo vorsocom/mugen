@@ -85,7 +85,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             class_name="DummyClass",
         )
         with patch.dict(
-            ext_mod._EXTENSION_TOKEN_REGISTRY,  # pylint: disable=protected-access
+            ext_mod._CORE_EXTENSION_TOKEN_REGISTRY,  # pylint: disable=protected-access
             {"test.cp.dummy": class_ref},
             clear=False,
         ):
@@ -94,21 +94,21 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 side_effect=ImportError("missing"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "Invalid extension class binding"):
-                    ext_mod.resolve_extension_spec("test.cp.dummy")
+                    ext_mod.resolve_extension_spec("test.cp.dummy", scope="core")
 
             with patch(
                 "mugen.core.bootstrap.extensions.importlib.import_module",
                 return_value=SimpleNamespace(DummyClass=object()),
             ):
                 with self.assertRaisesRegex(RuntimeError, "Invalid extension class binding"):
-                    ext_mod.resolve_extension_spec("test.cp.dummy")
+                    ext_mod.resolve_extension_spec("test.cp.dummy", scope="core")
 
             with patch(
                 "mugen.core.bootstrap.extensions.importlib.import_module",
                 return_value=SimpleNamespace(DummyClass=type("Wrong", (), {})),
             ):
                 with self.assertRaisesRegex(RuntimeError, "Invalid extension class binding"):
-                    ext_mod.resolve_extension_spec("test.cp.dummy")
+                    ext_mod.resolve_extension_spec("test.cp.dummy", scope="core")
 
     def test_resolve_extension_spec_success(self) -> None:
         class_ref = ext_mod._ExtensionClassRef(  # pylint: disable=protected-access
@@ -118,7 +118,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             class_name="DummyClass",
         )
         with patch.dict(
-            ext_mod._EXTENSION_TOKEN_REGISTRY,  # pylint: disable=protected-access
+            ext_mod._CORE_EXTENSION_TOKEN_REGISTRY,  # pylint: disable=protected-access
             {"test.cp.ok": class_ref},
             clear=False,
         ):
@@ -126,10 +126,94 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 "mugen.core.bootstrap.extensions.importlib.import_module",
                 return_value=SimpleNamespace(DummyClass=_DummyCPExt),
             ):
-                spec = ext_mod.resolve_extension_spec("test.cp.ok")
+                spec = ext_mod.resolve_extension_spec("test.cp.ok", scope="core")
         self.assertEqual(spec.extension_type, "cp")
         self.assertIs(spec.interface, ICPExtension)
         self.assertIs(spec.extension_class, _DummyCPExt)
+
+    def test_parse_plugin_extension_class_ref_rejects_invalid_shape(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "Invalid plugin extension class binding"):
+            ext_mod._parse_plugin_extension_class_ref(  # pylint: disable=protected-access
+                "plugin.cp.bad",
+                ("cp", ICPExtension, "dummy.module"),
+            )
+
+    def test_plugin_extension_registry_returns_cached_value(self) -> None:
+        cached_registry = {
+            "plugin.cp.cached": ext_mod._ExtensionClassRef(  # pylint: disable=protected-access
+                extension_type="cp",
+                interface=ICPExtension,
+                module_path="dummy.plugin",
+                class_name="PluginCachedExt",
+            )
+        }
+        with patch.object(
+            ext_mod,
+            "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE",
+            cached_registry,
+        ):
+            resolved = ext_mod._plugin_extension_token_registry()  # pylint: disable=protected-access
+        self.assertIs(resolved, cached_registry)
+
+    def test_plugin_extension_registry_rejects_import_or_provider_shape(self) -> None:
+        with patch.object(ext_mod, "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE", None), patch(
+            "mugen.core.bootstrap.extensions.importlib.import_module",
+            side_effect=ImportError("missing"),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Invalid plugin extension token registry configuration",
+            ):
+                ext_mod._plugin_extension_token_registry()  # pylint: disable=protected-access
+
+        bad_provider_module = SimpleNamespace(
+            **{ext_mod._PLUGIN_EXTENSION_REGISTRY_FUNC: object()}  # pylint: disable=protected-access
+        )
+        with patch.object(ext_mod, "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE", None), patch(
+            "mugen.core.bootstrap.extensions.importlib.import_module",
+            return_value=bad_provider_module,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Invalid plugin extension token registry configuration",
+            ):
+                ext_mod._plugin_extension_token_registry()  # pylint: disable=protected-access
+
+        bad_registry_module = SimpleNamespace(
+            **{ext_mod._PLUGIN_EXTENSION_REGISTRY_FUNC: lambda: []}  # pylint: disable=protected-access
+        )
+        with patch.object(ext_mod, "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE", None), patch(
+            "mugen.core.bootstrap.extensions.importlib.import_module",
+            return_value=bad_registry_module,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Invalid plugin extension token registry configuration",
+            ):
+                ext_mod._plugin_extension_token_registry()  # pylint: disable=protected-access
+
+    def test_resolve_extension_spec_plugin_scope_and_invalid_scope(self) -> None:
+        plugin_registry = {
+            "plugin.cp.ok": ext_mod._ExtensionClassRef(  # pylint: disable=protected-access
+                extension_type="cp",
+                interface=ICPExtension,
+                module_path="dummy.plugin",
+                class_name="PluginCPExt",
+            )
+        }
+        with patch(
+            "mugen.core.bootstrap.extensions._plugin_extension_token_registry",
+            return_value=plugin_registry,
+        ), patch(
+            "mugen.core.bootstrap.extensions.importlib.import_module",
+            return_value=SimpleNamespace(PluginCPExt=_DummyCPExt),
+        ):
+            spec = ext_mod.resolve_extension_spec("plugin.cp.ok", scope="plugin")
+
+        self.assertEqual(spec.extension_type, "cp")
+        self.assertIs(spec.extension_class, _DummyCPExt)
+        with self.assertRaisesRegex(RuntimeError, "Invalid extension token scope"):
+            ext_mod.resolve_extension_spec("plugin.cp.ok", scope="legacy")
 
     async def test_default_registry_register_branches(self) -> None:
         messaging_service = SimpleNamespace(
@@ -309,7 +393,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 modules=SimpleNamespace(
-                    core=SimpleNamespace(plugins=None),
+                    core=SimpleNamespace(extensions=None),
                     extensions=None,
                 )
             )
@@ -320,17 +404,17 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         bad_core = SimpleNamespace(
             mugen=SimpleNamespace(
                 modules=SimpleNamespace(
-                    core=SimpleNamespace(plugins="bad"),
+                    core=SimpleNamespace(extensions="bad"),
                 )
             )
         )
-        with self.assertRaisesRegex(RuntimeError, "core.plugins must be a list"):
+        with self.assertRaisesRegex(RuntimeError, "core.extensions must be a list"):
             ext_mod.configured_extensions(bad_core)
 
         bad_ext = SimpleNamespace(
             mugen=SimpleNamespace(
                 modules=SimpleNamespace(
-                    core=SimpleNamespace(plugins=[]),
+                    core=SimpleNamespace(extensions=[]),
                     extensions="bad",
                 )
             )

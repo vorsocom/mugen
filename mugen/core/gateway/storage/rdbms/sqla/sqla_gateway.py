@@ -64,7 +64,8 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
                 if missing_columns:
                     missing_text = ", ".join(missing_columns)
                     raise RuntimeError(
-                        "Relational schema mismatch: "
+                        "Database schema is not ready. "
+                        "Run migrations before startup. "
                         f"mugen.{table_name} missing column(s): {missing_text}."
                     )
 
@@ -76,7 +77,8 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
                 if missing_constraints:
                     missing_text = ", ".join(missing_constraints)
                     raise RuntimeError(
-                        "Relational schema mismatch: "
+                        "Database schema is not ready. "
+                        "Run migrations before startup. "
                         f"mugen.{table_name} missing constraint(s): {missing_text}."
                     )
 
@@ -85,7 +87,8 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
                 if missing_indexes:
                     missing_text = ", ".join(missing_indexes)
                     raise RuntimeError(
-                        "Relational schema mismatch: "
+                        "Database schema is not ready. "
+                        "Run migrations before startup. "
                         f"mugen.{table_name} missing index(es): {missing_text}."
                     )
 

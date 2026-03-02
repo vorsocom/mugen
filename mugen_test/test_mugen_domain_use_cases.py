@@ -335,6 +335,34 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
         self.assertIn("messaging.mh.availability", invalid_mode.failed_capabilities)
         self.assertIn("messaging.mh.web", invalid_mode.failed_capabilities)
 
+        optional_provider_degraded = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["matrix"],
+                messaging_handler_platforms=[["matrix"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                container_ready=True,
+                provider_ready=True,
+                optional_provider_failures={
+                    "email_gateway": "smtp unavailable",
+                    "knowledge_gateway": "   ",
+                },
+            )
+        )
+        self.assertTrue(optional_provider_degraded.healthy)
+        self.assertEqual(
+            optional_provider_degraded.statuses["provider_readiness.optional.email_gateway"],
+            "degraded",
+        )
+        self.assertEqual(
+            optional_provider_degraded.errors["provider_readiness.optional.email_gateway"],
+            "smtp unavailable",
+        )
+        self.assertEqual(
+            optional_provider_degraded.errors["provider_readiness.optional.knowledge_gateway"],
+            "Optional provider readiness check failed.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
