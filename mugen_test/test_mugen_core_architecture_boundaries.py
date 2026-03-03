@@ -95,6 +95,15 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
         )
         self.assertEqual(violations, [])
 
+    def test_migration_env_uses_contract_helpers_for_core_extension_config(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        env_source = (repo_root / "migrations" / "env.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "from mugen.core.contract.migration_config import",
+            env_source,
+        )
+        self.assertNotIn('core_cfg.get("plugins"', env_source)
+
 
 def _find_import_violations(
     *,

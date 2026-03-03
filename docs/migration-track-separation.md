@@ -56,6 +56,12 @@ It sets track-specific Alembic env vars:
 - `MUGEN_ALEMBIC_VERSION_TABLE_SCHEMA`
 - optional `MUGEN_ALEMBIC_MODEL_MODULES`
 
+The config file used for track loading and Alembic env bootstrap resolves with:
+
+1. `--config-file`
+2. `MUGEN_CONFIG_FILE`
+3. `mugen.toml`
+
 Core runtime relational gateways also resolve their schema from
 `rdbms.migration_tracks.core.schema` (default `mugen` when omitted), so
 migration and runtime schema contracts stay aligned.
@@ -63,6 +69,9 @@ migration and runtime schema contracts stay aligned.
 ## Configuration Contract
 
 Track configuration lives under `rdbms.migration_tracks` in `mugen.toml`.
+Core extension model entries for migration autogenerate live under
+`mugen.modules.core.extensions`. The legacy key
+`mugen.modules.core.plugins` is unsupported and fails fast.
 
 ```toml
 [rdbms.migration_tracks.core]
@@ -103,8 +112,6 @@ python scripts/run_migration_tracks.py --track acme_extension upgrade head
 2. Add a plugin track entry in `rdbms.migration_tracks.plugins`.
 3. Keep plugin revisions in plugin-owned `versions/`, not in core `migrations/versions`.
 4. Run migration checks per track in CI.
-
-## Legacy Note
 
 Historical revisions remain in the existing core lineage. This decision applies
 to new downstream plugin schema work going forward.

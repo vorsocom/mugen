@@ -2,7 +2,6 @@ import importlib
 from logging.config import fileConfig
 import os
 import re
-import sys
 from typing import Optional
 
 from sqlalchemy import engine_from_config
@@ -10,9 +9,14 @@ from sqlalchemy import pool
 from sqlalchemy import text
 from sqlalchemy import MetaData
 
-import tomlkit
-
 from alembic import context
+from mugen.core.contract.migration_config import (
+    configured_core_extension_entries,
+    configured_downstream_extension_entries,
+    load_mugen_config,
+    migration_schema_bootstrap_order,
+    resolve_mugen_config_path,
+)
 
 # pylint: disable=no-member
 
@@ -29,34 +33,6 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 
-def _load_mugen_config(config_file: str) -> dict:
-    """Load TOML configuration."""
-    # Get application base path.
-    rel = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")
-    basedir = os.path.realpath(rel)
-    # Attempt to read TOML config file.
-    try:
-        with open(os.path.join(basedir, config_file), "r", encoding="utf8") as f:
-            cfg = tomlkit.loads(f.read()).value
-            # Add base directory to configuration.
-            cfg["basedir"] = basedir
-            return cfg
-    except FileNotFoundError:
-        # Exit application if config file not found.
-        sys.exit(1)
-
-
-def _resolve_mugen_config_file() -> str:
-    """Resolve runtime config file from environment with sane defaults."""
-    config_file = os.getenv("MUGEN_CONFIG_FILE", "mugen.toml")
-    if not isinstance(config_file, str):
-        return "mugen.toml"
-    config_file = config_file.strip()
-    if config_file == "":
-        return "mugen.toml"
-    return config_file
-
-
 def _import_extension_models(cfg: dict) -> None:
     """Import extension declarative models to make alembic aware of them."""
     explicit_modules = _get_explicit_model_modules()
@@ -66,15 +42,12 @@ def _import_extension_models(cfg: dict) -> None:
         return
 
     requested_track = _get_track_name()
-    core_cfg = cfg.get("mugen", {}).get("modules", {}).get("core", {})
-    root_cfg = cfg.get("mugen", {}).get("modules", {})
-
-    # Core plugin entries default to the "core" migration track.
-    for entry in core_cfg.get("plugins", []):
+    # Core extension entries default to the "core" migration track.
+    for entry in configured_core_extension_entries(cfg):
         _maybe_import_model(entry, default_track="core", requested_track=requested_track)
 
     # Extension entries default to the "downstream" migration track.
-    for entry in root_cfg.get("extensions", []):
+    for entry in configured_downstream_extension_entries(cfg):
         _maybe_import_model(
             entry,
             default_track="downstream",
@@ -142,6 +115,18 @@ def _quote_identifier(name: str) -> str:
     return f'"{name}"'
 
 
+def _ensure_schema_exists(connection, schema_name: str) -> None:
+    """Create schema if missing and fail with schema-specific signal on errors."""
+    schema_sql = _quote_identifier(schema_name)
+    try:
+        connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_sql}"))
+    except Exception as exc:  # pragma: no cover - exercised via integration.
+        raise RuntimeError(
+            f"Failed to ensure migration schema exists: {schema_name!r}. "
+            "Check database permissions and migration track schema settings."
+        ) from exc
+
+
 def _load_target_metadata(cfg: dict) -> Optional[MetaData]:
     """
     Load metadata only for autogenerate workflows.
@@ -168,7 +153,7 @@ def get_url(cfg: dict) -> str:
     return cfg["rdbms"]["alembic"]["url"]
 
 
-_mugen_cfg = _load_mugen_config(_resolve_mugen_config_file())
+_mugen_cfg = load_mugen_config(resolve_mugen_config_path())
 
 _RUNTIME_SCHEMA = _get_identifier_from_env("MUGEN_ALEMBIC_SCHEMA", "mugen")
 _VERSION_TABLE = _get_identifier_from_env(
@@ -252,9 +237,13 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        schema_sql = _quote_identifier(_RUNTIME_SCHEMA)
-        connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_sql}"))
-        connection.execute(text(f"SET search_path TO {schema_sql}, public"))
+        for schema_name in migration_schema_bootstrap_order(
+            runtime_schema=_RUNTIME_SCHEMA,
+            version_table_schema=_VERSION_TABLE_SCHEMA,
+        ):
+            _ensure_schema_exists(connection, schema_name)
+        runtime_schema_sql = _quote_identifier(_RUNTIME_SCHEMA)
+        connection.execute(text(f"SET search_path TO {runtime_schema_sql}, public"))
         connection.commit()
 
         context.configure(
