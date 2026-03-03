@@ -171,8 +171,6 @@ class OpenAICompletionGateway(ICompletionGateway):
         timeout_seconds = self._timeout_seconds
         if timeout_seconds is None:
             timeout_seconds = 5.0
-        if timeout_seconds <= 0:
-            timeout_seconds = 5.0
         try:
             try:
                 readiness_probe = list_models(limit=1)

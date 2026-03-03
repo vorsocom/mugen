@@ -4830,10 +4830,12 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         # parse and coercion helpers.
         self.assertEqual(self.client._resolve_float_config(("missing",), 1.0, minimum=0.1), 1.0)  # pylint: disable=protected-access
         self.assertEqual(self.client._resolve_int_config(("missing",), 1, minimum=1), 1)  # pylint: disable=protected-access
-        self.assertEqual(
-            self.client._resolve_float_config(("web", "sse", "keepalive_seconds"), 1.0, minimum=100.0),  # pylint: disable=protected-access
-            1.0,
-        )
+        with self.assertRaisesRegex(RuntimeError, "keepalive_seconds"):
+            self.client._resolve_float_config(  # pylint: disable=protected-access
+                ("web", "sse", "keepalive_seconds"),
+                1.0,
+                minimum=100.0,
+            )
         self.assertEqual(
             self.client._resolve_int_config(("web", "queue", "max_pending_jobs"), 1, minimum=1000),  # pylint: disable=protected-access
             1,

@@ -1167,18 +1167,14 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    def test_resolve_shutdown_timeout_seconds_falls_back_for_invalid_values(self) -> None:
+    def test_resolve_shutdown_timeout_seconds_rejects_invalid_values(self) -> None:
         client = self._client()
         client._config.mugen.runtime = SimpleNamespace(shutdown_timeout_seconds="bad")
-        self.assertEqual(
-            client._resolve_shutdown_timeout_seconds(),  # pylint: disable=protected-access
-            client._default_shutdown_timeout_seconds,  # pylint: disable=protected-access
-        )
+        with self.assertRaisesRegex(RuntimeError, "shutdown_timeout_seconds"):
+            client._resolve_shutdown_timeout_seconds()  # pylint: disable=protected-access
         client._config.mugen.runtime.shutdown_timeout_seconds = 0
-        self.assertEqual(
-            client._resolve_shutdown_timeout_seconds(),  # pylint: disable=protected-access
-            client._default_shutdown_timeout_seconds,  # pylint: disable=protected-access
-        )
+        with self.assertRaisesRegex(RuntimeError, "shutdown_timeout_seconds"):
+            client._resolve_shutdown_timeout_seconds()  # pylint: disable=protected-access
 
     def test_effective_shutdown_timeout_seconds_refreshes_non_positive_cache(self) -> None:
         client = self._client()

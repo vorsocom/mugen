@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from math import isfinite
 from typing import Iterable
 
 
@@ -19,7 +20,9 @@ def _validate_timeout_seconds(timeout_seconds: float) -> float:
     try:
         parsed = float(timeout_seconds)
     except (TypeError, ValueError) as exc:
-        raise RuntimeError("timeout_seconds must be a positive number.") from exc
+        raise RuntimeError("timeout_seconds must be a positive finite number.") from exc
+    if isfinite(parsed) is not True:
+        raise RuntimeError("timeout_seconds must be a positive finite number.")
     if parsed <= 0:
         raise RuntimeError("timeout_seconds must be greater than 0.")
     return parsed
@@ -65,4 +68,3 @@ async def cancel_tasks_with_timeout(
         completed_tasks=tuple(completed),
         timed_out_tasks=(),
     )
-

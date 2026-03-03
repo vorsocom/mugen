@@ -117,7 +117,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             )
 
         timeout_seconds = self._read_timeout_seconds
-        if timeout_seconds is None or timeout_seconds <= 0:
+        if timeout_seconds is None:
             timeout_seconds = 10.0
 
         headers = [
@@ -415,13 +415,15 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             curl.setopt(pycurl.SSL_VERIFYPEER, 1)
             curl.setopt(pycurl.SSL_VERIFYHOST, 2)
             if self._connect_timeout_seconds is not None:
-                connect_timeout_ms = to_timeout_milliseconds(self._connect_timeout_seconds)
-                if connect_timeout_ms is not None:
-                    curl.setopt(pycurl.CONNECTTIMEOUT_MS, connect_timeout_ms)
+                curl.setopt(
+                    pycurl.CONNECTTIMEOUT_MS,
+                    to_timeout_milliseconds(self._connect_timeout_seconds),
+                )
             if self._read_timeout_seconds is not None:
-                read_timeout_ms = to_timeout_milliseconds(self._read_timeout_seconds)
-                if read_timeout_ms is not None:
-                    curl.setopt(pycurl.TIMEOUT_MS, read_timeout_ms)
+                curl.setopt(
+                    pycurl.TIMEOUT_MS,
+                    to_timeout_milliseconds(self._read_timeout_seconds),
+                )
             curl.perform()
             status_code = int(curl.getinfo(pycurl.RESPONSE_CODE))
         finally:

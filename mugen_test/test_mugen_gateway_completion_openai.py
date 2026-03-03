@@ -136,7 +136,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(wait_for_calls, [5.0])
 
-    async def test_check_readiness_uses_default_timeout_when_nonpositive(self) -> None:
+    async def test_check_readiness_uses_internal_timeout_value_without_fallback(self) -> None:
         config = _make_config()
         config.openai.api.timeout_seconds = None
         config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
@@ -161,7 +161,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             gateway._timeout_seconds = 0  # pylint: disable=protected-access
             await gateway.check_readiness()
 
-        self.assertEqual(wait_for_calls, [5.0])
+        self.assertEqual(wait_for_calls, [0.0])
 
     async def test_check_readiness_wraps_probe_failures(self) -> None:
         config = _make_config()
@@ -230,21 +230,18 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             timeout=12.5,
         )
 
-    def test_constructor_ignores_invalid_timeout_configuration(self) -> None:
+    def test_constructor_rejects_invalid_timeout_configuration(self) -> None:
         config = _make_config()
         config.openai.api.timeout_seconds = "bad"
         logging_gateway = Mock()
 
-        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI") as async_openai:
+        with (
+            patch("mugen.core.gateway.completion.openai.AsyncOpenAI") as async_openai,
+            self.assertRaisesRegex(RuntimeError, "timeout_seconds"),
+        ):
             OpenAICompletionGateway(config, logging_gateway)
 
-        async_openai.assert_called_once_with(
-            api_key="sk_test",
-            base_url="https://api.openai.com/v1",
-        )
-        logging_gateway.warning.assert_called_once_with(
-            "OpenAICompletionGateway: Invalid timeout_seconds configuration."
-        )
+        async_openai.assert_not_called()
 
     async def test_get_completion_builds_request_and_returns_response(self) -> None:
         config = _make_config()

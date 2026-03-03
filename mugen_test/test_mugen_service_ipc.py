@@ -231,12 +231,25 @@ class TestMugenServiceIPC(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-        svc = DefaultIPCService(
-            config=config,
-            logging_gateway=Mock(),
+        with self.assertRaisesRegex(RuntimeError, "ipc.dispatch.timeout_seconds"):
+            DefaultIPCService(
+                config=config,
+                logging_gateway=Mock(),
+            )
+
+        config = SimpleNamespace(
+            ipc=SimpleNamespace(
+                dispatch=SimpleNamespace(
+                    timeout_seconds=5.0,
+                    max_timeout_seconds=0,
+                )
+            )
         )
-        self.assertEqual(svc._timeout_seconds, 10.0)  # pylint: disable=protected-access
-        self.assertEqual(svc._timeout_max_seconds, 30.0)  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "ipc.dispatch.max_timeout_seconds"):
+            DefaultIPCService(
+                config=config,
+                logging_gateway=Mock(),
+            )
 
         config = SimpleNamespace(
             ipc=SimpleNamespace(

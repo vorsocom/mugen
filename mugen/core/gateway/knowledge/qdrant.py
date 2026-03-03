@@ -19,6 +19,10 @@ from mugen.core.contract.gateway.knowledge import (
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import require_fields_in_production
+from mugen.core.utility.config_value import (
+    parse_nonnegative_finite_float,
+    parse_optional_positive_finite_float,
+)
 
 
 # pylint: disable=too-few-public-methods
@@ -99,21 +103,10 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             "timeout_seconds",
             None,
         )
-        if raw_value is None:
-            return None
-        try:
-            parsed = float(raw_value)
-        except (TypeError, ValueError):
-            self._logging_gateway.warning(
-                "QdrantKnowledgeGateway: Invalid timeout_seconds configuration."
-            )
-            return None
-        if parsed <= 0:
-            self._logging_gateway.warning(
-                "QdrantKnowledgeGateway: timeout_seconds must be positive when provided."
-            )
-            return None
-        return parsed
+        return parse_optional_positive_finite_float(
+            raw_value,
+            "qdrant.api.timeout_seconds",
+        )
 
     def _resolve_api_max_retries(self) -> int:
         raw_value = getattr(
@@ -139,21 +132,13 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         raw_value = getattr(
             getattr(getattr(self._config, "qdrant", SimpleNamespace()), "api", None),
             "retry_backoff_seconds",
-            self._default_api_retry_backoff_seconds,
+            None,
         )
-        try:
-            parsed = float(raw_value)
-        except (TypeError, ValueError):
-            self._logging_gateway.warning(
-                "QdrantKnowledgeGateway: Invalid retry_backoff_seconds configuration."
-            )
-            return self._default_api_retry_backoff_seconds
-        if parsed < 0:
-            self._logging_gateway.warning(
-                "QdrantKnowledgeGateway: retry_backoff_seconds must be non-negative."
-            )
-            return self._default_api_retry_backoff_seconds
-        return parsed
+        return parse_nonnegative_finite_float(
+            raw_value,
+            field_name="qdrant.api.retry_backoff_seconds",
+            default=self._default_api_retry_backoff_seconds,
+        )
 
     def _warn_missing_timeout_in_production(self) -> None:
         environment = str(
@@ -178,7 +163,7 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         if callable(probe) is not True:
             raise RuntimeError("Qdrant knowledge gateway readiness probe is unavailable.")
         timeout_seconds = self._api_timeout_seconds
-        if timeout_seconds is None or timeout_seconds <= 0:
+        if timeout_seconds is None:
             timeout_seconds = 5.0
         try:
             await asyncio.wait_for(probe(), timeout=timeout_seconds)

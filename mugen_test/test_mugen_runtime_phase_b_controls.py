@@ -28,13 +28,31 @@ class TestMugenRuntimePhaseBControls(unittest.TestCase):
         self.assertEqual(critical, ["web", "matrix"])
         self.assertFalse(degrade)
 
+    def test_parse_nonnegative_float_and_normalize_platform_list_helpers(self) -> None:
+        self.assertEqual(
+            controls.parse_nonnegative_float("2.5", default=0.0),
+            2.5,
+        )
+        self.assertEqual(
+            controls.parse_nonnegative_float("bad", default=1.0),
+            1.0,
+        )
+        self.assertEqual(
+            controls.parse_nonnegative_float(float("inf"), default=1.5),
+            1.5,
+        )
+        self.assertEqual(
+            controls.normalize_platform_list([" web ", "", "web", "matrix"]),
+            ["web", "matrix"],
+        )
+
     def test_resolve_runtime_controls_falls_back_to_active_platforms(self) -> None:
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 platforms=[" web ", "", "matrix"],
                 runtime=SimpleNamespace(
                     phase_b=SimpleNamespace(
-                        readiness_grace_seconds=-1,
+                        readiness_grace_seconds=0,
                         critical_platforms=None,
                         degrade_on_critical_exit=object(),
                     )
@@ -46,6 +64,10 @@ class TestMugenRuntimePhaseBControls(unittest.TestCase):
         self.assertEqual(grace, 0.0)
         self.assertEqual(critical, ["web", "matrix"])
         self.assertTrue(degrade)
+
+        config.mugen.runtime.phase_b.readiness_grace_seconds = -1
+        with self.assertRaisesRegex(RuntimeError, "readiness_grace_seconds"):
+            controls.resolve_phase_b_runtime_controls(config)
 
     def test_resolve_startup_timeout_requires_phase_b_key(self) -> None:
         with self.assertRaises(RuntimeError):

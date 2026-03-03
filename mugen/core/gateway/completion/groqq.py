@@ -117,7 +117,7 @@ class GroqCompletionGateway(ICompletionGateway):
                 "Groq completion gateway readiness probe unavailable: models.list."
             )
         timeout_seconds = self._timeout_seconds
-        if timeout_seconds is None or timeout_seconds <= 0:
+        if timeout_seconds is None:
             timeout_seconds = 5.0
         try:
             try:

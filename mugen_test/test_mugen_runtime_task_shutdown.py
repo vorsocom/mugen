@@ -11,12 +11,16 @@ from mugen.core.runtime.task_shutdown import cancel_tasks_with_timeout
 
 class TestMugenRuntimeTaskShutdown(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_tasks_with_timeout_rejects_non_numeric_timeout(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "positive number"):
+        with self.assertRaisesRegex(RuntimeError, "positive finite number"):
             await cancel_tasks_with_timeout((), timeout_seconds="bad")
 
     async def test_cancel_tasks_with_timeout_rejects_non_positive_timeout(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "greater than 0"):
             await cancel_tasks_with_timeout((), timeout_seconds=0)
+
+    async def test_cancel_tasks_with_timeout_rejects_non_finite_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "positive finite number"):
+            await cancel_tasks_with_timeout((), timeout_seconds=float("inf"))
 
     async def test_cancel_tasks_with_timeout_returns_empty_for_no_tasks(self) -> None:
         outcome = await cancel_tasks_with_timeout((), timeout_seconds=1.0)

@@ -741,17 +741,20 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
         svc._config = SimpleNamespace(  # pylint: disable=protected-access
             mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds=object()))
         )
-        self.assertIsNone(svc._resolve_extension_timeout_seconds())  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
+            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
 
         svc._config = SimpleNamespace(  # pylint: disable=protected-access
             mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds="bad"))
         )
-        self.assertIsNone(svc._resolve_extension_timeout_seconds())  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
+            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
 
         svc._config = SimpleNamespace(  # pylint: disable=protected-access
             mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds=0))
         )
-        self.assertIsNone(svc._resolve_extension_timeout_seconds())  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
+            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
 
     def test_extension_timeout_resolution_uses_default_in_production(self) -> None:
         svc = self._new_service()
@@ -774,10 +777,8 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
                 messaging=SimpleNamespace(extension_timeout_seconds=object()),
             )
         )
-        self.assertEqual(
-            svc._resolve_extension_timeout_seconds(),  # pylint: disable=protected-access
-            expected,
-        )
+        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
+            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
 
         svc._config = SimpleNamespace(  # pylint: disable=protected-access
             mugen=SimpleNamespace(
@@ -785,10 +786,8 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
                 messaging=SimpleNamespace(extension_timeout_seconds="bad"),
             )
         )
-        self.assertEqual(
-            svc._resolve_extension_timeout_seconds(),  # pylint: disable=protected-access
-            expected,
-        )
+        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
+            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
 
         svc._config = SimpleNamespace(  # pylint: disable=protected-access
             mugen=SimpleNamespace(
@@ -796,10 +795,8 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
                 messaging=SimpleNamespace(extension_timeout_seconds=0),
             )
         )
-        self.assertEqual(
-            svc._resolve_extension_timeout_seconds(),  # pylint: disable=protected-access
-            expected,
-        )
+        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
+            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
 
     def test_bind_mh_extension_marks_critical_key(self) -> None:
         svc = self._new_service()

@@ -166,6 +166,20 @@ class TestMugenRuntimePhaseBRuntime(unittest.IsolatedAsyncioTestCase):
             await runtime.wait_for_critical_startup(
                 {},
                 critical_platforms=["web"],
+                startup_timeout_seconds="bad",  # type: ignore[arg-type]
+            )
+
+        with self.assertRaises(RuntimeError):
+            await runtime.wait_for_critical_startup(
+                {},
+                critical_platforms=["web"],
+                startup_timeout_seconds=float("inf"),
+            )
+
+        with self.assertRaises(RuntimeError):
+            await runtime.wait_for_critical_startup(
+                {},
+                critical_platforms=["web"],
                 startup_timeout_seconds=0.0,
             )
 

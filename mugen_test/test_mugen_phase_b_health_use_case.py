@@ -96,7 +96,7 @@ class TestPhaseBHealthUseCase(unittest.TestCase):
         self.assertEqual(result.failed_critical_platforms, [])
         self.assertEqual(result.reasons, {"phase_b": "phase_b reported degraded"})
 
-    def test_normalize_platform_list_and_parse_float_helpers_cover_edge_paths(self) -> None:
+    def test_normalize_platform_list_and_grace_parsing_edge_paths(self) -> None:
         self.assertEqual(
             phase_b_health_mod._normalize_platform_list("web"),  # pylint: disable=protected-access
             [],
@@ -107,19 +107,21 @@ class TestPhaseBHealthUseCase(unittest.TestCase):
             ),
             ["web", "matrix"],
         )
-        self.assertEqual(
-            phase_b_health_mod._parse_nonnegative_float(  # pylint: disable=protected-access
-                "bad",
-                default=7.0,
-            ),
-            7.0,
+        self.assertFalse(
+            phase_b_health_mod._phase_b_starting_within_grace(  # pylint: disable=protected-access
+                phase_b_status=PHASE_STATUS_STARTING,
+                phase_b_started_at=0.0,
+                readiness_grace_seconds="bad",
+                now_monotonic=0.1,
+            )
         )
-        self.assertEqual(
-            phase_b_health_mod._parse_nonnegative_float(  # pylint: disable=protected-access
-                -5,
-                default=3.0,
-            ),
-            3.0,
+        self.assertFalse(
+            phase_b_health_mod._phase_b_starting_within_grace(  # pylint: disable=protected-access
+                phase_b_status=PHASE_STATUS_STARTING,
+                phase_b_started_at=0.0,
+                readiness_grace_seconds=float("inf"),
+                now_monotonic=0.1,
+            )
         )
 
     def test_default_platform_reason_handles_starting_and_unknown(self) -> None:

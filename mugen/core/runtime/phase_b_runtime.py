@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from math import isfinite
 from time import perf_counter
 
 from mugen.bootstrap_state import (
@@ -132,12 +133,18 @@ async def wait_for_critical_startup(
     poll_interval_seconds: float = 0.05,
 ) -> None:
     """Block startup until all critical platforms report healthy, or fail."""
-    if startup_timeout_seconds <= 0:
+    try:
+        timeout_seconds = float(startup_timeout_seconds)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("startup_timeout_seconds must be a positive finite number.") from exc
+    if isfinite(timeout_seconds) is not True:
+        raise RuntimeError("startup_timeout_seconds must be a positive finite number.")
+    if timeout_seconds <= 0:
         raise RuntimeError("startup_timeout_seconds must be greater than 0.")
     if not critical_platforms:
         return
 
-    deadline = perf_counter() + startup_timeout_seconds
+    deadline = perf_counter() + timeout_seconds
     while True:
         phase_b_status = str(bootstrap_state.get(PHASE_B_STATUS_KEY, "") or "").strip().lower()
         phase_b_error = bootstrap_state.get(PHASE_B_ERROR_KEY)

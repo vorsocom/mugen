@@ -9,6 +9,7 @@ import base64
 import hashlib
 import inspect
 import json
+from math import isfinite
 import mimetypes
 import os
 import tempfile
@@ -67,6 +68,7 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.utility.config_value import parse_optional_positive_finite_float
 from mugen.core.utility.platforms import normalize_platforms
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
@@ -691,13 +693,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         raw_value = getattr(
             getattr(getattr(self._config, "mugen", SimpleNamespace()), "runtime", None),
             "shutdown_timeout_seconds",
-            self._default_shutdown_timeout_seconds,
+            None,
         )
-        try:
-            parsed = float(raw_value)
-        except (TypeError, ValueError):
-            return self._default_shutdown_timeout_seconds
-        if parsed <= 0:
+        parsed = parse_optional_positive_finite_float(
+            raw_value,
+            "mugen.runtime.shutdown_timeout_seconds",
+        )
+        if parsed is None:
             return self._default_shutdown_timeout_seconds
         return parsed
 
@@ -709,7 +711,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             parsed = self._resolve_shutdown_timeout_seconds()
             self._shutdown_timeout_seconds = parsed
             return parsed
-        if parsed <= 0:
+        if isfinite(parsed) is not True or parsed <= 0:
             parsed = self._resolve_shutdown_timeout_seconds()
             self._shutdown_timeout_seconds = parsed
         return parsed

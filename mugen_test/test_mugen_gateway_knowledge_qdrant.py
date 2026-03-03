@@ -121,9 +121,29 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
             await failing_gateway.check_readiness()
 
-    async def test_check_readiness_defaults_timeout_when_nonpositive(self) -> None:
+    async def test_check_readiness_uses_internal_timeout_value_without_fallback(
+        self,
+    ) -> None:
         gateway, _, _, _ = _build_gateway(config=_make_config(timeout_seconds=2.5))
         gateway._api_timeout_seconds = 0  # pylint: disable=protected-access
+
+        timeout_values: list[float] = []
+
+        async def _wait_for(awaitable, timeout):
+            timeout_values.append(float(timeout))
+            return await awaitable
+
+        with patch(
+            "mugen.core.gateway.knowledge.qdrant.asyncio.wait_for",
+            side_effect=_wait_for,
+        ):
+            await gateway.check_readiness()
+
+        self.assertEqual(timeout_values, [0.0, 0.0])
+
+    async def test_check_readiness_uses_default_timeout_when_value_unset(self) -> None:
+        gateway, _, _, _ = _build_gateway(config=_make_config(timeout_seconds=2.5))
+        gateway._api_timeout_seconds = None  # pylint: disable=protected-access
 
         timeout_values: list[float] = []
 
@@ -216,9 +236,11 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         )
 
         gateway._config.qdrant.api.timeout_seconds = "bad"  # pylint: disable=protected-access
-        self.assertIsNone(gateway._resolve_api_timeout_seconds())  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "timeout_seconds"):
+            gateway._resolve_api_timeout_seconds()  # pylint: disable=protected-access
         gateway._config.qdrant.api.timeout_seconds = 0  # pylint: disable=protected-access
-        self.assertIsNone(gateway._resolve_api_timeout_seconds())  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "timeout_seconds"):
+            gateway._resolve_api_timeout_seconds()  # pylint: disable=protected-access
         gateway._config.qdrant.api.timeout_seconds = 3  # pylint: disable=protected-access
         self.assertEqual(gateway._resolve_api_timeout_seconds(), 3.0)  # pylint: disable=protected-access
 
@@ -236,15 +258,11 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(gateway._resolve_api_max_retries(), 4)  # pylint: disable=protected-access
 
         gateway._config.qdrant.api.retry_backoff_seconds = "bad"  # pylint: disable=protected-access
-        self.assertEqual(
-            gateway._resolve_api_retry_backoff_seconds(),  # pylint: disable=protected-access
-            gateway._default_api_retry_backoff_seconds,  # pylint: disable=protected-access
-        )
+        with self.assertRaisesRegex(RuntimeError, "retry_backoff_seconds"):
+            gateway._resolve_api_retry_backoff_seconds()  # pylint: disable=protected-access
         gateway._config.qdrant.api.retry_backoff_seconds = -1  # pylint: disable=protected-access
-        self.assertEqual(
-            gateway._resolve_api_retry_backoff_seconds(),  # pylint: disable=protected-access
-            gateway._default_api_retry_backoff_seconds,  # pylint: disable=protected-access
-        )
+        with self.assertRaisesRegex(RuntimeError, "retry_backoff_seconds"):
+            gateway._resolve_api_retry_backoff_seconds()  # pylint: disable=protected-access
         gateway._config.qdrant.api.retry_backoff_seconds = 0.25  # pylint: disable=protected-access
         self.assertEqual(
             gateway._resolve_api_retry_backoff_seconds(), 0.25  # pylint: disable=protected-access
@@ -252,27 +270,11 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
 
         warnings = [str(call.args[0]) for call in logging_gateway.warning.call_args_list]
         self.assertIn(
-            "QdrantKnowledgeGateway: Invalid timeout_seconds configuration.",
-            warnings,
-        )
-        self.assertIn(
-            "QdrantKnowledgeGateway: timeout_seconds must be positive when provided.",
-            warnings,
-        )
-        self.assertIn(
             "QdrantKnowledgeGateway: Invalid max_retries configuration.",
             warnings,
         )
         self.assertIn(
             "QdrantKnowledgeGateway: max_retries must be non-negative.",
-            warnings,
-        )
-        self.assertIn(
-            "QdrantKnowledgeGateway: Invalid retry_backoff_seconds configuration.",
-            warnings,
-        )
-        self.assertIn(
-            "QdrantKnowledgeGateway: retry_backoff_seconds must be non-negative.",
             warnings,
         )
 

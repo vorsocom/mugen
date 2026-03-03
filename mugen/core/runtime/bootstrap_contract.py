@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mugen.core.utility.config_value import (
+    parse_bool_flag,
+    parse_nonnegative_finite_float,
+    parse_optional_positive_finite_float,
+    parse_required_positive_finite_float,
+)
 from mugen.core.utility.platforms import normalize_platforms
 
 _PROFILE_KEY = "mugen.runtime.profile"
+_READINESS_GRACE_KEY = "mugen.runtime.phase_b.readiness_grace_seconds"
 _STARTUP_TIMEOUT_KEY = "mugen.runtime.phase_b.startup_timeout_seconds"
 _PROVIDER_TIMEOUT_KEY = "mugen.runtime.provider_readiness_timeout_seconds"
 _PROVIDER_SHUTDOWN_TIMEOUT_KEY = "mugen.runtime.provider_shutdown_timeout_seconds"
@@ -54,68 +61,6 @@ def _read_path(config: object, *path: str) -> object:
             return _MISSING
         current = getattr(current, key)
     return current
-
-
-def _parse_bool(value: object, *, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return default
-
-
-def _parse_nonnegative_float(value: object, *, default: float) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return default
-    if parsed < 0:
-        return default
-    return parsed
-
-
-def _parse_required_positive_float(
-    *,
-    raw_value: object,
-    missing_message: str,
-    invalid_message: str,
-    nonpositive_message: str,
-) -> float:
-    if raw_value is _MISSING or raw_value is None or raw_value == "":
-        raise RuntimeError(missing_message)
-    try:
-        parsed = float(raw_value)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(invalid_message) from exc
-    if parsed <= 0:
-        raise RuntimeError(nonpositive_message)
-    return parsed
-
-
-def _parse_optional_positive_float(
-    *,
-    raw_value: object,
-    key_path: str,
-) -> float | None:
-    if raw_value is _MISSING or raw_value is None or raw_value == "":
-        return None
-    try:
-        parsed = float(raw_value)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(
-            "Invalid runtime configuration: "
-            f"{key_path} must be a positive number."
-        ) from exc
-    if parsed <= 0:
-        raise RuntimeError(
-            "Invalid runtime configuration: "
-            f"{key_path} must be greater than 0."
-        )
-    return parsed
 
 
 def _parse_runtime_profile(raw_value: object) -> str:
@@ -170,7 +115,7 @@ def parse_runtime_bootstrap_settings(
         "phase_b",
         "degrade_on_critical_exit",
     )
-    degrade_on_critical_exit = _parse_bool(
+    degrade_on_critical_exit = parse_bool_flag(
         True if raw_degrade is _MISSING else raw_degrade,
         default=True,
     )
@@ -182,8 +127,9 @@ def parse_runtime_bootstrap_settings(
         "phase_b",
         "readiness_grace_seconds",
     )
-    readiness_grace_seconds = _parse_nonnegative_float(
-        0.0 if raw_grace is _MISSING else raw_grace,
+    readiness_grace_seconds = parse_nonnegative_finite_float(
+        None if raw_grace is _MISSING else raw_grace,
+        field_name=_READINESS_GRACE_KEY,
         default=0.0,
     )
 
@@ -195,43 +141,29 @@ def parse_runtime_bootstrap_settings(
 
     startup_timeout_seconds: float | None = None
     if require_startup_timeout_seconds:
-        startup_timeout_seconds = _parse_required_positive_float(
-            raw_value=_read_path(config, "mugen", "runtime", "phase_b", "startup_timeout_seconds"),
-            missing_message=(
-                "Invalid runtime configuration: "
-                f"{_STARTUP_TIMEOUT_KEY} is required."
-            ),
-            invalid_message=(
-                "Invalid runtime configuration: "
-                f"{_STARTUP_TIMEOUT_KEY} must be a positive number."
-            ),
-            nonpositive_message=(
-                "Invalid runtime configuration: "
-                f"{_STARTUP_TIMEOUT_KEY} must be greater than 0."
-            ),
+        raw_startup_timeout = _read_path(
+            config,
+            "mugen",
+            "runtime",
+            "phase_b",
+            "startup_timeout_seconds",
+        )
+        startup_timeout_seconds = parse_required_positive_finite_float(
+            None if raw_startup_timeout is _MISSING else raw_startup_timeout,
+            _STARTUP_TIMEOUT_KEY,
         )
 
     provider_readiness_timeout_seconds: float | None = None
     if require_provider_readiness_timeout_seconds:
-        provider_readiness_timeout_seconds = _parse_required_positive_float(
-            raw_value=_read_path(
-                config,
-                "mugen",
-                "runtime",
-                "provider_readiness_timeout_seconds",
-            ),
-            missing_message=(
-                "Invalid runtime configuration: "
-                f"{_PROVIDER_TIMEOUT_KEY} is required."
-            ),
-            invalid_message=(
-                "Invalid runtime configuration: "
-                f"{_PROVIDER_TIMEOUT_KEY} must be a positive number."
-            ),
-            nonpositive_message=(
-                "Invalid runtime configuration: "
-                f"{_PROVIDER_TIMEOUT_KEY} must be greater than 0."
-            ),
+        raw_provider_timeout = _read_path(
+            config,
+            "mugen",
+            "runtime",
+            "provider_readiness_timeout_seconds",
+        )
+        provider_readiness_timeout_seconds = parse_required_positive_finite_float(
+            None if raw_provider_timeout is _MISSING else raw_provider_timeout,
+            _PROVIDER_TIMEOUT_KEY,
         )
 
     raw_provider_shutdown_timeout = _read_path(
@@ -241,25 +173,18 @@ def parse_runtime_bootstrap_settings(
         "provider_shutdown_timeout_seconds",
     )
     if require_provider_shutdown_timeout_seconds:
-        provider_shutdown_timeout_seconds = _parse_required_positive_float(
-            raw_value=raw_provider_shutdown_timeout,
-            missing_message=(
-                "Invalid runtime configuration: "
-                f"{_PROVIDER_SHUTDOWN_TIMEOUT_KEY} is required."
-            ),
-            invalid_message=(
-                "Invalid runtime configuration: "
-                f"{_PROVIDER_SHUTDOWN_TIMEOUT_KEY} must be a positive number."
-            ),
-            nonpositive_message=(
-                "Invalid runtime configuration: "
-                f"{_PROVIDER_SHUTDOWN_TIMEOUT_KEY} must be greater than 0."
-            ),
+        provider_shutdown_timeout_seconds = parse_required_positive_finite_float(
+            None
+            if raw_provider_shutdown_timeout is _MISSING
+            else raw_provider_shutdown_timeout,
+            _PROVIDER_SHUTDOWN_TIMEOUT_KEY,
         )
     else:
-        provider_shutdown_timeout_seconds = _parse_optional_positive_float(
-            raw_value=raw_provider_shutdown_timeout,
-            key_path=_PROVIDER_SHUTDOWN_TIMEOUT_KEY,
+        provider_shutdown_timeout_seconds = parse_optional_positive_finite_float(
+            None
+            if raw_provider_shutdown_timeout is _MISSING
+            else raw_provider_shutdown_timeout,
+            _PROVIDER_SHUTDOWN_TIMEOUT_KEY,
         )
 
     raw_shutdown_timeout = _read_path(
@@ -269,25 +194,14 @@ def parse_runtime_bootstrap_settings(
         "shutdown_timeout_seconds",
     )
     if require_shutdown_timeout_seconds:
-        shutdown_timeout_seconds = _parse_required_positive_float(
-            raw_value=raw_shutdown_timeout,
-            missing_message=(
-                "Invalid runtime configuration: "
-                f"{_SHUTDOWN_TIMEOUT_KEY} is required."
-            ),
-            invalid_message=(
-                "Invalid runtime configuration: "
-                f"{_SHUTDOWN_TIMEOUT_KEY} must be a positive number."
-            ),
-            nonpositive_message=(
-                "Invalid runtime configuration: "
-                f"{_SHUTDOWN_TIMEOUT_KEY} must be greater than 0."
-            ),
+        shutdown_timeout_seconds = parse_required_positive_finite_float(
+            None if raw_shutdown_timeout is _MISSING else raw_shutdown_timeout,
+            _SHUTDOWN_TIMEOUT_KEY,
         )
     else:
-        shutdown_timeout_seconds = _parse_optional_positive_float(
-            raw_value=raw_shutdown_timeout,
-            key_path=_SHUTDOWN_TIMEOUT_KEY,
+        shutdown_timeout_seconds = parse_optional_positive_finite_float(
+            None if raw_shutdown_timeout is _MISSING else raw_shutdown_timeout,
+            _SHUTDOWN_TIMEOUT_KEY,
         )
 
     if raw_platforms is _MISSING:
