@@ -26,4 +26,5 @@
 2. Correlate platform failure reason with runtime logs for the same platform name.
 3. For critical platform clean exits, confirm whether exit was expected shutdown or unexpected runtime stop.
 4. Validate timeout/profile settings (`mugen.runtime.profile`, `mugen.runtime.provider_readiness_timeout_seconds`, `mugen.runtime.provider_shutdown_timeout_seconds`, `mugen.runtime.shutdown_timeout_seconds`, gateway timeout keys, qdrant retry/timeout keys).
+   `mugen.runtime.provider_shutdown_timeout_seconds` and `mugen.runtime.shutdown_timeout_seconds` are required positive values; missing/invalid values must fail bootstrap.
 5. Roll back or restart only after readiness returns `ready=true` with empty `failed_platforms`.

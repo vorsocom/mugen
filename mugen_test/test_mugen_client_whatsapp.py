@@ -1,5 +1,6 @@
 """Unit tests for mugen.core.client.whatsapp.DefaultWhatsAppClient."""
 
+import asyncio
 from http import HTTPMethod
 from io import BytesIO
 import json
@@ -164,6 +165,52 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
 
         existing_session.close.assert_not_awaited()
         self.assertIsNone(client._client_session)  # pylint: disable=protected-access
+
+    async def test_close_logs_warning_when_session_close_times_out(self) -> None:
+        client = self._new_client()
+        existing_session = Mock()
+        existing_session.closed = False
+        existing_session.close = AsyncMock(return_value=None)
+        client._client_session = existing_session  # pylint: disable=protected-access
+
+        def _raise_timeout(awaitable, timeout):  # noqa: ARG001
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise asyncio.TimeoutError
+
+        with patch(
+            "mugen.core.client.whatsapp.asyncio.wait_for",
+            side_effect=_raise_timeout,
+        ):
+            await client.close()
+
+        self.assertTrue(
+            any(
+                "WhatsApp client session close timed out" in str(call.args[0])
+                for call in client._logging_gateway.warning.call_args_list
+            )
+        )
+
+    async def test_resolve_shutdown_timeout_seconds_falls_back_for_invalid_values(self) -> None:
+        config = _make_config()
+        config.mugen = SimpleNamespace(runtime=SimpleNamespace(shutdown_timeout_seconds="bad"))
+        client = DefaultWhatsAppClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        self.assertEqual(
+            client._shutdown_timeout_seconds,  # pylint: disable=protected-access
+            client._default_shutdown_timeout_seconds,  # pylint: disable=protected-access
+        )
+        config.mugen.runtime.shutdown_timeout_seconds = 0
+        self.assertEqual(
+            client._resolve_shutdown_timeout_seconds(),  # pylint: disable=protected-access
+            client._default_shutdown_timeout_seconds,  # pylint: disable=protected-access
+        )
 
     async def test_resolve_config_values_fallback_to_defaults(self) -> None:
         config = _make_config()

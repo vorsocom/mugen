@@ -10,6 +10,13 @@ This note documents the core DI structure in `mugen/core/di/__init__.py` and the
 
 Keep `logging_gateway` as the bootstrap provider and keep the remaining providers in `_PROVIDER_BUILD_ORDER` dependency-safe order.
 
+## Runtime Shutdown Timeout Contract
+
+- `mugen.runtime.provider_shutdown_timeout_seconds` is required and must be `> 0`.
+- `mugen.runtime.shutdown_timeout_seconds` is required and must be `> 0`.
+- DI shutdown paths do not silently fall back to legacy default timeout values when these settings are missing/invalid.
+- Invalid timeout configuration must fail bootstrap validation before runtime startup.
+
 ## Layering Contract
 
 Core DI participates in a strict clean-architecture contract that is enforced by tests:

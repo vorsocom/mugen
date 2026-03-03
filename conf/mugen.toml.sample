@@ -18,6 +18,7 @@ runtime.phase_b.startup_timeout_seconds = 30.0
 runtime.phase_b.critical_platforms = ["web"]
 runtime.phase_b.degrade_on_critical_exit = true
 runtime.provider_readiness_timeout_seconds = 15.0
+# Required deterministic shutdown timeouts (must be > 0).
 runtime.provider_shutdown_timeout_seconds = 10.0
 runtime.shutdown_timeout_seconds = 60.0
 runtime.profile = "platform_full"

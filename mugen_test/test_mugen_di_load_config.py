@@ -13,6 +13,8 @@ def _minimal_core_config() -> dict:
             "runtime": {
                 "profile": "platform_full",
                 "provider_readiness_timeout_seconds": 15.0,
+                "provider_shutdown_timeout_seconds": 10.0,
+                "shutdown_timeout_seconds": 60.0,
                 "phase_b": {
                     "startup_timeout_seconds": 30.0,
                     "readiness_grace_seconds": 0.0,

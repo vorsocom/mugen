@@ -48,7 +48,7 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
         )
         self.assertEqual(violations, [])
 
-    def test_adapter_layers_do_not_import_api_layer(self) -> None:
+    def test_adapter_layers_do_not_import_api_or_runtime_layers(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         adapter_roots = [
             repo_root / "mugen" / "core" / "client",
@@ -58,7 +58,10 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
         for adapter_root in adapter_roots:
             violations += _find_import_violations(
                 python_files=sorted(adapter_root.rglob("*.py")),
-                forbidden_prefixes=("mugen.core.api",),
+                forbidden_prefixes=(
+                    "mugen.core.api",
+                    "mugen.core.runtime",
+                ),
             )
         self.assertEqual(violations, [])
 
@@ -73,6 +76,7 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
             "mugen.core.client",
             "mugen.core.gateway.",
             "mugen.core.plugin",
+            "mugen.core.runtime.",
         )
         violations = _find_import_violations(
             python_files=sorted(service_root.rglob("*.py")),

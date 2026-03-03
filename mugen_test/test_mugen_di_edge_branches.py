@@ -62,6 +62,10 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             "platform_full",
         )
 
+    def test_validate_optional_positive_timeout_allows_missing_value(self) -> None:
+        di._validate_optional_positive_timeout(None, path="mugen.runtime.some_timeout")
+        di._validate_optional_positive_timeout("", path="mugen.runtime.some_timeout")
+
     def test_get_active_platforms_requires_list(self) -> None:
         self.assertIsNone(di._get_active_platforms({"mugen": {"platforms": "matrix"}}))
         self.assertEqual(di._get_active_platforms({"mugen": {"platforms": ["matrix"]}}), ["matrix"])
@@ -1037,13 +1041,11 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                 {"mugen": {"runtime": {"provider_readiness_timeout_seconds": 0}}}
             )
 
-    def test_resolve_provider_shutdown_timeout_seconds_defaults_and_validation(
+    def test_resolve_provider_shutdown_timeout_seconds_required_and_validation(
         self,
     ) -> None:
-        self.assertEqual(
-            di._resolve_provider_shutdown_timeout_seconds({}),  # pylint: disable=protected-access
-            10.0,
-        )
+        with self.assertRaises(RuntimeError):
+            di._resolve_provider_shutdown_timeout_seconds({})  # pylint: disable=protected-access
         self.assertEqual(
             di._resolve_provider_shutdown_timeout_seconds(  # pylint: disable=protected-access
                 {"mugen": {"runtime": {"provider_shutdown_timeout_seconds": "2.5"}}}
@@ -1054,12 +1056,14 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._resolve_provider_shutdown_timeout_seconds(  # pylint: disable=protected-access
                 {"mugen": {"runtime": {"provider_shutdown_timeout_seconds": "bad"}}}
             )
+        with self.assertRaises(RuntimeError):
+            di._resolve_provider_shutdown_timeout_seconds(  # pylint: disable=protected-access
+                {"mugen": {"runtime": {"provider_shutdown_timeout_seconds": 0}}}
+            )
 
-    def test_resolve_shutdown_timeout_seconds_defaults_and_validation(self) -> None:
-        self.assertEqual(
-            di._resolve_shutdown_timeout_seconds({}),  # pylint: disable=protected-access
-            60.0,
-        )
+    def test_resolve_shutdown_timeout_seconds_required_and_validation(self) -> None:
+        with self.assertRaises(RuntimeError):
+            di._resolve_shutdown_timeout_seconds({})  # pylint: disable=protected-access
         self.assertEqual(
             di._resolve_shutdown_timeout_seconds(  # pylint: disable=protected-access
                 {"mugen": {"runtime": {"shutdown_timeout_seconds": "5.0"}}}

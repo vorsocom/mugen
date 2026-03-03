@@ -152,6 +152,7 @@ class DefaultWebClient(IWebClient):
     ]
     _default_media_download_token_ttl_seconds: int = 900
     _default_media_retention_seconds: int = 86400
+    _default_shutdown_timeout_seconds: float = 60.0
 
     _sse_queue_size: int = 128
 
@@ -283,6 +284,11 @@ class DefaultWebClient(IWebClient):
             self._default_media_retention_seconds,
             minimum=1,
         )
+        self._shutdown_timeout_seconds = self._resolve_float_config(
+            ("mugen", "runtime", "shutdown_timeout_seconds"),
+            self._default_shutdown_timeout_seconds,
+            minimum=0.01,
+        )
 
     async def init(self) -> None:
         """Start the background worker loop."""
@@ -335,12 +341,10 @@ class DefaultWebClient(IWebClient):
 
         task = self._worker_task
         self._worker_task = None
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                ...
+        await self._cancel_task_with_timeout(
+            task,
+            task_name="worker",
+        )
 
         async with self._subscriber_lock:
             self._subscribers.clear()
@@ -895,9 +899,10 @@ class DefaultWebClient(IWebClient):
 
         task, stop_event = existing
         stop_event.set()
-        if task.done() is not True:
-            task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        await self._cancel_task_with_timeout(
+            task,
+            task_name=f"cross_instance_poller:{conversation_id}",
+        )
 
     async def _stop_all_cross_instance_pollers(self) -> None:
         async with self._sse_poller_lock:
@@ -905,9 +910,34 @@ class DefaultWebClient(IWebClient):
             self._sse_cross_instance_pollers = {}
         for _conversation_id, (task, stop_event) in active:
             stop_event.set()
-            if task.done() is not True:
-                task.cancel()
+            await self._cancel_task_with_timeout(
+                task,
+                task_name=f"cross_instance_poller:{_conversation_id}",
+            )
+
+    async def _cancel_task_with_timeout(
+        self,
+        task: asyncio.Task | None,
+        *,
+        task_name: str,
+    ) -> None:
+        if not isinstance(task, asyncio.Task):
+            return
+        if task.done():
             await asyncio.gather(task, return_exceptions=True)
+            return
+
+        task.cancel()
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(task, return_exceptions=True),
+                timeout=self._shutdown_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            self._logging_gateway.warning(
+                "Web client shutdown timed out "
+                f"(task={task_name} timeout_seconds={self._shutdown_timeout_seconds:.2f})."
+            )
 
     async def resolve_media_download(
         self,

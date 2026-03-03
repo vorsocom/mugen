@@ -57,8 +57,6 @@ _CONFIG_NAMESPACE_CONVERSION = NamespaceConfig(
     raw_attr="dict",
     add_aliases=False,
 )
-_DEFAULT_PROVIDER_SHUTDOWN_TIMEOUT_SECONDS = 10.0
-_DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 60.0
 
 
 class ContainerBootstrapError(RuntimeError):
@@ -167,6 +165,18 @@ def _validate_optional_positive_timeout(
         )
 
 
+def _validate_required_positive_timeout(
+    value: object,
+    *,
+    path: str,
+) -> None:
+    if value is None or value == "":
+        raise RuntimeError(
+            f"Invalid configuration: {path} is required."
+        )
+    _validate_optional_positive_timeout(value, path=path)
+
+
 def _validate_extension_entry_schema(
     entry: object,
     *,
@@ -245,11 +255,11 @@ def _validate_core_module_schema(config: dict) -> None:
         runtime_cfg.get("provider_readiness_timeout_seconds"),
         path="mugen.runtime.provider_readiness_timeout_seconds",
     )
-    _validate_optional_positive_timeout(
+    _validate_required_positive_timeout(
         runtime_cfg.get("provider_shutdown_timeout_seconds"),
         path="mugen.runtime.provider_shutdown_timeout_seconds",
     )
-    _validate_optional_positive_timeout(
+    _validate_required_positive_timeout(
         runtime_cfg.get("shutdown_timeout_seconds"),
         path="mugen.runtime.shutdown_timeout_seconds",
     )
@@ -918,11 +928,9 @@ def _resolve_provider_shutdown_timeout_seconds(config: dict) -> float:
         require_profile=False,
         require_startup_timeout_seconds=False,
         require_provider_readiness_timeout_seconds=False,
+        require_provider_shutdown_timeout_seconds=True,
     )
-    timeout_seconds = settings.provider_shutdown_timeout_seconds
-    if timeout_seconds is None:
-        return _DEFAULT_PROVIDER_SHUTDOWN_TIMEOUT_SECONDS
-    return float(timeout_seconds)
+    return float(settings.provider_shutdown_timeout_seconds)
 
 
 def _resolve_shutdown_timeout_seconds(config: dict) -> float:
@@ -931,11 +939,9 @@ def _resolve_shutdown_timeout_seconds(config: dict) -> float:
         require_profile=False,
         require_startup_timeout_seconds=False,
         require_provider_readiness_timeout_seconds=False,
+        require_shutdown_timeout_seconds=True,
     )
-    timeout_seconds = settings.shutdown_timeout_seconds
-    if timeout_seconds is None:
-        return _DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
-    return float(timeout_seconds)
+    return float(settings.shutdown_timeout_seconds)
 
 
 async def _await_readiness_probe_async(
@@ -1368,24 +1374,15 @@ async def _shutdown_injector_async(injector: DependencyInjector | None) -> None:
         "logging_gateway",
         logging.getLogger(),
     )
-    provider_timeout_seconds = _DEFAULT_PROVIDER_SHUTDOWN_TIMEOUT_SECONDS
-    shutdown_timeout_seconds = _DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
-    config = None
     try:
         config = _injector_config_dict(injector)
-    except Exception:  # pylint: disable=broad-exception-caught
-        config = None
-    if isinstance(config, dict):
-        try:
-            provider_timeout_seconds = _resolve_provider_shutdown_timeout_seconds(config)
-            shutdown_timeout_seconds = _resolve_shutdown_timeout_seconds(config)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning(
-                "Invalid shutdown timeout configuration; using defaults: "
-                f"{exc}"
-            )
-            provider_timeout_seconds = _DEFAULT_PROVIDER_SHUTDOWN_TIMEOUT_SECONDS
-            shutdown_timeout_seconds = _DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+    except RuntimeError:
+        # Some tests inject placeholder objects into container cache to verify
+        # proxy behavior; those objects have no runtime config and no providers
+        # to deterministically shut down.
+        return
+    provider_timeout_seconds = _resolve_provider_shutdown_timeout_seconds(config)
+    shutdown_timeout_seconds = _resolve_shutdown_timeout_seconds(config)
 
     async def _shutdown_inner() -> None:
         seen: set[int] = set()

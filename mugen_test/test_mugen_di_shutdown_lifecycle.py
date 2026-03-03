@@ -57,6 +57,19 @@ class _ProviderWithAClose:
 
 
 class _ExtServicesBoom:
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(
+            dict={
+                "mugen": {
+                    "runtime": {
+                        "provider_shutdown_timeout_seconds": 0.5,
+                        "shutdown_timeout_seconds": 5.0,
+                    }
+                }
+            }
+        )
+        self.logging_gateway = Mock()
+
     @property
     def ext_services(self):
         raise RuntimeError("boom")
@@ -200,6 +213,16 @@ class TestMugenDIShutdownLifecycleAsync(unittest.IsolatedAsyncioTestCase):
         shared_provider = object()
         unique_service = object()
         injector = SimpleNamespace(
+            config=SimpleNamespace(
+                dict={
+                    "mugen": {
+                        "runtime": {
+                            "provider_shutdown_timeout_seconds": 0.5,
+                            "shutdown_timeout_seconds": 5.0,
+                        }
+                    }
+                }
+            ),
             logging_gateway=logger,
             completion_gateway=shared_provider,
             keyval_storage_gateway=shared_provider,
@@ -230,7 +253,12 @@ class TestMugenDIShutdownLifecycleAsync(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_injector_async_handles_bad_ext_services(self) -> None:
         with patch("mugen.core.di._shutdown_provider_async", new=AsyncMock()) as shutdown_mock:
             await di._shutdown_injector_async(_ExtServicesBoom())  # pylint: disable=protected-access
-        shutdown_mock.assert_not_called()
+        self.assertTrue(
+            all(
+                not str(call.args[0]).startswith("ext_service:")
+                for call in shutdown_mock.call_args_list
+            )
+        )
 
     async def test_shutdown_injector_async_uses_configured_provider_timeout(self) -> None:
         logger = Mock()
@@ -260,7 +288,7 @@ class TestMugenDIShutdownLifecycleAsync(unittest.IsolatedAsyncioTestCase):
             0.5,
         )
 
-    async def test_shutdown_injector_async_falls_back_to_default_timeout_on_invalid_config(
+    async def test_shutdown_injector_async_rejects_invalid_timeout_config(
         self,
     ) -> None:
         logger = Mock()
@@ -282,21 +310,23 @@ class TestMugenDIShutdownLifecycleAsync(unittest.IsolatedAsyncioTestCase):
             patch("mugen.core.di._provider_specs_for_shutdown", return_value=[spec]),
             patch("mugen.core.di._shutdown_provider_async", new=AsyncMock()) as shutdown_mock,
         ):
-            await di._shutdown_injector_async(injector)  # pylint: disable=protected-access
-
-        self.assertEqual(
-            shutdown_mock.await_args.kwargs["timeout_seconds"],
-            di._DEFAULT_PROVIDER_SHUTDOWN_TIMEOUT_SECONDS,  # pylint: disable=protected-access
-        )
-        self.assertIn(
-            "Invalid shutdown timeout configuration",
-            logger.warning.call_args_list[0].args[0],
-        )
+            with self.assertRaises(RuntimeError):
+                await di._shutdown_injector_async(injector)  # pylint: disable=protected-access
+        shutdown_mock.assert_not_awaited()
 
     async def test_shutdown_injector_async_logs_when_global_timeout_expires(self) -> None:
         logger = Mock()
         injector = SimpleNamespace(
-            config=SimpleNamespace(dict={"mugen": {"runtime": {"shutdown_timeout_seconds": 1.0}}}),
+            config=SimpleNamespace(
+                dict={
+                    "mugen": {
+                        "runtime": {
+                            "provider_shutdown_timeout_seconds": 0.5,
+                            "shutdown_timeout_seconds": 1.0,
+                        }
+                    }
+                }
+            ),
             logging_gateway=logger,
         )
 

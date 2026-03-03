@@ -55,6 +55,8 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
     _default_typing_indicator_enabled: bool = True
 
+    _default_shutdown_timeout_seconds: float = 60.0
+
     _api_base_path: str
 
     _api_media_path: str
@@ -82,6 +84,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         self._max_api_retries = self._resolve_max_api_retries()
         self._retry_backoff_seconds = self._resolve_retry_backoff_seconds()
         self._typing_indicator_enabled = self._resolve_typing_indicator_enabled()
+        self._shutdown_timeout_seconds = self._resolve_shutdown_timeout_seconds()
 
         self._api_base_path = (
             f"{self._config.whatsapp.graphapi.base_url}/"
@@ -173,6 +176,20 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             if normalized in {"0", "false", "no", "off"}:
                 return False
         return self._default_typing_indicator_enabled
+
+    def _resolve_shutdown_timeout_seconds(self) -> float:
+        raw_timeout = getattr(
+            getattr(getattr(self._config, "mugen", None), "runtime", None),
+            "shutdown_timeout_seconds",
+            self._default_shutdown_timeout_seconds,
+        )
+        try:
+            timeout = float(raw_timeout)
+        except (TypeError, ValueError):
+            timeout = self._default_shutdown_timeout_seconds
+        if timeout <= 0:
+            return self._default_shutdown_timeout_seconds
+        return timeout
 
     @staticmethod
     def _format_recipient(recipient: str) -> str:
@@ -288,7 +305,16 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             return
 
         if getattr(self._client_session, "closed", False) is not True:
-            await self._client_session.close()
+            try:
+                await asyncio.wait_for(
+                    self._client_session.close(),
+                    timeout=self._shutdown_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                self._logging_gateway.warning(
+                    "WhatsApp client session close timed out "
+                    f"(timeout_seconds={self._shutdown_timeout_seconds:.2f})."
+                )
 
         self._client_session = None
 
