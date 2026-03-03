@@ -10,8 +10,9 @@ import tempfile
 import textwrap
 import unittest
 
-
-_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_migration_tracks.py"
+_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[1] / "scripts" / "run_migration_tracks.py"
+)
 
 
 class TestRunMigrationTracksSchemaContract(unittest.TestCase):
@@ -24,6 +25,7 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         repo_root: Path,
         config_file: str | None = None,
         env_overrides: dict[str, str] | None = None,
+        extra_args: list[str] | None = None,
         dry_run: bool = True,
     ) -> subprocess.CompletedProcess:
         if config_text is not None:
@@ -41,6 +43,8 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
             cmd.extend(["--config-file", config_file])
         if dry_run:
             cmd.append("--dry-run")
+        if extra_args:
+            cmd.extend(extra_args)
         cmd.extend(["upgrade", "head"])
 
         env = os.environ.copy()
@@ -68,12 +72,10 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         self.assertIn("track=core schema=mugen", result.stdout)
 
     def test_uses_configured_core_schema(self) -> None:
-        config_text = textwrap.dedent(
-            """
+        config_text = textwrap.dedent("""
             [rdbms.migration_tracks.core]
             schema = "core_runtime"
-            """
-        )
+            """)
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             result = self._run_script(
@@ -85,12 +87,10 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         self.assertIn("track=core schema=core_runtime", result.stdout)
 
     def test_rejects_invalid_core_schema(self) -> None:
-        config_text = textwrap.dedent(
-            """
+        config_text = textwrap.dedent("""
             [rdbms.migration_tracks.core]
             schema = "bad-schema"
-            """
-        )
+            """)
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             result = self._run_script(
@@ -105,7 +105,7 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "env.toml").write_text(
-                "[rdbms.migration_tracks.core]\nschema = \"env_schema\"\n",
+                '[rdbms.migration_tracks.core]\nschema = "env_schema"\n',
                 encoding="utf-8",
             )
             result = self._run_script(
@@ -121,11 +121,11 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "env.toml").write_text(
-                "[rdbms.migration_tracks.core]\nschema = \"env_schema\"\n",
+                '[rdbms.migration_tracks.core]\nschema = "env_schema"\n',
                 encoding="utf-8",
             )
             (repo_root / "cli.toml").write_text(
-                "[rdbms.migration_tracks.core]\nschema = \"cli_schema\"\n",
+                '[rdbms.migration_tracks.core]\nschema = "cli_schema"\n',
                 encoding="utf-8",
             )
             result = self._run_script(
@@ -144,8 +144,7 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
             config_path = repo_root / "custom.toml"
             config_path.write_text("", encoding="utf-8")
             (repo_root / "alembic.py").write_text(
-                textwrap.dedent(
-                    """
+                textwrap.dedent("""
                     import os
                     import sys
 
@@ -154,8 +153,7 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
                         + str(os.getenv("MUGEN_CONFIG_FILE", ""))
                     )
                     raise SystemExit(0)
-                    """
-                ),
+                    """),
                 encoding="utf-8",
             )
             result = self._run_script(
@@ -179,3 +177,90 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("Config file not found:", result.stderr)
+
+    def test_disabled_plugin_missing_config_does_not_block_default_core_run(
+        self,
+    ) -> None:
+        config_text = textwrap.dedent("""
+            [rdbms.migration_tracks.core]
+            enabled = true
+
+            [[rdbms.migration_tracks.plugins]]
+            name = "broken_plugin"
+            enabled = false
+            alembic_config = "plugins/broken_plugin/missing.ini"
+            """)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            result = self._run_script(
+                config_text=config_text,
+                repo_root=repo_root,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("track=core", result.stdout)
+        self.assertNotIn("broken_plugin", result.stdout)
+
+    def test_track_core_ignores_unrelated_plugin_config_path_errors(self) -> None:
+        config_text = textwrap.dedent("""
+            [rdbms.migration_tracks.core]
+            enabled = true
+
+            [[rdbms.migration_tracks.plugins]]
+            name = "broken_plugin"
+            enabled = true
+            alembic_config = "plugins/broken_plugin/missing.ini"
+            """)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            result = self._run_script(
+                config_text=config_text,
+                repo_root=repo_root,
+                extra_args=["--track", "core"],
+            )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("track=core", result.stdout)
+        self.assertNotIn("broken_plugin", result.stdout)
+
+    def test_selecting_disabled_track_without_include_disabled_fails_clearly(
+        self,
+    ) -> None:
+        config_text = textwrap.dedent("""
+            [rdbms.migration_tracks.core]
+            enabled = true
+
+            [[rdbms.migration_tracks.plugins]]
+            name = "disabled_plugin"
+            enabled = false
+            alembic_config = "plugins/disabled_plugin/missing.ini"
+            """)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            result = self._run_script(
+                config_text=config_text,
+                repo_root=repo_root,
+                extra_args=["--track", "disabled_plugin"],
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Selected migration track(s) are disabled", result.stderr)
+        self.assertNotIn("Alembic config not found", result.stderr)
+
+    def test_no_effective_tracks_selected_fails_non_zero(self) -> None:
+        config_text = textwrap.dedent("""
+            [rdbms.migration_tracks.core]
+            enabled = false
+            """)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            result = self._run_script(
+                config_text=config_text,
+                repo_root=repo_root,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "No migration tracks selected for execution",
+            result.stderr,
+        )
