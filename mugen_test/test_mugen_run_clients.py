@@ -23,6 +23,7 @@ from mugen import (
     run_platform_clients,
     run_whatsapp_client,
 )
+from mugen.core.runtime.task_shutdown import TaskCancellationOutcome
 
 
 def _test_config(*, platforms: list[str], mh_mode: str = "optional") -> SimpleNamespace:
@@ -30,6 +31,8 @@ def _test_config(*, platforms: list[str], mh_mode: str = "optional") -> SimpleNa
         platforms=list(platforms),
         messaging=SimpleNamespace(mh_mode=mh_mode),
         runtime=SimpleNamespace(
+            provider_shutdown_timeout_seconds=10.0,
+            shutdown_timeout_seconds=60.0,
             phase_b=SimpleNamespace(
                 startup_timeout_seconds=30.0,
                 readiness_grace_seconds=0.0,
@@ -86,6 +89,8 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 runtime=SimpleNamespace(
+                    provider_shutdown_timeout_seconds=10.0,
+                    shutdown_timeout_seconds=60.0,
                     phase_b=SimpleNamespace(startup_timeout_seconds=30.0),
                 )
             )
@@ -337,6 +342,113 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             runner.cancel()
             with self.assertRaises(asyncio.exceptions.CancelledError):
                 await runner
+
+    async def test_run_platform_clients_marks_platform_degraded_when_shutdown_timeout_expires(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _test_config(platforms=["web"])
+        started = asyncio.Event()
+
+        async def _run_web_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = (degraded_callback, healthy_callback)
+            if callable(started_callback):
+                started_callback()
+            started.set()
+            await asyncio.Event().wait()
+
+        async def _timeout_cancel(tasks, timeout_seconds):  # noqa: ARG001
+            task_tuple = tuple(tasks)
+            return TaskCancellationOutcome(
+                completed_tasks=(),
+                timed_out_tasks=task_tuple,
+            )
+
+        with (
+            unittest.mock.patch("mugen.run_web_client", new=_run_web_client),
+            unittest.mock.patch(
+                "mugen.cancel_tasks_with_timeout",
+                new=unittest.mock.AsyncMock(side_effect=_timeout_cancel),
+            ),
+        ):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            runner.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await runner
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["web"],
+            PHASE_STATUS_DEGRADED,
+        )
+        self.assertIn(
+            "shutdown timed out after",
+            str(state[PHASE_B_PLATFORM_ERRORS_KEY]["web"]),
+        )
+
+    async def test_run_platform_clients_handles_partial_timeout_membership(self) -> None:
+        app = Quart("test_app")
+        config = _test_config(platforms=["matrix", "web"])
+        started = asyncio.Event()
+
+        async def _blocking_runner(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = (degraded_callback, healthy_callback)
+            if callable(started_callback):
+                started_callback()
+            started.set()
+            await asyncio.Event().wait()
+
+        async def _partial_timeout(tasks, timeout_seconds):  # noqa: ARG001
+            task_tuple = tuple(tasks)
+            for platform_task in task_tuple:
+                platform_task.cancel()
+            await asyncio.gather(*task_tuple, return_exceptions=True)
+            return TaskCancellationOutcome(
+                completed_tasks=task_tuple[1:],
+                timed_out_tasks=(task_tuple[0],),
+            )
+
+        with (
+            unittest.mock.patch("mugen.run_matrix_client", new=_blocking_runner),
+            unittest.mock.patch("mugen.run_web_client", new=_blocking_runner),
+            unittest.mock.patch(
+                "mugen.cancel_tasks_with_timeout",
+                new=unittest.mock.AsyncMock(side_effect=_partial_timeout),
+            ),
+        ):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            runner.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await runner
+
+        state = app.extensions["mugen"]["bootstrap"]
+        errors = state[PHASE_B_PLATFORM_ERRORS_KEY]
+        timeout_errors = [value for value in errors.values() if "shutdown timed out after" in str(value)]
+        self.assertEqual(len(timeout_errors), 1)
 
     async def test_run_platform_clients_started_callback_ignored_when_shutdown_requested(
         self,

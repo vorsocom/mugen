@@ -47,6 +47,7 @@ from mugen.core.runtime.phase_b_bootstrap import (
     PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY as _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY,
     PHASE_B_STARTUP_PLAN_KEY as _PHASE_B_STARTUP_PLAN_KEY,
 )
+from mugen.core.runtime.bootstrap_contract import parse_runtime_bootstrap_settings
 from mugen.core.runtime.phase_b_coordinator import start_phase_b_runtime
 from mugen.core.runtime.phase_b_controls import (
     parse_bool,
@@ -55,6 +56,7 @@ from mugen.core.runtime.phase_b_runtime import (
     finalize_phase_b_task_completion,
     wait_for_critical_startup,
 )
+from mugen.core.runtime.task_shutdown import cancel_tasks_with_timeout
 
 _PLATFORM_CLIENTS_TASK_KEY = "platform_clients_task"
 
@@ -75,6 +77,20 @@ def _bootstrap_state() -> dict:
 
 def _parse_bool(value: object, default: bool = False) -> bool:
     return parse_bool(value, default=default)
+
+
+def _resolve_shutdown_timeout_seconds() -> float:
+    runtime_config = getattr(di.container, "config", None)
+    if runtime_config is None:
+        raise RuntimeError("Configuration unavailable.")
+    settings = parse_runtime_bootstrap_settings(
+        runtime_config,
+        require_profile=False,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=False,
+        require_shutdown_timeout_seconds=True,
+    )
+    return float(settings.shutdown_timeout_seconds)
 
 
 async def _shutdown_container() -> None:
@@ -207,30 +223,54 @@ async def shutdown():
     state = _bootstrap_state()
     task = state.get(_PLATFORM_CLIENTS_TASK_KEY)
     state[SHUTDOWN_REQUESTED_KEY] = True
-    state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
-    state[PHASE_B_ERROR_KEY] = None
+
     if not isinstance(task, asyncio.Task):
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
+        state[PHASE_B_ERROR_KEY] = None
         await _shutdown_container()
         return
 
     if task.done():
         state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
+        state[PHASE_B_ERROR_KEY] = None
         await _shutdown_container()
         return
 
-    app.logger.debug("Cancelling platform client runner task.")
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        app.logger.debug("Platform client runner task cancelled during shutdown.")
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        app.logger.warning(
-            "Platform client runner task raised during shutdown "
-            "(error_type=%s error=%s).",
-            type(exc).__name__,
-            exc,
+    shutdown_timeout_seconds = _resolve_shutdown_timeout_seconds()
+    app.logger.debug(
+        "Cancelling platform client runner task timeout_seconds=%.2f",
+        shutdown_timeout_seconds,
+    )
+    outcome = await cancel_tasks_with_timeout(
+        (task,),
+        timeout_seconds=shutdown_timeout_seconds,
+    )
+    if outcome.timed_out_tasks:
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        state[PHASE_B_ERROR_KEY] = (
+            "phase_b shutdown timed out after "
+            f"{shutdown_timeout_seconds:.2f}s"
         )
-    finally:
-        state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
-        await _shutdown_container()
+        app.logger.error(
+            "Platform client runner task did not stop during shutdown "
+            "timeout_seconds=%.2f",
+            shutdown_timeout_seconds,
+        )
+    else:
+        try:
+            await asyncio.gather(task, return_exceptions=False)
+        except asyncio.CancelledError:
+            app.logger.debug("Platform client runner task cancelled during shutdown.")
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            app.logger.warning(
+                "Platform client runner task raised during shutdown "
+                "(error_type=%s error=%s).",
+                type(exc).__name__,
+                exc,
+            )
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
+        state[PHASE_B_ERROR_KEY] = None
+
+    state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
+    await _shutdown_container()

@@ -23,12 +23,21 @@ from mugen.core.runtime.phase_b_controls import (
     resolve_phase_b_runtime_controls,
     resolve_phase_b_startup_timeout_seconds,
 )
+from mugen.core.runtime.task_shutdown import TaskCancellationOutcome
 
 
 def _import_quartman_with_app(app: Quart):
     sys.modules.pop("quartman", None)
     with unittest.mock.patch("mugen.create_quart_app", return_value=app):
         return import_module("quartman")
+
+
+def _runtime_mock(*, startup_timeout_seconds: float) -> unittest.mock.Mock:
+    return unittest.mock.Mock(
+        phase_b=unittest.mock.Mock(startup_timeout_seconds=startup_timeout_seconds),
+        provider_shutdown_timeout_seconds=10.0,
+        shutdown_timeout_seconds=60.0,
+    )
 
 
 class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
@@ -61,9 +70,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=[],
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-                ),
+                runtime=_runtime_mock(startup_timeout_seconds=30.0),
             )
         )
 
@@ -173,9 +180,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=[],
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-                ),
+                runtime=_runtime_mock(startup_timeout_seconds=30.0),
             )
         )
 
@@ -208,9 +213,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=[],
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-                ),
+                runtime=_runtime_mock(startup_timeout_seconds=30.0),
             )
         )
 
@@ -234,9 +237,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=["web", "unknown"],
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-                ),
+                runtime=_runtime_mock(startup_timeout_seconds=30.0),
             )
         )
 
@@ -273,9 +274,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=["telnet"],
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-                ),
+                runtime=_runtime_mock(startup_timeout_seconds=30.0),
             ),
         )
 
@@ -312,9 +311,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=["web"],
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-                ),
+                runtime=_runtime_mock(startup_timeout_seconds=30.0),
                 modules=unittest.mock.Mock(
                     core=unittest.mock.Mock(
                         gateway=unittest.mock.Mock(
@@ -360,17 +357,13 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=["whatsapp"],
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-                ),
+                runtime=_runtime_mock(startup_timeout_seconds=30.0),
             )
         )
         config = unittest.mock.Mock()
         config.mugen = unittest.mock.Mock(
             platforms=["whatsapp"],
-            runtime=unittest.mock.Mock(
-                phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-            ),
+            runtime=_runtime_mock(startup_timeout_seconds=30.0),
         )
         whatsapp_started = asyncio.Event()
 
@@ -551,7 +544,19 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(phase_b_runner.await_count, 0)
         self.assertTrue(any("already active" in msg for msg in logs.output))
-        await quartman.app.shutdown()
+        with (
+            unittest.mock.patch.object(
+                quartman,
+                "_resolve_shutdown_timeout_seconds",
+                return_value=0.01,
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=unittest.mock.AsyncMock(),
+            ),
+        ):
+            await quartman.app.shutdown()
 
     async def test_startup_fails_when_container_config_is_missing(self) -> None:
         app = Quart("quartman_test")
@@ -616,15 +621,20 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container = unittest.mock.Mock()
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=12.5)
-                )
+                runtime=_runtime_mock(startup_timeout_seconds=12.5)
             )
         )
         self.assertEqual(
             resolve_phase_b_startup_timeout_seconds(container.config),
             12.5,
         )
+
+    async def test_resolve_shutdown_timeout_seconds_requires_runtime_config(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        with unittest.mock.patch.object(quartman.di, "container", object()):
+            with self.assertRaisesRegex(RuntimeError, "Configuration unavailable"):
+                quartman._resolve_shutdown_timeout_seconds()
 
     async def test_startup_rejects_phase_b_plan_missing_timeout_value(self) -> None:
         app = Quart("quartman_test")
@@ -633,9 +643,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=[],
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-                ),
+                runtime=_runtime_mock(startup_timeout_seconds=30.0),
             )
         )
 
@@ -673,9 +681,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=[],
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-                ),
+                runtime=_runtime_mock(startup_timeout_seconds=30.0),
             )
         )
 
@@ -726,9 +732,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 platforms=[],
-                runtime=unittest.mock.Mock(
-                    phase_b=unittest.mock.Mock(startup_timeout_seconds=30.0)
-                ),
+                runtime=_runtime_mock(startup_timeout_seconds=30.0),
             )
         )
 
@@ -778,7 +782,19 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(asyncio.Event().wait())
         quartman._bootstrap_state()[quartman._PLATFORM_CLIENTS_TASK_KEY] = task
 
-        with self.assertLogs(logger=app.name, level="DEBUG") as logs:
+        with (
+            unittest.mock.patch.object(
+                quartman,
+                "_resolve_shutdown_timeout_seconds",
+                return_value=0.01,
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=unittest.mock.AsyncMock(),
+            ),
+            self.assertLogs(logger=app.name, level="DEBUG") as logs,
+        ):
             await quartman.shutdown()
 
         self.assertTrue(task.done())
@@ -788,6 +804,45 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             quartman._bootstrap_state().get(quartman._PLATFORM_CLIENTS_TASK_KEY)
         )
+
+    async def test_shutdown_marks_degraded_when_task_timeout_expires(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        task = asyncio.create_task(asyncio.Event().wait())
+        quartman._bootstrap_state()[quartman._PLATFORM_CLIENTS_TASK_KEY] = task
+
+        with (
+            unittest.mock.patch.object(
+                quartman,
+                "_resolve_shutdown_timeout_seconds",
+                return_value=0.01,
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "cancel_tasks_with_timeout",
+                new=unittest.mock.AsyncMock(
+                    return_value=TaskCancellationOutcome(
+                        completed_tasks=(),
+                        timed_out_tasks=(task,),
+                    )
+                ),
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=unittest.mock.AsyncMock(),
+            ),
+            self.assertLogs(logger=app.name, level="ERROR") as logs,
+        ):
+            await quartman.shutdown()
+
+        state = quartman._bootstrap_state()
+        self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+        self.assertIn("phase_b shutdown timed out after", str(state[quartman.PHASE_B_ERROR_KEY]))
+        self.assertTrue(any("did not stop during shutdown" in msg for msg in logs.output))
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     async def test_shutdown_handles_non_cancelled_error_from_task_await(self) -> None:
         app = Quart("quartman_test")
@@ -809,6 +864,11 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 quartman,
                 "_shutdown_container",
                 new=shutdown_container,
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "_resolve_shutdown_timeout_seconds",
+                return_value=0.01,
             ),
             self.assertLogs(logger=app.name, level="WARNING") as logs,
         ):

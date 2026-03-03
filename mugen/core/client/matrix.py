@@ -110,6 +110,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     _default_matrix_ipc_queue_size: int = 256
 
+    _default_shutdown_timeout_seconds: float = 60.0
+
     _sync_key: str = "matrix_client_sync_next_batch"
     _encrypted_secret_prefix: str = "enc:v1:"
 
@@ -143,6 +145,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._matrix_ipc_queue: asyncio.Queue | None = None
         self._matrix_ipc_worker_task: asyncio.Task | None = None
         self._matrix_ipc_worker_stop = asyncio.Event()
+        self._shutdown_timeout_seconds = self._resolve_shutdown_timeout_seconds()
         self._credentials_key_prefix = self._resolve_credentials_key_prefix()
         self._known_devices_list_key = self._keyval_key("known_devices_list")
         self._sync_key = self._keyval_key("matrix_client_sync_next_batch")
@@ -379,10 +382,19 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             return
         if getattr(session, "closed", False) is True:
             return
+        timeout_seconds = self._effective_shutdown_timeout_seconds()
         try:
-            await session.close()
+            await asyncio.wait_for(
+                session.close(),
+                timeout=timeout_seconds,
+            )
         except AttributeError:
             ...
+        except asyncio.TimeoutError:
+            self._logging_gateway.warning(
+                "Matrix client session close timed out "
+                f"(timeout_seconds={timeout_seconds:.2f})."
+            )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
                 "Matrix client session close failed "
@@ -675,6 +687,33 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             return self._default_matrix_ipc_queue_size
         return parsed
 
+    def _resolve_shutdown_timeout_seconds(self) -> float:
+        raw_value = getattr(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "runtime", None),
+            "shutdown_timeout_seconds",
+            self._default_shutdown_timeout_seconds,
+        )
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            return self._default_shutdown_timeout_seconds
+        if parsed <= 0:
+            return self._default_shutdown_timeout_seconds
+        return parsed
+
+    def _effective_shutdown_timeout_seconds(self) -> float:
+        raw_value = getattr(self, "_shutdown_timeout_seconds", None)
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            parsed = self._resolve_shutdown_timeout_seconds()
+            self._shutdown_timeout_seconds = parsed
+            return parsed
+        if parsed <= 0:
+            parsed = self._resolve_shutdown_timeout_seconds()
+            self._shutdown_timeout_seconds = parsed
+        return parsed
+
     def _start_matrix_ipc_worker(self) -> None:
         if self._ipc_service is None:
             return
@@ -692,11 +731,20 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         task = self._matrix_ipc_worker_task
         self._matrix_ipc_worker_task = None
         if task is not None and not task.done():
+            timeout_seconds = self._effective_shutdown_timeout_seconds()
             task.cancel()
             try:
-                await task
+                await asyncio.wait_for(
+                    asyncio.gather(task, return_exceptions=True),
+                    timeout=timeout_seconds,
+                )
             except asyncio.CancelledError:
                 ...
+            except asyncio.TimeoutError:
+                self._logging_gateway.warning(
+                    "Matrix IPC worker shutdown timed out "
+                    f"(timeout_seconds={timeout_seconds:.2f})."
+                )
         self._matrix_ipc_queue = None
 
     async def _dispatch_matrix_ipc_request(

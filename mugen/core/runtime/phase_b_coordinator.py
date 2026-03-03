@@ -13,6 +13,7 @@ from mugen.core.runtime.phase_b_bootstrap import (
     apply_phase_b_startup_state,
     build_phase_b_startup_plan,
 )
+from mugen.core.runtime.task_shutdown import cancel_tasks_with_timeout
 
 
 def _build_startup_plan(
@@ -129,21 +130,19 @@ async def start_phase_b_runtime(
         )
     except Exception:
         if not task.done():
-            task.cancel()
             cancel_timeout_seconds = (
                 resolve_phase_b_startup_failure_cancel_timeout_seconds(config)
             )
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(task, return_exceptions=True),
-                    timeout=cancel_timeout_seconds,
-                )
-            except asyncio.TimeoutError as exc:
+            outcome = await cancel_tasks_with_timeout(
+                (task,),
+                timeout_seconds=cancel_timeout_seconds,
+            )
+            if outcome.timed_out_tasks:
                 raise RuntimeError(
                     "Phase-B runner did not stop within "
                     f"{cancel_timeout_seconds:.2f}s after critical startup failure; "
                     "check provider cancellation handling or increase "
                     "mugen.runtime.provider_shutdown_timeout_seconds."
-                ) from exc
+                )
         raise
     return plan, task

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from mugen.core.runtime import phase_b_coordinator
 from mugen.core.runtime.phase_b_bootstrap import PhaseBStartupPlan
+from mugen.core.runtime.task_shutdown import TaskCancellationOutcome
 
 
 class TestPhaseBCoordinator(unittest.TestCase):
@@ -107,6 +108,11 @@ class TestPhaseBCoordinator(unittest.TestCase):
         wait_for_critical_startup = unittest.mock.AsyncMock(
             side_effect=_wait_for_critical_startup
         )
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                runtime=SimpleNamespace(provider_shutdown_timeout_seconds=0.25)
+            )
+        )
 
         async def _run() -> None:
             with patch.object(
@@ -116,7 +122,7 @@ class TestPhaseBCoordinator(unittest.TestCase):
             ):
                 await phase_b_coordinator.start_phase_b_runtime(
                     app=object(),
-                    config=object(),
+                    config=config,
                     bootstrap_state={},
                     logger=object(),
                     run_platform_clients=_runner,
@@ -180,7 +186,6 @@ class TestPhaseBCoordinator(unittest.TestCase):
             startup_timeout_seconds=30.0,
         )
         runner_started = asyncio.Event()
-        cancellation_count = {"value": 0}
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 runtime=SimpleNamespace(provider_shutdown_timeout_seconds=0.01)
@@ -189,13 +194,7 @@ class TestPhaseBCoordinator(unittest.TestCase):
 
         async def _runner(_app) -> None:
             runner_started.set()
-            while True:
-                try:
-                    await asyncio.sleep(60)
-                except asyncio.CancelledError:
-                    cancellation_count["value"] += 1
-                    if cancellation_count["value"] >= 2:
-                        raise
+            await asyncio.Event().wait()
 
         async def _wait_for_critical_startup(*_args, **_kwargs) -> None:
             await runner_started.wait()
@@ -210,6 +209,15 @@ class TestPhaseBCoordinator(unittest.TestCase):
                 phase_b_coordinator,
                 "prepare_phase_b_startup_plan",
                 return_value=startup_plan,
+            ), patch.object(
+                phase_b_coordinator,
+                "cancel_tasks_with_timeout",
+                new=unittest.mock.AsyncMock(
+                    return_value=TaskCancellationOutcome(
+                        completed_tasks=(),
+                        timed_out_tasks=(object(),),
+                    )
+                ),
             ):
                 await phase_b_coordinator.start_phase_b_runtime(
                     app=object(),

@@ -96,6 +96,7 @@ from mugen.core.runtime.phase_b_controls import (
     parse_bool as _parse_bool,
 )
 from mugen.core.runtime.phase_b_runtime import refresh_phase_b_health
+from mugen.core.runtime.task_shutdown import cancel_tasks_with_timeout
 from mugen.core.utility.platforms import (
     SUPPORTED_CORE_PLATFORMS,
     normalize_platforms,
@@ -487,6 +488,17 @@ def _resolve_phase_b_supervision_controls(
     if max_backoff_seconds < base_backoff_seconds:
         max_backoff_seconds = base_backoff_seconds
     return max_restarts, base_backoff_seconds, max_backoff_seconds
+
+
+def _resolve_runtime_shutdown_timeout_seconds(config: SimpleNamespace) -> float:
+    settings = parse_runtime_bootstrap_settings(
+        config,
+        require_profile=False,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=False,
+        require_shutdown_timeout_seconds=True,
+    )
+    return float(settings.shutdown_timeout_seconds)
 
 
 def _ensure_platform_state(
@@ -1001,11 +1013,33 @@ async def run_platform_clients(
                         break
     except asyncio.exceptions.CancelledError:
         bootstrap_state[SHUTDOWN_REQUESTED_KEY] = True
-        for task in tasks.values():
-            if task.done():  # pragma: no cover
-                continue
-            task.cancel()
-        await asyncio.gather(*tasks.values(), return_exceptions=True)
+        runtime_shutdown_timeout_seconds = _resolve_runtime_shutdown_timeout_seconds(config)
+        outcome = await cancel_tasks_with_timeout(
+            tuple(tasks.values()),
+            timeout_seconds=runtime_shutdown_timeout_seconds,
+        )
+        if outcome.timed_out_tasks:
+            for platform_name, platform_task in tasks.items():
+                if platform_task not in outcome.timed_out_tasks:
+                    continue
+                _set_platform_status(
+                    bootstrap_state,
+                    platform=platform_name,
+                    status=PHASE_STATUS_DEGRADED,
+                    error=(
+                        "shutdown timed out after "
+                        f"{runtime_shutdown_timeout_seconds:.2f}s"
+                    ),
+                )
+                logger.error(
+                    f"{platform_name} client did not stop during shutdown "
+                    f"timeout_seconds={runtime_shutdown_timeout_seconds:.2f}."
+                )
+            _refresh_phase_b_status(
+                bootstrap_state,
+                critical_platforms=critical_platforms,
+                degrade_on_critical_exit=degrade_on_critical_exit,
+            )
         raise
 
 

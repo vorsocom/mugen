@@ -16,6 +16,8 @@ def _valid_core_config() -> dict:
             "runtime": {
                 "profile": "platform_full",
                 "provider_readiness_timeout_seconds": 15.0,
+                "provider_shutdown_timeout_seconds": 10.0,
+                "shutdown_timeout_seconds": 60.0,
                 "phase_b": {
                     "startup_timeout_seconds": 30.0,
                     "readiness_grace_seconds": 0.0,
@@ -192,11 +194,27 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         ]
         di._validate_core_module_schema(cfg)
 
-    def test_core_schema_validates_optional_runtime_shutdown_timeouts(self) -> None:
+    def test_core_schema_validates_required_runtime_shutdown_timeouts(self) -> None:
         cfg = _valid_core_config()
         cfg["mugen"]["runtime"]["provider_shutdown_timeout_seconds"] = 10.0
         cfg["mugen"]["runtime"]["shutdown_timeout_seconds"] = 60.0
         di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        del cfg["mugen"]["runtime"]["provider_shutdown_timeout_seconds"]
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mugen.runtime.provider_shutdown_timeout_seconds is required",
+        ):
+            di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        del cfg["mugen"]["runtime"]["shutdown_timeout_seconds"]
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mugen.runtime.shutdown_timeout_seconds is required",
+        ):
+            di._validate_core_module_schema(cfg)
 
         cfg = _valid_core_config()
         cfg["mugen"]["runtime"]["provider_shutdown_timeout_seconds"] = "bad"

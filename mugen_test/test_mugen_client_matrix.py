@@ -873,6 +873,56 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(client._matrix_ipc_queue)
         self.assertIsNone(client._matrix_ipc_worker_task)
 
+    async def test_stop_matrix_ipc_worker_handles_wait_for_cancelled_error(self) -> None:
+        client = self._client()
+        client._matrix_ipc_queue = asyncio.Queue()
+
+        task = asyncio.create_task(asyncio.sleep(60))
+        client._matrix_ipc_worker_task = task
+
+        def _raise_cancelled(awaitable, timeout):  # noqa: ARG001
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise asyncio.CancelledError
+
+        with patch(
+            "mugen.core.client.matrix.asyncio.wait_for",
+            side_effect=_raise_cancelled,
+        ):
+            await client._stop_matrix_ipc_worker()  # pylint: disable=protected-access
+
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertIsNone(client._matrix_ipc_queue)
+        self.assertIsNone(client._matrix_ipc_worker_task)
+
+    async def test_stop_matrix_ipc_worker_logs_timeout_warning(self) -> None:
+        client = self._client()
+        client._matrix_ipc_queue = asyncio.Queue()
+
+        task = asyncio.create_task(asyncio.sleep(60))
+        client._matrix_ipc_worker_task = task
+
+        def _raise_timeout(awaitable, timeout):  # noqa: ARG001
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise asyncio.TimeoutError
+
+        with patch(
+            "mugen.core.client.matrix.asyncio.wait_for",
+            side_effect=_raise_timeout,
+        ):
+            await client._stop_matrix_ipc_worker()  # pylint: disable=protected-access
+
+        self.assertTrue(
+            any(
+                "Matrix IPC worker shutdown timed out" in str(call.args[0])
+                for call in client._logging_gateway.warning.call_args_list
+            )
+        )
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
     async def test_dispatch_matrix_ipc_request_guard_paths(self) -> None:
         client = self._client()
         payload = IPCCommandRequest(platform="matrix", command="matrix_event", data={})
@@ -1092,6 +1142,66 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         failing_session.close.assert_awaited_once_with()
         client._logging_gateway.warning.assert_called_once()  # pylint: disable=protected-access
+
+    async def test_close_logs_warning_when_session_close_times_out(self) -> None:
+        client = self._client()
+        client.client_session = SimpleNamespace(
+            close=AsyncMock(return_value=None),
+            closed=False,
+        )
+
+        def _raise_timeout(awaitable, timeout):  # noqa: ARG001
+            awaitable.close()
+            raise asyncio.TimeoutError
+
+        with patch(
+            "mugen.core.client.matrix.asyncio.wait_for",
+            side_effect=_raise_timeout,
+        ):
+            await client.close()
+
+        self.assertTrue(
+            any(
+                "Matrix client session close timed out" in str(call.args[0])
+                for call in client._logging_gateway.warning.call_args_list
+            )
+        )
+
+    def test_resolve_shutdown_timeout_seconds_falls_back_for_invalid_values(self) -> None:
+        client = self._client()
+        client._config.mugen.runtime = SimpleNamespace(shutdown_timeout_seconds="bad")
+        self.assertEqual(
+            client._resolve_shutdown_timeout_seconds(),  # pylint: disable=protected-access
+            client._default_shutdown_timeout_seconds,  # pylint: disable=protected-access
+        )
+        client._config.mugen.runtime.shutdown_timeout_seconds = 0
+        self.assertEqual(
+            client._resolve_shutdown_timeout_seconds(),  # pylint: disable=protected-access
+            client._default_shutdown_timeout_seconds,  # pylint: disable=protected-access
+        )
+
+    def test_effective_shutdown_timeout_seconds_refreshes_non_positive_cache(self) -> None:
+        client = self._client()
+        client._shutdown_timeout_seconds = 0  # pylint: disable=protected-access
+        client._config.mugen.runtime = SimpleNamespace(shutdown_timeout_seconds=12.5)
+        self.assertEqual(
+            client._effective_shutdown_timeout_seconds(),  # pylint: disable=protected-access
+            12.5,
+        )
+        self.assertEqual(client._shutdown_timeout_seconds, 12.5)  # pylint: disable=protected-access
+
+    def test_effective_shutdown_timeout_seconds_keeps_positive_cached_value(self) -> None:
+        client = self._client()
+        client._shutdown_timeout_seconds = 7.0  # pylint: disable=protected-access
+        with patch.object(
+            client,
+            "_resolve_shutdown_timeout_seconds",
+            side_effect=AssertionError("should not be called"),
+        ):
+            self.assertEqual(
+                client._effective_shutdown_timeout_seconds(),  # pylint: disable=protected-access
+                7.0,
+            )
 
     async def test_sync_token_property_reads_storage(self) -> None:
         client = self._client()

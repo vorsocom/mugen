@@ -104,23 +104,22 @@ class TestMugenRuntimePhaseBControls(unittest.TestCase):
         )
         self.assertEqual(timeout_seconds, 3.5)
 
-    def test_resolve_startup_failure_cancel_timeout_falls_back_to_default_when_missing(
+    def test_resolve_startup_failure_cancel_timeout_requires_config_value(
         self,
     ) -> None:
-        timeout_seconds = (
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "provider_shutdown_timeout_seconds",
+        ):
             controls.resolve_phase_b_startup_failure_cancel_timeout_seconds(object())
-        )
-        self.assertEqual(timeout_seconds, 10.0)
 
-    def test_resolve_startup_failure_cancel_timeout_falls_back_to_default_when_invalid(
-        self,
-    ) -> None:
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 runtime=SimpleNamespace(provider_shutdown_timeout_seconds="bad")
             )
         )
-        timeout_seconds = (
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "provider_shutdown_timeout_seconds",
+        ):
             controls.resolve_phase_b_startup_failure_cancel_timeout_seconds(config)
-        )
-        self.assertEqual(timeout_seconds, 10.0)

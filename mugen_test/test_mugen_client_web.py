@@ -6302,6 +6302,33 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(pending_task.done())
 
+    async def test_cancel_task_with_timeout_logs_warning_on_timeout(self) -> None:
+        pending_task = asyncio.create_task(asyncio.sleep(60))
+        self.client._shutdown_timeout_seconds = 0.01  # pylint: disable=protected-access
+
+        def _raise_timeout(awaitable, timeout):  # noqa: ARG001
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise asyncio.TimeoutError
+
+        with patch(
+            "mugen.core.client.web.asyncio.wait_for",
+            side_effect=_raise_timeout,
+        ):
+            await self.client._cancel_task_with_timeout(  # pylint: disable=protected-access
+                pending_task,
+                task_name="worker",
+            )
+
+        self.assertTrue(
+            any(
+                "Web client shutdown timed out" in str(call.args[0])
+                for call in self.client._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
+            )
+        )
+        pending_task.cancel()
+        await asyncio.gather(pending_task, return_exceptions=True)
+
     def test_ensure_media_directory_creates_storage_path(self) -> None:
         temp_dir = os.path.join(self.tmpdir.name, "media-test")
         self.client._media_storage_path = temp_dir  # pylint: disable=protected-access

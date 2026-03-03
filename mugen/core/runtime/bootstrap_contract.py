@@ -149,6 +149,8 @@ def parse_runtime_bootstrap_settings(
     require_profile: bool,
     require_startup_timeout_seconds: bool,
     require_provider_readiness_timeout_seconds: bool,
+    require_provider_shutdown_timeout_seconds: bool = False,
+    require_shutdown_timeout_seconds: bool = False,
 ) -> RuntimeBootstrapSettings:
     """Parse canonical runtime bootstrap controls from dict or namespace config."""
     raw_platforms = _read_path(config, "mugen", "platforms")
@@ -232,25 +234,61 @@ def parse_runtime_bootstrap_settings(
             ),
         )
 
-    provider_shutdown_timeout_seconds = _parse_optional_positive_float(
-        raw_value=_read_path(
-            config,
-            "mugen",
-            "runtime",
-            "provider_shutdown_timeout_seconds",
-        ),
-        key_path=_PROVIDER_SHUTDOWN_TIMEOUT_KEY,
+    raw_provider_shutdown_timeout = _read_path(
+        config,
+        "mugen",
+        "runtime",
+        "provider_shutdown_timeout_seconds",
     )
+    if require_provider_shutdown_timeout_seconds:
+        provider_shutdown_timeout_seconds = _parse_required_positive_float(
+            raw_value=raw_provider_shutdown_timeout,
+            missing_message=(
+                "Invalid runtime configuration: "
+                f"{_PROVIDER_SHUTDOWN_TIMEOUT_KEY} is required."
+            ),
+            invalid_message=(
+                "Invalid runtime configuration: "
+                f"{_PROVIDER_SHUTDOWN_TIMEOUT_KEY} must be a positive number."
+            ),
+            nonpositive_message=(
+                "Invalid runtime configuration: "
+                f"{_PROVIDER_SHUTDOWN_TIMEOUT_KEY} must be greater than 0."
+            ),
+        )
+    else:
+        provider_shutdown_timeout_seconds = _parse_optional_positive_float(
+            raw_value=raw_provider_shutdown_timeout,
+            key_path=_PROVIDER_SHUTDOWN_TIMEOUT_KEY,
+        )
 
-    shutdown_timeout_seconds = _parse_optional_positive_float(
-        raw_value=_read_path(
-            config,
-            "mugen",
-            "runtime",
-            "shutdown_timeout_seconds",
-        ),
-        key_path=_SHUTDOWN_TIMEOUT_KEY,
+    raw_shutdown_timeout = _read_path(
+        config,
+        "mugen",
+        "runtime",
+        "shutdown_timeout_seconds",
     )
+    if require_shutdown_timeout_seconds:
+        shutdown_timeout_seconds = _parse_required_positive_float(
+            raw_value=raw_shutdown_timeout,
+            missing_message=(
+                "Invalid runtime configuration: "
+                f"{_SHUTDOWN_TIMEOUT_KEY} is required."
+            ),
+            invalid_message=(
+                "Invalid runtime configuration: "
+                f"{_SHUTDOWN_TIMEOUT_KEY} must be a positive number."
+            ),
+            nonpositive_message=(
+                "Invalid runtime configuration: "
+                f"{_SHUTDOWN_TIMEOUT_KEY} must be greater than 0."
+            ),
+        )
+    else:
+        shutdown_timeout_seconds = _parse_optional_positive_float(
+            raw_value=raw_shutdown_timeout,
+            key_path=_SHUTDOWN_TIMEOUT_KEY,
+        )
 
     if raw_platforms is _MISSING:
         raw_platforms = None
