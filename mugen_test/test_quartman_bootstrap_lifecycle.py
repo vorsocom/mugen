@@ -12,6 +12,7 @@ from mugen import (
     PHASE_B_ERROR_KEY,
     PHASE_B_PLATFORM_ERRORS_KEY,
     PHASE_B_PLATFORM_STATUSES_KEY,
+    PHASE_B_PLATFORM_TASKS_KEY,
     PHASE_B_STATUS_KEY,
     PHASE_STATUS_HEALTHY,
     PHASE_STATUS_STOPPED,
@@ -23,7 +24,7 @@ from mugen.core.runtime.phase_b_controls import (
     resolve_phase_b_runtime_controls,
     resolve_phase_b_startup_timeout_seconds,
 )
-from mugen.core.runtime.task_shutdown import TaskCancellationOutcome
+from mugen.core.runtime.phase_b_shutdown import PhaseBShutdownError
 
 
 def _import_quartman_with_app(app: Quart):
@@ -812,6 +813,30 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(asyncio.Event().wait())
         quartman._bootstrap_state()[quartman._PLATFORM_CLIENTS_TASK_KEY] = task
 
+        async def _timeout_cancel(
+            bootstrap_state,
+            *,
+            timeout_seconds,
+            logger,
+        ):  # noqa: ARG001
+            bootstrap_state[quartman.PHASE_B_STATUS_KEY] = quartman.PHASE_STATUS_DEGRADED
+            bootstrap_state[quartman.PHASE_B_ERROR_KEY] = (
+                "phase_b platform shutdown timed out after "
+                f"{timeout_seconds:.2f}s (web)"
+            )
+            platform_statuses = bootstrap_state.get(quartman.PHASE_B_PLATFORM_STATUSES_KEY, {})
+            if not isinstance(platform_statuses, dict):
+                platform_statuses = {}
+            platform_statuses["web"] = quartman.PHASE_STATUS_DEGRADED
+            bootstrap_state[quartman.PHASE_B_PLATFORM_STATUSES_KEY] = platform_statuses
+            platform_errors = bootstrap_state.get(quartman.PHASE_B_PLATFORM_ERRORS_KEY, {})
+            if not isinstance(platform_errors, dict):
+                platform_errors = {}
+            platform_errors["web"] = f"shutdown timed out after {timeout_seconds:.2f}s"
+            bootstrap_state[quartman.PHASE_B_PLATFORM_ERRORS_KEY] = platform_errors
+            bootstrap_state[quartman.PHASE_B_PLATFORM_TASKS_KEY] = {"web": task}
+            raise PhaseBShutdownError(bootstrap_state[quartman.PHASE_B_ERROR_KEY])
+
         with (
             unittest.mock.patch.object(
                 quartman,
@@ -820,12 +845,9 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             ),
             unittest.mock.patch.object(
                 quartman,
-                "cancel_tasks_with_timeout",
+                "cancel_registered_platform_tasks",
                 new=unittest.mock.AsyncMock(
-                    return_value=TaskCancellationOutcome(
-                        completed_tasks=(),
-                        timed_out_tasks=(task,),
-                    )
+                    side_effect=_timeout_cancel
                 ),
             ),
             unittest.mock.patch.object(
@@ -839,8 +861,9 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
 
         state = quartman._bootstrap_state()
         self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
-        self.assertIn("phase_b shutdown timed out after", str(state[quartman.PHASE_B_ERROR_KEY]))
-        self.assertTrue(any("did not stop during shutdown" in msg for msg in logs.output))
+        self.assertIn("phase_b platform shutdown timed out after", str(state[quartman.PHASE_B_ERROR_KEY]))
+        self.assertTrue(any("shutdown failed" in msg for msg in logs.output))
+        self.assertIn("web", state[PHASE_B_PLATFORM_TASKS_KEY])
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
@@ -870,14 +893,46 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 "_resolve_shutdown_timeout_seconds",
                 return_value=0.01,
             ),
-            self.assertLogs(logger=app.name, level="WARNING") as logs,
+            self.assertLogs(logger=app.name, level="ERROR") as logs,
         ):
             await quartman.shutdown()
 
-        self.assertTrue(any("raised during shutdown" in msg for msg in logs.output))
+        self.assertTrue(any("shutdown failed" in msg for msg in logs.output))
         shutdown_container.assert_awaited_once_with()
+        self.assertEqual(
+            quartman._bootstrap_state()[quartman.PHASE_B_STATUS_KEY],
+            quartman.PHASE_STATUS_DEGRADED,
+        )
         self.assertIsNone(
             quartman._bootstrap_state().get(quartman._PLATFORM_CLIENTS_TASK_KEY)
+        )
+
+    async def test_shutdown_normalizes_platform_task_registry_after_container_shutdown(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        async def _mutating_shutdown_container() -> None:
+            quartman._bootstrap_state()[quartman.PHASE_B_PLATFORM_TASKS_KEY] = "invalid"
+
+        with (
+            unittest.mock.patch.object(
+                quartman,
+                "_resolve_shutdown_timeout_seconds",
+                return_value=0.01,
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=_mutating_shutdown_container,
+            ),
+        ):
+            await quartman.shutdown()
+
+        self.assertEqual(
+            quartman._bootstrap_state()[quartman.PHASE_B_PLATFORM_TASKS_KEY],
+            {},
         )
 
     async def test_runtime_controls_default_when_container_config_missing(self) -> None:

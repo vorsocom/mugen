@@ -17,6 +17,7 @@ PHASE_B_ERROR_KEY = "phase_b_error"
 PHASE_B_STARTED_AT_KEY = "phase_b_started_at"
 PHASE_B_PLATFORM_STATUSES_KEY = "platform_statuses"
 PHASE_B_PLATFORM_ERRORS_KEY = "platform_errors"
+PHASE_B_PLATFORM_TASKS_KEY = "platform_tasks"
 SHUTDOWN_REQUESTED_KEY = "shutdown_requested"
 
 PHASE_STATUS_STARTING = "starting"

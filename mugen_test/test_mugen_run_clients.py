@@ -12,6 +12,7 @@ from mugen import (
     PHASE_B_ERROR_KEY,
     PHASE_B_PLATFORM_ERRORS_KEY,
     PHASE_B_PLATFORM_STATUSES_KEY,
+    PHASE_B_PLATFORM_TASKS_KEY,
     PHASE_B_STATUS_KEY,
     PHASE_STATUS_DEGRADED,
     PHASE_STATUS_HEALTHY,
@@ -23,7 +24,6 @@ from mugen import (
     run_platform_clients,
     run_whatsapp_client,
 )
-from mugen.core.runtime.task_shutdown import TaskCancellationOutcome
 
 
 def _test_config(*, platforms: list[str], mh_mode: str = "optional") -> SimpleNamespace:
@@ -362,17 +362,35 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             started.set()
             await asyncio.Event().wait()
 
-        async def _timeout_cancel(tasks, timeout_seconds):  # noqa: ARG001
-            task_tuple = tuple(tasks)
-            return TaskCancellationOutcome(
-                completed_tasks=(),
-                timed_out_tasks=task_tuple,
+        async def _timeout_cancel(
+            bootstrap_state,
+            *,
+            timeout_seconds,
+            logger,
+        ):  # noqa: ARG001
+            platform_statuses = bootstrap_state.get(PHASE_B_PLATFORM_STATUSES_KEY, {})
+            if not isinstance(platform_statuses, dict):
+                platform_statuses = {}
+            platform_statuses["web"] = PHASE_STATUS_DEGRADED
+            bootstrap_state[PHASE_B_PLATFORM_STATUSES_KEY] = platform_statuses
+
+            platform_errors = bootstrap_state.get(PHASE_B_PLATFORM_ERRORS_KEY, {})
+            if not isinstance(platform_errors, dict):
+                platform_errors = {}
+            platform_errors["web"] = f"shutdown timed out after {timeout_seconds:.2f}s"
+            bootstrap_state[PHASE_B_PLATFORM_ERRORS_KEY] = platform_errors
+
+            bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
+            bootstrap_state[PHASE_B_ERROR_KEY] = (
+                "phase_b platform shutdown timed out after "
+                f"{timeout_seconds:.2f}s (web)"
             )
+            raise RuntimeError(bootstrap_state[PHASE_B_ERROR_KEY])
 
         with (
             unittest.mock.patch("mugen.run_web_client", new=_run_web_client),
             unittest.mock.patch(
-                "mugen.cancel_tasks_with_timeout",
+                "mugen.cancel_registered_platform_tasks",
                 new=unittest.mock.AsyncMock(side_effect=_timeout_cancel),
             ),
         ):
@@ -385,7 +403,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             )
             await asyncio.wait_for(started.wait(), timeout=1.0)
             runner.cancel()
-            with self.assertRaises(asyncio.CancelledError):
+            with self.assertRaises(RuntimeError):
                 await runner
 
         state = app.extensions["mugen"]["bootstrap"]
@@ -415,21 +433,44 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             started.set()
             await asyncio.Event().wait()
 
-        async def _partial_timeout(tasks, timeout_seconds):  # noqa: ARG001
-            task_tuple = tuple(tasks)
-            for platform_task in task_tuple:
-                platform_task.cancel()
-            await asyncio.gather(*task_tuple, return_exceptions=True)
-            return TaskCancellationOutcome(
-                completed_tasks=task_tuple[1:],
-                timed_out_tasks=(task_tuple[0],),
+        async def _partial_timeout(
+            bootstrap_state,
+            *,
+            timeout_seconds,
+            logger,
+        ):  # noqa: ARG001
+            platform_statuses = bootstrap_state.get(PHASE_B_PLATFORM_STATUSES_KEY, {})
+            if not isinstance(platform_statuses, dict):
+                platform_statuses = {}
+            platform_statuses["matrix"] = PHASE_STATUS_DEGRADED
+            platform_statuses["web"] = PHASE_STATUS_STOPPED
+            bootstrap_state[PHASE_B_PLATFORM_STATUSES_KEY] = platform_statuses
+
+            platform_errors = bootstrap_state.get(PHASE_B_PLATFORM_ERRORS_KEY, {})
+            if not isinstance(platform_errors, dict):
+                platform_errors = {}
+            platform_errors["matrix"] = f"shutdown timed out after {timeout_seconds:.2f}s"
+            platform_errors["web"] = None
+            bootstrap_state[PHASE_B_PLATFORM_ERRORS_KEY] = platform_errors
+
+            task_map = bootstrap_state.get(PHASE_B_PLATFORM_TASKS_KEY, {})
+            if not isinstance(task_map, dict):
+                task_map = {}
+            bootstrap_state[PHASE_B_PLATFORM_TASKS_KEY] = {
+                "matrix": task_map.get("matrix")
+            }
+            bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
+            bootstrap_state[PHASE_B_ERROR_KEY] = (
+                "phase_b platform shutdown timed out after "
+                f"{timeout_seconds:.2f}s (matrix)"
             )
+            raise RuntimeError(bootstrap_state[PHASE_B_ERROR_KEY])
 
         with (
             unittest.mock.patch("mugen.run_matrix_client", new=_blocking_runner),
             unittest.mock.patch("mugen.run_web_client", new=_blocking_runner),
             unittest.mock.patch(
-                "mugen.cancel_tasks_with_timeout",
+                "mugen.cancel_registered_platform_tasks",
                 new=unittest.mock.AsyncMock(side_effect=_partial_timeout),
             ),
         ):
@@ -442,7 +483,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             )
             await asyncio.wait_for(started.wait(), timeout=1.0)
             runner.cancel()
-            with self.assertRaises(asyncio.CancelledError):
+            with self.assertRaises(RuntimeError):
                 await runner
 
         state = app.extensions["mugen"]["bootstrap"]
@@ -803,6 +844,47 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
         state = app.extensions["mugen"]["bootstrap"]
         self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED)
+
+    async def test_run_platform_clients_surfaces_runner_error_when_shutdown_requested(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _test_config(platforms=["web"])
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _run_web_client(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = (degraded_callback, healthy_callback)
+            if callable(started_callback):
+                started_callback()
+            started.set()
+            await release.wait()
+            raise ValueError("late failure")
+
+        with unittest.mock.patch("mugen.run_web_client", new=_run_web_client):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            state = app.extensions["mugen"]["bootstrap"]
+            state[SHUTDOWN_REQUESTED_KEY] = True
+            release.set()
+            await runner
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertIn(
+            "RuntimeError: ValueError: late failure",
+            str(state[PHASE_B_PLATFORM_ERRORS_KEY]["web"]),
+        )
 
     async def test_run_platform_clients_handles_cancellation(
         self,

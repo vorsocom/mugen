@@ -33,6 +33,7 @@ from mugen.bootstrap_state import (
     PHASE_B_ERROR_KEY,
     PHASE_B_PLATFORM_ERRORS_KEY,
     PHASE_B_PLATFORM_STATUSES_KEY,
+    PHASE_B_PLATFORM_TASKS_KEY,
     PHASE_B_STARTED_AT_KEY,
     PHASE_B_STATUS_KEY,
     PHASE_STATUS_DEGRADED,
@@ -56,7 +57,13 @@ from mugen.core.runtime.phase_b_runtime import (
     finalize_phase_b_task_completion,
     wait_for_critical_startup,
 )
-from mugen.core.runtime.task_shutdown import cancel_tasks_with_timeout
+from mugen.core.runtime.phase_b_shutdown import (
+    PhaseBShutdownError,
+    cancel_registered_platform_tasks,
+    clear_phase_b_platform_tasks,
+    reconcile_phase_b_shutdown_state,
+    shutdown_phase_b_runner_task,
+)
 
 _PLATFORM_CLIENTS_TASK_KEY = "platform_clients_task"
 
@@ -157,6 +164,7 @@ async def startup():
     state[PHASE_B_ERROR_KEY] = None
     state[PHASE_B_PLATFORM_STATUSES_KEY] = {}
     state[PHASE_B_PLATFORM_ERRORS_KEY] = {}
+    state[PHASE_B_PLATFORM_TASKS_KEY] = {}
     state[SHUTDOWN_REQUESTED_KEY] = False
     app.logger.info("Bootstrap phase_a starting.")
     try:
@@ -221,56 +229,38 @@ async def startup():
 async def shutdown():
     """Cancel and await platform client background task during shutdown."""
     state = _bootstrap_state()
-    task = state.get(_PLATFORM_CLIENTS_TASK_KEY)
     state[SHUTDOWN_REQUESTED_KEY] = True
-
-    if not isinstance(task, asyncio.Task):
-        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
-        state[PHASE_B_ERROR_KEY] = None
-        await _shutdown_container()
-        return
-
-    if task.done():
-        state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
-        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
-        state[PHASE_B_ERROR_KEY] = None
-        await _shutdown_container()
-        return
-
+    task = state.get(_PLATFORM_CLIENTS_TASK_KEY)
     shutdown_timeout_seconds = _resolve_shutdown_timeout_seconds()
-    app.logger.debug(
-        "Cancelling platform client runner task timeout_seconds=%.2f",
-        shutdown_timeout_seconds,
-    )
-    outcome = await cancel_tasks_with_timeout(
-        (task,),
-        timeout_seconds=shutdown_timeout_seconds,
-    )
-    if outcome.timed_out_tasks:
-        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
-        state[PHASE_B_ERROR_KEY] = (
-            "phase_b shutdown timed out after "
-            f"{shutdown_timeout_seconds:.2f}s"
-        )
-        app.logger.error(
-            "Platform client runner task did not stop during shutdown "
-            "timeout_seconds=%.2f",
+    shutdown_error: PhaseBShutdownError | None = None
+    if isinstance(task, asyncio.Task):
+        app.logger.debug(
+            "Cancelling platform client runner task timeout_seconds=%.2f",
             shutdown_timeout_seconds,
         )
-    else:
-        try:
-            await asyncio.gather(task, return_exceptions=False)
-        except asyncio.CancelledError:
-            app.logger.debug("Platform client runner task cancelled during shutdown.")
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            app.logger.warning(
-                "Platform client runner task raised during shutdown "
-                "(error_type=%s error=%s).",
-                type(exc).__name__,
-                exc,
+    try:
+        await cancel_registered_platform_tasks(
+            state,
+            timeout_seconds=shutdown_timeout_seconds,
+            logger=app.logger,
+        )
+        if isinstance(task, asyncio.Task):
+            await shutdown_phase_b_runner_task(
+                state,
+                task=task,
+                timeout_seconds=shutdown_timeout_seconds,
+                logger=app.logger,
             )
-        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
-        state[PHASE_B_ERROR_KEY] = None
-
-    state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
-    await _shutdown_container()
+    except PhaseBShutdownError as exc:
+        shutdown_error = exc
+        app.logger.error("Bootstrap phase_b shutdown failed error=%s", exc)
+    finally:
+        if shutdown_error is None:
+            clear_phase_b_platform_tasks(state)
+        reconcile_phase_b_shutdown_state(state)
+        state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
+        try:
+            await _shutdown_container()
+        finally:
+            if isinstance(state.get(PHASE_B_PLATFORM_TASKS_KEY), dict) is not True:
+                state[PHASE_B_PLATFORM_TASKS_KEY] = {}

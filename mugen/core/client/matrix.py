@@ -393,10 +393,12 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         except AttributeError:
             ...
         except asyncio.TimeoutError:
-            self._logging_gateway.warning(
+            message = (
                 "Matrix client session close timed out "
                 f"(timeout_seconds={timeout_seconds:.2f})."
             )
+            self._logging_gateway.warning(message)
+            raise RuntimeError(message)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
                 "Matrix client session close failed "
@@ -731,7 +733,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     async def _stop_matrix_ipc_worker(self) -> None:
         self._matrix_ipc_worker_stop.set()
         task = self._matrix_ipc_worker_task
-        self._matrix_ipc_worker_task = None
         if task is not None and not task.done():
             timeout_seconds = self._effective_shutdown_timeout_seconds()
             task.cancel()
@@ -743,10 +744,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             except asyncio.CancelledError:
                 ...
             except asyncio.TimeoutError:
-                self._logging_gateway.warning(
+                message = (
                     "Matrix IPC worker shutdown timed out "
                     f"(timeout_seconds={timeout_seconds:.2f})."
                 )
+                self._logging_gateway.warning(message)
+                raise RuntimeError(message)
+        self._matrix_ipc_worker_task = None
         self._matrix_ipc_queue = None
 
     async def _dispatch_matrix_ipc_request(

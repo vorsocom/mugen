@@ -15,6 +15,7 @@ __all__ = [
     "PHASE_B_ERROR_KEY",
     "PHASE_B_PLATFORM_ERRORS_KEY",
     "PHASE_B_PLATFORM_STATUSES_KEY",
+    "PHASE_B_PLATFORM_TASKS_KEY",
     "PHASE_B_STARTED_AT_KEY",
     "PHASE_B_STATUS_KEY",
     "PHASE_STATUS_DEGRADED",
@@ -51,6 +52,7 @@ from mugen.bootstrap_state import (
     PHASE_B_ERROR_KEY,
     PHASE_B_PLATFORM_ERRORS_KEY,
     PHASE_B_PLATFORM_STATUSES_KEY,
+    PHASE_B_PLATFORM_TASKS_KEY,
     PHASE_B_STARTED_AT_KEY,
     PHASE_B_STATUS_KEY,
     PHASE_STATUS_DEGRADED,
@@ -95,8 +97,12 @@ from mugen.core.runtime.bootstrap_contract import parse_runtime_bootstrap_settin
 from mugen.core.runtime.phase_b_controls import (
     parse_bool as _parse_bool,
 )
+from mugen.core.runtime.phase_b_shutdown import (
+    cancel_registered_platform_tasks,
+    register_phase_b_platform_task,
+    unregister_phase_b_platform_task,
+)
 from mugen.core.runtime.phase_b_runtime import refresh_phase_b_health
-from mugen.core.runtime.task_shutdown import cancel_tasks_with_timeout
 from mugen.core.utility.config_value import parse_optional_positive_finite_float
 from mugen.core.utility.platforms import (
     SUPPORTED_CORE_PLATFORMS,
@@ -536,8 +542,11 @@ def _ensure_platform_state(
         statuses.setdefault(platform, PHASE_STATUS_STARTING)
         errors.setdefault(platform, None)
 
+    tasks = {}
+
     bootstrap_state[PHASE_B_PLATFORM_STATUSES_KEY] = statuses
     bootstrap_state[PHASE_B_PLATFORM_ERRORS_KEY] = errors
+    bootstrap_state[PHASE_B_PLATFORM_TASKS_KEY] = tasks
     return statuses, errors
 
 
@@ -566,11 +575,13 @@ def _refresh_phase_b_status(
     *,
     critical_platforms: list[str],
     degrade_on_critical_exit: bool = True,
+    shutdown_requested: bool | None = None,
 ) -> None:
     refresh_phase_b_health(
         bootstrap_state,
         critical_platforms=list(critical_platforms),
         degrade_on_critical_exit=degrade_on_critical_exit,
+        shutdown_requested=shutdown_requested,
     )
 
 
@@ -844,10 +855,24 @@ async def run_platform_clients(
         )
 
     def _on_platform_task_done(platform_name: str, task: asyncio.Task) -> None:
+        unregister_phase_b_platform_task(
+            bootstrap_state,
+            platform_name=platform_name,
+        )
         shutdown_requested = _parse_bool(
             bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
             default=False,
         )
+        phase_b_status = str(bootstrap_state.get(PHASE_B_STATUS_KEY, "") or "").strip().lower()
+        phase_b_error = bootstrap_state.get(PHASE_B_ERROR_KEY)
+        if shutdown_requested and (
+            phase_b_status == PHASE_STATUS_DEGRADED
+            or (
+                isinstance(phase_b_error, str)
+                and phase_b_error.strip() != ""
+            )
+        ):
+            return
         try:
             error = task.exception()
         except asyncio.CancelledError:
@@ -947,6 +972,12 @@ async def run_platform_clients(
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 last_error_message = f"{type(exc).__name__}: {exc}"
                 _on_platform_degraded(platform_name, last_error_message)
+                shutdown_requested = _parse_bool(
+                    bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
+                    default=False,
+                )
+                if shutdown_requested:
+                    raise RuntimeError(last_error_message) from exc
 
             if restart_count >= supervisor_max_restarts:
                 raise RuntimeError(
@@ -979,6 +1010,11 @@ async def run_platform_clients(
                 )
             )
             tasks["matrix"] = task
+            register_phase_b_platform_task(
+                bootstrap_state,
+                platform_name="matrix",
+                task=task,
+            )
 
         if "whatsapp" in active_platforms:
             logger.debug("Running whatsapp client.")
@@ -992,6 +1028,11 @@ async def run_platform_clients(
                 )
             )
             tasks["whatsapp"] = task
+            register_phase_b_platform_task(
+                bootstrap_state,
+                platform_name="whatsapp",
+                task=task,
+            )
 
         if "web" in active_platforms:
             logger.debug("Running web client.")
@@ -1005,6 +1046,11 @@ async def run_platform_clients(
                 )
             )
             tasks["web"] = task
+            register_phase_b_platform_task(
+                bootstrap_state,
+                platform_name="web",
+                task=task,
+            )
     except AttributeError as exc:
         logger.error("Invalid platform configuration.")
         raise BootstrapConfigError("Invalid platform configuration.") from exc
@@ -1028,36 +1074,28 @@ async def run_platform_clients(
                 for platform_name, platform_task in list(tasks.items()):
                     if platform_task is finished:
                         tasks.pop(platform_name, None)
+                        unregister_phase_b_platform_task(
+                            bootstrap_state,
+                            platform_name=platform_name,
+                        )
                         break
     except asyncio.exceptions.CancelledError:
         bootstrap_state[SHUTDOWN_REQUESTED_KEY] = True
         runtime_shutdown_timeout_seconds = _resolve_runtime_shutdown_timeout_seconds(config)
-        outcome = await cancel_tasks_with_timeout(
-            tuple(tasks.values()),
-            timeout_seconds=runtime_shutdown_timeout_seconds,
-        )
-        if outcome.timed_out_tasks:
-            for platform_name, platform_task in tasks.items():
-                if platform_task not in outcome.timed_out_tasks:
-                    continue
-                _set_platform_status(
-                    bootstrap_state,
-                    platform=platform_name,
-                    status=PHASE_STATUS_DEGRADED,
-                    error=(
-                        "shutdown timed out after "
-                        f"{runtime_shutdown_timeout_seconds:.2f}s"
-                    ),
-                )
-                logger.error(
-                    f"{platform_name} client did not stop during shutdown "
-                    f"timeout_seconds={runtime_shutdown_timeout_seconds:.2f}."
-                )
+        try:
+            await cancel_registered_platform_tasks(
+                bootstrap_state,
+                timeout_seconds=runtime_shutdown_timeout_seconds,
+                logger=logger,
+            )
+        except RuntimeError as exc:
             _refresh_phase_b_status(
                 bootstrap_state,
                 critical_platforms=critical_platforms,
                 degrade_on_critical_exit=degrade_on_critical_exit,
+                shutdown_requested=False,
             )
+            raise RuntimeError(str(exc)) from exc
         raise
 
 
@@ -1407,3 +1445,4 @@ async def run_web_client(
             await web_client.close()
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning(f"Failed to close web client ({exc}).")
+            raise

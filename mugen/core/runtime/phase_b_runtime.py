@@ -41,19 +41,25 @@ def refresh_phase_b_health(
     *,
     critical_platforms: list[str],
     degrade_on_critical_exit: bool,
+    shutdown_requested: bool | None = None,
 ) -> None:
     """Recompute aggregate phase-B health from per-platform statuses."""
     statuses, errors = _status_maps(bootstrap_state)
+    resolved_shutdown_requested = (
+        parse_bool(
+            bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
+            default=False,
+        )
+        if shutdown_requested is None
+        else bool(shutdown_requested)
+    )
     evaluation = evaluate_phase_b_health(
         PhaseBHealthInput(
             platform_statuses=statuses,
             platform_errors=errors,
             critical_platforms=list(critical_platforms),
             degrade_on_critical_exit=degrade_on_critical_exit,
-            shutdown_requested=parse_bool(
-                bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
-                default=False,
-            ),
+            shutdown_requested=resolved_shutdown_requested,
             phase_b_status=str(bootstrap_state.get(PHASE_B_STATUS_KEY, "") or ""),
             phase_b_error=bootstrap_state.get(PHASE_B_ERROR_KEY),
             phase_b_started_at=bootstrap_state.get(PHASE_B_STARTED_AT_KEY),
@@ -73,9 +79,16 @@ def finalize_phase_b_task_completion(
 ) -> None:
     """Apply terminal aggregate status for the phase-B runner task."""
     shutdown_requested = bool(bootstrap_state.get(SHUTDOWN_REQUESTED_KEY))
+    existing_status = str(bootstrap_state.get(PHASE_B_STATUS_KEY, "") or "").strip().lower()
+    existing_error = bootstrap_state.get(PHASE_B_ERROR_KEY)
+    preserve_degraded = existing_status == PHASE_STATUS_DEGRADED or (
+        isinstance(existing_error, str) and existing_error.strip() != ""
+    )
     try:
         error = task.exception()
     except asyncio.CancelledError:
+        if shutdown_requested and preserve_degraded:
+            return
         if shutdown_requested:
             bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
             bootstrap_state[PHASE_B_ERROR_KEY] = None
@@ -85,6 +98,8 @@ def finalize_phase_b_task_completion(
         return
 
     if error is None:
+        if shutdown_requested and preserve_degraded:
+            return
         if shutdown_requested:
             bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_STOPPED
             bootstrap_state[PHASE_B_ERROR_KEY] = None

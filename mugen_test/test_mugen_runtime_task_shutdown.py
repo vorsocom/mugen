@@ -6,7 +6,11 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from mugen.core.runtime.task_shutdown import cancel_tasks_with_timeout
+from mugen.core.runtime import task_shutdown as task_shutdown_mod
+from mugen.core.runtime.task_shutdown import (
+    TaskCancellationTimeoutError,
+    cancel_tasks_with_timeout,
+)
 
 
 class TestMugenRuntimeTaskShutdown(unittest.IsolatedAsyncioTestCase):
@@ -51,3 +55,46 @@ class TestMugenRuntimeTaskShutdown(unittest.IsolatedAsyncioTestCase):
         self.assertIn(pending_task, outcome.timed_out_tasks)
         pending_task.cancel()
         await asyncio.gather(pending_task, return_exceptions=True)
+
+    async def test_cancel_tasks_with_timeout_raises_on_timeout_when_enabled(self) -> None:
+        pending_task = asyncio.create_task(asyncio.sleep(60), name="mugen.test.pending")
+
+        def _raise_timeout(awaitable, timeout):  # noqa: ARG001
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise asyncio.TimeoutError
+
+        with (
+            patch(
+                "mugen.core.runtime.task_shutdown.asyncio.wait_for",
+                side_effect=_raise_timeout,
+            ),
+            self.assertRaises(TaskCancellationTimeoutError) as ctx,
+        ):
+            await cancel_tasks_with_timeout(
+                (pending_task,),
+                timeout_seconds=0.01,
+                raise_on_timeout=True,
+                timeout_error_prefix="phase_b platform shutdown timed out",
+            )
+
+        self.assertIn("phase_b platform shutdown timed out after 0.01s", str(ctx.exception))
+        self.assertEqual(
+            ctx.exception.timed_out_task_names,
+            ("mugen.test.pending",),
+        )
+        pending_task.cancel()
+        await asyncio.gather(pending_task, return_exceptions=True)
+
+    async def test_task_name_falls_back_to_repr_when_get_name_raises(self) -> None:
+        class _BrokenTask:  # pylint: disable=too-few-public-methods
+            def get_name(self) -> str:
+                raise RuntimeError("boom")
+
+            def __repr__(self) -> str:
+                return "<broken-task>"
+
+        self.assertEqual(
+            task_shutdown_mod._task_name(_BrokenTask()),  # pylint: disable=protected-access
+            "<broken-task>",
+        )
