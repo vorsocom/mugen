@@ -10,12 +10,16 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tomllib
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from mugen.core.contract.migration_config import (
+    MUGEN_CONFIG_FILE_ENV,
+    load_mugen_config,
+    resolve_mugen_config_path,
+)
 from mugen.core.utility.rdbms_schema import (
     DEFAULT_CORE_RDBMS_SCHEMA,
     resolve_core_rdbms_schema,
@@ -36,15 +40,6 @@ class MigrationTrack:
     version_table: str
     version_table_schema: str
     model_modules: tuple[str, ...] = ()
-
-
-def _load_toml(path: Path) -> dict:
-    """Load TOML config document from path."""
-    try:
-        with path.open("rb") as handle:
-            return tomllib.load(handle)
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"Config file not found: {path}") from exc
 
 
 def _resolve_path(value: str, repo_root: Path) -> Path:
@@ -265,8 +260,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--config-file",
-        default="mugen.toml",
-        help="Path to mugen TOML config (default: mugen.toml).",
+        default=None,
+        help=(
+            "Path to mugen TOML config (default precedence: "
+            "--config-file > MUGEN_CONFIG_FILE > mugen.toml)."
+        ),
     )
     parser.add_argument(
         "--repo-root",
@@ -300,27 +298,35 @@ def main() -> int:
     if not alembic_args:
         parser.error("missing alembic args (example: upgrade head)")
 
-    repo_root = Path(args.repo_root).resolve()
-    config_file = _resolve_path(args.config_file, repo_root)
-
-    cfg = _load_toml(config_file)
-    tracks = _load_tracks(cfg, repo_root)
-    selected_tracks = _select_tracks(tracks, args.track, args.include_disabled)
-
-    if not selected_tracks:
-        print("No migration tracks selected.")
-        return 0
-
-    for track in selected_tracks:
-        code = _run_track(
-            track=track,
-            python_bin=args.python,
-            alembic_args=alembic_args,
+    try:
+        repo_root = Path(args.repo_root).resolve()
+        config_file = resolve_mugen_config_path(
+            args.config_file,
             repo_root=repo_root,
-            dry_run=args.dry_run,
         )
-        if code != 0:
-            return code
+        os.environ[MUGEN_CONFIG_FILE_ENV] = str(config_file)
+
+        cfg = load_mugen_config(config_file)
+        tracks = _load_tracks(cfg, repo_root)
+        selected_tracks = _select_tracks(tracks, args.track, args.include_disabled)
+
+        if not selected_tracks:
+            print("No migration tracks selected.")
+            return 0
+
+        for track in selected_tracks:
+            code = _run_track(
+                track=track,
+                python_bin=args.python,
+                alembic_args=alembic_args,
+                repo_root=repo_root,
+                dry_run=args.dry_run,
+            )
+            if code != 0:
+                return code
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
     return 0
 
