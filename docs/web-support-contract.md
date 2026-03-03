@@ -19,6 +19,15 @@ Delivery semantics are **at-least-once**.
 ## Auth
 All web endpoints require ACP bearer access token via `Authorization: Bearer <token>` and use `global_auth_required`.
 
+## Startup Contract
+When `web` is active in `mugen.platforms`, phase-A bootstrap requires the
+following FW extension tokens to load successfully:
+- `core.fw.acp`
+- `core.fw.web`
+
+If either token is missing or fails to register, bootstrap fails before the app
+starts serving traffic.
+
 ## Endpoints
 
 ### `POST /api/core/web/v1/messages`

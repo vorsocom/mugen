@@ -872,7 +872,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         app = Quart("test_app")
         cfg = _test_config(platforms=["web"], mh_mode="optional")
-        register_extensions_mock = unittest.mock.AsyncMock(return_value={})
+        register_extensions_mock = unittest.mock.AsyncMock(
+            return_value={"fw": ["core.fw.acp", "core.fw.web"]}
+        )
 
         with (
             unittest.mock.patch.object(
@@ -904,14 +906,55 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(statuses["messaging.mh.mode"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["messaging.mh.availability"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["messaging.mh.web"], PHASE_STATUS_HEALTHY)
-        self.assertNotIn("web.fw_extension", statuses)
+        self.assertEqual(statuses["web.fw.extension_contract"], PHASE_STATUS_HEALTHY)
+
+    async def test_bootstrap_app_fails_when_web_fw_contract_tokens_missing(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=["web"], mh_mode="optional")
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=unittest.mock.AsyncMock(return_value={"fw": ["core.fw.web"]}),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_messaging_provider",
+                return_value=SimpleNamespace(mh_extensions=[]),
+            ),
+            unittest.mock.patch.object(mugen_mod, "_web_provider", return_value=object()),
+            self.assertRaisesRegex(
+                BootstrapConfigError,
+                "web.fw.extension_contract",
+            ),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
+        errors = state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY]
+        self.assertEqual(statuses["web.fw.extension_contract"], PHASE_STATUS_DEGRADED)
+        self.assertIn("core.fw.acp", errors["web.fw.extension_contract"])
 
     async def test_bootstrap_app_marks_required_capabilities_healthy_when_satisfied(
         self,
     ) -> None:
         app = Quart("test_app")
         cfg = _test_config(platforms=["web", "matrix"], mh_mode="required")
-        register_extensions_mock = unittest.mock.AsyncMock(return_value={})
+        register_extensions_mock = unittest.mock.AsyncMock(
+            return_value={"fw": ["core.fw.acp", "core.fw.web"]}
+        )
 
         with (
             unittest.mock.patch.object(
@@ -945,6 +988,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(statuses["messaging.mh.mode"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["messaging.mh.availability"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["web.client_runtime_path"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["web.fw.extension_contract"], PHASE_STATUS_HEALTHY)
 
     async def test_bootstrap_app_passes_optional_provider_failures_to_capability_eval(
         self,
@@ -1001,6 +1045,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             runtime_input.optional_provider_failures,
             {"email_gateway": "smtp unavailable"},
         )
+        self.assertEqual(runtime_input.registered_fw_extension_tokens, [])
 
     async def test_bootstrap_app_normalizes_non_dict_phase_a_capability_state(self) -> None:
         app = Quart("test_app")
@@ -1162,6 +1207,18 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             mugen_mod._parse_bool("maybe", default=True)  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            mugen_mod._normalize_extension_token_list(  # pylint: disable=protected-access
+                "bad"
+            ),
+            [],
+        )
+        self.assertEqual(
+            mugen_mod._normalize_extension_token_list(  # pylint: disable=protected-access
+                ["core.fw.web", "", " CORE.FW.WEB ", 1]
+            ),
+            ["core.fw.web"],
         )
         self.assertEqual(
             mugen_mod._normalize_platform_list([" web ", "", "web", "matrix"]),  # pylint: disable=protected-access

@@ -9,6 +9,10 @@ PHASE_STATUS_HEALTHY = "healthy"
 PHASE_STATUS_DEGRADED = "degraded"
 
 _MESSAGING_PLATFORMS = {"matrix", "web", "whatsapp"}
+_REQUIRED_WEB_FW_EXTENSION_TOKENS = (
+    "core.fw.acp",
+    "core.fw.web",
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -19,6 +23,7 @@ class RuntimeCapabilityInput:
     messaging_handler_platforms: list[object]
     mh_mode: str
     has_web_client_runtime_path: bool
+    registered_fw_extension_tokens: list[object] | None = None
     container_ready: bool = True
     provider_ready: bool = True
     optional_provider_failures: dict[str, str] | None = None
@@ -42,6 +47,9 @@ def evaluate_runtime_capabilities(
     active_platforms = _normalize_platforms(capability.active_platforms)
     handler_scopes = _normalize_handler_scopes(capability.messaging_handler_platforms)
     mh_mode = _normalize_mh_mode(capability.mh_mode)
+    registered_fw_extension_tokens = _normalize_extension_tokens(
+        capability.registered_fw_extension_tokens
+    )
 
     statuses: dict[str, str] = {}
     errors: dict[str, str | None] = {}
@@ -139,6 +147,20 @@ def evaluate_runtime_capabilities(
                 "mugen.modules.core.client.web."
             ),
         )
+        missing_tokens = [
+            token
+            for token in _REQUIRED_WEB_FW_EXTENSION_TOKENS
+            if token not in registered_fw_extension_tokens
+        ]
+        _record(
+            "web.fw.extension_contract",
+            healthy=not missing_tokens,
+            error=(
+                "Web platform requires registered FW extension token(s): "
+                + ", ".join(missing_tokens)
+                + "."
+            ),
+        )
 
     return RuntimeCapabilityResult(
         statuses=statuses,
@@ -185,6 +207,20 @@ def _normalize_mh_mode(value: object) -> str | None:
     if candidate in {"optional", "required"}:
         return candidate
     return None
+
+
+def _normalize_extension_tokens(values: object) -> set[str]:
+    if not isinstance(values, (list, tuple, set, frozenset)):
+        return set()
+    normalized: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        token = value.strip().lower()
+        if token == "":
+            continue
+        normalized.add(token)
+    return normalized
 
 
 def _has_any_handler(handler_scopes: Iterable[set[str] | None]) -> bool:

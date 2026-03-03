@@ -91,6 +91,32 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["failed_platforms"], ["web"])
         self.assertIn("web", payload["reasons"])
 
+    async def test_ready_endpoint_returns_503_when_reported_phase_b_degraded_but_platforms_healthy(
+        self,
+    ) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        state[PHASE_B_ERROR_KEY] = "phase_b task cancelled unexpectedly"
+        state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_HEALTHY}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["failed_platforms"], [])
+        self.assertEqual(payload["phase_b_status"], PHASE_STATUS_DEGRADED)
+        self.assertEqual(payload["phase_b_error"], "phase_b task cancelled unexpectedly")
+        self.assertEqual(
+            payload["reasons"],
+            {"phase_b": "phase_b task cancelled unexpectedly"},
+        )
+
     async def test_ready_endpoint_returns_503_when_critical_platform_degraded_at_runtime(
         self,
     ) -> None:

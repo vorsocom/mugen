@@ -3,6 +3,7 @@
 import unittest
 
 from mugen.core.domain.entity import ConversationEntity, ProcessingLifecycleEntity
+from mugen.core.domain.use_case import runtime_capability as runtime_capability_mod
 from mugen.core.domain.use_case.enqueue_web_message import BuildQueuedMessageJobUseCase
 from mugen.core.domain.use_case.normalize_composed_message import (
     NormalizeComposedMessageUseCase,
@@ -250,6 +251,7 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 messaging_handler_platforms=[[]],
                 mh_mode="required",
                 has_web_client_runtime_path=True,
+                registered_fw_extension_tokens=["core.fw.acp", "core.fw.web"],
                 container_ready=True,
                 provider_ready=True,
             )
@@ -266,6 +268,7 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 messaging_handler_platforms=[["web"]],
                 mh_mode="required",
                 has_web_client_runtime_path=False,
+                registered_fw_extension_tokens=["core.fw.acp", "core.fw.web"],
                 container_ready=True,
                 provider_ready=False,
             )
@@ -281,6 +284,7 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 messaging_handler_platforms=[],
                 mh_mode="optional",
                 has_web_client_runtime_path=True,
+                registered_fw_extension_tokens=["core.fw.acp", "core.fw.web"],
                 container_ready=True,
                 provider_ready=True,
             )
@@ -332,6 +336,7 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 messaging_handler_platforms=[object()],
                 mh_mode="legacy",
                 has_web_client_runtime_path=True,
+                registered_fw_extension_tokens=["core.fw.acp", "core.fw.web"],
             )
         )
         self.assertFalse(invalid_mode.healthy)
@@ -345,6 +350,7 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 messaging_handler_platforms=[["matrix"]],
                 mh_mode="required",
                 has_web_client_runtime_path=True,
+                registered_fw_extension_tokens=["core.fw.acp", "core.fw.web"],
                 container_ready=True,
                 provider_ready=True,
                 optional_provider_failures={
@@ -372,6 +378,30 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 "provider_readiness.optional.email_gateway",
                 "provider_readiness.optional.knowledge_gateway",
             ],
+        )
+        self.assertEqual(
+            runtime_capability_mod._normalize_extension_tokens(  # pylint: disable=protected-access
+                ["core.fw.web", "", 1]
+            ),
+            {"core.fw.web"},
+        )
+
+        missing_web_fw = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["web"],
+                messaging_handler_platforms=[["web"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                registered_fw_extension_tokens=["core.fw.web"],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertFalse(missing_web_fw.healthy)
+        self.assertIn("web.fw.extension_contract", missing_web_fw.failed_capabilities)
+        self.assertEqual(
+            missing_web_fw.errors["web.fw.extension_contract"],
+            "Web platform requires registered FW extension token(s): core.fw.acp.",
         )
 
     def test_web_stream_continuity_use_case(self) -> None:
