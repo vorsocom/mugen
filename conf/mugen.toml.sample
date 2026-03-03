@@ -75,10 +75,19 @@ token = "core.ctx.system_persona"
 type = "cp"
 token = "core.cp.clear_history"
 
+# Web platform FW contract (required when `web` is active).
+[[mugen.modules.core.extensions]]
+type = "fw"
+token = "core.fw.acp"
+
+[[mugen.modules.core.extensions]]
+type = "fw"
+token = "core.fw.web"
+
 # Plugin and downstream extensions (opt-in).
 # [[mugen.modules.extensions]]
-# type = "fw"
-# token = "core.fw.web"
+# type = "ctx"
+# token = "my_org.ctx.custom_context"
 
 # === ACP plugin ===
 [acp]

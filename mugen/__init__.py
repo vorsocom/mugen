@@ -210,6 +210,26 @@ def _normalize_platform_list(values: object) -> list[str]:
     return normalize_platforms(values)
 
 
+def _normalize_extension_token_list(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    normalized: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        token = value.strip().lower()
+        if token == "" or token in normalized:
+            continue
+        normalized.append(token)
+    return normalized
+
+
+def _resolve_registered_fw_extension_tokens(extension_report: object) -> list[str]:
+    if not isinstance(extension_report, dict):
+        return []
+    return _normalize_extension_token_list(extension_report.get("fw", []))
+
+
 def _config_path_exists(config: object, *path: str) -> bool:
     current = config
     for key in path:
@@ -606,7 +626,7 @@ async def bootstrap_app(
 
     # Discover and register core plugins and
     # third-party extensions.
-    _ = await register_extensions(app, config_provider=config_provider)
+    extension_report = await register_extensions(app, config_provider=config_provider)
 
     messaging_service: IMessagingService | None = _messaging_provider()
     mh_extension_platforms: list[object] = []
@@ -620,6 +640,9 @@ async def bootstrap_app(
     active_platforms = _normalize_platform_list(
         getattr(getattr(config, "mugen", SimpleNamespace()), "platforms", [])
     )
+    registered_fw_extension_tokens = _resolve_registered_fw_extension_tokens(
+        extension_report
+    )
     mh_mode = _resolve_messaging_mh_mode(config)
     has_web_client_runtime_path = (
         _config_path_exists(config, "mugen", "modules", "core", "client", "web")
@@ -632,6 +655,7 @@ async def bootstrap_app(
             messaging_handler_platforms=mh_extension_platforms,
             mh_mode=mh_mode,
             has_web_client_runtime_path=has_web_client_runtime_path,
+            registered_fw_extension_tokens=registered_fw_extension_tokens,
             container_ready=(
                 capability_statuses.get("container_readiness") == PHASE_STATUS_HEALTHY
             ),
@@ -729,6 +753,9 @@ async def run_platform_clients(
             status=PHASE_STATUS_HEALTHY,
             error=None,
         )
+        # Clear stale aggregate degradation before recomputing from platform state.
+        bootstrap_state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        bootstrap_state[PHASE_B_ERROR_KEY] = None
         _refresh_phase_b_status(
             bootstrap_state,
             critical_platforms=critical_platforms,

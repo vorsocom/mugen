@@ -96,7 +96,7 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 # setting mugen.modules.core.gateway.completion.
 # Keep mugen.runtime.profile explicitly set
 # to platform_full.
-# If web platform is enabled, keep core.fw.web enabled.
+# If web platform is enabled, keep both core.fw.acp and core.fw.web enabled.
 # If matrix platform is enabled, set security.secrets.encryption_key.
 # Gateways are currently provided for AWS Bedrock,
 # Groq, OpenAI, and SambaNova.

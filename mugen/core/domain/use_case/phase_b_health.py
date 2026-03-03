@@ -63,6 +63,37 @@ def evaluate_phase_b_health(phase: PhaseBHealthInput) -> PhaseBHealthResult:
             ignore_starting=False,
         )
 
+    reported_error = _string_or_none(phase.phase_b_error)
+    if reported_status == PHASE_STATUS_DEGRADED or reported_error is not None:
+        failed_platforms, reasons = _resolve_failed_platforms(
+            critical_platforms=critical_platforms,
+            platform_statuses=platform_statuses,
+            platform_errors=platform_errors,
+            include_starting_failures=phase.include_starting_failures,
+            ignore_starting=ignore_starting,
+            degrade_on_critical_exit=phase.degrade_on_critical_exit,
+        )
+        aggregate_error = reported_error
+        if aggregate_error is None:
+            if failed_platforms:
+                failed_platform = failed_platforms[0]
+                aggregate_error = _default_platform_reason(
+                    platform=failed_platform,
+                    status=platform_statuses.get(failed_platform, ""),
+                    platform_errors=platform_errors,
+                )
+            else:
+                aggregate_error = "phase_b reported degraded"
+        if not failed_platforms:
+            reasons["phase_b"] = aggregate_error
+        return PhaseBHealthResult(
+            phase_b_status=PHASE_STATUS_DEGRADED,
+            phase_b_error=aggregate_error,
+            failed_critical_platforms=failed_platforms,
+            reasons=reasons,
+            ignore_starting=ignore_starting,
+        )
+
     degraded: list[str] = []
     starting: list[str] = []
     unexpected: list[str] = []
