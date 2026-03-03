@@ -8,6 +8,9 @@ __all__ = [
     "QueueJobLifecycleUseCase",
     "RuntimeCapabilityInput",
     "RuntimeCapabilityResult",
+    "WebStreamContinuityInput",
+    "WebStreamContinuityResult",
+    "evaluate_web_stream_continuity",
     "evaluate_runtime_capabilities",
     "evaluate_phase_b_health",
 ]
@@ -26,4 +29,9 @@ from mugen.core.domain.use_case.runtime_capability import (
     RuntimeCapabilityInput,
     RuntimeCapabilityResult,
     evaluate_runtime_capabilities,
+)
+from mugen.core.domain.use_case.web_stream_continuity import (
+    WebStreamContinuityInput,
+    WebStreamContinuityResult,
+    evaluate_web_stream_continuity,
 )

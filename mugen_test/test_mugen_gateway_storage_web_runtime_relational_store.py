@@ -272,6 +272,9 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(batch.stream_generation, "gen-b")
         self.assertEqual(batch.max_event_id, 3)
+        self.assertEqual(batch.requested_after_event_id, 99)
+        self.assertEqual(batch.effective_after_event_id, 0)
+        self.assertEqual(batch.first_event_id, 1)
         self.assertEqual(len(batch.events), 2)
         self.assertEqual(batch.events[0].id, 1)
         self.assertEqual(batch.events[0].stream_version, 2)
@@ -295,4 +298,7 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(batch.stream_generation, str)
         self.assertNotEqual(batch.stream_generation, "")
         self.assertEqual(batch.max_event_id, 0)
+        self.assertEqual(batch.requested_after_event_id, 0)
+        self.assertEqual(batch.effective_after_event_id, 0)
+        self.assertIsNone(batch.first_event_id)
         self.assertEqual(batch.events, [])

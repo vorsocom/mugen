@@ -656,10 +656,13 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
 
         events: list[WebRuntimeTailEvent] = []
         max_event_id = effective_after_event_id
+        first_event_id: int | None = None
         for row in rows:
             event_id = self._parse_event_id(row.get("event_id"))
             if event_id is None:
                 continue
+            if first_event_id is None:
+                first_event_id = event_id
             max_event_id = max(max_event_id, event_id)
             payload = row.get("payload")
             if not isinstance(payload, dict):
@@ -685,6 +688,9 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         return WebRuntimeTailBatch(
             stream_generation=active_generation,
             max_event_id=max_event_id,
+            requested_after_event_id=normalized_after_event_id,
+            effective_after_event_id=effective_after_event_id,
+            first_event_id=first_event_id,
             events=events,
         )
 

@@ -611,7 +611,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             PHASE_STATUS_DEGRADED,
         )
         self.assertIn(
-            "runner does not accept required callback parameter",
+            "TypeError: unexpected keyword argument 'degraded_callback'",
             str(state[PHASE_B_PLATFORM_ERRORS_KEY]["web"]),
         )
 

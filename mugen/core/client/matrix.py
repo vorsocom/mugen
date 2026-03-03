@@ -383,6 +383,11 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             await session.close()
         except AttributeError:
             ...
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Matrix client session close failed "
+                f"error_type={type(exc).__name__} error={exc}"
+            )
 
     async def sync_forever(
         self,

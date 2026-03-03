@@ -26,6 +26,9 @@ class WebRuntimeTailBatch:
 
     stream_generation: str
     max_event_id: int
+    requested_after_event_id: int = 0
+    effective_after_event_id: int = 0
+    first_event_id: int | None = None
     events: list[WebRuntimeTailEvent] = field(default_factory=list)
 
 

@@ -26,6 +26,10 @@ from mugen.core.domain.use_case.enqueue_web_message import BuildQueuedMessageJob
 from mugen.core.domain.use_case.normalize_composed_message import (
     NormalizeComposedMessageUseCase,
 )
+from mugen.core.domain.use_case.web_stream_continuity import (
+    WebStreamContinuityInput,
+    evaluate_web_stream_continuity,
+)
 from mugen.core.utility.processing_signal import (
     PROCESSING_SIGNAL_THINKING,
     PROCESSING_STATE_START,
@@ -520,6 +524,38 @@ class DefaultWebClient(IWebClient):
                     > int(cursor["effective_last_event_id"])
                 )
             ]
+            replay_first_event_id = self._first_numeric_event_id(replay_events)
+            if (
+                cursor.get("reset_event") is None
+                and cursor.get("incoming_event_id") is not None
+            ):
+                replay_continuity = evaluate_web_stream_continuity(
+                    WebStreamContinuityInput(
+                        expected_stream_generation=stream_generation,
+                        observed_stream_generation=stream_generation,
+                        requested_after_event_id=int(
+                            cursor["effective_last_event_id"]
+                        ),
+                        effective_after_event_id=int(
+                            cursor["effective_last_event_id"]
+                        ),
+                        first_event_id=replay_first_event_id,
+                        generation_changed_reason="replay_generation_changed",
+                        cursor_gap_reason="replay_cursor_gap",
+                    )
+                )
+                if (
+                    replay_continuity.reset_required is True
+                    and replay_continuity.reset_reason == "replay_cursor_gap"
+                ):
+                    cursor["effective_last_event_id"] = 0
+                    cursor["reset_event"] = self._build_stream_reset_event(
+                        conversation_id=conversation,
+                        reason="replay_cursor_gap",
+                        incoming_last_event_id=last_event_id,
+                        incoming_event_id=replay_first_event_id,
+                        stream_generation=stream_generation,
+                    )
 
         subscriber_queue: asyncio.Queue = asyncio.Queue(maxsize=self._sse_queue_size)
         await self._register_subscriber(conversation, subscriber_queue)
@@ -674,6 +710,9 @@ class DefaultWebClient(IWebClient):
         return {
             "stream_generation": batch.stream_generation,
             "max_event_id": batch.max_event_id,
+            "requested_after_event_id": batch.requested_after_event_id,
+            "effective_after_event_id": batch.effective_after_event_id,
+            "first_event_id": batch.first_event_id,
             "events": [
                 {
                     "id": str(event.id),
@@ -771,22 +810,53 @@ class DefaultWebClient(IWebClient):
                     tail_batch.get("stream_generation"),
                     fallback=stream_generation,
                 )
-                if batch_generation != stream_generation:
+                requested_after_event_id = self._parse_event_id(
+                    tail_batch.get("requested_after_event_id")
+                )
+                if requested_after_event_id is None:
+                    requested_after_event_id = highest_event_id
+                effective_after_event_id = self._parse_event_id(
+                    tail_batch.get("effective_after_event_id")
+                )
+                if effective_after_event_id is None:
+                    effective_after_event_id = requested_after_event_id
+                first_event_id = self._parse_event_id(tail_batch.get("first_event_id"))
+                if first_event_id is None:
+                    first_event_id = self._first_numeric_event_id(
+                        tail_batch.get("events", [])
+                    )
+
+                continuity = evaluate_web_stream_continuity(
+                    WebStreamContinuityInput(
+                        expected_stream_generation=stream_generation,
+                        observed_stream_generation=batch_generation,
+                        requested_after_event_id=requested_after_event_id,
+                        effective_after_event_id=effective_after_event_id,
+                        first_event_id=first_event_id,
+                        generation_changed_reason="poll_generation_changed",
+                        cursor_gap_reason="poll_cursor_gap",
+                    )
+                )
+                if continuity.reset_required is True:
+                    reset_reason = str(continuity.reset_reason or "poll_generation_changed")
                     self._log_sse_diagnostic(
                         conversation_id=conversation_id,
                         incoming_event_id=None,
                         last_event_id=highest_event_id,
-                        reason="poll_generation_changed",
+                        reason=reset_reason,
                     )
                     stream_generation = batch_generation
-                    highest_event_id = 0
+                    if reset_reason == "poll_generation_changed":
+                        highest_event_id = 0
+                    else:
+                        highest_event_id = max(effective_after_event_id, 0)
                     await self._publish_event(
                         conversation_id,
                         self._build_stream_reset_event(
                             conversation_id=conversation_id,
-                            reason="poll_generation_changed",
+                            reason=reset_reason,
                             incoming_last_event_id=None,
-                            incoming_event_id=None,
+                            incoming_event_id=first_event_id,
                             stream_generation=stream_generation,
                         ),
                     )
@@ -2452,6 +2522,17 @@ class DefaultWebClient(IWebClient):
             self._logging_gateway.warning(message)
         else:
             self._logging_gateway.debug(message)
+
+    def _first_numeric_event_id(self, events: Any) -> int | None:
+        if not isinstance(events, list):
+            return None
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            event_id = self._parse_event_id(event.get("id"))
+            if event_id is not None:
+                return event_id
+        return None
 
     @staticmethod
     def _parse_event_id(value: Any) -> int | None:

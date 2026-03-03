@@ -224,6 +224,13 @@ async def shutdown():
         await task
     except asyncio.CancelledError:
         app.logger.debug("Platform client runner task cancelled during shutdown.")
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        app.logger.warning(
+            "Platform client runner task raised during shutdown "
+            "(error_type=%s error=%s).",
+            type(exc).__name__,
+            exc,
+        )
     finally:
         state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
         await _shutdown_container()

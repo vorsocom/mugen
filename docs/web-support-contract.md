@@ -112,6 +112,7 @@ Replay behavior:
 - SSE IDs are emitted as `v<event_log_version>:<event_log_generation>:<event_id>`.
 - Clients should persist and resend the full SSE `id` value (not just numeric suffix).
 - If the resume cursor is stale/invalid, server emits a `system` event with `signal="stream_reset"` and resets replay baseline to current stream generation.
+- If resume continuity is broken because retained durable events no longer cover the requested cursor, server emits `stream_reset` with reason `replay_cursor_gap` (replay path) or `poll_cursor_gap` (cross-instance poll path), then continues from the first available retained event.
 
 Event types:
 - `ack`
@@ -127,6 +128,16 @@ Correlation guarantees:
 Keepalive:
 - SSE comment heartbeat: `: ping`
 - interval: `web.sse.keepalive_seconds`
+
+Common `stream_reset` reasons:
+- `invalid_last_event_id`
+- `cursor_event_log_version_mismatch`
+- `cursor_stream_generation_mismatch`
+- `replay_generation_changed`
+- `live_generation_changed`
+- `poll_generation_changed`
+- `replay_cursor_gap`
+- `poll_cursor_gap`
 
 ### `GET /api/core/web/v1/media/<token>`
 Resolves a tokenized media URL.

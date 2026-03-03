@@ -2974,6 +2974,150 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             self.client._web_metrics.get("web.sse.poll.errors", 0), 0  # pylint: disable=protected-access
         )
 
+    async def test_stream_events_emits_replay_cursor_gap_reset(self) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-replay-gap",
+            message_type="text",
+            text="seed",
+        )
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+                "conv-replay-gap",
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "replay-gap-gen",
+                    "next_event_id": 6,
+                    "events": [
+                        {
+                            "id": "5",
+                            "event": "system",
+                            "data": {"message": "replay-gap"},
+                            "created_at": "t0",
+                            "stream_generation": "replay-gap-gen",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        }
+                    ],
+                },
+            )
+
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-replay-gap",
+            last_event_id=self.client._format_stream_cursor_id(  # pylint: disable=protected-access
+                stream_generation="replay-gap-gen",
+                event_id=1,
+            ),
+        )
+
+        reset_chunk = await self._next_non_ping(stream)
+        self.assertIn('"reason":"replay_cursor_gap"', reset_chunk)
+        replay_chunk = await self._next_non_ping(stream)
+        self.assertIn(":replay-gap-gen:5", replay_chunk)
+        await stream.aclose()
+
+    async def test_stream_events_emits_poll_cursor_gap_reset(self) -> None:
+        self.client._sse_keepalive_seconds = 60.0  # pylint: disable=protected-access
+        self.client._sse_cross_instance_poll_seconds = 0.001  # pylint: disable=protected-access
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-poll-gap",
+            message_type="text",
+            text="seed",
+        )
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+                "conv-poll-gap",
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "poll-gap-gen",
+                    "next_event_id": 1,
+                    "events": [],
+                },
+            )
+        self.client._tail_events_since = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            side_effect=[
+                {
+                    "stream_generation": "poll-gap-gen",
+                    "requested_after_event_id": 10,
+                    "effective_after_event_id": 10,
+                    "first_event_id": 15,
+                    "events": [
+                        {
+                            "id": "15",
+                            "event": "system",
+                            "data": {"message": "poll-gap"},
+                            "created_at": None,
+                            "stream_generation": "poll-gap-gen",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        }
+                    ],
+                },
+                {
+                    "stream_generation": "poll-gap-gen",
+                    "requested_after_event_id": 15,
+                    "effective_after_event_id": 15,
+                    "first_event_id": None,
+                    "events": [],
+                },
+            ]
+        )
+
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-poll-gap",
+            last_event_id=None,
+        )
+
+        reset_chunk = await self._next_non_ping(stream)
+        self.assertIn('"reason":"poll_cursor_gap"', reset_chunk)
+        polled_chunk = await self._next_non_ping(stream)
+        self.assertIn(":poll-gap-gen:15", polled_chunk)
+        await stream.aclose()
+
+    async def test_stream_events_does_not_emit_reset_when_replay_cursor_is_contiguous(
+        self,
+    ) -> None:
+        await self.client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-replay-no-gap",
+            message_type="text",
+            text="seed",
+        )
+        async with self.client._storage_lock:  # pylint: disable=protected-access
+            await self.client._write_event_log_unlocked(  # pylint: disable=protected-access
+                "conv-replay-no-gap",
+                {
+                    "version": self.client._event_log_version,  # pylint: disable=protected-access
+                    "generation": "replay-nogap-gen",
+                    "next_event_id": 3,
+                    "events": [
+                        {
+                            "id": "2",
+                            "event": "system",
+                            "data": {"message": "replay-no-gap"},
+                            "created_at": "t0",
+                            "stream_generation": "replay-nogap-gen",
+                            "stream_version": self.client._event_log_version,  # pylint: disable=protected-access
+                        }
+                    ],
+                },
+            )
+
+        stream = await self.client.stream_events(
+            auth_user="user-1",
+            conversation_id="conv-replay-no-gap",
+            last_event_id=self.client._format_stream_cursor_id(  # pylint: disable=protected-access
+                stream_generation="replay-nogap-gen",
+                event_id=1,
+            ),
+        )
+
+        replay_chunk = await self._next_non_ping(stream)
+        self.assertNotIn('"signal":"stream_reset"', replay_chunk)
+        self.assertIn(":replay-nogap-gen:2", replay_chunk)
+        await stream.aclose()
+
     async def test_stream_events_poll_stable_generation_and_live_event_paths(self) -> None:
         self.client._sse_keepalive_seconds = 60.0  # pylint: disable=protected-access
         self.client._sse_cross_instance_poll_seconds = 0.001  # pylint: disable=protected-access
@@ -3572,6 +3716,13 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         replay_chunk = await stream.__anext__()
         self.assertIn("id: bad", replay_chunk)
         await stream.aclose()
+
+    def test_first_numeric_event_id_helper_handles_non_list_and_non_dict_items(self) -> None:
+        self.assertIsNone(self.client._first_numeric_event_id(None))  # pylint: disable=protected-access
+        self.assertEqual(
+            self.client._first_numeric_event_id(["bad", {"id": "3"}]),  # pylint: disable=protected-access
+            3,
+        )
 
     async def test_disconnect_subscriber_for_backpressure_helper_branches(self) -> None:
         queue = asyncio.Queue(maxsize=1)
@@ -4953,6 +5104,9 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         tail_batch = WebRuntimeTailBatch(
             stream_generation="gen-x",
             max_event_id=9,
+            requested_after_event_id=4,
+            effective_after_event_id=4,
+            first_event_id=7,
             events=[
                 WebRuntimeTailEvent(
                     id=7,
@@ -4976,6 +5130,9 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["stream_generation"], "gen-x")
         self.assertEqual(payload["max_event_id"], 9)
+        self.assertEqual(payload["requested_after_event_id"], 4)
+        self.assertEqual(payload["effective_after_event_id"], 4)
+        self.assertEqual(payload["first_event_id"], 7)
         self.assertEqual(payload["events"][0]["id"], "7")
         self.assertEqual(payload["events"][0]["event"], "system")
         self.assertEqual(payload["events"][0]["stream_version"], 2)

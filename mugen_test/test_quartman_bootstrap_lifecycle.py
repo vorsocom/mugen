@@ -789,6 +789,37 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             quartman._bootstrap_state().get(quartman._PLATFORM_CLIENTS_TASK_KEY)
         )
 
+    async def test_shutdown_handles_non_cancelled_error_from_task_await(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        async def _raise_after_cancel() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError as exc:
+                raise RuntimeError("shutdown failure") from exc
+
+        task = asyncio.create_task(_raise_after_cancel())
+        await asyncio.sleep(0)
+        quartman._bootstrap_state()[quartman._PLATFORM_CLIENTS_TASK_KEY] = task
+        shutdown_container = unittest.mock.AsyncMock()
+
+        with (
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=shutdown_container,
+            ),
+            self.assertLogs(logger=app.name, level="WARNING") as logs,
+        ):
+            await quartman.shutdown()
+
+        self.assertTrue(any("raised during shutdown" in msg for msg in logs.output))
+        shutdown_container.assert_awaited_once_with()
+        self.assertIsNone(
+            quartman._bootstrap_state().get(quartman._PLATFORM_CLIENTS_TASK_KEY)
+        )
+
     async def test_runtime_controls_default_when_container_config_missing(self) -> None:
         grace, critical, degrade_on_critical_exit = resolve_phase_b_runtime_controls(
             object()

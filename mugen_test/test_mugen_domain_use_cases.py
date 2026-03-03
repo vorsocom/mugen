@@ -12,6 +12,10 @@ from mugen.core.domain.use_case.runtime_capability import (
     RuntimeCapabilityInput,
     evaluate_runtime_capabilities,
 )
+from mugen.core.domain.use_case.web_stream_continuity import (
+    WebStreamContinuityInput,
+    evaluate_web_stream_continuity,
+)
 
 
 class TestDomainEntitiesAndUseCases(unittest.TestCase):
@@ -369,6 +373,106 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 "provider_readiness.optional.knowledge_gateway",
             ],
         )
+
+    def test_web_stream_continuity_use_case(self) -> None:
+        generation_changed = evaluate_web_stream_continuity(
+            WebStreamContinuityInput(
+                expected_stream_generation="gen-a",
+                observed_stream_generation="gen-b",
+                requested_after_event_id=5,
+                effective_after_event_id=0,
+                first_event_id=1,
+                generation_changed_reason="poll_generation_changed",
+                cursor_gap_reason="poll_cursor_gap",
+            )
+        )
+        self.assertTrue(generation_changed.reset_required)
+        self.assertEqual(generation_changed.reset_reason, "poll_generation_changed")
+        self.assertEqual(generation_changed.expected_next_event_id, 1)
+
+        cursor_gap = evaluate_web_stream_continuity(
+            WebStreamContinuityInput(
+                expected_stream_generation="gen-a",
+                observed_stream_generation="gen-a",
+                requested_after_event_id=5,
+                effective_after_event_id=5,
+                first_event_id=9,
+                generation_changed_reason="poll_generation_changed",
+                cursor_gap_reason="poll_cursor_gap",
+            )
+        )
+        self.assertTrue(cursor_gap.reset_required)
+        self.assertEqual(cursor_gap.reset_reason, "poll_cursor_gap")
+        self.assertEqual(cursor_gap.expected_next_event_id, 6)
+
+        contiguous = evaluate_web_stream_continuity(
+            WebStreamContinuityInput(
+                expected_stream_generation="gen-a",
+                observed_stream_generation="gen-a",
+                requested_after_event_id=5,
+                effective_after_event_id=5,
+                first_event_id=6,
+                generation_changed_reason="poll_generation_changed",
+                cursor_gap_reason="poll_cursor_gap",
+            )
+        )
+        self.assertFalse(contiguous.reset_required)
+        self.assertIsNone(contiguous.reset_reason)
+        self.assertEqual(contiguous.expected_next_event_id, 6)
+
+        generation_reason_fallback = evaluate_web_stream_continuity(
+            WebStreamContinuityInput(
+                expected_stream_generation="gen-a",
+                observed_stream_generation="gen-b",
+                requested_after_event_id=0,
+                effective_after_event_id=0,
+                first_event_id=1,
+                generation_changed_reason="  ",
+                cursor_gap_reason="poll_cursor_gap",
+            )
+        )
+        self.assertEqual(generation_reason_fallback.reset_reason, "generation_changed")
+
+        gap_reason_fallback = evaluate_web_stream_continuity(
+            WebStreamContinuityInput(
+                expected_stream_generation="gen-a",
+                observed_stream_generation="gen-a",
+                requested_after_event_id=1,
+                effective_after_event_id=1,
+                first_event_id=4,
+                generation_changed_reason="poll_generation_changed",
+                cursor_gap_reason="  ",
+            )
+        )
+        self.assertEqual(gap_reason_fallback.reset_reason, "cursor_gap")
+
+        coerced_inputs = evaluate_web_stream_continuity(
+            WebStreamContinuityInput(
+                expected_stream_generation=None,
+                observed_stream_generation=" ",
+                requested_after_event_id=5,
+                effective_after_event_id="bad",  # type: ignore[arg-type]
+                first_event_id="bad",  # type: ignore[arg-type]
+                generation_changed_reason="poll_generation_changed",
+                cursor_gap_reason="poll_cursor_gap",
+            )
+        )
+        self.assertFalse(coerced_inputs.reset_required)
+        self.assertEqual(coerced_inputs.expected_next_event_id, 1)
+
+        nonnegative_default = evaluate_web_stream_continuity(
+            WebStreamContinuityInput(
+                expected_stream_generation="gen-a",
+                observed_stream_generation="gen-a",
+                requested_after_event_id=5,
+                effective_after_event_id=-3,
+                first_event_id=0,
+                generation_changed_reason="poll_generation_changed",
+                cursor_gap_reason="poll_cursor_gap",
+            )
+        )
+        self.assertFalse(nonnegative_default.reset_required)
+        self.assertEqual(nonnegative_default.expected_next_event_id, 1)
 
 
 if __name__ == "__main__":
