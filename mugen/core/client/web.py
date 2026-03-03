@@ -30,6 +30,7 @@ from mugen.core.domain.use_case.web_stream_continuity import (
     WebStreamContinuityInput,
     evaluate_web_stream_continuity,
 )
+from mugen.core.utility.config_value import parse_optional_positive_finite_float
 from mugen.core.utility.processing_signal import (
     PROCESSING_SIGNAL_THINKING,
     PROCESSING_STATE_START,
@@ -2198,14 +2199,15 @@ class DefaultWebClient(IWebClient):
         minimum: float,
     ) -> float:
         raw_value = self._resolve_config_path(path)
-        try:
-            value = float(raw_value)
-        except (TypeError, ValueError):
-            value = default
-
-        if value < minimum:
+        field_name = ".".join(path)
+        value = parse_optional_positive_finite_float(raw_value, field_name)
+        if value is None:
             return default
-
+        if value < minimum:
+            raise RuntimeError(
+                f"Invalid configuration: {field_name} must be greater than or equal to "
+                f"{minimum}."
+            )
         return value
 
     def _resolve_int_config(

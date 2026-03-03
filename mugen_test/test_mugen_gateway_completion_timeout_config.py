@@ -7,6 +7,8 @@ from unittest.mock import Mock
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
     require_fields_in_production,
+    resolve_optional_positive_float,
+    resolve_optional_positive_int,
     warn_missing_in_production,
     to_timeout_milliseconds,
 )
@@ -19,6 +21,8 @@ class TestMugenGatewayCompletionTimeoutConfig(unittest.TestCase):
         self.assertIsNone(to_timeout_milliseconds(None))
         self.assertEqual(to_timeout_milliseconds(0.001), 1)
         self.assertEqual(to_timeout_milliseconds(0.25), 250)
+        with self.assertRaisesRegex(RuntimeError, "positive finite"):
+            to_timeout_milliseconds(float("inf"))
 
     def test_parse_bool_like_accepts_bool_int_and_string_values(self) -> None:
         self.assertTrue(
@@ -122,6 +126,23 @@ class TestMugenGatewayCompletionTimeoutConfig(unittest.TestCase):
         logging_gateway.warning.assert_called_once_with(
             "Provider: timeout_seconds is not configured in production."
         )
+
+    def test_resolve_optional_positive_parsers_reject_non_finite_and_bool_int(self) -> None:
+        logger = Mock()
+        with self.assertRaisesRegex(RuntimeError, "positive finite number"):
+            resolve_optional_positive_float(
+                value=float("nan"),
+                field_name="timeout_seconds",
+                provider_label="Provider",
+                logging_gateway=logger,
+            )
+        with self.assertRaisesRegex(RuntimeError, "positive integer"):
+            resolve_optional_positive_int(
+                value=True,
+                field_name="max_attempts",
+                provider_label="Provider",
+                logging_gateway=logger,
+            )
 
 
 if __name__ == "__main__":

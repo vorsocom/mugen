@@ -42,20 +42,92 @@ class TestSharedSQLAlchemyRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(SharedSQLAlchemyRuntime._resolve_bool("unknown", default=True))
         self.assertFalse(SharedSQLAlchemyRuntime._resolve_bool(object(), default=False))
 
-        self.assertEqual(SharedSQLAlchemyRuntime._resolve_positive_int("4", 1), 4)
-        self.assertEqual(SharedSQLAlchemyRuntime._resolve_positive_int(0, 9), 9)
-        self.assertEqual(SharedSQLAlchemyRuntime._resolve_positive_int(-1, 8), 8)
-        self.assertEqual(SharedSQLAlchemyRuntime._resolve_positive_int("bad", 7), 7)
+        self.assertEqual(
+            SharedSQLAlchemyRuntime._resolve_positive_int(
+                "4",
+                default=1,
+                field_name="field",
+            ),
+            4,
+        )
+        self.assertEqual(
+            SharedSQLAlchemyRuntime._resolve_positive_int(
+                None,
+                default=9,
+                field_name="field",
+            ),
+            9,
+        )
+        with self.assertRaisesRegex(RuntimeError, "field"):
+            SharedSQLAlchemyRuntime._resolve_positive_int(
+                0,
+                default=9,
+                field_name="field",
+            )
+        with self.assertRaisesRegex(RuntimeError, "field"):
+            SharedSQLAlchemyRuntime._resolve_positive_int(
+                "bad",
+                default=7,
+                field_name="field",
+            )
+        with self.assertRaisesRegex(RuntimeError, "field"):
+            SharedSQLAlchemyRuntime._resolve_positive_int(
+                True,
+                default=7,
+                field_name="field",
+            )
 
-        self.assertEqual(SharedSQLAlchemyRuntime._resolve_nonnegative_int("5", 1), 5)
-        self.assertEqual(SharedSQLAlchemyRuntime._resolve_nonnegative_int(0, 1), 0)
-        self.assertEqual(SharedSQLAlchemyRuntime._resolve_nonnegative_int(-1, 6), 6)
-        self.assertEqual(SharedSQLAlchemyRuntime._resolve_nonnegative_int("bad", 3), 3)
+        self.assertEqual(
+            SharedSQLAlchemyRuntime._resolve_nonnegative_int(
+                "5",
+                default=1,
+                field_name="field",
+            ),
+            5,
+        )
+        self.assertEqual(
+            SharedSQLAlchemyRuntime._resolve_nonnegative_int(
+                0,
+                default=1,
+                field_name="field",
+            ),
+            0,
+        )
+        self.assertEqual(
+            SharedSQLAlchemyRuntime._resolve_nonnegative_int(
+                None,
+                default=6,
+                field_name="field",
+            ),
+            6,
+        )
+        with self.assertRaisesRegex(RuntimeError, "field"):
+            SharedSQLAlchemyRuntime._resolve_nonnegative_int(
+                -1,
+                default=6,
+                field_name="field",
+            )
+        with self.assertRaisesRegex(RuntimeError, "field"):
+            SharedSQLAlchemyRuntime._resolve_nonnegative_int(
+                "bad",
+                default=3,
+                field_name="field",
+            )
+        with self.assertRaisesRegex(RuntimeError, "field"):
+            SharedSQLAlchemyRuntime._resolve_nonnegative_int(
+                False,
+                default=3,
+                field_name="field",
+            )
 
         self.assertIsNone(SharedSQLAlchemyRuntime._resolve_statement_timeout_ms(None))
         self.assertIsNone(SharedSQLAlchemyRuntime._resolve_statement_timeout_ms(""))
-        self.assertIsNone(SharedSQLAlchemyRuntime._resolve_statement_timeout_ms("bad"))
-        self.assertIsNone(SharedSQLAlchemyRuntime._resolve_statement_timeout_ms(0))
+        with self.assertRaisesRegex(RuntimeError, "statement_timeout_ms"):
+            SharedSQLAlchemyRuntime._resolve_statement_timeout_ms("bad")
+        with self.assertRaisesRegex(RuntimeError, "statement_timeout_ms"):
+            SharedSQLAlchemyRuntime._resolve_statement_timeout_ms(0)
+        with self.assertRaisesRegex(RuntimeError, "statement_timeout_ms"):
+            SharedSQLAlchemyRuntime._resolve_statement_timeout_ms(True)
         self.assertEqual(SharedSQLAlchemyRuntime._resolve_statement_timeout_ms("2500"), 2500)
 
     def test_from_config_asyncpg_applies_pool_and_statement_timeout(self) -> None:

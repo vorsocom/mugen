@@ -3,6 +3,7 @@
 __all__ = ["DefaultIPCService"]
 
 import asyncio
+from math import isfinite
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Any
@@ -16,6 +17,7 @@ from mugen.core.contract.service.ipc import (
     IPCAggregateError,
     IPCAggregateResult,
 )
+from mugen.core.utility.config_value import parse_optional_positive_finite_float
 
 
 class DefaultIPCService(IIPCService):
@@ -58,13 +60,11 @@ class DefaultIPCService(IIPCService):
             if cursor is None:
                 return fallback
             cursor = getattr(cursor, token, None)
-        if cursor in [None, ""]:
-            return fallback
-        try:
-            parsed = float(cursor)
-        except (TypeError, ValueError):
-            return fallback
-        if parsed <= 0:
+        parsed = parse_optional_positive_finite_float(
+            cursor,
+            ".".join(path),
+        )
+        if parsed is None:
             return fallback
         return parsed
 
@@ -76,7 +76,7 @@ class DefaultIPCService(IIPCService):
             parsed = float(timeout_seconds)
         except (TypeError, ValueError):
             return self._timeout_seconds
-        if parsed <= 0:
+        if isfinite(parsed) is not True or parsed <= 0:
             return self._timeout_seconds
         if parsed > self._timeout_max_seconds:
             return self._timeout_max_seconds

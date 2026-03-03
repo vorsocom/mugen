@@ -191,9 +191,20 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_resolve_shutdown_timeout_seconds_falls_back_for_invalid_values(self) -> None:
+    async def test_resolve_shutdown_timeout_seconds_rejects_invalid_values(self) -> None:
         config = _make_config()
         config.mugen = SimpleNamespace(runtime=SimpleNamespace(shutdown_timeout_seconds="bad"))
+        with self.assertRaisesRegex(RuntimeError, "shutdown_timeout_seconds"):
+            DefaultWhatsAppClient(
+                config=config,
+                ipc_service=Mock(),
+                keyval_storage_gateway=Mock(),
+                logging_gateway=Mock(),
+                messaging_service=Mock(),
+                user_service=Mock(),
+            )
+
+        config.mugen.runtime.shutdown_timeout_seconds = 12.5
         client = DefaultWhatsAppClient(
             config=config,
             ipc_service=Mock(),
@@ -204,21 +215,50 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             client._shutdown_timeout_seconds,  # pylint: disable=protected-access
-            client._default_shutdown_timeout_seconds,  # pylint: disable=protected-access
+            12.5,
         )
         config.mugen.runtime.shutdown_timeout_seconds = 0
-        self.assertEqual(
-            client._resolve_shutdown_timeout_seconds(),  # pylint: disable=protected-access
-            client._default_shutdown_timeout_seconds,  # pylint: disable=protected-access
-        )
+        with self.assertRaisesRegex(RuntimeError, "shutdown_timeout_seconds"):
+            DefaultWhatsAppClient(
+                config=config,
+                ipc_service=Mock(),
+                keyval_storage_gateway=Mock(),
+                logging_gateway=Mock(),
+                messaging_service=Mock(),
+                user_service=Mock(),
+            )
 
-    async def test_resolve_config_values_fallback_to_defaults(self) -> None:
+    async def test_resolve_config_values_reject_invalid_timeout_fields(self) -> None:
         config = _make_config()
         config.whatsapp.graphapi.timeout_seconds = "invalid"
+        with self.assertRaisesRegex(RuntimeError, "timeout_seconds"):
+            DefaultWhatsAppClient(
+                config=config,
+                ipc_service=Mock(),
+                keyval_storage_gateway=Mock(),
+                logging_gateway=Mock(),
+                messaging_service=Mock(),
+                user_service=Mock(),
+            )
+
+        config = _make_config()
+        config.whatsapp.graphapi.timeout_seconds = 10
+        config.whatsapp.graphapi.retry_backoff_seconds = "bad"
+        with self.assertRaisesRegex(RuntimeError, "retry_backoff_seconds"):
+            DefaultWhatsAppClient(
+                config=config,
+                ipc_service=Mock(),
+                keyval_storage_gateway=Mock(),
+                logging_gateway=Mock(),
+                messaging_service=Mock(),
+                user_service=Mock(),
+            )
+
+        config = _make_config()
+        config.whatsapp.graphapi.timeout_seconds = 10
+        config.whatsapp.graphapi.retry_backoff_seconds = 0.5
         config.whatsapp.graphapi.max_download_bytes = "bad"
         config.whatsapp.graphapi.max_api_retries = "bad"
-        config.whatsapp.graphapi.retry_backoff_seconds = "bad"
-
         client = DefaultWhatsAppClient(
             config=config,
             ipc_service=Mock(),
@@ -284,10 +324,10 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(client_non_string._typing_indicator_enabled)  # pylint: disable=protected-access
 
-        config.whatsapp.graphapi.timeout_seconds = -1
+        config.whatsapp.graphapi.timeout_seconds = 10
         config.whatsapp.graphapi.max_download_bytes = 0
         config.whatsapp.graphapi.max_api_retries = -1
-        config.whatsapp.graphapi.retry_backoff_seconds = 0
+        config.whatsapp.graphapi.retry_backoff_seconds = 0.5
         client = DefaultWhatsAppClient(
             config=config,
             ipc_service=Mock(),
@@ -306,6 +346,31 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             client._retry_backoff_seconds, 0.5
         )  # pylint: disable=protected-access
+
+        config.whatsapp.graphapi.timeout_seconds = -1
+        with self.assertRaisesRegex(RuntimeError, "timeout_seconds"):
+            DefaultWhatsAppClient(
+                config=config,
+                ipc_service=Mock(),
+                keyval_storage_gateway=Mock(),
+                logging_gateway=Mock(),
+                messaging_service=Mock(),
+                user_service=Mock(),
+            )
+        config.whatsapp.graphapi.timeout_seconds = 10
+        config.whatsapp.graphapi.retry_backoff_seconds = 0
+        client_zero_backoff = DefaultWhatsAppClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+        self.assertEqual(
+            client_zero_backoff._retry_backoff_seconds,  # pylint: disable=protected-access
+            0.0,
+        )
 
     async def test_api_wrapper_methods_delegate_to_internal_helpers(self) -> None:
         client = self._new_client()

@@ -132,7 +132,7 @@ class BedrockCompletionGateway(ICompletionGateway):
             raise RuntimeError("Bedrock completion gateway readiness probe model is missing.")
 
         timeout_seconds = self._read_timeout_seconds
-        if timeout_seconds is None or timeout_seconds <= 0:
+        if timeout_seconds is None:
             timeout_seconds = 10.0
         try:
             await asyncio.wait_for(

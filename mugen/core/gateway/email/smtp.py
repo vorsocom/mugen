@@ -18,6 +18,7 @@ from mugen.core.contract.gateway.email import (
     IEmailGateway,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.utility.config_value import parse_optional_positive_finite_float
 
 
 # pylint: disable=too-few-public-methods
@@ -158,21 +159,18 @@ class SMTPEmailGateway(IEmailGateway):
 
         timeout_seconds = getattr(smtp_cfg, "timeout_seconds", 30.0)
         try:
-            timeout_seconds = float(timeout_seconds)
-        except (TypeError, ValueError) as exc:
+            parsed_timeout = parse_optional_positive_finite_float(
+                timeout_seconds,
+                "smtp.timeout_seconds",
+            )
+        except RuntimeError as exc:
             raise EmailGatewayError(
                 provider=self._provider,
                 operation="initialization",
-                message="smtp.timeout_seconds must be numeric.",
+                message=str(exc).replace("Invalid configuration: ", ""),
                 cause=exc,
             ) from exc
-
-        if timeout_seconds <= 0:
-            raise EmailGatewayError(
-                provider=self._provider,
-                operation="initialization",
-                message="smtp.timeout_seconds must be greater than zero.",
-            )
+        timeout_seconds = 30.0 if parsed_timeout is None else parsed_timeout
 
         username = self._optional_string(getattr(smtp_cfg, "username", None))
         password = self._optional_string(getattr(smtp_cfg, "password", None))

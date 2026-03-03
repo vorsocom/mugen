@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Mapping
 
+from mugen.core.utility.config_value import parse_nonnegative_finite_float
+
 PHASE_STATUS_STARTING = "starting"
 PHASE_STATUS_HEALTHY = "healthy"
 PHASE_STATUS_DEGRADED = "degraded"
@@ -198,16 +200,6 @@ def _normalize_platform_errors(values: object) -> dict[str, Any]:
     return normalized
 
 
-def _parse_nonnegative_float(value: object, *, default: float) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return default
-    if parsed < 0:
-        return default
-    return parsed
-
-
 def _phase_b_starting_within_grace(
     *,
     phase_b_status: str,
@@ -217,7 +209,15 @@ def _phase_b_starting_within_grace(
 ) -> bool:
     if phase_b_status != PHASE_STATUS_STARTING:
         return False
-    grace_seconds = _parse_nonnegative_float(readiness_grace_seconds, default=0.0)
+    try:
+        grace_seconds = parse_nonnegative_finite_float(
+            readiness_grace_seconds,
+            field_name="phase_b_readiness_grace_seconds",
+            default=0.0,
+        )
+    except RuntimeError:
+        # Invalid grace config values must not extend startup grace windows.
+        grace_seconds = 0.0
     if grace_seconds <= 0:
         return False
     try:

@@ -889,7 +889,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(critical, [])
         self.assertTrue(degrade_on_critical_exit)
 
-    async def test_runtime_controls_normalize_invalid_values(self) -> None:
+    async def test_runtime_controls_reject_invalid_grace_values(self) -> None:
         container = unittest.mock.Mock()
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
@@ -903,10 +903,13 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 platforms=["matrix"],
             )
         )
+        with self.assertRaisesRegex(RuntimeError, "readiness_grace_seconds"):
+            resolve_phase_b_runtime_controls(container.config)
+
+        container.config.mugen.runtime.phase_b.readiness_grace_seconds = 0
         grace, critical, degrade_on_critical_exit = resolve_phase_b_runtime_controls(
             container.config
         )
-
         self.assertEqual(grace, 0.0)
         self.assertEqual(critical, ["web", "whatsapp"])
         self.assertFalse(degrade_on_critical_exit)
@@ -914,13 +917,8 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config.mugen.runtime.phase_b.readiness_grace_seconds = -10
         container.config.mugen.runtime.phase_b.critical_platforms = None
         container.config.mugen.runtime.phase_b.degrade_on_critical_exit = "invalid"
-        grace, critical, degrade_on_critical_exit = resolve_phase_b_runtime_controls(
-            container.config
-        )
-
-        self.assertEqual(grace, 0.0)
-        self.assertEqual(critical, ["matrix"])
-        self.assertTrue(degrade_on_critical_exit)
+        with self.assertRaisesRegex(RuntimeError, "readiness_grace_seconds"):
+            resolve_phase_b_runtime_controls(container.config)
 
     async def test_shutdown_container_logs_warning_on_exception(self) -> None:
         app = Quart("quartman_test")

@@ -19,6 +19,7 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core.domain.use_case import NormalizeComposedMessageUseCase
+from mugen.core.utility.config_value import parse_optional_positive_finite_float
 
 
 # pylint: disable=too-many-instance-attributes
@@ -89,39 +90,10 @@ class DefaultMessagingService(IMessagingService):
                 )
                 return self._default_extension_timeout_seconds
             return None
-        if not isinstance(messaging_cfg, (int, float, str)):
-            if production_mode:
-                self._logging_gateway.warning(
-                    "Invalid extension timeout configuration in production; "
-                    f"using default {self._default_extension_timeout_seconds:.1f}s."
-                )
-                return self._default_extension_timeout_seconds
-            return None
-        try:
-            timeout_seconds = float(messaging_cfg)
-        except (TypeError, ValueError):
-            if production_mode:
-                self._logging_gateway.warning(
-                    "Invalid extension timeout configuration in production; "
-                    f"using default {self._default_extension_timeout_seconds:.1f}s."
-                )
-                return self._default_extension_timeout_seconds
-            self._logging_gateway.warning(
-                "Invalid extension timeout configuration; disabling timeout enforcement."
-            )
-            return None
-        if timeout_seconds <= 0:
-            if production_mode:
-                self._logging_gateway.warning(
-                    "Extension timeout must be positive in production; "
-                    f"using default {self._default_extension_timeout_seconds:.1f}s."
-                )
-                return self._default_extension_timeout_seconds
-            self._logging_gateway.warning(
-                "Extension timeout must be positive; disabling timeout enforcement."
-            )
-            return None
-        return timeout_seconds
+        return parse_optional_positive_finite_float(
+            messaging_cfg,
+            "mugen.messaging.extension_timeout_seconds",
+        )
 
     def _resolve_mh_mode(self) -> str:
         messaging_cfg = getattr(

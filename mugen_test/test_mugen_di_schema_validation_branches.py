@@ -220,7 +220,7 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cfg["mugen"]["runtime"]["provider_shutdown_timeout_seconds"] = "bad"
         with self.assertRaisesRegex(
             RuntimeError,
-            "mugen.runtime.provider_shutdown_timeout_seconds must be a positive number",
+            "mugen.runtime.provider_shutdown_timeout_seconds must be a positive finite number",
         ):
             di._validate_core_module_schema(cfg)
 

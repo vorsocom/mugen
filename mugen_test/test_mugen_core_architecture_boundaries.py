@@ -116,6 +116,17 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
         )
         self.assertEqual(violations, [])
 
+    def test_api_endpoint_does_not_depend_on_runtime_parsing_helpers(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        endpoint_file = repo_root / "mugen" / "core" / "api" / "endpoint.py"
+        violations = _find_import_violations(
+            python_files=[endpoint_file],
+            forbidden_prefixes=(
+                "mugen.core.runtime.phase_b_controls",
+            ),
+        )
+        self.assertEqual(violations, [])
+
     def test_migration_env_uses_contract_helpers_for_core_extension_config(
         self,
     ) -> None:

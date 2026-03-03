@@ -24,6 +24,11 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.utility.config_value import (
+    parse_bool_flag,
+    parse_nonnegative_finite_float,
+    parse_optional_positive_finite_float,
+)
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
     PROCESSING_STATE_STOP,
@@ -101,16 +106,14 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         raw_timeout = getattr(
             getattr(getattr(self._config, "whatsapp", None), "graphapi", None),
             "timeout_seconds",
-            self._default_http_timeout_seconds,
+            None,
         )
-        try:
-            timeout = float(raw_timeout)
-        except (TypeError, ValueError):
-            timeout = self._default_http_timeout_seconds
-
-        if timeout <= 0:
+        timeout = parse_optional_positive_finite_float(
+            raw_timeout,
+            "whatsapp.graphapi.timeout_seconds",
+        )
+        if timeout is None:
             return self._default_http_timeout_seconds
-
         return timeout
 
     def _resolve_max_download_bytes(self) -> int:
@@ -149,17 +152,13 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         raw_backoff = getattr(
             getattr(getattr(self._config, "whatsapp", None), "graphapi", None),
             "retry_backoff_seconds",
-            self._default_retry_backoff_seconds,
+            None,
         )
-        try:
-            backoff = float(raw_backoff)
-        except (TypeError, ValueError):
-            backoff = self._default_retry_backoff_seconds
-
-        if backoff <= 0:
-            return self._default_retry_backoff_seconds
-
-        return backoff
+        return parse_nonnegative_finite_float(
+            raw_backoff,
+            field_name="whatsapp.graphapi.retry_backoff_seconds",
+            default=self._default_retry_backoff_seconds,
+        )
 
     def _resolve_typing_indicator_enabled(self) -> bool:
         raw_enabled = getattr(
@@ -167,27 +166,19 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             "typing_indicator_enabled",
             self._default_typing_indicator_enabled,
         )
-        if isinstance(raw_enabled, bool):
-            return raw_enabled
-        if isinstance(raw_enabled, str):
-            normalized = raw_enabled.strip().lower()
-            if normalized in {"1", "true", "yes", "on"}:
-                return True
-            if normalized in {"0", "false", "no", "off"}:
-                return False
-        return self._default_typing_indicator_enabled
+        return parse_bool_flag(raw_enabled, self._default_typing_indicator_enabled)
 
     def _resolve_shutdown_timeout_seconds(self) -> float:
         raw_timeout = getattr(
             getattr(getattr(self._config, "mugen", None), "runtime", None),
             "shutdown_timeout_seconds",
-            self._default_shutdown_timeout_seconds,
+            None,
         )
-        try:
-            timeout = float(raw_timeout)
-        except (TypeError, ValueError):
-            timeout = self._default_shutdown_timeout_seconds
-        if timeout <= 0:
+        timeout = parse_optional_positive_finite_float(
+            raw_timeout,
+            "mugen.runtime.shutdown_timeout_seconds",
+        )
+        if timeout is None:
             return self._default_shutdown_timeout_seconds
         return timeout
 

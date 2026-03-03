@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from math import ceil
+from math import isfinite
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,19 +17,26 @@ def resolve_optional_positive_float(
     provider_label: str,
     logging_gateway: ILoggingGateway,
 ) -> float | None:
-    """Parse optional positive float with consistent warning messages."""
-    if value is None:
+    """Parse optional positive finite float."""
+    _ = logging_gateway
+    if value in [None, ""]:
         return None
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
-        logging_gateway.warning(f"{provider_label}: Invalid {field_name} configuration.")
-        return None
-    if parsed <= 0:
-        logging_gateway.warning(
-            f"{provider_label}: {field_name} must be positive when provided."
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Invalid configuration: {provider_label}.{field_name} must be a positive "
+            "finite number."
+        ) from exc
+    if isfinite(parsed) is not True:
+        raise RuntimeError(
+            f"Invalid configuration: {provider_label}.{field_name} must be a positive "
+            "finite number."
         )
-        return None
+    if parsed <= 0:
+        raise RuntimeError(
+            f"Invalid configuration: {provider_label}.{field_name} must be greater than 0."
+        )
     return parsed
 
 
@@ -39,19 +47,24 @@ def resolve_optional_positive_int(
     provider_label: str,
     logging_gateway: ILoggingGateway,
 ) -> int | None:
-    """Parse optional positive int with consistent warning messages."""
-    if value is None:
+    """Parse optional positive integer."""
+    _ = logging_gateway
+    if value in [None, ""]:
         return None
+    if isinstance(value, bool):
+        raise RuntimeError(
+            f"Invalid configuration: {provider_label}.{field_name} must be a positive integer."
+        )
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
-        logging_gateway.warning(f"{provider_label}: Invalid {field_name} configuration.")
-        return None
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Invalid configuration: {provider_label}.{field_name} must be a positive integer."
+        ) from exc
     if parsed <= 0:
-        logging_gateway.warning(
-            f"{provider_label}: {field_name} must be positive when provided."
+        raise RuntimeError(
+            f"Invalid configuration: {provider_label}.{field_name} must be greater than 0."
         )
-        return None
     return parsed
 
 
@@ -108,7 +121,12 @@ def to_timeout_milliseconds(seconds: float | None) -> int | None:
     """Convert timeout seconds to milliseconds without collapsing sub-second values."""
     if seconds is None:
         return None
-    return max(1, int(ceil(float(seconds) * 1000.0)))
+    parsed = float(seconds)
+    if isfinite(parsed) is not True or parsed <= 0:
+        raise RuntimeError(
+            "Invalid configuration: completion timeout must be a positive finite number."
+        )
+    return max(1, int(ceil(parsed * 1000.0)))
 
 
 def parse_bool_like(

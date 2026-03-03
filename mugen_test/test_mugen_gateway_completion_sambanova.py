@@ -1037,14 +1037,17 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             ):
                 await gateway.get_completion(request)
 
-    def test_timeout_parser_and_production_fail_fast(self) -> None:
+    def test_timeout_parser_rejects_invalid_values_and_production_fail_fast(
+        self,
+    ) -> None:
         gateway = SambaNovaCompletionGateway.__new__(SambaNovaCompletionGateway)
         gateway._config = _make_config()  # pylint: disable=protected-access
         gateway._logging_gateway = Mock()  # pylint: disable=protected-access
 
-        self.assertIsNone(gateway._resolve_optional_positive_float("bad", "timeout"))
-        self.assertIsNone(gateway._resolve_optional_positive_float(0, "timeout"))
-        self.assertGreaterEqual(gateway._logging_gateway.warning.call_count, 2)  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "SambaNovaCompletionGateway.timeout"):
+            gateway._resolve_optional_positive_float("bad", "timeout")
+        with self.assertRaisesRegex(RuntimeError, "SambaNovaCompletionGateway.timeout"):
+            gateway._resolve_optional_positive_float(0, "timeout")
 
         config = _make_config()
         config.mugen = SimpleNamespace(environment="production")
@@ -1152,7 +1155,7 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         SambaNovaCompletionGateway(config, logging_gateway)
         logging_gateway.warning.assert_not_called()
 
-    def test_perform_request_skips_timeout_setopt_when_conversion_returns_none(self) -> None:
+    def test_perform_request_sets_timeout_options_without_none_guard(self) -> None:
         import mugen.core.gateway.completion.sambanova as sambanova_mod  # pylint: disable=import-outside-toplevel
 
         config = _make_config()
@@ -1197,11 +1200,11 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         ):
             gateway._perform_request(headers=["h: v"], body={"hello": "world"})  # pylint: disable=protected-access
 
-        self.assertNotIn(
+        self.assertIn(
             sambanova_mod.pycurl.CONNECTTIMEOUT_MS,
             options,
         )
-        self.assertNotIn(
+        self.assertIn(
             sambanova_mod.pycurl.TIMEOUT_MS,
             options,
         )

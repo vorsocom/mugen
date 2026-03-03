@@ -189,7 +189,9 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         ):
             await gateway.check_readiness()
 
-    async def test_check_readiness_defaults_timeout_when_nonpositive(self) -> None:
+    async def test_check_readiness_uses_internal_timeout_value_without_fallback(
+        self,
+    ) -> None:
         config = _make_config()
         config.aws.bedrock.api.dict["classification"] = dict(
             config.aws.bedrock.api.dict["completion"]
@@ -219,7 +221,7 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         ):
             await gateway.check_readiness()
 
-        self.assertEqual(timeout_values, [10.0])
+        self.assertEqual(timeout_values, [0.0])
 
     async def test_check_readiness_uses_configured_positive_timeout(self) -> None:
         config = _make_config()
@@ -1255,15 +1257,18 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["config"].connect_timeout, 1.5)
         self.assertEqual(kwargs["config"].read_timeout, 2.5)
 
-    def test_timeout_parsers_handle_invalid_and_non_positive_values(self) -> None:
+    def test_timeout_parsers_reject_invalid_and_non_positive_values(self) -> None:
         gateway = self._build_gateway()
         gateway._logging_gateway = Mock()
 
-        self.assertIsNone(gateway._resolve_optional_positive_float("bad", "f"))
-        self.assertIsNone(gateway._resolve_optional_positive_float(0, "f"))
-        self.assertIsNone(gateway._resolve_optional_positive_int("bad", "i"))
-        self.assertIsNone(gateway._resolve_optional_positive_int(0, "i"))
-        self.assertGreaterEqual(gateway._logging_gateway.warning.call_count, 4)
+        with self.assertRaisesRegex(RuntimeError, "BedrockCompletionGateway.f"):
+            gateway._resolve_optional_positive_float("bad", "f")
+        with self.assertRaisesRegex(RuntimeError, "BedrockCompletionGateway.f"):
+            gateway._resolve_optional_positive_float(0, "f")
+        with self.assertRaisesRegex(RuntimeError, "BedrockCompletionGateway.i"):
+            gateway._resolve_optional_positive_int("bad", "i")
+        with self.assertRaisesRegex(RuntimeError, "BedrockCompletionGateway.i"):
+            gateway._resolve_optional_positive_int(0, "i")
 
     def test_constructor_raises_when_timeout_controls_missing_in_production(self) -> None:
         config = _make_config()

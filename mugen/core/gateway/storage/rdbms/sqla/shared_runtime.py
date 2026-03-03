@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
+from mugen.core.utility.config_value import parse_bool_flag
+
 
 @dataclass(slots=True)
 class SharedSQLAlchemyRuntime:
@@ -18,46 +20,79 @@ class SharedSQLAlchemyRuntime:
 
     @staticmethod
     def _resolve_bool(value: object, default: bool) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"1", "true", "yes", "on"}:
-                return True
-            if normalized in {"0", "false", "no", "off"}:
-                return False
-        return default
+        return parse_bool_flag(value, default)
 
     @staticmethod
-    def _resolve_positive_int(value: object, default: int) -> int:
+    def _resolve_positive_int(
+        value: object,
+        *,
+        default: int,
+        field_name: str,
+    ) -> int:
+        if value in [None, ""]:
+            return default
+        if isinstance(value, bool):
+            raise RuntimeError(
+                f"Invalid configuration: {field_name} must be a positive integer."
+            )
         try:
             parsed = int(value)
-        except (TypeError, ValueError):
-            return default
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Invalid configuration: {field_name} must be a positive integer."
+            ) from exc
         if parsed <= 0:
-            return default
+            raise RuntimeError(
+                f"Invalid configuration: {field_name} must be greater than 0."
+            )
         return parsed
 
     @staticmethod
-    def _resolve_nonnegative_int(value: object, default: int) -> int:
+    def _resolve_nonnegative_int(
+        value: object,
+        *,
+        default: int,
+        field_name: str,
+    ) -> int:
+        if value in [None, ""]:
+            return default
+        if isinstance(value, bool):
+            raise RuntimeError(
+                f"Invalid configuration: {field_name} must be a non-negative integer."
+            )
         try:
             parsed = int(value)
-        except (TypeError, ValueError):
-            return default
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Invalid configuration: {field_name} must be a non-negative integer."
+            ) from exc
         if parsed < 0:
-            return default
+            raise RuntimeError(
+                f"Invalid configuration: {field_name} must be greater than or equal to 0."
+            )
         return parsed
 
     @staticmethod
     def _resolve_statement_timeout_ms(value: object) -> int | None:
         if value in [None, ""]:
             return None
+        if isinstance(value, bool):
+            raise RuntimeError(
+                "Invalid configuration: rdbms.sqlalchemy.statement_timeout_ms must be "
+                "a positive integer."
+            )
         try:
             parsed = int(value)
-        except (TypeError, ValueError):
-            return None
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "Invalid configuration: rdbms.sqlalchemy.statement_timeout_ms must be "
+                "a positive integer."
+            ) from exc
         if parsed <= 0:
-            return None
+            raise RuntimeError(
+                "Invalid configuration: rdbms.sqlalchemy.statement_timeout_ms must be "
+                "greater than 0."
+            )
         return parsed
 
     @classmethod
@@ -80,20 +115,24 @@ class SharedSQLAlchemyRuntime:
             default=True,
         )
         pool_recycle = cls._resolve_positive_int(
-            getattr(sqlalchemy_cfg, "pool_recycle_seconds", 1800),
+            getattr(sqlalchemy_cfg, "pool_recycle_seconds", None),
             default=1800,
+            field_name="rdbms.sqlalchemy.pool_recycle_seconds",
         )
         pool_timeout = cls._resolve_positive_int(
-            getattr(sqlalchemy_cfg, "pool_timeout_seconds", 30),
+            getattr(sqlalchemy_cfg, "pool_timeout_seconds", None),
             default=30,
+            field_name="rdbms.sqlalchemy.pool_timeout_seconds",
         )
         pool_size = cls._resolve_positive_int(
-            getattr(sqlalchemy_cfg, "pool_size", 10),
+            getattr(sqlalchemy_cfg, "pool_size", None),
             default=10,
+            field_name="rdbms.sqlalchemy.pool_size",
         )
         max_overflow = cls._resolve_nonnegative_int(
-            getattr(sqlalchemy_cfg, "max_overflow", 20),
+            getattr(sqlalchemy_cfg, "max_overflow", None),
             default=20,
+            field_name="rdbms.sqlalchemy.max_overflow",
         )
         statement_timeout_ms = cls._resolve_statement_timeout_ms(
             getattr(sqlalchemy_cfg, "statement_timeout_ms", None),

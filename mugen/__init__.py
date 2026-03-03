@@ -97,6 +97,7 @@ from mugen.core.runtime.phase_b_controls import (
 )
 from mugen.core.runtime.phase_b_runtime import refresh_phase_b_health
 from mugen.core.runtime.task_shutdown import cancel_tasks_with_timeout
+from mugen.core.utility.config_value import parse_optional_positive_finite_float
 from mugen.core.utility.platforms import (
     SUPPORTED_CORE_PLATFORMS,
     normalize_platforms,
@@ -458,12 +459,27 @@ def _coerce_positive_int(value: object, *, default: int) -> int:
     return parsed
 
 
-def _coerce_positive_float(value: object, *, default: float) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
+def _read_optional_attr(node: object, attr: str, *, default: object = None) -> object:
+    if node is None:
         return default
-    if parsed <= 0:
+    node_dict = getattr(node, "__dict__", None)
+    if (
+        isinstance(node_dict, dict)
+        and attr not in node_dict
+        and hasattr(type(node), attr) is not True
+    ):
+        return default
+    return getattr(node, attr, default)
+
+
+def _resolve_supervisor_backoff_seconds(
+    value: object,
+    *,
+    field_name: str,
+    default: float,
+) -> float:
+    parsed = parse_optional_positive_finite_float(value, field_name)
+    if parsed is None:
         return default
     return parsed
 
@@ -474,15 +490,17 @@ def _resolve_phase_b_supervision_controls(
     runtime_cfg = getattr(getattr(config, "mugen", SimpleNamespace()), "runtime", None)
     phase_b_cfg = getattr(runtime_cfg, "phase_b", None)
     max_restarts = _coerce_positive_int(
-        getattr(phase_b_cfg, "supervisor_max_restarts", 3),
+        _read_optional_attr(phase_b_cfg, "supervisor_max_restarts", default=3),
         default=3,
     )
-    base_backoff_seconds = _coerce_positive_float(
-        getattr(phase_b_cfg, "supervisor_backoff_base_seconds", 1.0),
+    base_backoff_seconds = _resolve_supervisor_backoff_seconds(
+        _read_optional_attr(phase_b_cfg, "supervisor_backoff_base_seconds", default=None),
+        field_name="mugen.runtime.phase_b.supervisor_backoff_base_seconds",
         default=1.0,
     )
-    max_backoff_seconds = _coerce_positive_float(
-        getattr(phase_b_cfg, "supervisor_backoff_max_seconds", 30.0),
+    max_backoff_seconds = _resolve_supervisor_backoff_seconds(
+        _read_optional_attr(phase_b_cfg, "supervisor_backoff_max_seconds", default=None),
+        field_name="mugen.runtime.phase_b.supervisor_backoff_max_seconds",
         default=30.0,
     )
     if max_backoff_seconds < base_backoff_seconds:

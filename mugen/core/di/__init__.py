@@ -42,6 +42,10 @@ from mugen.core.contract.service.user import IUserService
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.runtime.bootstrap_contract import parse_runtime_bootstrap_settings
 from mugen.core.utility.collection.namespace import NamespaceConfig, to_namespace
+from mugen.core.utility.config_value import (
+    parse_nonnegative_finite_float,
+    parse_optional_positive_finite_float,
+)
 from mugen.core.utility.platforms import normalize_platforms, unknown_platforms
 
 from .injector import DependencyInjector
@@ -151,18 +155,7 @@ def _validate_optional_positive_timeout(
     *,
     path: str,
 ) -> None:
-    if value is None or value == "":
-        return
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(
-            f"Invalid configuration: {path} must be a positive number."
-        ) from exc
-    if parsed <= 0:
-        raise RuntimeError(
-            f"Invalid configuration: {path} must be greater than 0."
-        )
+    parse_optional_positive_finite_float(value, path)
 
 
 def _validate_required_positive_timeout(
@@ -175,6 +168,18 @@ def _validate_required_positive_timeout(
             f"Invalid configuration: {path} is required."
         )
     _validate_optional_positive_timeout(value, path=path)
+
+
+def _validate_optional_nonnegative_timeout_like_value(
+    value: object,
+    *,
+    path: str,
+) -> None:
+    parse_nonnegative_finite_float(
+        value,
+        field_name=path,
+        default=0.0,
+    )
 
 
 def _validate_extension_entry_schema(
@@ -279,6 +284,22 @@ def _validate_core_module_schema(config: dict) -> None:
             "supervisor_backoff_base_seconds",
             "supervisor_backoff_max_seconds",
         },
+    )
+    _validate_optional_nonnegative_timeout_like_value(
+        phase_b_cfg.get("readiness_grace_seconds"),
+        path="mugen.runtime.phase_b.readiness_grace_seconds",
+    )
+    _validate_optional_positive_timeout(
+        phase_b_cfg.get("startup_timeout_seconds"),
+        path="mugen.runtime.phase_b.startup_timeout_seconds",
+    )
+    _validate_optional_positive_timeout(
+        phase_b_cfg.get("supervisor_backoff_base_seconds"),
+        path="mugen.runtime.phase_b.supervisor_backoff_base_seconds",
+    )
+    _validate_optional_positive_timeout(
+        phase_b_cfg.get("supervisor_backoff_max_seconds"),
+        path="mugen.runtime.phase_b.supervisor_backoff_max_seconds",
     )
 
     messaging_cfg = mugen_cfg.get("messaging")

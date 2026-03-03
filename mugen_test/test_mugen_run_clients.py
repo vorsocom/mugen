@@ -1341,8 +1341,29 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             3,
         )
         self.assertEqual(  # pylint: disable=protected-access
-            mugen_mod._coerce_positive_float(0.0, default=1.5),
+            mugen_mod._coerce_positive_int("bad", default=4),
+            4,
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            mugen_mod._resolve_supervisor_backoff_seconds(
+                None,
+                field_name="field",
+                default=1.5,
+            ),
             1.5,
+        )
+        with self.assertRaisesRegex(RuntimeError, "field"):
+            mugen_mod._resolve_supervisor_backoff_seconds(  # pylint: disable=protected-access
+                0.0,
+                field_name="field",
+                default=1.5,
+            )
+        self.assertIsNone(
+            mugen_mod._read_optional_attr(  # pylint: disable=protected-access
+                None,
+                "missing",
+                default=None,
+            )
         )
         self.assertFalse(
             mugen_mod._config_path_exists(  # pylint: disable=protected-access

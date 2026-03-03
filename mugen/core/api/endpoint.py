@@ -28,11 +28,11 @@ from mugen.core.domain.use_case.phase_b_health import (
     PhaseBHealthInput,
     evaluate_phase_b_health,
 )
-from mugen.core.runtime.phase_b_controls import (
-    normalize_platform_list,
-    parse_bool,
-    parse_nonnegative_float,
+from mugen.core.utility.config_value import (
+    parse_bool_flag,
+    parse_nonnegative_finite_float,
 )
+from mugen.core.utility.platforms import normalize_platforms
 
 _PHASE_B_READINESS_GRACE_KEY = "phase_b_readiness_grace_seconds"
 _PHASE_B_CRITICAL_PLATFORMS_KEY = "phase_b_critical_platforms"
@@ -147,15 +147,20 @@ async def core_health_ready():
     ):
         phase_a_blocking_failed_capabilities = sorted(phase_a_capability_reasons.keys())
 
-    readiness_grace_seconds = parse_nonnegative_float(
-        status["phase_b_readiness_grace_seconds"],
-        default=0.0,
-    )
-    degrade_on_critical_exit = parse_bool(
+    try:
+        readiness_grace_seconds = parse_nonnegative_finite_float(
+            status["phase_b_readiness_grace_seconds"],
+            field_name="phase_b_readiness_grace_seconds",
+            default=0.0,
+        )
+    except RuntimeError:
+        # Invalid health-state grace values are treated strictly (no grace).
+        readiness_grace_seconds = 0.0
+    degrade_on_critical_exit = parse_bool_flag(
         status["phase_b_degrade_on_critical_exit"],
         default=True,
     )
-    critical_platforms = normalize_platform_list(status["phase_b_critical_platforms"])
+    critical_platforms = normalize_platforms(status["phase_b_critical_platforms"])
 
     health = evaluate_phase_b_health(
         PhaseBHealthInput(

@@ -1053,17 +1053,18 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
 
         async_groq.assert_called_once_with(api_key="gsk_test", timeout=9.0)
 
-    def test_timeout_resolution_logs_invalid_values(self) -> None:
+    def test_timeout_resolution_rejects_invalid_values(self) -> None:
         gateway = GroqCompletionGateway.__new__(GroqCompletionGateway)
         gateway._config = _make_config()  # pylint: disable=protected-access
         gateway._logging_gateway = Mock()  # pylint: disable=protected-access
 
         self.assertIsNone(gateway._resolve_timeout_seconds())
         gateway._config.groq.api.timeout_seconds = "bad"  # pylint: disable=protected-access
-        self.assertIsNone(gateway._resolve_timeout_seconds())
+        with self.assertRaisesRegex(RuntimeError, "timeout_seconds"):
+            gateway._resolve_timeout_seconds()
         gateway._config.groq.api.timeout_seconds = 0  # pylint: disable=protected-access
-        self.assertIsNone(gateway._resolve_timeout_seconds())
-        self.assertGreaterEqual(gateway._logging_gateway.warning.call_count, 2)  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "timeout_seconds"):
+            gateway._resolve_timeout_seconds()
 
     def test_constructor_raises_when_timeout_missing_in_production(self) -> None:
         config = _make_config()
