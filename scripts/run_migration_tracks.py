@@ -12,7 +12,16 @@ import subprocess
 import sys
 import tomllib
 
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from mugen.core.utility.rdbms_schema import (
+    DEFAULT_CORE_RDBMS_SCHEMA,
+    resolve_core_rdbms_schema,
+    validate_sql_identifier,
+)
+
 _TRACK_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 
 
@@ -44,14 +53,6 @@ def _resolve_path(value: str, repo_root: Path) -> Path:
     if not path.is_absolute():
         path = repo_root / path
     return path.resolve()
-
-
-def _validate_identifier(value: str, label: str) -> str:
-    """Validate SQL identifier-like values."""
-    clean = value.strip()
-    if not _IDENTIFIER_RE.fullmatch(clean):
-        raise RuntimeError(f"Invalid {label}: {value!r}")
-    return clean
 
 
 def _validate_track_name(value: str) -> str:
@@ -104,17 +105,17 @@ def _build_track(
             f"Track '{track_name}' Alembic config not found: {alembic_config}",
         )
 
-    schema = _validate_identifier(
+    schema = validate_sql_identifier(
         str(raw.get("schema", defaults["schema"])),
-        f"schema for track '{track_name}'",
+        label=f"schema for track '{track_name}'",
     )
-    version_table = _validate_identifier(
+    version_table = validate_sql_identifier(
         str(raw.get("version_table", defaults["version_table"])),
-        f"version_table for track '{track_name}'",
+        label=f"version_table for track '{track_name}'",
     )
-    version_table_schema = _validate_identifier(
+    version_table_schema = validate_sql_identifier(
         str(raw.get("version_table_schema", schema)),
-        f"version_table_schema for track '{track_name}'",
+        label=f"version_table_schema for track '{track_name}'",
     )
     model_modules = _normalize_model_modules(raw.get("model_modules"), track_name)
 
@@ -135,9 +136,10 @@ def _load_tracks(cfg: dict, repo_root: Path) -> list[MigrationTrack]:
     if tracks_cfg and not isinstance(tracks_cfg, dict):
         raise RuntimeError("rdbms.migration_tracks must be a table")
 
+    core_schema = resolve_core_rdbms_schema(cfg, default=DEFAULT_CORE_RDBMS_SCHEMA)
     core_defaults = {
         "alembic_config": "alembic.ini",
-        "schema": "mugen",
+        "schema": core_schema,
         "version_table": "alembic_version",
     }
     core_raw = tracks_cfg.get("core", {})
@@ -167,9 +169,9 @@ def _load_tracks(cfg: dict, repo_root: Path) -> list[MigrationTrack]:
                 "Each migration track plugin entry requires a non-empty 'name'",
             )
 
-        default_schema = _validate_identifier(
+        default_schema = validate_sql_identifier(
             f"plugin_{name.strip().replace('-', '_')}",
-            f"default schema for track '{name}'",
+            label=f"default schema for track '{name}'",
         )
         plugin_defaults = {
             "alembic_config": f"plugins/{name.strip()}/alembic.ini",

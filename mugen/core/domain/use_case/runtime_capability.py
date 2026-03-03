@@ -31,6 +31,7 @@ class RuntimeCapabilityResult:
     statuses: dict[str, str]
     errors: dict[str, str | None]
     failed_capabilities: list[str]
+    non_blocking_degraded_capabilities: list[str]
     healthy: bool
 
 
@@ -45,6 +46,7 @@ def evaluate_runtime_capabilities(
     statuses: dict[str, str] = {}
     errors: dict[str, str | None] = {}
     failed_capabilities: list[str] = []
+    non_blocking_degraded_capabilities: list[str] = []
 
     def _record(name: str, *, healthy: bool, error: str) -> None:
         if healthy:
@@ -74,8 +76,10 @@ def evaluate_runtime_capabilities(
                 error_message = (
                     "Optional provider readiness check failed."
                 )
-            statuses[f"provider_readiness.optional.{provider_name}"] = PHASE_STATUS_DEGRADED
-            errors[f"provider_readiness.optional.{provider_name}"] = error_message
+            capability_name = f"provider_readiness.optional.{provider_name}"
+            statuses[capability_name] = PHASE_STATUS_DEGRADED
+            errors[capability_name] = error_message
+            non_blocking_degraded_capabilities.append(capability_name)
     _record(
         "messaging.mh.mode",
         healthy=mh_mode is not None,
@@ -140,6 +144,7 @@ def evaluate_runtime_capabilities(
         statuses=statuses,
         errors=errors,
         failed_capabilities=failed_capabilities,
+        non_blocking_degraded_capabilities=non_blocking_degraded_capabilities,
         healthy=not failed_capabilities,
     )
 

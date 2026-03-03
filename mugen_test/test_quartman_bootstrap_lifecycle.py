@@ -151,7 +151,9 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(phase_b_runner.await_count, 0)
         await quartman.app.shutdown()
 
-    async def test_startup_marks_phase_a_degraded_for_degraded_capabilities(self) -> None:
+    async def test_startup_keeps_phase_a_healthy_for_non_blocking_degradations(
+        self,
+    ) -> None:
         app = Quart("quartman_test")
         quartman = _import_quartman_with_app(app)
         phase_b_runner = unittest.mock.AsyncMock(return_value=None)
@@ -159,9 +161,13 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         async def _degraded_bootstrap(_app: Quart) -> None:
             state = quartman._bootstrap_state()
             state[quartman.PHASE_A_CAPABILITY_STATUSES_KEY] = {
-                "container_readiness": quartman.PHASE_STATUS_DEGRADED
+                "provider_readiness.optional.email_gateway": quartman.PHASE_STATUS_DEGRADED
             }
             state[quartman.PHASE_A_ERROR_KEY] = None
+            state[quartman.PHASE_A_BLOCKING_FAILURES_KEY] = []
+            state[quartman.PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY] = [
+                "provider_readiness.optional.email_gateway"
+            ]
 
         container = unittest.mock.Mock()
         container.config = unittest.mock.Mock(
@@ -180,8 +186,8 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         ):
             await quartman.app.startup()
             state = quartman._bootstrap_state()
-            self.assertEqual(state[quartman.PHASE_A_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
-            self.assertIn("phase_a degraded capabilities", str(state[quartman.PHASE_A_ERROR_KEY]))
+            self.assertEqual(state[quartman.PHASE_A_STATUS_KEY], quartman.PHASE_STATUS_HEALTHY)
+            self.assertEqual(state[quartman.PHASE_A_ERROR_KEY], None)
             await quartman.app.shutdown()
 
     async def test_startup_preserves_existing_phase_a_error_for_degraded_capabilities(
@@ -215,7 +221,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         ):
             await quartman.app.startup()
             state = quartman._bootstrap_state()
-            self.assertEqual(state[quartman.PHASE_A_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+            self.assertEqual(state[quartman.PHASE_A_STATUS_KEY], quartman.PHASE_STATUS_HEALTHY)
             self.assertEqual(state[quartman.PHASE_A_ERROR_KEY], "container probe failed")
             await quartman.app.shutdown()
 

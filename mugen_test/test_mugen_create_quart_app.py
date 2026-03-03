@@ -63,7 +63,7 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="default",
                 ),
-                quart=SimpleNamespace(secret_key="secret_key"),
+                quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
             )
 
             app = create_quart_app(config_provider=lambda: dummy_config)
@@ -83,7 +83,7 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="development",
                 ),
-                quart=SimpleNamespace(secret_key="secret_key"),
+                quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
             )
 
             app = create_quart_app(config_provider=lambda: dummy_config)
@@ -103,7 +103,7 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="testing",
                 ),
-                quart=SimpleNamespace(secret_key="secret_key"),
+                quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
             )
 
             app = create_quart_app(config_provider=lambda: dummy_config)
@@ -124,7 +124,7 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="production",
                 ),
-                quart=SimpleNamespace(secret_key="secret_key"),
+                quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
             )
 
             app = create_quart_app(config_provider=lambda: dummy_config)
@@ -135,3 +135,25 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
             # We should not get here because all exceptions
             # should be handled in the called function.
             self.fail("Exception raised unexpectedly.")
+
+    async def test_rejects_weak_quart_secret_key(self):
+        dummy_config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                environment="development",
+            ),
+            quart=SimpleNamespace(secret_key="short-secret"),
+        )
+
+        with self.assertRaises(BootstrapConfigError):
+            create_quart_app(config_provider=lambda: dummy_config)
+
+    async def test_rejects_placeholder_quart_secret_key(self):
+        dummy_config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                environment="development",
+            ),
+            quart=SimpleNamespace(secret_key="<set-quart-secret-key>"),
+        )
+
+        with self.assertRaises(BootstrapConfigError):
+            create_quart_app(config_provider=lambda: dummy_config)

@@ -2,9 +2,11 @@
 
 __all__ = [
     "BOOTSTRAP_STATE_KEY",
+    "PHASE_A_BLOCKING_FAILURES_KEY",
     "PHASE_A_CAPABILITY_ERRORS_KEY",
     "PHASE_A_CAPABILITY_STATUSES_KEY",
     "PHASE_A_ERROR_KEY",
+    "PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY",
     "BootstrapConfigError",
     "BootstrapError",
     "ExtensionLoadError",
@@ -40,9 +42,11 @@ from quart import Quart
 from mugen.bootstrap_state import (
     BOOTSTRAP_STATE_KEY,
     MUGEN_EXTENSION_KEY,
+    PHASE_A_BLOCKING_FAILURES_KEY,
     PHASE_A_CAPABILITY_ERRORS_KEY,
     PHASE_A_CAPABILITY_STATUSES_KEY,
     PHASE_A_ERROR_KEY,
+    PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY,
     PHASE_A_STATUS_KEY,
     PHASE_B_ERROR_KEY,
     PHASE_B_PLATFORM_ERRORS_KEY,
@@ -552,7 +556,11 @@ def create_quart_app(
     app.config.from_object(AppConfig[environment])
 
     # Initialize application.
-    AppConfig[environment].init_app(app, config)
+    try:
+        AppConfig[environment].init_app(app, config)
+    except RuntimeError as exc:
+        logger.error(str(exc))
+        raise BootstrapConfigError(str(exc)) from exc
 
     # Return the built application object.
     return app
@@ -575,6 +583,8 @@ async def bootstrap_app(
     if not isinstance(capability_errors, dict):
         capability_errors = {}
     bootstrap_state[PHASE_A_CAPABILITY_ERRORS_KEY] = capability_errors
+    bootstrap_state[PHASE_A_BLOCKING_FAILURES_KEY] = []
+    bootstrap_state[PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY] = []
 
     try:
         await di.ensure_container_readiness_async()
@@ -583,6 +593,8 @@ async def bootstrap_app(
     except di.ProviderBootstrapError as exc:
         capability_statuses["container_readiness"] = PHASE_STATUS_DEGRADED
         capability_errors["container_readiness"] = str(exc)
+        bootstrap_state[PHASE_A_BLOCKING_FAILURES_KEY] = ["container_readiness"]
+        bootstrap_state[PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY] = []
         bootstrap_state[PHASE_A_ERROR_KEY] = str(exc)
         raise BootstrapConfigError(
             f"Container readiness check failed: {exc}"
@@ -633,6 +645,12 @@ async def bootstrap_app(
         capability_statuses[capability_name] = status
     for capability_name, error in capability_result.errors.items():
         capability_errors[capability_name] = error
+    bootstrap_state[PHASE_A_BLOCKING_FAILURES_KEY] = list(
+        capability_result.failed_capabilities
+    )
+    bootstrap_state[PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY] = list(
+        capability_result.non_blocking_degraded_capabilities
+    )
 
     if capability_result.healthy is not True:
         failed_messages: list[str] = []

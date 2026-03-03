@@ -20,7 +20,7 @@ class TestMuGenConfigInitApp(unittest.TestCase):
 
         # Create dummy configuration for testing.
         dummy_config = SimpleNamespace(
-            quart=SimpleNamespace(secret_key="secret_key"),
+            quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
         )
 
         # We do not expect to get any exceptions here.
@@ -49,7 +49,7 @@ class TestMuGenConfigInitApp(unittest.TestCase):
 
         # Create dummy configuration for testing.
         dummy_config = SimpleNamespace(
-            quart=SimpleNamespace(secret_key="secret_key"),
+            quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
         )
 
         # We do not expect to get any exceptions here.
@@ -60,3 +60,21 @@ class TestMuGenConfigInitApp(unittest.TestCase):
             # We should not get here because all exceptions
             # should be handled in the called function.
             self.fail("Exception raised unexpectedly.")
+
+    def test_rejects_weak_secret_key(self) -> None:
+        app = Quart("test_app")
+        app.config["LOG_LEVEL"] = 10
+        dummy_config = SimpleNamespace(
+            quart=SimpleNamespace(secret_key="secret_key"),
+        )
+
+        with self.assertRaises(RuntimeError):
+            Config.init_app(app, config=dummy_config)
+
+    def test_requires_quart_section(self) -> None:
+        app = Quart("test_app")
+        app.config["LOG_LEVEL"] = 10
+        dummy_config = SimpleNamespace()
+
+        with self.assertRaises(RuntimeError):
+            Config.init_app(app, config=dummy_config)

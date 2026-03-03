@@ -56,6 +56,10 @@ It sets track-specific Alembic env vars:
 - `MUGEN_ALEMBIC_VERSION_TABLE_SCHEMA`
 - optional `MUGEN_ALEMBIC_MODEL_MODULES`
 
+Core runtime relational gateways also resolve their schema from
+`rdbms.migration_tracks.core.schema` (default `mugen` when omitted), so
+migration and runtime schema contracts stay aligned.
+
 ## Configuration Contract
 
 Track configuration lives under `rdbms.migration_tracks` in `mugen.toml`.

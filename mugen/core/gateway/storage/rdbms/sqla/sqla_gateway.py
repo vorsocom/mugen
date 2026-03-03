@@ -23,6 +23,7 @@ from mugen.core.gateway.storage.rdbms.sqla.sqla_uow import (
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.utility.platforms import normalize_platforms
+from mugen.core.utility.rdbms_schema import resolve_core_rdbms_schema
 
 
 class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
@@ -46,6 +47,7 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
         self._config = config
         self._logging_gateway = logging_gateway
         self._runtime = relational_runtime
+        self._core_schema = resolve_core_rdbms_schema(config)
         self._engine: AsyncEngine = self._runtime.engine
         self._tables: TableRegistry = build_table_registry_from_base(ModelBase)
         self._session_maker: async_sessionmaker = self._runtime.session_maker
@@ -66,7 +68,7 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
                     raise RuntimeError(
                         "Database schema is not ready. "
                         "Run migrations before startup. "
-                        f"mugen.{table_name} missing column(s): {missing_text}."
+                        f"{self._core_schema}.{table_name} missing column(s): {missing_text}."
                     )
 
                 constraints = await self._existing_constraints(
@@ -79,7 +81,7 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
                     raise RuntimeError(
                         "Database schema is not ready. "
                         "Run migrations before startup. "
-                        f"mugen.{table_name} missing constraint(s): {missing_text}."
+                        f"{self._core_schema}.{table_name} missing constraint(s): {missing_text}."
                     )
 
                 indexes = await self._existing_indexes(conn, table_name=table_name)
@@ -89,7 +91,7 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
                     raise RuntimeError(
                         "Database schema is not ready. "
                         "Run migrations before startup. "
-                        f"mugen.{table_name} missing index(es): {missing_text}."
+                        f"{self._core_schema}.{table_name} missing index(es): {missing_text}."
                     )
 
     def _required_schema_checks(self) -> dict[str, dict[str, set[str]]]:
@@ -179,7 +181,7 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
             sa_text(
                 "SELECT column_name "
                 "FROM information_schema.columns "
-                "WHERE table_schema = 'mugen' AND table_name = :table_name"
+                f"WHERE table_schema = '{self._core_schema}' AND table_name = :table_name"
             ),
             {"table_name": table_name},
         )
@@ -190,7 +192,7 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
             sa_text(
                 "SELECT constraint_name "
                 "FROM information_schema.table_constraints "
-                "WHERE table_schema = 'mugen' "
+                f"WHERE table_schema = '{self._core_schema}' "
                 "AND table_name = :table_name "
                 "AND constraint_type IN ('PRIMARY KEY', 'UNIQUE')"
             ),
@@ -203,7 +205,7 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
             sa_text(
                 "SELECT indexname "
                 "FROM pg_indexes "
-                "WHERE schemaname = 'mugen' AND tablename = :table_name"
+                f"WHERE schemaname = '{self._core_schema}' AND tablename = :table_name"
             ),
             {"table_name": table_name},
         )

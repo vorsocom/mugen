@@ -362,6 +362,13 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
             optional_provider_degraded.errors["provider_readiness.optional.knowledge_gateway"],
             "Optional provider readiness check failed.",
         )
+        self.assertEqual(
+            optional_provider_degraded.non_blocking_degraded_capabilities,
+            [
+                "provider_readiness.optional.email_gateway",
+                "provider_readiness.optional.knowledge_gateway",
+            ],
+        )
 
 
 if __name__ == "__main__":

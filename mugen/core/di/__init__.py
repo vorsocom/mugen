@@ -57,6 +57,8 @@ _CONFIG_NAMESPACE_CONVERSION = NamespaceConfig(
     raw_attr="dict",
     add_aliases=False,
 )
+_DEFAULT_PROVIDER_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+_DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 60.0
 
 
 class ContainerBootstrapError(RuntimeError):
@@ -146,6 +148,25 @@ def _ensure_only_known_keys(
         )
 
 
+def _validate_optional_positive_timeout(
+    value: object,
+    *,
+    path: str,
+) -> None:
+    if value is None or value == "":
+        return
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Invalid configuration: {path} must be a positive number."
+        ) from exc
+    if parsed <= 0:
+        raise RuntimeError(
+            f"Invalid configuration: {path} must be greater than 0."
+        )
+
+
 def _validate_extension_entry_schema(
     entry: object,
     *,
@@ -212,7 +233,25 @@ def _validate_core_module_schema(config: dict) -> None:
     _ensure_only_known_keys(
         runtime_cfg,
         path="mugen.runtime",
-        allowed={"phase_b", "profile", "provider_readiness_timeout_seconds"},
+        allowed={
+            "phase_b",
+            "profile",
+            "provider_readiness_timeout_seconds",
+            "provider_shutdown_timeout_seconds",
+            "shutdown_timeout_seconds",
+        },
+    )
+    _validate_optional_positive_timeout(
+        runtime_cfg.get("provider_readiness_timeout_seconds"),
+        path="mugen.runtime.provider_readiness_timeout_seconds",
+    )
+    _validate_optional_positive_timeout(
+        runtime_cfg.get("provider_shutdown_timeout_seconds"),
+        path="mugen.runtime.provider_shutdown_timeout_seconds",
+    )
+    _validate_optional_positive_timeout(
+        runtime_cfg.get("shutdown_timeout_seconds"),
+        path="mugen.runtime.shutdown_timeout_seconds",
     )
 
     phase_b_cfg = runtime_cfg.get("phase_b")
@@ -440,14 +479,9 @@ def _resolve_runtime_profile_override(config: dict) -> str:
     return str(settings.profile)
 
 
-def _infer_runtime_profile(config: dict) -> str:
-    """Resolve explicit DI runtime validation profile."""
-    return _resolve_runtime_profile_override(config)
-
-
 def _validate_container(config: dict, injector: DependencyInjector) -> None:
     """Validate that required providers were built for active configuration."""
-    profile = _infer_runtime_profile(config)
+    profile = _resolve_runtime_profile_override(config)
     active_platforms = _normalize_platforms(_get_active_platforms(config))
     active_platform_set = set(active_platforms)
     unsupported_platforms = unknown_platforms(active_platforms)
@@ -878,6 +912,32 @@ def _resolve_provider_readiness_timeout_seconds(config: dict) -> float:
     return float(settings.provider_readiness_timeout_seconds)
 
 
+def _resolve_provider_shutdown_timeout_seconds(config: dict) -> float:
+    settings = parse_runtime_bootstrap_settings(
+        config,
+        require_profile=False,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=False,
+    )
+    timeout_seconds = settings.provider_shutdown_timeout_seconds
+    if timeout_seconds is None:
+        return _DEFAULT_PROVIDER_SHUTDOWN_TIMEOUT_SECONDS
+    return float(timeout_seconds)
+
+
+def _resolve_shutdown_timeout_seconds(config: dict) -> float:
+    settings = parse_runtime_bootstrap_settings(
+        config,
+        require_profile=False,
+        require_startup_timeout_seconds=False,
+        require_provider_readiness_timeout_seconds=False,
+    )
+    timeout_seconds = settings.shutdown_timeout_seconds
+    if timeout_seconds is None:
+        return _DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+    return float(timeout_seconds)
+
+
 async def _await_readiness_probe_async(
     maybe_awaitable,
     *,
@@ -1224,6 +1284,8 @@ async def _shutdown_provider_async(
     provider_name: str,
     provider: object | None,
     logger: ILoggingGateway | logging.Logger,
+    *,
+    timeout_seconds: float | None = None,
 ) -> None:
     """Deterministically close one provider instance."""
     if provider is None:
@@ -1253,7 +1315,15 @@ async def _shutdown_provider_async(
         if inspect.isawaitable(maybe_awaitable) is not True:
             continue
         try:
-            await maybe_awaitable
+            if timeout_seconds is None:
+                await maybe_awaitable
+            else:
+                await asyncio.wait_for(maybe_awaitable, timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Provider shutdown timed out "
+                f"({provider_name}) hook={hook_name} timeout={timeout_seconds:.2f}s"
+            )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             if hook_name == "close":
                 logger.warning(
@@ -1298,38 +1368,80 @@ async def _shutdown_injector_async(injector: DependencyInjector | None) -> None:
         "logging_gateway",
         logging.getLogger(),
     )
+    provider_timeout_seconds = _DEFAULT_PROVIDER_SHUTDOWN_TIMEOUT_SECONDS
+    shutdown_timeout_seconds = _DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+    config = None
+    try:
+        config = _injector_config_dict(injector)
+    except Exception:  # pylint: disable=broad-exception-caught
+        config = None
+    if isinstance(config, dict):
+        try:
+            provider_timeout_seconds = _resolve_provider_shutdown_timeout_seconds(config)
+            shutdown_timeout_seconds = _resolve_shutdown_timeout_seconds(config)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "Invalid shutdown timeout configuration; using defaults: "
+                f"{exc}"
+            )
+            provider_timeout_seconds = _DEFAULT_PROVIDER_SHUTDOWN_TIMEOUT_SECONDS
+            shutdown_timeout_seconds = _DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
 
-    seen: set[int] = set()
-    for spec in _provider_specs_for_shutdown():
-        provider = getattr(injector, spec.injector_attr, None)
-        if provider is None:
-            continue
+    async def _shutdown_inner() -> None:
+        seen: set[int] = set()
+        for spec in _provider_specs_for_shutdown():
+            provider = getattr(injector, spec.injector_attr, None)
+            if provider is None:
+                continue
 
-        provider_id = id(provider)
-        if provider_id in seen:
+            provider_id = id(provider)
+            if provider_id in seen:
+                setattr(injector, spec.injector_attr, None)
+                continue
+
+            seen.add(provider_id)
+            await _shutdown_provider_async(
+                spec.provider_name,
+                provider,
+                logger,
+                timeout_seconds=provider_timeout_seconds,
+            )
             setattr(injector, spec.injector_attr, None)
-            continue
 
-        seen.add(provider_id)
-        await _shutdown_provider_async(spec.provider_name, provider, logger)
-        setattr(injector, spec.injector_attr, None)
+        try:
+            ext_services = dict(getattr(injector, "ext_services", {}))
+        except Exception:  # pylint: disable=broad-exception-caught
+            ext_services = {}
+
+        for name, service in ext_services.items():
+            service_id = id(service)
+            if service_id in seen:
+                continue
+            seen.add(service_id)
+            await _shutdown_provider_async(
+                f"ext_service:{name}",
+                service,
+                logger,
+                timeout_seconds=provider_timeout_seconds,
+            )
+
+        relational_runtime = getattr(injector, "relational_runtime", None)
+        if relational_runtime is not None and id(relational_runtime) not in seen:
+            seen.add(id(relational_runtime))
+            await _shutdown_provider_async(
+                "relational_runtime",
+                relational_runtime,
+                logger,
+                timeout_seconds=provider_timeout_seconds,
+            )
 
     try:
-        ext_services = dict(getattr(injector, "ext_services", {}))
-    except Exception:  # pylint: disable=broad-exception-caught
-        ext_services = {}
-
-    for name, service in ext_services.items():
-        service_id = id(service)
-        if service_id in seen:
-            continue
-        seen.add(service_id)
-        await _shutdown_provider_async(f"ext_service:{name}", service, logger)
-
-    relational_runtime = getattr(injector, "relational_runtime", None)
-    if relational_runtime is not None and id(relational_runtime) not in seen:
-        seen.add(id(relational_runtime))
-        await _shutdown_provider_async("relational_runtime", relational_runtime, logger)
+        await asyncio.wait_for(_shutdown_inner(), timeout=shutdown_timeout_seconds)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Injector shutdown timed out after "
+            f"{shutdown_timeout_seconds:.2f}s; continuing shutdown."
+        )
 
 
 def _injector_config_dict(injector: DependencyInjector | None) -> dict:

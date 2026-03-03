@@ -192,6 +192,28 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         ]
         di._validate_core_module_schema(cfg)
 
+    def test_core_schema_validates_optional_runtime_shutdown_timeouts(self) -> None:
+        cfg = _valid_core_config()
+        cfg["mugen"]["runtime"]["provider_shutdown_timeout_seconds"] = 10.0
+        cfg["mugen"]["runtime"]["shutdown_timeout_seconds"] = 60.0
+        di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["runtime"]["provider_shutdown_timeout_seconds"] = "bad"
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mugen.runtime.provider_shutdown_timeout_seconds must be a positive number",
+        ):
+            di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["runtime"]["shutdown_timeout_seconds"] = 0
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mugen.runtime.shutdown_timeout_seconds must be greater than 0",
+        ):
+            di._validate_core_module_schema(cfg)
+
     def test_core_schema_requires_matrix_encryption_key_when_matrix_enabled(self) -> None:
         for mutate in (
             lambda cfg: cfg,

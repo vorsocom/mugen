@@ -8,9 +8,11 @@ from typing import Any
 from quart import current_app, jsonify
 
 from mugen.bootstrap_state import (
+    PHASE_A_BLOCKING_FAILURES_KEY,
     PHASE_A_CAPABILITY_ERRORS_KEY,
     PHASE_A_CAPABILITY_STATUSES_KEY,
     PHASE_A_ERROR_KEY,
+    PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY,
     PHASE_A_STATUS_KEY,
     PHASE_B_ERROR_KEY,
     PHASE_B_PLATFORM_ERRORS_KEY,
@@ -44,6 +46,11 @@ def _resolve_bootstrap_status() -> dict[str, Any]:
         "phase_a_error": state.get(PHASE_A_ERROR_KEY),
         "phase_a_capability_statuses": state.get(PHASE_A_CAPABILITY_STATUSES_KEY, {}),
         "phase_a_capability_errors": state.get(PHASE_A_CAPABILITY_ERRORS_KEY, {}),
+        "phase_a_blocking_failures": state.get(PHASE_A_BLOCKING_FAILURES_KEY, []),
+        "phase_a_non_blocking_degradations": state.get(
+            PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY,
+            [],
+        ),
         "phase_b_status": str(state.get(PHASE_B_STATUS_KEY, "") or ""),
         "phase_b_error": state.get(PHASE_B_ERROR_KEY),
         "phase_b_started_at": state.get(PHASE_B_STARTED_AT_KEY),
@@ -56,6 +63,20 @@ def _resolve_bootstrap_status() -> dict[str, Any]:
         "phase_b_platform_statuses": state.get(PHASE_B_PLATFORM_STATUSES_KEY, {}),
         "phase_b_platform_errors": state.get(PHASE_B_PLATFORM_ERRORS_KEY, {}),
     }
+
+
+def _normalize_string_list(values: object) -> list[str]:
+    if isinstance(values, list) is not True:
+        return []
+    normalized: list[str] = []
+    for value in values:
+        if isinstance(value, str) is not True:
+            continue
+        candidate = value.strip()
+        if candidate == "" or candidate in normalized:
+            continue
+        normalized.append(candidate)
+    return normalized
 
 
 @api.get("/core/health/live")
@@ -112,6 +133,19 @@ async def core_health_ready():
             if normalized_error == "":
                 continue
             phase_a_capability_errors[normalized_name] = normalized_error
+    phase_a_capability_reasons: dict[str, str] = dict(phase_a_capability_errors)
+
+    phase_a_blocking_failed_capabilities = _normalize_string_list(
+        status["phase_a_blocking_failures"]
+    )
+    phase_a_non_blocking_degraded_capabilities = _normalize_string_list(
+        status["phase_a_non_blocking_degradations"]
+    )
+    if (
+        not phase_a_blocking_failed_capabilities
+        and phase_a_status != PHASE_STATUS_HEALTHY
+    ):
+        phase_a_blocking_failed_capabilities = sorted(phase_a_capability_reasons.keys())
 
     readiness_grace_seconds = parse_nonnegative_float(
         status["phase_b_readiness_grace_seconds"],
@@ -142,17 +176,30 @@ async def core_health_ready():
     phase_b_error = health.phase_b_error
     failed_platforms = health.failed_critical_platforms
     reasons: dict[str, str] = dict(health.reasons)
-    phase_a_capability_reasons: dict[str, str] = dict(phase_a_capability_errors)
 
     if phase_a_status != PHASE_STATUS_HEALTHY:
         if isinstance(phase_a_error, str) and phase_a_error.strip():
             reasons["phase_a"] = phase_a_error.strip()
-        for capability_name, capability_error in phase_a_capability_reasons.items():
+        for capability_name in phase_a_blocking_failed_capabilities:
+            capability_error = phase_a_capability_reasons.get(capability_name)
+            if capability_error is None:
+                continue
             reasons[f"phase_a.{capability_name}"] = capability_error
 
-    phase_a_failed_capabilities = sorted(phase_a_capability_reasons.keys())
+    phase_a_failed_capabilities = list(phase_a_blocking_failed_capabilities)
+    phase_a_blocking_capability_errors: dict[str, str] = {
+        capability_name: phase_a_capability_reasons[capability_name]
+        for capability_name in phase_a_blocking_failed_capabilities
+        if capability_name in phase_a_capability_reasons
+    }
+    phase_a_non_blocking_capability_errors: dict[str, str] = {
+        capability_name: phase_a_capability_reasons[capability_name]
+        for capability_name in phase_a_non_blocking_degraded_capabilities
+        if capability_name in phase_a_capability_reasons
+    }
     ready = (
         phase_a_status == PHASE_STATUS_HEALTHY
+        and not phase_a_blocking_failed_capabilities
         and phase_b_status != PHASE_STATUS_DEGRADED
         and not failed_platforms
     )
@@ -168,6 +215,16 @@ async def core_health_ready():
                 "phase_a_capability_errors": phase_a_capability_errors,
                 "phase_a_capability_reasons": phase_a_capability_reasons,
                 "phase_a_failed_capabilities": phase_a_failed_capabilities,
+                "phase_a_blocking_failed_capabilities": (
+                    phase_a_blocking_failed_capabilities
+                ),
+                "phase_a_non_blocking_degraded_capabilities": (
+                    phase_a_non_blocking_degraded_capabilities
+                ),
+                "phase_a_blocking_capability_errors": phase_a_blocking_capability_errors,
+                "phase_a_non_blocking_capability_errors": (
+                    phase_a_non_blocking_capability_errors
+                ),
                 "phase_b_status": phase_b_status,
                 "phase_b_error": phase_b_error,
                 "critical_platforms": critical_platforms,

@@ -9,6 +9,8 @@ from mugen.core.utility.platforms import normalize_platforms
 _PROFILE_KEY = "mugen.runtime.profile"
 _STARTUP_TIMEOUT_KEY = "mugen.runtime.phase_b.startup_timeout_seconds"
 _PROVIDER_TIMEOUT_KEY = "mugen.runtime.provider_readiness_timeout_seconds"
+_PROVIDER_SHUTDOWN_TIMEOUT_KEY = "mugen.runtime.provider_shutdown_timeout_seconds"
+_SHUTDOWN_TIMEOUT_KEY = "mugen.runtime.shutdown_timeout_seconds"
 _ALLOWED_PROFILES = {"platform_full"}
 
 
@@ -24,6 +26,8 @@ class RuntimeBootstrapSettings:
     profile: str | None
     startup_timeout_seconds: float | None
     provider_readiness_timeout_seconds: float | None
+    provider_shutdown_timeout_seconds: float | None
+    shutdown_timeout_seconds: float | None
 
 
 _MISSING = object()
@@ -38,6 +42,13 @@ def _read_path(config: object, *path: str) -> object:
             current = current[key]
             continue
         if current is None:
+            return _MISSING
+        current_dict = getattr(current, "__dict__", None)
+        if (
+            isinstance(current_dict, dict)
+            and key not in current_dict
+            and hasattr(type(current), key) is not True
+        ):
             return _MISSING
         if hasattr(current, key) is not True:
             return _MISSING
@@ -74,7 +85,7 @@ def _parse_required_positive_float(
     invalid_message: str,
     nonpositive_message: str,
 ) -> float:
-    if raw_value in {_MISSING, None, ""}:
+    if raw_value is _MISSING or raw_value is None or raw_value == "":
         raise RuntimeError(missing_message)
     try:
         parsed = float(raw_value)
@@ -82,6 +93,28 @@ def _parse_required_positive_float(
         raise RuntimeError(invalid_message) from exc
     if parsed <= 0:
         raise RuntimeError(nonpositive_message)
+    return parsed
+
+
+def _parse_optional_positive_float(
+    *,
+    raw_value: object,
+    key_path: str,
+) -> float | None:
+    if raw_value is _MISSING or raw_value is None or raw_value == "":
+        return None
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Invalid runtime configuration: "
+            f"{key_path} must be a positive number."
+        ) from exc
+    if parsed <= 0:
+        raise RuntimeError(
+            "Invalid runtime configuration: "
+            f"{key_path} must be greater than 0."
+        )
     return parsed
 
 
@@ -199,6 +232,26 @@ def parse_runtime_bootstrap_settings(
             ),
         )
 
+    provider_shutdown_timeout_seconds = _parse_optional_positive_float(
+        raw_value=_read_path(
+            config,
+            "mugen",
+            "runtime",
+            "provider_shutdown_timeout_seconds",
+        ),
+        key_path=_PROVIDER_SHUTDOWN_TIMEOUT_KEY,
+    )
+
+    shutdown_timeout_seconds = _parse_optional_positive_float(
+        raw_value=_read_path(
+            config,
+            "mugen",
+            "runtime",
+            "shutdown_timeout_seconds",
+        ),
+        key_path=_SHUTDOWN_TIMEOUT_KEY,
+    )
+
     if raw_platforms is _MISSING:
         raw_platforms = None
 
@@ -211,4 +264,6 @@ def parse_runtime_bootstrap_settings(
         profile=profile,
         startup_timeout_seconds=startup_timeout_seconds,
         provider_readiness_timeout_seconds=provider_readiness_timeout_seconds,
+        provider_shutdown_timeout_seconds=provider_shutdown_timeout_seconds,
+        shutdown_timeout_seconds=shutdown_timeout_seconds,
     )
