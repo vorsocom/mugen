@@ -1080,6 +1080,19 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.client_session = object()
         await client.close()
 
+    async def test_close_logs_warning_when_session_close_raises(self) -> None:
+        client = self._client()
+        failing_session = SimpleNamespace(
+            close=AsyncMock(side_effect=RuntimeError("session close failed")),
+            closed=False,
+        )
+        client.client_session = failing_session
+
+        await client.close()
+
+        failing_session.close.assert_awaited_once_with()
+        client._logging_gateway.warning.assert_called_once()  # pylint: disable=protected-access
+
     async def test_sync_token_property_reads_storage(self) -> None:
         client = self._client()
         client._sync_token = "next-batch"  # pylint: disable=protected-access

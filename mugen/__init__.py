@@ -780,39 +780,11 @@ async def run_platform_clients(
         def _healthy_callback() -> None:
             _on_platform_healthy(platform_name)
 
-        try:
-            return runner(
-                started_callback=_started_callback,
-                degraded_callback=_degraded_callback,
-                healthy_callback=_healthy_callback,
-            )
-        except TypeError as exc:
-            exc_text = str(exc)
-            callback_name = next(
-                (
-                    callback
-                    for callback in (
-                        "started_callback",
-                        "degraded_callback",
-                        "healthy_callback",
-                    )
-                    if callback in exc_text
-                ),
-                None,
-            )
-            if callback_name is None:
-                raise
-
-            async def _signature_mismatch_runner(
-                captured_exc: TypeError = exc,
-                mismatched_callback: str = callback_name,
-            ) -> None:
-                raise RuntimeError(
-                    f"{platform_name} runner does not accept required callback "
-                    f"parameter '{mismatched_callback}'."
-                ) from captured_exc
-
-            return _signature_mismatch_runner()
+        return runner(
+            started_callback=_started_callback,
+            degraded_callback=_degraded_callback,
+            healthy_callback=_healthy_callback,
+        )
 
     def _on_platform_task_done(platform_name: str, task: asyncio.Task) -> None:
         shutdown_requested = _parse_bool(
