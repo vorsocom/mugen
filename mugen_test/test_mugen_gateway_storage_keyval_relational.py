@@ -80,6 +80,29 @@ class _AsyncContext:
         return False
 
 
+class _ProbeConnection:
+    def __init__(self):
+        self.sql: list[str] = []
+
+    async def execute(self, stmt, params=None):  # noqa: ARG002
+        sql = str(stmt)
+        self.sql.append(sql)
+        if "to_regclass" in sql:
+            return _FakeResult(rows=[{"table_name": "core_runtime.core_keyval_entry"}])
+        return _FakeResult()
+
+
+class _ProbeEngine:
+    def __init__(self, connection: _ProbeConnection):
+        self._connection = connection
+
+    def connect(self):
+        return _AsyncContext(self._connection)
+
+    def begin(self):
+        return _AsyncContext(self._connection)
+
+
 class _MemoryRelationalEngine:
     def __init__(self):
         self.rows: dict[tuple[str, str], dict] = {}
@@ -292,7 +315,16 @@ def _make_config(
 
 def _new_gateway(*, engine=None, config=None, logger=None):
     gateway = RelationalKeyValStorageGateway.__new__(RelationalKeyValStorageGateway)
-    gateway._config = config or _make_config()
+    resolved_config = config or _make_config()
+    gateway._config = resolved_config
+    schema = "mugen"
+    migration_tracks = getattr(getattr(resolved_config, "rdbms", None), "migration_tracks", None)
+    core_track = getattr(migration_tracks, "core", None)
+    schema_value = getattr(core_track, "schema", None)
+    if isinstance(schema_value, str) and schema_value.strip() != "":
+        schema = schema_value.strip()
+    gateway._core_schema = schema
+    gateway._core_keyval_table = f"{schema}.core_keyval_entry"
     gateway._logging_gateway = logger or Mock()
     gateway._runtime = SimpleNamespace(engine=None)
     gateway._namespace_default = "core"
@@ -321,6 +353,27 @@ class TestMugenGatewayStorageKeyvalRelational(unittest.IsolatedAsyncioTestCase):
         engine.raise_exc = SQLAlchemyError("boom")
         with self.assertRaises(RuntimeError):
             await gateway._verify_backend_ready()  # pylint: disable=protected-access
+
+    async def test_verify_backend_ready_uses_configured_core_schema(self) -> None:
+        config = _make_config()
+        config.rdbms.migration_tracks = SimpleNamespace(
+            core=SimpleNamespace(schema="core_runtime")
+        )
+        probe_conn = _ProbeConnection()
+        gateway = _new_gateway(
+            engine=_ProbeEngine(probe_conn),
+            config=config,
+            logger=Mock(),
+        )
+
+        await gateway._verify_backend_ready()  # pylint: disable=protected-access
+
+        self.assertTrue(
+            any(
+                "to_regclass('core_runtime.core_keyval_entry')" in sql
+                for sql in probe_conn.sql
+            )
+        )
 
     async def test_async_crud_cas_delete_exists_and_list(self) -> None:
         gateway = _new_gateway()

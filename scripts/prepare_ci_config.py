@@ -183,7 +183,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--quart-secret-key",
-        default="ci-quart-secret-key",
+        default="ci-quart-secret-key-0123456789abcdef",
         help="Quart secret_key value for CI.",
     )
     parser.add_argument(

@@ -18,6 +18,7 @@ from mugen.core.contract.gateway.storage.web_runtime import (
 from mugen.core.domain.use_case.queue_job_lifecycle import QueueJobLifecycleUseCase
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.gateway.storage.web_runtime.sql import text as web_sql_text
+from mugen.core.utility.rdbms_schema import resolve_core_rdbms_schema
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -34,6 +35,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         self._config = config
         self._logging_gateway = logging_gateway
         self._runtime = relational_runtime
+        self._core_schema = resolve_core_rdbms_schema(config)
         self._queue_job_lifecycle_use_case = QueueJobLifecycleUseCase()
         self._engine = self._runtime.engine
 
@@ -52,6 +54,9 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         async with self._session_provider() as session:
             yield session
 
+    def _schema_sql(self, statement: str):
+        return web_sql_text(statement.replace("mugen.", f"{self._core_schema}."))
+
     async def aclose(self) -> None:
         return None
 
@@ -62,7 +67,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
 
         async with self._relational_session() as session:
             result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT "
                     "to_regclass('mugen.web_queue_job') AS web_queue_job, "
                     "to_regclass('mugen.web_conversation_state') AS web_conversation_state, "
@@ -217,7 +222,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     ) -> None:
         async with self._relational_session() as session:
             result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT owner_user_id "
                     "FROM mugen.web_conversation_state "
                     "WHERE conversation_id = :conversation_id"
@@ -230,7 +235,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                     raise KeyError("conversation not found")
 
                 await session.execute(
-                    web_sql_text(
+                    self._schema_sql(
                         "INSERT INTO mugen.web_conversation_state "
                         "("
                         "conversation_id, owner_user_id, stream_generation, "
@@ -251,7 +256,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                 )
 
                 result = await session.execute(
-                    web_sql_text(
+                    self._schema_sql(
                         "SELECT owner_user_id "
                         "FROM mugen.web_conversation_state "
                         "WHERE conversation_id = :conversation_id"
@@ -271,7 +276,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     async def count_pending_jobs(self) -> int:
         async with self._relational_session() as session:
             result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT count(*) "
                     "FROM mugen.web_queue_job "
                     "WHERE status = 'pending'"
@@ -291,7 +296,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     ) -> None:
         async with self._relational_session() as session:
             await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "INSERT INTO mugen.web_queue_job "
                     "("
                     "job_id, conversation_id, sender, message_type, payload, "
@@ -323,7 +328,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     ) -> tuple[dict[str, Any] | None, int]:
         async with self._relational_session() as session:
             recovered_result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "UPDATE mugen.web_queue_job "
                     "SET status = 'pending', lease_expires_at = NULL, updated_at = now() "
                     "WHERE status = 'processing' "
@@ -333,7 +338,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             recovered_count = int(getattr(recovered_result, "rowcount", 0) or 0)
 
             selected = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT job_id, conversation_id, sender, message_type, payload, "
                     "status, attempts, created_at, updated_at, lease_expires_at, "
                     "error_message, completed_at, client_message_id "
@@ -355,7 +360,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                 lease_expires_at=(now_epoch + queue_processing_lease_seconds),
             )
             updated = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "UPDATE mugen.web_queue_job "
                     "SET status = :status, "
                     "attempts = :attempts, "
@@ -405,7 +410,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     ) -> bool:
         async with self._relational_session() as session:
             result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT status, attempts "
                     "FROM mugen.web_queue_job "
                     "WHERE job_id = :job_id"
@@ -430,7 +435,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     ) -> bool:
         async with self._relational_session() as session:
             result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "UPDATE mugen.web_queue_job "
                     "SET lease_expires_at = :lease_expires_at, "
                     "updated_at = :updated_at "
@@ -463,7 +468,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     ) -> dict[str, Any]:
         async with self._relational_session() as session:
             state_result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT owner_user_id, stream_generation, next_event_id "
                     "FROM mugen.web_conversation_state "
                     "WHERE conversation_id = :conversation_id "
@@ -474,7 +479,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             state = state_result.mappings().one_or_none()
             if state is None:
                 await session.execute(
-                    web_sql_text(
+                    self._schema_sql(
                         "INSERT INTO mugen.web_conversation_state "
                         "("
                         "conversation_id, owner_user_id, stream_generation, "
@@ -493,7 +498,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                     },
                 )
                 state_result = await session.execute(
-                    web_sql_text(
+                    self._schema_sql(
                         "SELECT owner_user_id, stream_generation, next_event_id "
                         "FROM mugen.web_conversation_state "
                         "WHERE conversation_id = :conversation_id "
@@ -519,7 +524,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                 event_id = 1
 
             await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "INSERT INTO mugen.web_conversation_event "
                     "("
                     "conversation_id, event_id, event_type, payload, "
@@ -542,7 +547,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             )
 
             await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "UPDATE mugen.web_conversation_state "
                     "SET next_event_id = :next_event_id, "
                     "stream_generation = :stream_generation, "
@@ -560,7 +565,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
 
             min_keep_event_id = max(event_id - replay_max_events + 1, 1)
             await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "DELETE FROM mugen.web_conversation_event "
                     "WHERE conversation_id = :conversation_id "
                     "AND event_id < :min_keep_event_id"
@@ -583,7 +588,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     async def list_media_tokens(self) -> list[dict[str, Any]]:
         async with self._relational_session() as session:
             result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT token, file_path, expires_at "
                     "FROM mugen.web_media_token"
                 )
@@ -607,7 +612,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
 
         async with self._relational_session() as session:
             state_result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT stream_generation "
                     "FROM mugen.web_conversation_state "
                     "WHERE conversation_id = :conversation_id"
@@ -630,7 +635,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                 effective_after_event_id = 0
 
             events_result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT event_id, event_type, payload, created_at, stream_generation, "
                     "stream_version "
                     "FROM mugen.web_conversation_event "
@@ -686,7 +691,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     async def delete_media_token(self, *, token: str) -> None:
         async with self._relational_session() as session:
             await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "DELETE FROM mugen.web_media_token "
                     "WHERE token = :token"
                 ),
@@ -696,7 +701,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     async def list_active_queue_payloads(self) -> list[Any]:
         async with self._relational_session() as session:
             queue_result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT payload "
                     "FROM mugen.web_queue_job "
                     "WHERE status IN ('pending', 'processing')"
@@ -717,7 +722,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     ) -> None:
         async with self._relational_session() as session:
             await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "INSERT INTO mugen.web_media_token "
                     "("
                     "token, owner_user_id, conversation_id, file_path, mime_type, "
@@ -742,7 +747,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     async def get_media_token(self, *, token: str) -> dict[str, Any] | None:
         async with self._relational_session() as session:
             result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT token, owner_user_id, file_path, mime_type, filename, "
                     "expires_at "
                     "FROM mugen.web_media_token "
@@ -758,7 +763,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     async def recover_stale_processing_jobs(self, *, now_ts: datetime) -> int:
         async with self._relational_session() as session:
             recovered_result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "UPDATE mugen.web_queue_job "
                     "SET status = 'pending', lease_expires_at = NULL, updated_at = now() "
                     "WHERE status = 'processing' "
@@ -821,7 +826,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         normalized_status = str(status).strip().lower()
         async with self._relational_session() as session:
             result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT job_id, conversation_id, sender, message_type, payload, "
                     "status, attempts, created_at, updated_at, lease_expires_at, "
                     "error_message, completed_at, client_message_id "
@@ -890,7 +895,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                 update_sql += "WHERE job_id = :job_id"
 
             update_result = await session.execute(
-                web_sql_text(update_sql),
+                self._schema_sql(update_sql),
                 update_params,
             )
             rowcount = int(getattr(update_result, "rowcount", 0) or 0)
@@ -905,7 +910,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     async def read_queue_state(self, *, queue_state_version: int) -> dict[str, Any]:
         async with self._relational_session() as session:
             result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT job_id, conversation_id, sender, message_type, payload, "
                     "status, attempts, created_at, updated_at, lease_expires_at, "
                     "error_message, completed_at, client_message_id "
@@ -926,7 +931,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
 
         now_epoch = datetime.now(timezone.utc).timestamp()
         async with self._relational_session() as session:
-            await session.execute(web_sql_text("DELETE FROM mugen.web_queue_job"))
+            await session.execute(self._schema_sql("DELETE FROM mugen.web_queue_job"))
             for job in jobs:
                 if not isinstance(job, dict):
                     continue
@@ -942,7 +947,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                     "original_filename": job.get("original_filename"),
                 }
                 await session.execute(
-                    web_sql_text(
+                    self._schema_sql(
                         "INSERT INTO mugen.web_queue_job "
                         "("
                         "job_id, conversation_id, sender, message_type, payload, "
@@ -995,7 +1000,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
     ) -> dict[str, Any]:
         async with self._relational_session() as session:
             state_result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT stream_generation, stream_version, next_event_id "
                     "FROM mugen.web_conversation_state "
                     "WHERE conversation_id = :conversation_id"
@@ -1021,7 +1026,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                 return self._new_event_log_state(event_log_version)
 
             events_result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT event_id, event_type, payload, created_at, stream_generation, "
                     "stream_version "
                     "FROM mugen.web_conversation_event "
@@ -1103,7 +1108,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
 
         async with self._relational_session() as session:
             owner_result = await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "SELECT owner_user_id "
                     "FROM mugen.web_conversation_state "
                     "WHERE conversation_id = :conversation_id"
@@ -1114,7 +1119,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             owner_user_id = owner_row.get("owner_user_id") if owner_row is not None else "system"
 
             await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "INSERT INTO mugen.web_conversation_state "
                     "("
                     "conversation_id, owner_user_id, stream_generation, "
@@ -1140,7 +1145,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             )
 
             await session.execute(
-                web_sql_text(
+                self._schema_sql(
                     "DELETE FROM mugen.web_conversation_event "
                     "WHERE conversation_id = :conversation_id"
                 ),
@@ -1157,7 +1162,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                 if not isinstance(event_payload, dict):
                     event_payload = {}
                 await session.execute(
-                    web_sql_text(
+                    self._schema_sql(
                         "INSERT INTO mugen.web_conversation_event "
                         "("
                         "conversation_id, event_id, event_type, payload, "

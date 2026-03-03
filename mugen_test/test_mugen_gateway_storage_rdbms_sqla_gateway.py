@@ -196,6 +196,45 @@ class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("SELECT 1", conn.executed[0])
 
+    async def test_check_readiness_uses_configured_core_schema(self) -> None:
+        custom_schema = "core_runtime"
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(platforms=[]),
+            rdbms=SimpleNamespace(
+                migration_tracks=SimpleNamespace(
+                    core=SimpleNamespace(schema=custom_schema),
+                )
+            ),
+        )
+        with (
+            patch.object(
+                sqla_gateway,
+                "build_table_registry_from_base",
+                return_value={"widgets": self.widgets},
+            ),
+        ):
+            gateway = SQLAlchemyRelationalStorageGateway(
+                config=config,
+                logging_gateway=SimpleNamespace(),
+                relational_runtime=self.runtime,
+            )
+
+        required = gateway._required_schema_checks()  # pylint: disable=protected-access
+        columns = {name: set(meta["columns"]) for name, meta in required.items()}
+        constraints = {name: set(meta["constraints"]) for name, meta in required.items()}
+        indexes = {name: set(meta["indexes"]) for name, meta in required.items()}
+        conn = _FakeConn(columns=columns, constraints=constraints, indexes=indexes)
+        gateway._engine = _FakeEngine(conn)  # pylint: disable=protected-access
+
+        await gateway.check_readiness()
+
+        self.assertTrue(
+            any(f"table_schema = '{custom_schema}'" in sql for sql in conn.executed)
+        )
+        self.assertTrue(
+            any(f"schemaname = '{custom_schema}'" in sql for sql in conn.executed)
+        )
+
     async def test_check_readiness_raises_for_missing_schema_elements(self) -> None:
         with patch.object(
             sqla_gateway,

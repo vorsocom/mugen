@@ -319,6 +319,103 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
             "backend unavailable",
         )
 
+    async def test_ready_endpoint_keeps_non_blocking_degradations_visible_without_failing(
+        self,
+    ) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_A_ERROR_KEY] = None
+        state[PHASE_A_CAPABILITY_ERRORS_KEY] = {
+            "provider_readiness.optional.email_gateway": "smtp unavailable",
+        }
+        state["phase_a_blocking_failures"] = []
+        state["phase_a_non_blocking_degradations"] = [
+            "provider_readiness.optional.email_gateway"
+        ]
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_HEALTHY}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["phase_a_blocking_failed_capabilities"], [])
+        self.assertEqual(
+            payload["phase_a_non_blocking_degraded_capabilities"],
+            ["provider_readiness.optional.email_gateway"],
+        )
+        self.assertEqual(
+            payload["phase_a_non_blocking_capability_errors"],
+            {"provider_readiness.optional.email_gateway": "smtp unavailable"},
+        )
+
+    async def test_ready_endpoint_treats_non_list_phase_a_capability_lists_as_empty(
+        self,
+    ) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_A_ERROR_KEY] = None
+        state["phase_a_blocking_failures"] = "invalid"
+        state["phase_a_non_blocking_degradations"] = {"invalid": True}
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_HEALTHY}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["phase_a_blocking_failed_capabilities"], [])
+        self.assertEqual(payload["phase_a_non_blocking_degraded_capabilities"], [])
+
+    async def test_ready_endpoint_normalizes_phase_a_non_blocking_degradation_list(
+        self,
+    ) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_A_ERROR_KEY] = None
+        state[PHASE_A_CAPABILITY_ERRORS_KEY] = {"optional.email": "degraded"}
+        state["phase_a_non_blocking_degradations"] = [" optional.email ", "", "optional.email", 1]
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_HEALTHY}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            payload["phase_a_non_blocking_degraded_capabilities"],
+            ["optional.email"],
+        )
+
+    async def test_ready_endpoint_skips_missing_blocking_capability_error_reason(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        state[PHASE_A_ERROR_KEY] = None
+        state[PHASE_A_CAPABILITY_ERRORS_KEY] = {}
+        state["phase_a_blocking_failures"] = ["missing.capability"]
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {"web": PHASE_STATUS_HEALTHY}
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {"web": None}
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(payload["ready"])
+        self.assertNotIn("phase_a.missing.capability", payload["reasons"])
+
     async def test_ready_endpoint_prefers_phase_a_error_reason_string(self) -> None:
         state = self._bootstrap_state()
         state[PHASE_A_STATUS_KEY] = PHASE_STATUS_DEGRADED

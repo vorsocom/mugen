@@ -21,6 +21,7 @@ from mugen.core.contract.gateway.storage.keyval_model import (
     KeyValListPage,
 )
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
+from mugen.core.utility.rdbms_schema import qualify_sql_name, resolve_core_rdbms_schema
 
 
 class RelationalKeyValStorageGateway(IKeyValStorageGateway):
@@ -39,6 +40,11 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         self._config = config
         self._logging_gateway = logging_gateway
         self._runtime = relational_runtime
+        self._core_schema = resolve_core_rdbms_schema(config)
+        self._core_keyval_table = qualify_sql_name(
+            schema=self._core_schema,
+            name="core_keyval_entry",
+        )
         self._namespace_default = self._resolve_namespace_default()
         self._list_limit_default = self._resolve_list_limit_default()
         self._closed = False
@@ -46,6 +52,9 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         self._backend_ready_lock: asyncio.Lock | None = None
 
         self._engine: AsyncEngine = self._runtime.engine
+
+    def _sql(self, statement: str):
+        return sa_text(statement.replace("mugen.", f"{self._core_schema}."))
 
     def _assert_open(self) -> None:
         if self._closed:
@@ -66,15 +75,15 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
     async def _verify_backend_ready(self) -> None:
         try:
             async with self._engine.connect() as conn:
-                await conn.execute(sa_text("SELECT 1"))
+                await conn.execute(self._sql("SELECT 1"))
                 result = await conn.execute(
-                    sa_text("SELECT to_regclass('mugen.core_keyval_entry') AS table_name")
+                    self._sql("SELECT to_regclass('mugen.core_keyval_entry') AS table_name")
                 )
                 row = result.mappings().one_or_none()
                 table_name = None if row is None else row.get("table_name")
                 if table_name in [None, ""]:
                     raise RuntimeError(
-                        "Required table mugen.core_keyval_entry was not found. "
+                        f"Required table {self._core_keyval_table} was not found. "
                         "Run migrations before booting relational keyval."
                     )
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -199,7 +208,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         if include_expired is not True:
             where_expiry = " AND (expires_at IS NULL OR expires_at > now())"
 
-        stmt = sa_text(
+        stmt = self._sql(
             "SELECT namespace, entry_key, payload, codec, row_version, expires_at, "
             "created_at, updated_at "
             "FROM mugen.core_keyval_entry "
@@ -322,7 +331,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         expires_at = self._resolve_expires_at(ttl_seconds)
 
         if expected_row_version is None:
-            stmt = sa_text(
+            stmt = self._sql(
                 "INSERT INTO mugen.core_keyval_entry "
                 "(namespace, entry_key, payload, codec, expires_at) "
                 "VALUES (:namespace, :entry_key, :payload, :codec, :expires_at) "
@@ -355,7 +364,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
 
         expected = int(expected_row_version)
         if expected <= 0:
-            stmt_insert = sa_text(
+            stmt_insert = self._sql(
                 "INSERT INTO mugen.core_keyval_entry "
                 "(namespace, entry_key, payload, codec, expires_at) "
                 "VALUES (:namespace, :entry_key, :payload, :codec, :expires_at) "
@@ -397,7 +406,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
 
             return self._to_entry(dict(row))
 
-        stmt_update = sa_text(
+        stmt_update = self._sql(
             "UPDATE mugen.core_keyval_entry "
             "SET payload = :payload, "
             "codec = :codec, "
@@ -482,7 +491,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
             params["expected_row_version"] = int(expected_row_version)
             where_row_version = " AND row_version = :expected_row_version"
 
-        stmt = sa_text(
+        stmt = self._sql(
             "DELETE FROM mugen.core_keyval_entry "
             "WHERE namespace = :namespace AND entry_key = :entry_key"
             f"{where_row_version}"
@@ -528,7 +537,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
         target_namespace = self._normalize_namespace(namespace)
         target_key = self._normalize_key(key)
 
-        stmt = sa_text(
+        stmt = self._sql(
             "SELECT 1 "
             "FROM mugen.core_keyval_entry "
             "WHERE namespace = :namespace "
@@ -588,7 +597,7 @@ class RelationalKeyValStorageGateway(IKeyValStorageGateway):
             params["cursor"] = str(cursor)
 
         where_clause = " AND ".join(filters)
-        stmt = sa_text(
+        stmt = self._sql(
             "SELECT entry_key "
             "FROM mugen.core_keyval_entry "
             f"WHERE {where_clause} "

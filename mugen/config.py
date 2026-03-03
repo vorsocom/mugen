@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 from quart import Quart
 
+from mugen.core.utility.security import validate_quart_secret_key
+
 
 class Config:  # pylint: disable=too-few-public-methods
     """Base configuration class."""
@@ -27,7 +29,12 @@ class Config:  # pylint: disable=too-few-public-methods
         except KeyError:
             app.logger.error("LOG_LEVEL not configured.")
 
-        app.config["SECRET_KEY"] = config.quart.secret_key
+        quart_config = getattr(config, "quart", None)
+        if quart_config is None:
+            raise RuntimeError("Invalid configuration: [quart] section is required.")
+        app.config["SECRET_KEY"] = validate_quart_secret_key(
+            getattr(quart_config, "secret_key", None)
+        )
 
 
 class DevelopmentConfig(Config):  # pylint: disable=too-few-public-methods

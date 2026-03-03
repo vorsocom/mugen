@@ -959,6 +959,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 statuses={},
                 errors={},
                 failed_capabilities=[],
+                non_blocking_degraded_capabilities=[],
                 healthy=True,
             )
 
@@ -1099,6 +1100,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             statuses={"container_readiness": PHASE_STATUS_HEALTHY},
             errors={"missing": None},
             failed_capabilities=["missing"],
+            non_blocking_degraded_capabilities=[],
             healthy=False,
         )
 

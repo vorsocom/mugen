@@ -89,6 +89,7 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
         row,
         session=None,
         engine=None,
+        config=None,
     ) -> tuple[RelationalWebRuntimeStore, _Session]:
         active_session = session or _Session(row)
         runtime = SimpleNamespace(
@@ -96,7 +97,7 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
             session_maker=Mock(return_value=active_session),
         )
         store = RelationalWebRuntimeStore(
-            config=SimpleNamespace(),
+            config=config or SimpleNamespace(),
             logging_gateway=Mock(),
             relational_runtime=runtime,
         )
@@ -155,6 +156,30 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
         )
         await store.check_readiness()
         self.assertEqual(session.execute.await_count, 1)
+
+    async def test_check_readiness_uses_configured_core_schema(self) -> None:
+        custom_schema = "core_runtime"
+        config = SimpleNamespace(
+            rdbms=SimpleNamespace(
+                migration_tracks=SimpleNamespace(
+                    core=SimpleNamespace(schema=custom_schema),
+                )
+            )
+        )
+        store, session = self._build_store(
+            row={
+                "web_queue_job": f"{custom_schema}.web_queue_job",
+                "web_conversation_state": f"{custom_schema}.web_conversation_state",
+                "web_conversation_event": f"{custom_schema}.web_conversation_event",
+                "web_media_token": f"{custom_schema}.web_media_token",
+            },
+            config=config,
+        )
+
+        await store.check_readiness()
+
+        readiness_sql = str(session.execute.await_args_list[0].args[0])
+        self.assertIn(f"to_regclass('{custom_schema}.web_queue_job')", readiness_sql)
 
     async def test_aclose_noops_when_engine_not_initialized(self) -> None:
         store, _ = self._build_store(row={})
