@@ -62,7 +62,9 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
             )
         self.assertEqual(violations, [])
 
-    def test_service_layer_does_not_import_plugin_or_adapter_implementations(self) -> None:
+    def test_service_layer_does_not_import_plugin_or_adapter_implementations(
+        self,
+    ) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         service_root = repo_root / "mugen" / "core" / "service"
         forbidden_prefixes = (
@@ -74,6 +76,21 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
         )
         violations = _find_import_violations(
             python_files=sorted(service_root.rglob("*.py")),
+            forbidden_prefixes=forbidden_prefixes,
+        )
+        self.assertEqual(violations, [])
+
+    def test_runtime_layer_does_not_import_di_or_implementation_layers(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        runtime_root = repo_root / "mugen" / "core" / "runtime"
+        forbidden_prefixes = (
+            "mugen.core.di",
+            "mugen.core.gateway.",
+            "mugen.core.plugin",
+            "mugen.core.service.",
+        )
+        violations = _find_import_violations(
+            python_files=sorted(runtime_root.rglob("*.py")),
             forbidden_prefixes=forbidden_prefixes,
         )
         self.assertEqual(violations, [])
@@ -95,7 +112,9 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
         )
         self.assertEqual(violations, [])
 
-    def test_migration_env_uses_contract_helpers_for_core_extension_config(self) -> None:
+    def test_migration_env_uses_contract_helpers_for_core_extension_config(
+        self,
+    ) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         env_source = (repo_root / "migrations" / "env.py").read_text(encoding="utf-8")
         self.assertIn(

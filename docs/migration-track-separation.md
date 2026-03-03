@@ -56,6 +56,15 @@ It sets track-specific Alembic env vars:
 - `MUGEN_ALEMBIC_VERSION_TABLE_SCHEMA`
 - optional `MUGEN_ALEMBIC_MODEL_MODULES`
 
+Track selection is strict and fail-fast:
+
+- Selection/filtering happens before execution validation.
+- `--track core` validates only the `core` track and is not blocked by unrelated
+  plugin track Alembic config paths.
+- Disabled tracks are skipped by default; selecting a disabled track without
+  `--include-disabled` returns an explicit error.
+- Zero effective selected tracks returns a non-zero error (never silent success).
+
 The config file used for track loading and Alembic env bootstrap resolves with:
 
 1. `--config-file`

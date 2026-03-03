@@ -51,11 +51,15 @@ class TestMugenRuntimePhaseBControls(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             controls.resolve_phase_b_startup_timeout_seconds(None)
 
-        config = SimpleNamespace(mugen=SimpleNamespace(runtime=SimpleNamespace(phase_b=None)))
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(runtime=SimpleNamespace(phase_b=None))
+        )
         with self.assertRaises(RuntimeError):
             controls.resolve_phase_b_startup_timeout_seconds(config)
 
-    def test_resolve_startup_timeout_rejects_invalid_and_non_positive_values(self) -> None:
+    def test_resolve_startup_timeout_rejects_invalid_and_non_positive_values(
+        self,
+    ) -> None:
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 runtime=SimpleNamespace(
@@ -82,4 +86,41 @@ class TestMugenRuntimePhaseBControls(unittest.TestCase):
                 )
             )
         )
-        self.assertEqual(controls.resolve_phase_b_startup_timeout_seconds(config), 15.25)
+        self.assertEqual(
+            controls.resolve_phase_b_startup_timeout_seconds(config), 15.25
+        )
+
+    def test_resolve_startup_failure_cancel_timeout_prefers_provider_shutdown_timeout(
+        self,
+    ) -> None:
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                runtime=SimpleNamespace(provider_shutdown_timeout_seconds="3.5")
+            )
+        )
+
+        timeout_seconds = (
+            controls.resolve_phase_b_startup_failure_cancel_timeout_seconds(config)
+        )
+        self.assertEqual(timeout_seconds, 3.5)
+
+    def test_resolve_startup_failure_cancel_timeout_falls_back_to_default_when_missing(
+        self,
+    ) -> None:
+        timeout_seconds = (
+            controls.resolve_phase_b_startup_failure_cancel_timeout_seconds(object())
+        )
+        self.assertEqual(timeout_seconds, 10.0)
+
+    def test_resolve_startup_failure_cancel_timeout_falls_back_to_default_when_invalid(
+        self,
+    ) -> None:
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                runtime=SimpleNamespace(provider_shutdown_timeout_seconds="bad")
+            )
+        )
+        timeout_seconds = (
+            controls.resolve_phase_b_startup_failure_cancel_timeout_seconds(config)
+        )
+        self.assertEqual(timeout_seconds, 10.0)

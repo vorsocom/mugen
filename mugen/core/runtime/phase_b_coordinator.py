@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 
+from mugen.core.runtime.phase_b_controls import (
+    resolve_phase_b_startup_failure_cancel_timeout_seconds,
+)
 from mugen.core.runtime.phase_b_bootstrap import (
     PHASE_B_STARTUP_PLAN_KEY,
     PhaseBStartupPlan,
@@ -29,7 +32,9 @@ def _build_startup_plan(
         include_startup_timeout=True,
     )
     if plan.startup_timeout_seconds is None:
-        raise RuntimeError("Invalid runtime configuration: startup timeout is required.")
+        raise RuntimeError(
+            "Invalid runtime configuration: startup timeout is required."
+        )
     return plan
 
 
@@ -107,7 +112,9 @@ async def start_phase_b_runtime(
     )
     startup_timeout_seconds = plan.startup_timeout_seconds
     if startup_timeout_seconds is None:
-        raise RuntimeError("Invalid runtime configuration: startup timeout is required.")
+        raise RuntimeError(
+            "Invalid runtime configuration: startup timeout is required."
+        )
 
     loop = asyncio.get_running_loop()
     task = loop.create_task(
@@ -123,6 +130,20 @@ async def start_phase_b_runtime(
     except Exception:
         if not task.done():
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            cancel_timeout_seconds = (
+                resolve_phase_b_startup_failure_cancel_timeout_seconds(config)
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(task, return_exceptions=True),
+                    timeout=cancel_timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(
+                    "Phase-B runner did not stop within "
+                    f"{cancel_timeout_seconds:.2f}s after critical startup failure; "
+                    "check provider cancellation handling or increase "
+                    "mugen.runtime.provider_shutdown_timeout_seconds."
+                ) from exc
         raise
     return plan, task

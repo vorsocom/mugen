@@ -5,8 +5,8 @@ from __future__ import annotations
 from mugen.core.runtime.bootstrap_contract import parse_runtime_bootstrap_settings
 from mugen.core.utility.platforms import normalize_platforms
 
-
 _STARTUP_TIMEOUT_KEY = "mugen.runtime.phase_b.startup_timeout_seconds"
+_STARTUP_FAILURE_CANCEL_TIMEOUT_DEFAULT_SECONDS = 10.0
 
 
 def parse_bool(value: object, *, default: bool) -> bool:
@@ -62,3 +62,21 @@ def resolve_phase_b_startup_timeout_seconds(config: object) -> float:
         require_provider_readiness_timeout_seconds=False,
     )
     return float(settings.startup_timeout_seconds)
+
+
+def resolve_phase_b_startup_failure_cancel_timeout_seconds(config: object) -> float:
+    """Resolve bounded timeout used while cancelling phase-B startup on failure."""
+    try:
+        settings = parse_runtime_bootstrap_settings(
+            config,
+            require_profile=False,
+            require_startup_timeout_seconds=False,
+            require_provider_readiness_timeout_seconds=False,
+        )
+    except RuntimeError:
+        return _STARTUP_FAILURE_CANCEL_TIMEOUT_DEFAULT_SECONDS
+
+    timeout_seconds = settings.provider_shutdown_timeout_seconds
+    if timeout_seconds is None:
+        return _STARTUP_FAILURE_CANCEL_TIMEOUT_DEFAULT_SECONDS
+    return float(timeout_seconds)

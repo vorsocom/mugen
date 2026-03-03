@@ -30,8 +30,21 @@ _TRACK_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 
 
 @dataclass(frozen=True)
+class MigrationTrackSpec:
+    """Migration track configuration parsed from TOML."""
+
+    name: str
+    enabled: bool
+    alembic_config: Path
+    schema_raw: object
+    version_table_raw: object
+    version_table_schema_raw: object
+    model_modules_raw: object = None
+
+
+@dataclass(frozen=True)
 class MigrationTrack:
-    """Migration track execution contract."""
+    """Validated migration track execution contract."""
 
     name: str
     enabled: bool
@@ -39,7 +52,7 @@ class MigrationTrack:
     schema: str
     version_table: str
     version_table_schema: str
-    model_modules: tuple[str, ...] = ()
+    model_modules: tuple[str, ...]
 
 
 def _resolve_path(value: str, repo_root: Path) -> Path:
@@ -80,14 +93,14 @@ def _normalize_model_modules(raw: object, track_name: str) -> tuple[str, ...]:
     return tuple(modules)
 
 
-def _build_track(
+def _build_track_spec(
     *,
     name: str,
     raw: dict,
     repo_root: Path,
     defaults: dict[str, str],
-) -> MigrationTrack:
-    """Build one migration track from TOML config data."""
+) -> MigrationTrackSpec:
+    """Build one migration track spec from TOML config data."""
     track_name = _validate_track_name(name)
     enabled = bool(raw.get("enabled", True))
 
@@ -95,38 +108,24 @@ def _build_track(
         str(raw.get("alembic_config", defaults["alembic_config"])),
         repo_root,
     )
-    if not alembic_config.is_file():
-        raise RuntimeError(
-            f"Track '{track_name}' Alembic config not found: {alembic_config}",
-        )
 
-    schema = validate_sql_identifier(
-        str(raw.get("schema", defaults["schema"])),
-        label=f"schema for track '{track_name}'",
-    )
-    version_table = validate_sql_identifier(
-        str(raw.get("version_table", defaults["version_table"])),
-        label=f"version_table for track '{track_name}'",
-    )
-    version_table_schema = validate_sql_identifier(
-        str(raw.get("version_table_schema", schema)),
-        label=f"version_table_schema for track '{track_name}'",
-    )
-    model_modules = _normalize_model_modules(raw.get("model_modules"), track_name)
+    schema_raw = raw.get("schema", defaults["schema"])
+    version_table_raw = raw.get("version_table", defaults["version_table"])
+    version_table_schema_raw = raw.get("version_table_schema", schema_raw)
 
-    return MigrationTrack(
+    return MigrationTrackSpec(
         name=track_name,
         enabled=enabled,
         alembic_config=alembic_config,
-        schema=schema,
-        version_table=version_table,
-        version_table_schema=version_table_schema,
-        model_modules=model_modules,
+        schema_raw=schema_raw,
+        version_table_raw=version_table_raw,
+        version_table_schema_raw=version_table_schema_raw,
+        model_modules_raw=raw.get("model_modules"),
     )
 
 
-def _load_tracks(cfg: dict, repo_root: Path) -> list[MigrationTrack]:
-    """Load configured tracks with defaults and validation."""
+def _load_track_specs(cfg: dict, repo_root: Path) -> list[MigrationTrackSpec]:
+    """Load configured track specs with defaults and structural validation."""
     tracks_cfg = cfg.get("rdbms", {}).get("migration_tracks", {})
     if tracks_cfg and not isinstance(tracks_cfg, dict):
         raise RuntimeError("rdbms.migration_tracks must be a table")
@@ -141,8 +140,8 @@ def _load_tracks(cfg: dict, repo_root: Path) -> list[MigrationTrack]:
     if core_raw and not isinstance(core_raw, dict):
         raise RuntimeError("rdbms.migration_tracks.core must be a table")
 
-    tracks = [
-        _build_track(
+    track_specs = [
+        _build_track_spec(
             name="core",
             raw=core_raw if isinstance(core_raw, dict) else {},
             repo_root=repo_root,
@@ -173,8 +172,8 @@ def _load_tracks(cfg: dict, repo_root: Path) -> list[MigrationTrack]:
             "schema": default_schema,
             "version_table": "alembic_version",
         }
-        tracks.append(
-            _build_track(
+        track_specs.append(
+            _build_track_spec(
                 name=name,
                 raw=entry,
                 repo_root=repo_root,
@@ -182,30 +181,98 @@ def _load_tracks(cfg: dict, repo_root: Path) -> list[MigrationTrack]:
             )
         )
 
-    names = [track.name for track in tracks]
+    names = [track.name for track in track_specs]
     if len(names) != len(set(names)):
         raise RuntimeError(f"Duplicate migration track names detected: {names!r}")
-    return tracks
+    return track_specs
 
 
 def _select_tracks(
-    tracks: list[MigrationTrack],
+    track_specs: list[MigrationTrackSpec],
     selected_names: list[str],
     include_disabled: bool,
-) -> list[MigrationTrack]:
-    """Select enabled tracks or explicit track subset."""
+) -> list[MigrationTrackSpec]:
+    """Select track specs to execute."""
     if selected_names:
         wanted = {_validate_track_name(item) for item in selected_names}
-        selected = [track for track in tracks if track.name in wanted]
-        missing = sorted(wanted.difference({track.name for track in tracks}))
+        selected = [track for track in track_specs if track.name in wanted]
+        missing = sorted(wanted.difference({track.name for track in track_specs}))
         if missing:
             raise RuntimeError(f"Unknown migration track(s): {', '.join(missing)}")
-    else:
-        selected = list(tracks)
 
-    if include_disabled:
-        return selected
-    return [track for track in selected if track.enabled]
+        if not include_disabled:
+            disabled_selected = sorted(
+                track.name for track in selected if not track.enabled
+            )
+            if disabled_selected:
+                raise RuntimeError(
+                    "Selected migration track(s) are disabled: "
+                    f"{', '.join(disabled_selected)}. "
+                    "Use --include-disabled to run disabled tracks."
+                )
+
+        effective = (
+            selected
+            if include_disabled
+            else [track for track in selected if track.enabled]
+        )
+        if not effective:
+            raise RuntimeError(
+                "No effective migration tracks selected from --track options."
+            )
+        return effective
+
+    selected = list(track_specs)
+    effective = (
+        selected if include_disabled else [track for track in selected if track.enabled]
+    )
+    if not effective:
+        raise RuntimeError(
+            "No migration tracks selected for execution; enable at least one track "
+            "or use --include-disabled."
+        )
+    return effective
+
+
+def _validate_execution_track(track_spec: MigrationTrackSpec) -> MigrationTrack:
+    """Validate execution contract for one selected track."""
+    if not track_spec.alembic_config.is_file():
+        raise RuntimeError(
+            f"Track '{track_spec.name}' Alembic config not found: {track_spec.alembic_config}",
+        )
+
+    schema = validate_sql_identifier(
+        str(track_spec.schema_raw),
+        label=f"schema for track '{track_spec.name}'",
+    )
+    version_table = validate_sql_identifier(
+        str(track_spec.version_table_raw),
+        label=f"version_table for track '{track_spec.name}'",
+    )
+    version_table_schema = validate_sql_identifier(
+        str(track_spec.version_table_schema_raw),
+        label=f"version_table_schema for track '{track_spec.name}'",
+    )
+    model_modules = _normalize_model_modules(
+        track_spec.model_modules_raw,
+        track_spec.name,
+    )
+    return MigrationTrack(
+        name=track_spec.name,
+        enabled=track_spec.enabled,
+        alembic_config=track_spec.alembic_config,
+        schema=schema,
+        version_table=version_table,
+        version_table_schema=version_table_schema,
+        model_modules=model_modules,
+    )
+
+
+def _materialize_execution_tracks(
+    track_specs: list[MigrationTrackSpec],
+) -> list[MigrationTrack]:
+    """Validate selected tracks and return execution-ready contracts."""
+    return [_validate_execution_track(track_spec) for track_spec in track_specs]
 
 
 def _build_track_env(track: MigrationTrack) -> dict[str, str]:
@@ -307,12 +374,13 @@ def main() -> int:
         os.environ[MUGEN_CONFIG_FILE_ENV] = str(config_file)
 
         cfg = load_mugen_config(config_file)
-        tracks = _load_tracks(cfg, repo_root)
-        selected_tracks = _select_tracks(tracks, args.track, args.include_disabled)
-
-        if not selected_tracks:
-            print("No migration tracks selected.")
-            return 0
+        track_specs = _load_track_specs(cfg, repo_root)
+        selected_track_specs = _select_tracks(
+            track_specs,
+            args.track,
+            args.include_disabled,
+        )
+        selected_tracks = _materialize_execution_tracks(selected_track_specs)
 
         for track in selected_tracks:
             code = _run_track(
