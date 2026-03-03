@@ -122,6 +122,56 @@ class TestMugenRuntimePhaseBRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
         self.assertEqual(state[PHASE_B_ERROR_KEY], "ValueError: boom")
 
+    async def test_finalize_phase_b_task_completion_preserves_degraded_shutdown_state(
+        self,
+    ) -> None:
+        async def _ok() -> None:
+            return None
+
+        task = asyncio.create_task(_ok())
+        await task
+        state = {
+            SHUTDOWN_REQUESTED_KEY: True,
+            PHASE_B_STATUS_KEY: PHASE_STATUS_DEGRADED,
+            PHASE_B_ERROR_KEY: "phase_b shutdown timed out after 0.01s",
+            PHASE_B_PLATFORM_STATUSES_KEY: {"web": PHASE_STATUS_DEGRADED},
+            PHASE_B_PLATFORM_ERRORS_KEY: {"web": "shutdown timed out after 0.01s"},
+        }
+        runtime.finalize_phase_b_task_completion(
+            state,
+            task=task,
+            critical_platforms=["web"],
+            degrade_on_critical_exit=True,
+        )
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
+        self.assertEqual(
+            state[PHASE_B_ERROR_KEY],
+            "phase_b shutdown timed out after 0.01s",
+        )
+
+    async def test_finalize_phase_b_task_completion_preserves_cancelled_degraded_shutdown_state(
+        self,
+    ) -> None:
+        cancelled = asyncio.create_task(asyncio.sleep(1))
+        cancelled.cancel()
+        await asyncio.gather(cancelled, return_exceptions=True)
+        state = {
+            SHUTDOWN_REQUESTED_KEY: True,
+            PHASE_B_STATUS_KEY: PHASE_STATUS_DEGRADED,
+            PHASE_B_ERROR_KEY: "phase_b shutdown timed out after 0.01s",
+        }
+        runtime.finalize_phase_b_task_completion(
+            state,
+            task=cancelled,
+            critical_platforms=["web"],
+            degrade_on_critical_exit=True,
+        )
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
+        self.assertEqual(
+            state[PHASE_B_ERROR_KEY],
+            "phase_b shutdown timed out after 0.01s",
+        )
+
     def test_critical_startup_check_branch_paths(self) -> None:
         check = runtime._critical_startup_check  # pylint: disable=protected-access
         self.assertEqual(

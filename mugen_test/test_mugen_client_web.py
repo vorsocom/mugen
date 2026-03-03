@@ -6304,7 +6304,38 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(pending_task.done())
 
-    async def test_cancel_task_with_timeout_logs_warning_on_timeout(self) -> None:
+    async def test_stop_all_cross_instance_pollers_keeps_replaced_task_mapping(
+        self,
+    ) -> None:
+        blocker = asyncio.Event()
+        original_task = asyncio.create_task(blocker.wait())
+        replacement_task = asyncio.create_task(asyncio.sleep(0))
+        await replacement_task
+        self.client._sse_cross_instance_pollers = {  # pylint: disable=protected-access
+            "conv-replaced": (original_task, asyncio.Event())
+        }
+
+        async def _cancel_and_replace(task, *, task_name):  # noqa: ARG001
+            self.client._sse_cross_instance_pollers["conv-replaced"] = (  # pylint: disable=protected-access
+                replacement_task,
+                asyncio.Event(),
+            )
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        with patch.object(
+            self.client,
+            "_cancel_task_with_timeout",
+            new=AsyncMock(side_effect=_cancel_and_replace),
+        ):
+            await self.client._stop_all_cross_instance_pollers()  # pylint: disable=protected-access
+
+        self.assertIs(
+            self.client._sse_cross_instance_pollers["conv-replaced"][0],  # pylint: disable=protected-access
+            replacement_task,
+        )
+
+    async def test_cancel_task_with_timeout_raises_on_timeout(self) -> None:
         pending_task = asyncio.create_task(asyncio.sleep(60))
         self.client._shutdown_timeout_seconds = 0.01  # pylint: disable=protected-access
 
@@ -6313,9 +6344,12 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                 awaitable.close()
             raise asyncio.TimeoutError
 
-        with patch(
-            "mugen.core.client.web.asyncio.wait_for",
-            side_effect=_raise_timeout,
+        with (
+            patch(
+                "mugen.core.client.web.asyncio.wait_for",
+                side_effect=_raise_timeout,
+            ),
+            self.assertRaisesRegex(RuntimeError, "Web client shutdown timed out"),
         ):
             await self.client._cancel_task_with_timeout(  # pylint: disable=protected-access
                 pending_task,

@@ -20,6 +20,9 @@
 - Non-empty `phase_a_non_blocking_degraded_capabilities`: investigate and alert, but this does not block readiness by itself.
 - `phase_b_status == starting`: platform runtime is warming up; readiness can stay green only within grace period.
 - `failed_platforms` non-empty: inspect platform-specific logs and treat as degraded runtime.
+- During shutdown, any unresolved phase-B task timeout is fail-closed:
+  - `phase_b_status` must remain `degraded` (never forced to `stopped`).
+  - `phase_b_error` and platform-specific timeout errors are operator-facing terminal signals.
 
 ## Triage Checklist
 1. Check `/api/core/health/ready` payload and identify `failed_platforms`.
@@ -28,3 +31,4 @@
 4. Validate timeout/profile settings (`mugen.runtime.profile`, `mugen.runtime.provider_readiness_timeout_seconds`, `mugen.runtime.provider_shutdown_timeout_seconds`, `mugen.runtime.shutdown_timeout_seconds`, gateway timeout keys, qdrant retry/timeout keys).
    `mugen.runtime.provider_shutdown_timeout_seconds` and `mugen.runtime.shutdown_timeout_seconds` are required positive values; missing/invalid values must fail bootstrap.
 5. Roll back or restart only after readiness returns `ready=true` with empty `failed_platforms`.
+6. If shutdown timeout errors persist, treat the instance as not safely stopped and use process-level investigation/remediation before restart.

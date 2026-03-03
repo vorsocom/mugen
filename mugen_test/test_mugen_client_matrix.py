@@ -896,7 +896,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(client._matrix_ipc_queue)
         self.assertIsNone(client._matrix_ipc_worker_task)
 
-    async def test_stop_matrix_ipc_worker_logs_timeout_warning(self) -> None:
+    async def test_stop_matrix_ipc_worker_raises_on_timeout(self) -> None:
         client = self._client()
         client._matrix_ipc_queue = asyncio.Queue()
 
@@ -908,9 +908,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 awaitable.close()
             raise asyncio.TimeoutError
 
-        with patch(
-            "mugen.core.client.matrix.asyncio.wait_for",
-            side_effect=_raise_timeout,
+        with (
+            patch(
+                "mugen.core.client.matrix.asyncio.wait_for",
+                side_effect=_raise_timeout,
+            ),
+            self.assertRaisesRegex(RuntimeError, "Matrix IPC worker shutdown timed out"),
         ):
             await client._stop_matrix_ipc_worker()  # pylint: disable=protected-access
 
@@ -1143,7 +1146,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         failing_session.close.assert_awaited_once_with()
         client._logging_gateway.warning.assert_called_once()  # pylint: disable=protected-access
 
-    async def test_close_logs_warning_when_session_close_times_out(self) -> None:
+    async def test_close_raises_when_session_close_times_out(self) -> None:
         client = self._client()
         client.client_session = SimpleNamespace(
             close=AsyncMock(return_value=None),
@@ -1154,9 +1157,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             awaitable.close()
             raise asyncio.TimeoutError
 
-        with patch(
-            "mugen.core.client.matrix.asyncio.wait_for",
-            side_effect=_raise_timeout,
+        with (
+            patch(
+                "mugen.core.client.matrix.asyncio.wait_for",
+                side_effect=_raise_timeout,
+            ),
+            self.assertRaisesRegex(RuntimeError, "Matrix client session close timed out"),
         ):
             await client.close()
 

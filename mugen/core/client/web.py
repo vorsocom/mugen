@@ -341,11 +341,11 @@ class DefaultWebClient(IWebClient):
         self._worker_stop.set()
 
         task = self._worker_task
-        self._worker_task = None
         await self._cancel_task_with_timeout(
             task,
             task_name="worker",
         )
+        self._worker_task = None
 
         async with self._subscriber_lock:
             self._subscribers.clear()
@@ -894,7 +894,7 @@ class DefaultWebClient(IWebClient):
 
     async def _stop_cross_instance_poller(self, conversation_id: str) -> None:
         async with self._sse_poller_lock:
-            existing = self._sse_cross_instance_pollers.pop(conversation_id, None)
+            existing = self._sse_cross_instance_pollers.get(conversation_id)
         if existing is None:
             return
 
@@ -904,17 +904,24 @@ class DefaultWebClient(IWebClient):
             task,
             task_name=f"cross_instance_poller:{conversation_id}",
         )
+        async with self._sse_poller_lock:
+            latest = self._sse_cross_instance_pollers.get(conversation_id)
+            if latest is not None and latest[0] is task:
+                self._sse_cross_instance_pollers.pop(conversation_id, None)
 
     async def _stop_all_cross_instance_pollers(self) -> None:
         async with self._sse_poller_lock:
             active = list(self._sse_cross_instance_pollers.items())
-            self._sse_cross_instance_pollers = {}
-        for _conversation_id, (task, stop_event) in active:
+        for conversation_id, (task, stop_event) in active:
             stop_event.set()
             await self._cancel_task_with_timeout(
                 task,
-                task_name=f"cross_instance_poller:{_conversation_id}",
+                task_name=f"cross_instance_poller:{conversation_id}",
             )
+            async with self._sse_poller_lock:
+                latest = self._sse_cross_instance_pollers.get(conversation_id)
+                if latest is not None and latest[0] is task:
+                    self._sse_cross_instance_pollers.pop(conversation_id, None)
 
     async def _cancel_task_with_timeout(
         self,
@@ -935,10 +942,12 @@ class DefaultWebClient(IWebClient):
                 timeout=self._shutdown_timeout_seconds,
             )
         except asyncio.TimeoutError:
-            self._logging_gateway.warning(
+            message = (
                 "Web client shutdown timed out "
                 f"(task={task_name} timeout_seconds={self._shutdown_timeout_seconds:.2f})."
             )
+            self._logging_gateway.warning(message)
+            raise RuntimeError(message)
 
     async def resolve_media_download(
         self,

@@ -17,6 +17,12 @@ Keep `logging_gateway` as the bootstrap provider and keep the remaining provider
 - DI shutdown paths do not silently fall back to legacy default timeout values when these settings are missing/invalid.
 - Invalid timeout configuration must fail bootstrap validation before runtime startup.
 
+## Phase-B Shutdown Semantics
+
+- Phase-B shutdown is fail-closed for timeout paths.
+- Unresolved platform/client task cancellation timeouts must leave runtime status degraded with explicit timeout errors.
+- Shutdown adapters must not mask degraded timeout outcomes by writing `stopped` after unresolved task timeouts.
+
 ## Layering Contract
 
 Core DI participates in a strict clean-architecture contract that is enforced by tests:
