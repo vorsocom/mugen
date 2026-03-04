@@ -126,6 +126,10 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             module_path="mugen.core.gateway.knowledge.chromadb",
             class_name="ChromaKnowledgeGateway",
         ),
+        "weaviate": _ProviderTokenSpec(
+            module_path="mugen.core.gateway.knowledge.weaviate",
+            class_name="WeaviateKnowledgeGateway",
+        ),
     },
     "matrix_client": {
         "default": _ProviderTokenSpec(

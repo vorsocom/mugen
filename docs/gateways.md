@@ -10,7 +10,7 @@ This document explains gateway contracts and currently supported completion,
 knowledge, and email gateway implementations in muGen.
 
 Runtime configuration uses strict provider tokens (for example `bedrock`,
-`openai`, `sambanova`, `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `smtp`, `ses`), not
+`openai`, `sambanova`, `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate`, `smtp`, `ses`), not
 Python module paths.
 
 ## Completion Gateway Contract
@@ -469,6 +469,31 @@ Readiness requirements:
 - `embedding` column type is `vector`
 - at least one `ivfflat` or `hnsw` index on `embedding`
 
+### Weaviate
+
+Module: `mugen.core.gateway.knowledge.weaviate`
+
+Behavior:
+
+- Uses local sentence-transformer embeddings for semantic query vectors.
+- Queries a configured Weaviate collection using tenant-scoped and optional
+  scope filters (`channel`, `locale`, `category`).
+- Requires strict object properties per result:
+  `tenant_id`, `knowledge_entry_revision_id`, `knowledge_pack_version_id`,
+  `channel`, `locale`, `category`, `title`, `body`.
+- Returns normalized items with revision/version IDs, scope values, title,
+  snippet, similarity, and distance.
+- Applies retry/timeout controls from `[weaviate] api.*`.
+- Wraps provider transport/runtime failures as `KnowledgeGatewayRuntimeError`.
+
+Readiness requirements:
+
+- `weaviate.api.http_host` is configured
+- `weaviate.api.grpc_host` is configured
+- bounded `client.is_ready()` probe succeeds
+- configured collection exists
+- local sentence-transformer encoder initializes successfully
+
 ### Amazon SES
 
 Module: `mugen.core.gateway.email.ses`
@@ -503,6 +528,7 @@ gateway.completion = "bedrock"
 # gateway.knowledge = "pinecone"
 # gateway.knowledge = "pgvector"
 # gateway.knowledge = "qdrant"
+# gateway.knowledge = "weaviate"
 # Optional outbound email gateway.
 # gateway.email = "smtp"
 # gateway.email = "ses"
@@ -591,6 +617,26 @@ search.snippet_max_chars = 240
 api.timeout_seconds = 10.0
 api.max_retries = 2
 api.retry_backoff_seconds = 0.5
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
+
+[weaviate]
+api.http_host = "localhost"
+api.http_port = 8080
+api.http_secure = false
+api.grpc_host = "localhost"
+api.grpc_port = 50051
+api.grpc_secure = false
+api.key = "<weaviate-api-key>"
+api.headers = {}
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.collection = "DownstreamKPSearchDoc"
+search.target_vector = ""
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
 encoder.model = "all-mpnet-base-v2"
 encoder.max_concurrency = 4
 ```

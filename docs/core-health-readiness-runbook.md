@@ -42,7 +42,7 @@
 1. Check `/api/core/health/ready` payload and identify `failed_platforms`.
 2. Correlate platform failure reason with runtime logs for the same platform name.
 3. For critical platform clean exits, confirm whether exit was expected shutdown or unexpected runtime stop.
-4. Validate timeout/profile settings (`mugen.runtime.profile`, `mugen.runtime.provider_readiness_timeout_seconds`, `mugen.runtime.provider_shutdown_timeout_seconds`, `mugen.runtime.shutdown_timeout_seconds`, gateway timeout keys, chromadb retry/timeout keys, milvus retry/timeout keys, pinecone retry/timeout keys, qdrant retry/timeout keys, pgvector retry/timeout keys).
+4. Validate timeout/profile settings (`mugen.runtime.profile`, `mugen.runtime.provider_readiness_timeout_seconds`, `mugen.runtime.provider_shutdown_timeout_seconds`, `mugen.runtime.shutdown_timeout_seconds`, gateway timeout keys, chromadb retry/timeout keys, milvus retry/timeout keys, pinecone retry/timeout keys, qdrant retry/timeout keys, pgvector retry/timeout keys, weaviate retry/timeout keys).
    runtime bootstrap controls are strict required positives (`mugen.runtime.profile=platform_full`, `provider_readiness_timeout_seconds`, `provider_shutdown_timeout_seconds`, `shutdown_timeout_seconds`, `phase_b.startup_timeout_seconds`); missing/invalid values must fail bootstrap.
 5. For Matrix callback extension incidents, distinguish non-critical vs critical IPC outcomes:
    - non-critical: warning logs + `matrix.ipc.dispatch.non_critical_failure*` metrics.
