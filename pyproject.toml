@@ -39,6 +39,7 @@ weaviate-client = "^4.20.1"
 cryptography = "^46.0.3"
 openai = "^1.98.0"
 google-auth = "^2.43.0"
+cerebras-cloud-sdk = "^1.67.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
