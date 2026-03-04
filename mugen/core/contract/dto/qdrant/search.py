@@ -2,30 +2,20 @@
 
 __all__ = ["QdrantSearchVendorParams"]
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+import uuid
 
 from mugen.core.contract.dto.vendorparams import VendorParams
 
 
-# pylint: disable=too-many-instance-attributes
 @dataclass
 class QdrantSearchVendorParams(VendorParams):
-    """A dataclass for specifying Qdrant search parameters."""
-
-    collection_name: str
+    """A dataclass for specifying Qdrant semantic search parameters."""
 
     search_term: str
-
-    count: bool = False
-
-    dataset: str = None
-
-    date_from: str = None
-
-    date_to: str = None
-
-    keywords: list[str] = field(default_factory=list)
-
-    limit: int = 10
-
-    strategy: str = "must"
+    tenant_id: uuid.UUID
+    top_k: int = 10
+    min_similarity: float | None = None
+    channel: str | None = None
+    locale: str | None = None
+    category: str | None = None
