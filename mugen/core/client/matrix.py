@@ -80,6 +80,7 @@ from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_STOP,
     normalize_processing_state,
 )
+from mugen.core.utility.security import validate_matrix_secret_encryption_key
 
 
 class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
@@ -539,9 +540,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         raw_key = getattr(security_cfg, "encryption_key", None)
         if not isinstance(raw_key, str) or raw_key.strip() == "":
             return None
+        if self._matrix_secrets_encryption_required():
+            raw_key = validate_matrix_secret_encryption_key(raw_key)
+        else:
+            raw_key = raw_key.strip()
 
         # Derive stable Fernet key from operator-provided secret material.
-        digest = hashlib.sha256(raw_key.strip().encode("utf-8")).digest()
+        digest = hashlib.sha256(raw_key.encode("utf-8")).digest()
         return Fernet(base64.urlsafe_b64encode(digest))
 
     def _encode_secret_value(self, value: str, *, field_name: str) -> str:

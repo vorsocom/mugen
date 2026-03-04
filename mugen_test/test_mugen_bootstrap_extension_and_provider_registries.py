@@ -479,3 +479,14 @@ class TestProviderRegistryResolution(unittest.TestCase):
                 interface=ICompletionGateway,
             )
         self.assertIs(resolved, _DummyCompletion)
+
+    def test_unknown_module_path_like_token_surfaces_token_guidance(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "must use provider tokens",
+        ):
+            provider_registry.resolve_provider_class(
+                provider_name="completion_gateway",
+                token="mugen.core.gateway.completion.bedrock",
+                interface=ICompletionGateway,
+            )

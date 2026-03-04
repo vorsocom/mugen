@@ -91,7 +91,7 @@ def _valid_core_config() -> dict:
         },
         "security": {
             "secrets": {
-                "encryption_key": "matrix-secret",
+                "encryption_key": "0123456789abcdef0123456789abcdef",
             }
         },
     }
@@ -323,7 +323,7 @@ class TestDISchemaValidationBranches(unittest.TestCase):
             with self.subTest(security=cfg.get("security")):
                 with self.assertRaisesRegex(
                     RuntimeError,
-                    "security.secrets.encryption_key is required when matrix platform is enabled",
+                    "security.secrets.encryption_key",
                 ):
                     di._validate_core_module_schema(cfg)
 

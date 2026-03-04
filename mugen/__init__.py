@@ -939,6 +939,7 @@ async def run_platform_clients(
             bootstrap_state,
             critical_platforms=critical_platforms,
             degrade_on_critical_exit=degrade_on_critical_exit,
+            shutdown_requested=False,
         )
         logger.error(
             f"{platform_name} client failed ({error_message})."
@@ -1464,6 +1465,11 @@ async def run_whatsapp_client(
                 "WhatsApp client shutdown failed "
                 f"error_type={type(close_exc).__name__} error={close_exc}"
             )
+            if isinstance(runtime_error, asyncio.exceptions.CancelledError):
+                raise RuntimeError(
+                    "WhatsApp client shutdown failed during cancellation: "
+                    f"{type(close_exc).__name__}: {close_exc}"
+                ) from close_exc
             if runtime_error is None:
                 raise
 

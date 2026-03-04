@@ -158,9 +158,15 @@ def resolve_provider_class(
     provider_spec = provider_tokens.get(normalized)
     if provider_spec is None:
         known_tokens = ", ".join(sorted(provider_tokens))
+        module_path_hint = ""
+        if "." in normalized:
+            module_path_hint = (
+                " Config values must use provider tokens (for example "
+                f"{known_tokens}) rather than Python module paths."
+            )
         raise RuntimeError(
             f"Unknown provider token ({provider_name}): {token!r}. "
-            f"Known tokens: {known_tokens}."
+            f"Known tokens: {known_tokens}.{module_path_hint}"
         )
 
     try:
