@@ -44,6 +44,10 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             module_path="mugen.core.gateway.completion.vertex",
             class_name="VertexCompletionGateway",
         ),
+        "azure_foundry": _ProviderTokenSpec(
+            module_path="mugen.core.gateway.completion.azure_foundry",
+            class_name="AzureFoundryCompletionGateway",
+        ),
     },
     "email_gateway": {
         "smtp": _ProviderTokenSpec(

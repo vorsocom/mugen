@@ -536,6 +536,18 @@ class TestProviderRegistryResolution(unittest.TestCase):
             )
         self.assertIs(resolved, _DummyCompletion)
 
+    def test_azure_foundry_completion_provider_token_resolves(self) -> None:
+        with patch(
+            "mugen.core.di.provider_registry.importlib.import_module",
+            return_value=SimpleNamespace(AzureFoundryCompletionGateway=_DummyCompletion),
+        ):
+            resolved = provider_registry.resolve_provider_class(
+                provider_name="completion_gateway",
+                token="azure_foundry",
+                interface=ICompletionGateway,
+            )
+        self.assertIs(resolved, _DummyCompletion)
+
     def test_unknown_module_path_like_token_surfaces_token_guidance(self) -> None:
         with self.assertRaisesRegex(
             RuntimeError,
