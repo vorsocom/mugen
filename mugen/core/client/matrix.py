@@ -73,7 +73,7 @@ from mugen.core.contract.service.ipc import (
 )
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
-from mugen.core.utility.config_value import parse_optional_positive_finite_float
+from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.utility.platforms import normalize_platforms
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
@@ -106,8 +106,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     _matrix_event_hook_payload_version: int = 1
 
     _default_matrix_ipc_queue_size: int = 256
-
-    _default_shutdown_timeout_seconds: float = 60.0
 
     _sync_key: str = "matrix_client_sync_next_batch"
     _encrypted_secret_prefix: str = "enc:v1:"
@@ -395,13 +393,15 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 "Matrix client session close timed out "
                 f"(timeout_seconds={timeout_seconds:.2f})."
             )
-            self._logging_gateway.warning(message)
+            self._logging_gateway.error(message)
             raise RuntimeError(message)
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            self._logging_gateway.warning(
+            message = (
                 "Matrix client session close failed "
                 f"error_type={type(exc).__name__} error={exc}"
             )
+            self._logging_gateway.error(message)
+            raise RuntimeError(message) from exc
 
     async def sync_forever(
         self,
@@ -699,18 +699,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         return parsed
 
     def _resolve_shutdown_timeout_seconds(self) -> float:
-        raw_value = getattr(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "runtime", None),
-            "shutdown_timeout_seconds",
-            None,
-        )
-        parsed = parse_optional_positive_finite_float(
-            raw_value,
-            "mugen.runtime.shutdown_timeout_seconds",
-        )
-        if parsed is None:
-            return self._default_shutdown_timeout_seconds
-        return parsed
+        settings = parse_runtime_bootstrap_settings(self._config)
+        return float(settings.shutdown_timeout_seconds)
 
     def _effective_shutdown_timeout_seconds(self) -> float:
         raw_value = getattr(self, "_shutdown_timeout_seconds", None)

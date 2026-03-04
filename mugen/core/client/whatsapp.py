@@ -20,6 +20,7 @@ import aiohttp
 
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
@@ -59,8 +60,6 @@ class DefaultWhatsAppClient(IWhatsAppClient):
     _default_retry_backoff_seconds: float = 0.5
 
     _default_typing_indicator_enabled: bool = True
-
-    _default_shutdown_timeout_seconds: float = 60.0
 
     _api_base_path: str
 
@@ -169,18 +168,8 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         return parse_bool_flag(raw_enabled, self._default_typing_indicator_enabled)
 
     def _resolve_shutdown_timeout_seconds(self) -> float:
-        raw_timeout = getattr(
-            getattr(getattr(self._config, "mugen", None), "runtime", None),
-            "shutdown_timeout_seconds",
-            None,
-        )
-        timeout = parse_optional_positive_finite_float(
-            raw_timeout,
-            "mugen.runtime.shutdown_timeout_seconds",
-        )
-        if timeout is None:
-            return self._default_shutdown_timeout_seconds
-        return timeout
+        settings = parse_runtime_bootstrap_settings(self._config)
+        return float(settings.shutdown_timeout_seconds)
 
     @staticmethod
     def _format_recipient(recipient: str) -> str:
@@ -302,10 +291,19 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                     timeout=self._shutdown_timeout_seconds,
                 )
             except asyncio.TimeoutError:
-                self._logging_gateway.warning(
+                message = (
                     "WhatsApp client session close timed out "
                     f"(timeout_seconds={self._shutdown_timeout_seconds:.2f})."
                 )
+                self._logging_gateway.error(message)
+                raise RuntimeError(message)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                message = (
+                    "WhatsApp client session close failed "
+                    f"error_type={type(exc).__name__} error={exc}"
+                )
+                self._logging_gateway.error(message)
+                raise RuntimeError(message) from exc
 
         self._client_session = None
 

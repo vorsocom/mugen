@@ -1937,6 +1937,32 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         whatsapp_client.close.assert_awaited_once()
         degraded_callback.assert_called_once()
 
+    async def test_run_whatsapp_client_preserves_primary_error_when_cleanup_fails(
+        self,
+    ) -> None:
+        logger = unittest.mock.Mock()
+        whatsapp_client = unittest.mock.Mock()
+        whatsapp_client.init = unittest.mock.AsyncMock(
+            side_effect=RuntimeError("init failed")
+        )
+        whatsapp_client.verify_startup = unittest.mock.AsyncMock()
+        whatsapp_client.close = unittest.mock.AsyncMock(
+            side_effect=RuntimeError("close failed")
+        )
+        degraded_callback = unittest.mock.Mock()
+
+        with self.assertRaisesRegex(RuntimeError, "init failed"):
+            await run_whatsapp_client(
+                logger_provider=lambda: logger,
+                whatsapp_provider=lambda: whatsapp_client,
+                degraded_callback=degraded_callback,
+            )
+
+        degraded_callback.assert_called_once()
+        whatsapp_client.close.assert_awaited_once()
+        logger.error.assert_called_once()
+        self.assertIn("WhatsApp client shutdown failed", logger.error.call_args.args[0])
+
     async def test_run_platform_clients_tracks_whatsapp_runtime_degrade_and_recover(
         self,
     ) -> None:

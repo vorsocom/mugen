@@ -98,10 +98,7 @@ def _resolve_shutdown_timeout_seconds() -> float:
 
 
 async def _shutdown_container() -> None:
-    try:
-        await di.shutdown_container_async()
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        app.logger.warning("Container shutdown failed (%s).", exc)
+    await di.shutdown_container_async()
 
 
 def _on_platform_clients_done(task: asyncio.Task, started_at: float) -> None:
@@ -232,7 +229,8 @@ async def shutdown():
     state[SHUTDOWN_REQUESTED_KEY] = True
     task = state.get(_PLATFORM_CLIENTS_TASK_KEY)
     shutdown_timeout_seconds = _resolve_shutdown_timeout_seconds()
-    shutdown_error: PhaseBShutdownError | None = None
+    phase_b_shutdown_error: PhaseBShutdownError | None = None
+    container_shutdown_error: Exception | None = None
     if isinstance(task, asyncio.Task):
         app.logger.debug(
             "Cancelling platform client runner task timeout_seconds=%.2f",
@@ -252,15 +250,38 @@ async def shutdown():
                 logger=app.logger,
             )
     except PhaseBShutdownError as exc:
-        shutdown_error = exc
+        phase_b_shutdown_error = exc
         app.logger.error("Bootstrap phase_b shutdown failed error=%s", exc)
-    finally:
-        if shutdown_error is None:
-            clear_phase_b_platform_tasks(state)
-        reconcile_phase_b_shutdown_state(state)
-        state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
-        try:
-            await _shutdown_container()
-        finally:
-            if isinstance(state.get(PHASE_B_PLATFORM_TASKS_KEY), dict) is not True:
-                state[PHASE_B_PLATFORM_TASKS_KEY] = {}
+
+    if phase_b_shutdown_error is None:
+        clear_phase_b_platform_tasks(state)
+
+    try:
+        await _shutdown_container()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        container_shutdown_error = exc
+        app.logger.error("Container shutdown failed error=%s", exc)
+
+    shutdown_errors: list[str] = []
+    if phase_b_shutdown_error is not None:
+        message = str(phase_b_shutdown_error).strip()
+        shutdown_errors.append(
+            message if message else "phase_b shutdown failed"
+        )
+    if container_shutdown_error is not None:
+        shutdown_errors.append(
+            "container shutdown failed: "
+            f"{type(container_shutdown_error).__name__}: {container_shutdown_error}"
+        )
+
+    if shutdown_errors:
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        state[PHASE_B_ERROR_KEY] = "; ".join(shutdown_errors)
+
+    reconcile_phase_b_shutdown_state(state)
+    state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
+    if isinstance(state.get(PHASE_B_PLATFORM_TASKS_KEY), dict) is not True:
+        state[PHASE_B_PLATFORM_TASKS_KEY] = {}
+
+    if shutdown_errors:
+        raise PhaseBShutdownError("; ".join(shutdown_errors))

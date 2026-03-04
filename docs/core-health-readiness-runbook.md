@@ -29,6 +29,10 @@
 - During shutdown, any unresolved phase-B task timeout is fail-closed:
   - `phase_b_status` must remain `degraded` (never forced to `stopped`).
   - `phase_b_error` and platform-specific timeout errors are operator-facing terminal signals.
+- During shutdown, DI/container cleanup failures are also fail-closed:
+  - `phase_b_status` remains `degraded`.
+  - `phase_b_error` includes container shutdown failure details.
+  - shutdown hooks raise terminal errors to prevent false-positive "clean stop" signals.
 - Critical IPC dispatch failure is fail-closed for Matrix runtime:
   - expect Matrix platform degradation/restart under phase-B supervision,
   - `phase_b_error` / `platform_errors.matrix` should include critical IPC failure detail,
@@ -45,3 +49,4 @@
    - critical: `IPCCriticalDispatchError` path, runtime degradation, supervisor restart.
 6. Roll back or restart only after readiness returns `ready=true` with empty `failed_platforms`.
 7. If shutdown timeout errors persist, treat the instance as not safely stopped and use process-level investigation/remediation before restart.
+8. If container/provider shutdown errors are present, treat the instance as not cleanly stopped; investigate provider-specific shutdown failures before restart/recovery.

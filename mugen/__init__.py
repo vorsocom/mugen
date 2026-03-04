@@ -1408,6 +1408,7 @@ async def run_whatsapp_client(
     """Run assistant for the whatsapp platform."""
     logger: ILoggingGateway = logger_provider()
     whatsapp_client: IWhatsAppClient = whatsapp_provider()
+    runtime_error: BaseException | None = None
 
     try:
         await whatsapp_client.init()
@@ -1446,18 +1447,25 @@ async def run_whatsapp_client(
             if runtime_degraded is not True and callable(degraded_callback):
                 degraded_callback("WhatsApp runtime startup probe failed.")
             runtime_degraded = True
-    except asyncio.exceptions.CancelledError:
+    except asyncio.exceptions.CancelledError as exc:
+        runtime_error = exc
         logger.debug("WhatsApp client shutting down.")
         raise
     except Exception as exc:
+        runtime_error = exc
         if callable(degraded_callback):
             degraded_callback(f"{type(exc).__name__}: {exc}")
         raise
     finally:
         try:
             await whatsapp_client.close()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning(f"Failed to close whatsapp client ({exc}).")
+        except Exception as close_exc:  # pylint: disable=broad-exception-caught
+            logger.error(
+                "WhatsApp client shutdown failed "
+                f"error_type={type(close_exc).__name__} error={close_exc}"
+            )
+            if runtime_error is None:
+                raise
 
 
 async def run_web_client(

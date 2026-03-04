@@ -157,12 +157,31 @@ class _RecordingMatrixEventIPCExtension:  # pylint: disable=too-few-public-metho
         )
 
 
+def _runtime_settings(
+    *,
+    shutdown_timeout_seconds: object = 60.0,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        profile="platform_full",
+        provider_readiness_timeout_seconds=15.0,
+        provider_shutdown_timeout_seconds=10.0,
+        shutdown_timeout_seconds=shutdown_timeout_seconds,
+        phase_b=SimpleNamespace(
+            startup_timeout_seconds=30.0,
+        ),
+    )
+
+
 class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
     """Tests focused on direct unit coverage for DefaultMatrixClient."""
 
     def test_init_wires_dependencies_and_callbacks(self) -> None:
         config = SimpleNamespace(
             basedir="/tmp",
+            mugen=SimpleNamespace(
+                platforms=[],
+                runtime=_runtime_settings(),
+            ),
             matrix=SimpleNamespace(
                 homeserver="https://matrix.example.com",
                 client=SimpleNamespace(user="@assistant:example.com"),
@@ -281,6 +300,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             mugen=SimpleNamespace(
                 environment="development",
                 platforms=[" Matrix "],
+                runtime=_runtime_settings(),
             ),
             matrix=SimpleNamespace(
                 homeserver="https://matrix.example.com",
@@ -350,7 +370,10 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                     )
                 ),
             ),
-            mugen=SimpleNamespace(beta=SimpleNamespace(active=False)),
+            mugen=SimpleNamespace(
+                beta=SimpleNamespace(active=False),
+                runtime=_runtime_settings(),
+            ),
         )
         client._logging_gateway = Mock()
         client._keyval_storage_gateway = Mock()
@@ -759,7 +782,11 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
     def test_init_requires_secret_encryption_key_when_matrix_enabled(self) -> None:
         config = SimpleNamespace(
             basedir="/tmp",
-            mugen=SimpleNamespace(environment="development", platforms=["matrix"]),
+            mugen=SimpleNamespace(
+                environment="development",
+                platforms=["matrix"],
+                runtime=_runtime_settings(),
+            ),
             matrix=SimpleNamespace(
                 homeserver="https://matrix.example.com",
                 client=SimpleNamespace(user="@assistant:example.com"),
@@ -1262,7 +1289,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.client_session = object()
         await client.close()
 
-    async def test_close_logs_warning_when_session_close_raises(self) -> None:
+    async def test_close_raises_when_session_close_raises(self) -> None:
         client = self._client()
         failing_session = SimpleNamespace(
             close=AsyncMock(side_effect=RuntimeError("session close failed")),
@@ -1270,10 +1297,11 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
         client.client_session = failing_session
 
-        await client.close()
+        with self.assertRaisesRegex(RuntimeError, "session close failed"):
+            await client.close()
 
         failing_session.close.assert_awaited_once_with()
-        client._logging_gateway.warning.assert_called_once()  # pylint: disable=protected-access
+        client._logging_gateway.error.assert_called_once()  # pylint: disable=protected-access
 
     async def test_close_raises_when_session_close_times_out(self) -> None:
         client = self._client()
@@ -1298,23 +1326,25 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(
                 "Matrix client session close timed out" in str(call.args[0])
-                for call in client._logging_gateway.warning.call_args_list
+                for call in client._logging_gateway.error.call_args_list
             )
         )
 
     def test_resolve_shutdown_timeout_seconds_rejects_invalid_values(self) -> None:
         client = self._client()
-        client._config.mugen.runtime = SimpleNamespace(shutdown_timeout_seconds="bad")
+        client._config.mugen.runtime = _runtime_settings(
+            shutdown_timeout_seconds="bad"
+        )
         with self.assertRaisesRegex(RuntimeError, "shutdown_timeout_seconds"):
             client._resolve_shutdown_timeout_seconds()  # pylint: disable=protected-access
-        client._config.mugen.runtime.shutdown_timeout_seconds = 0
+        client._config.mugen.runtime = _runtime_settings(shutdown_timeout_seconds=0)
         with self.assertRaisesRegex(RuntimeError, "shutdown_timeout_seconds"):
             client._resolve_shutdown_timeout_seconds()  # pylint: disable=protected-access
 
     def test_effective_shutdown_timeout_seconds_refreshes_non_positive_cache(self) -> None:
         client = self._client()
         client._shutdown_timeout_seconds = 0  # pylint: disable=protected-access
-        client._config.mugen.runtime = SimpleNamespace(shutdown_timeout_seconds=12.5)
+        client._config.mugen.runtime = _runtime_settings(shutdown_timeout_seconds=12.5)
         self.assertEqual(
             client._effective_shutdown_timeout_seconds(),  # pylint: disable=protected-access
             12.5,
