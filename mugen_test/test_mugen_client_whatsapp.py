@@ -17,6 +17,18 @@ from mugen.core.client.whatsapp import DefaultWhatsAppClient
 
 def _make_config() -> SimpleNamespace:
     return SimpleNamespace(
+        mugen=SimpleNamespace(
+            runtime=SimpleNamespace(
+                profile="platform_full",
+                provider_readiness_timeout_seconds=15.0,
+                provider_shutdown_timeout_seconds=10.0,
+                shutdown_timeout_seconds=60.0,
+                phase_b=SimpleNamespace(
+                    startup_timeout_seconds=30.0,
+                ),
+            ),
+            platforms=["whatsapp"],
+        ),
         whatsapp=SimpleNamespace(
             graphapi=SimpleNamespace(
                 base_url="https://graph.example.com",
@@ -166,7 +178,7 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         existing_session.close.assert_not_awaited()
         self.assertIsNone(client._client_session)  # pylint: disable=protected-access
 
-    async def test_close_logs_warning_when_session_close_times_out(self) -> None:
+    async def test_close_raises_when_session_close_times_out(self) -> None:
         client = self._new_client()
         existing_session = Mock()
         existing_session.closed = False
@@ -178,22 +190,42 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
                 awaitable.close()
             raise asyncio.TimeoutError
 
-        with patch(
-            "mugen.core.client.whatsapp.asyncio.wait_for",
-            side_effect=_raise_timeout,
+        with (
+            patch(
+                "mugen.core.client.whatsapp.asyncio.wait_for",
+                side_effect=_raise_timeout,
+            ),
+            self.assertRaisesRegex(RuntimeError, "WhatsApp client session close timed out"),
         ):
             await client.close()
 
         self.assertTrue(
             any(
                 "WhatsApp client session close timed out" in str(call.args[0])
-                for call in client._logging_gateway.warning.call_args_list
+                for call in client._logging_gateway.error.call_args_list
+            )
+        )
+
+    async def test_close_raises_when_session_close_raises(self) -> None:
+        client = self._new_client()
+        existing_session = Mock()
+        existing_session.closed = False
+        existing_session.close = AsyncMock(side_effect=RuntimeError("boom"))
+        client._client_session = existing_session  # pylint: disable=protected-access
+
+        with self.assertRaisesRegex(RuntimeError, "session close failed"):
+            await client.close()
+
+        self.assertTrue(
+            any(
+                "WhatsApp client session close failed" in str(call.args[0])
+                for call in client._logging_gateway.error.call_args_list
             )
         )
 
     async def test_resolve_shutdown_timeout_seconds_rejects_invalid_values(self) -> None:
         config = _make_config()
-        config.mugen = SimpleNamespace(runtime=SimpleNamespace(shutdown_timeout_seconds="bad"))
+        config.mugen.runtime.shutdown_timeout_seconds = "bad"
         with self.assertRaisesRegex(RuntimeError, "shutdown_timeout_seconds"):
             DefaultWhatsAppClient(
                 config=config,

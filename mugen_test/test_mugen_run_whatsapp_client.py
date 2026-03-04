@@ -73,8 +73,35 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(task, return_exceptions=True)
 
         self.assertTrue(
-            any("Failed to close whatsapp client (boom)." in msg for msg in logger.output)
+            any("WhatsApp client shutdown failed" in msg for msg in logger.output)
         )
+
+    async def test_close_error_is_raised_when_runtime_path_has_no_primary_error(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+
+        class DummyWhatsAppClient:
+            async def init(self) -> None:
+                ...
+
+            async def verify_startup(self) -> bool:
+                return True
+
+            async def close(self) -> None:
+                raise RuntimeError("close failed")
+
+        with (
+            unittest.mock.patch(
+                "mugen.asyncio.sleep",
+                new=AsyncMock(side_effect=SystemExit("stop")),
+            ),
+            self.assertRaisesRegex(RuntimeError, "close failed"),
+        ):
+            await run_whatsapp_client(
+                logger_provider=lambda: app.logger,
+                whatsapp_provider=DummyWhatsAppClient,
+            )
 
     async def test_started_callback_is_invoked(self) -> None:
         app = Quart("test_app")

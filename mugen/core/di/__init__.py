@@ -1,10 +1,12 @@
 """Provides an application-wide dependency injection container."""
 
 __all__ = [
+    "ContainerShutdownError",
     "EXT_SERVICE_ADMIN_REGISTRY",
     "EXT_SERVICE_ADMIN_SANDBOX_ENFORCER",
     "EXT_SERVICE_ADMIN_SVC_AUTH",
     "EXT_SERVICE_ADMIN_SVC_JWT",
+    "ProviderShutdownFailure",
     "build_container",
     "container",
     "ensure_container_readiness_async",
@@ -73,6 +75,38 @@ class ContainerBootstrapError(RuntimeError):
 
 class ProviderBootstrapError(ContainerBootstrapError):
     """Raised when a required provider fails deterministic bootstrap."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderShutdownFailure:
+    """Structured provider shutdown failure signal."""
+
+    provider_name: str
+    hook_name: str
+    reason: str
+
+
+def _format_provider_shutdown_failure(failure: ProviderShutdownFailure) -> str:
+    return (
+        f"provider={failure.provider_name} "
+        f"hook={failure.hook_name} "
+        f"reason={failure.reason}"
+    )
+
+
+class ContainerShutdownError(RuntimeError):
+    """Raised when one or more container providers fail deterministic shutdown."""
+
+    def __init__(self, failures: tuple[ProviderShutdownFailure, ...]) -> None:
+        self.failures = failures
+        if not failures:
+            message = "Container shutdown failed."
+        else:
+            message = "Container shutdown failed: " + "; ".join(
+                _format_provider_shutdown_failure(failure)
+                for failure in failures
+            )
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -1279,10 +1313,9 @@ def _shutdown_provider(
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        try:
-            asyncio.run(_shutdown_provider_async(provider_name, provider, logger))
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning(f"Failed to shutdown provider ({provider_name}): {exc}")
+        failures = asyncio.run(_shutdown_provider_async(provider_name, provider, logger))
+        if failures:
+            raise ContainerShutdownError(failures)
         return
 
     raise RuntimeError(
@@ -1297,10 +1330,10 @@ async def _shutdown_provider_async(
     logger: ILoggingGateway | logging.Logger,
     *,
     timeout_seconds: float | None = None,
-) -> None:
+) -> tuple[ProviderShutdownFailure, ...]:
     """Deterministically close one provider instance."""
     if provider is None:
-        return
+        return ()
 
     close = getattr(provider, "close", None)
     aclose = getattr(provider, "aclose", None)
@@ -1311,16 +1344,19 @@ async def _shutdown_provider_async(
     if callable(aclose) and aclose is not close:
         hooks.append(("aclose", aclose))
 
+    failures: list[ProviderShutdownFailure] = []
+
     for hook_name, hook in hooks:
         try:
             maybe_awaitable = hook()
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            if hook_name == "close":
-                logger.warning(f"Failed to close provider ({provider_name}): {exc}")
-            else:
-                logger.warning(
-                    f"Failed to invoke provider {hook_name} ({provider_name}): {exc}"
+            failures.append(
+                ProviderShutdownFailure(
+                    provider_name=provider_name,
+                    hook_name=hook_name,
+                    reason=f"{type(exc).__name__}: {exc}",
                 )
+            )
             continue
 
         if inspect.isawaitable(maybe_awaitable) is not True:
@@ -1331,19 +1367,30 @@ async def _shutdown_provider_async(
             else:
                 await asyncio.wait_for(maybe_awaitable, timeout=timeout_seconds)
         except asyncio.TimeoutError:
-            logger.warning(
-                "Provider shutdown timed out "
-                f"({provider_name}) hook={hook_name} timeout={timeout_seconds:.2f}s"
+            timeout_reason = (
+                "TimeoutError: provider shutdown timed out."
+                if timeout_seconds is None
+                else (
+                    "TimeoutError: provider shutdown timed out after "
+                    f"{timeout_seconds:.2f}s"
+                )
+            )
+            failures.append(
+                ProviderShutdownFailure(
+                    provider_name=provider_name,
+                    hook_name=hook_name,
+                    reason=timeout_reason,
+                )
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            if hook_name == "close":
-                logger.warning(
-                    f"Failed to await provider close ({provider_name}): {exc}"
+            failures.append(
+                ProviderShutdownFailure(
+                    provider_name=provider_name,
+                    hook_name=hook_name,
+                    reason=f"{type(exc).__name__}: {exc}",
                 )
-            else:
-                logger.warning(
-                    f"Failed to await provider {hook_name} ({provider_name}): {exc}"
-                )
+            )
+    return tuple(failures)
 
 
 def _provider_specs_for_shutdown() -> list[_ProviderSpec]:
@@ -1388,6 +1435,8 @@ async def _shutdown_injector_async(injector: DependencyInjector | None) -> None:
         return
     provider_timeout_seconds = _resolve_provider_shutdown_timeout_seconds(config)
     shutdown_timeout_seconds = _resolve_shutdown_timeout_seconds(config)
+    failures: list[ProviderShutdownFailure] = []
+    failed_provider_ids: set[int] = set()
 
     async def _shutdown_inner() -> None:
         seen: set[int] = set()
@@ -1398,16 +1447,21 @@ async def _shutdown_injector_async(injector: DependencyInjector | None) -> None:
 
             provider_id = id(provider)
             if provider_id in seen:
-                setattr(injector, spec.injector_attr, None)
+                if provider_id not in failed_provider_ids:
+                    setattr(injector, spec.injector_attr, None)
                 continue
 
             seen.add(provider_id)
-            await _shutdown_provider_async(
+            provider_failures = await _shutdown_provider_async(
                 spec.provider_name,
                 provider,
                 logger,
                 timeout_seconds=provider_timeout_seconds,
             )
+            if provider_failures:
+                failures.extend(provider_failures)
+                failed_provider_ids.add(provider_id)
+                continue
             setattr(injector, spec.injector_attr, None)
 
         try:
@@ -1420,30 +1474,52 @@ async def _shutdown_injector_async(injector: DependencyInjector | None) -> None:
             if service_id in seen:
                 continue
             seen.add(service_id)
-            await _shutdown_provider_async(
+            provider_failures = await _shutdown_provider_async(
                 f"ext_service:{name}",
                 service,
                 logger,
                 timeout_seconds=provider_timeout_seconds,
             )
+            if provider_failures:
+                failures.extend(provider_failures)
+                failed_provider_ids.add(service_id)
 
         relational_runtime = getattr(injector, "relational_runtime", None)
         if relational_runtime is not None and id(relational_runtime) not in seen:
             seen.add(id(relational_runtime))
-            await _shutdown_provider_async(
+            provider_failures = await _shutdown_provider_async(
                 "relational_runtime",
                 relational_runtime,
                 logger,
                 timeout_seconds=provider_timeout_seconds,
             )
+            if provider_failures:
+                failures.extend(provider_failures)
+                failed_provider_ids.add(id(relational_runtime))
+            else:
+                injector.relational_runtime = None
 
     try:
         await asyncio.wait_for(_shutdown_inner(), timeout=shutdown_timeout_seconds)
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Injector shutdown timed out after "
-            f"{shutdown_timeout_seconds:.2f}s; continuing shutdown."
+    except asyncio.TimeoutError as exc:
+        failures.append(
+            ProviderShutdownFailure(
+                provider_name="injector",
+                hook_name="shutdown",
+                reason=(
+                    "TimeoutError: injector shutdown timed out after "
+                    f"{shutdown_timeout_seconds:.2f}s"
+                ),
+            )
         )
+        for failure in failures:
+            logger.error(_format_provider_shutdown_failure(failure))
+        raise ContainerShutdownError(tuple(failures)) from exc
+
+    if failures:
+        for failure in failures:
+            logger.error(_format_provider_shutdown_failure(failure))
+        raise ContainerShutdownError(tuple(failures))
 
 
 def _injector_config_dict(injector: DependencyInjector | None) -> dict:

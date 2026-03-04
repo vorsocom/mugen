@@ -16,6 +16,8 @@ Keep `logging_gateway` as the bootstrap provider and keep the remaining provider
 - `mugen.runtime.shutdown_timeout_seconds` is required and must be `> 0`.
 - DI shutdown paths do not silently fall back to legacy default timeout values when these settings are missing/invalid.
 - Invalid timeout configuration must fail bootstrap validation before runtime startup.
+- Provider/container shutdown failures are fail-closed and must raise `ContainerShutdownError`.
+- Shutdown failure signals are structured as `ProviderShutdownFailure` entries and are logged at error level.
 
 ## Runtime Bootstrap Contract
 
@@ -43,6 +45,8 @@ Keep `logging_gateway` as the bootstrap provider and keep the remaining provider
 - Phase-B shutdown is fail-closed for timeout paths.
 - Unresolved platform/client task cancellation timeouts must leave runtime status degraded with explicit timeout errors.
 - Shutdown adapters must not mask degraded timeout outcomes by writing `stopped` after unresolved task timeouts.
+- DI container shutdown failures must propagate to orchestration (no warning-only continuation).
+- Cached injector state is cleared only after successful deterministic shutdown.
 
 ## Layering Contract
 

@@ -53,6 +53,16 @@ class _MemoryRelational:
 def _make_config() -> SimpleNamespace:
     return SimpleNamespace(
         mugen=SimpleNamespace(
+            platforms=["whatsapp"],
+            runtime=SimpleNamespace(
+                profile="platform_full",
+                provider_readiness_timeout_seconds=15.0,
+                provider_shutdown_timeout_seconds=10.0,
+                shutdown_timeout_seconds=60.0,
+                phase_b=SimpleNamespace(
+                    startup_timeout_seconds=30.0,
+                ),
+            ),
             beta=SimpleNamespace(
                 active=False,
                 message="Beta only",

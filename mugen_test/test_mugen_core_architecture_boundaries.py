@@ -204,6 +204,19 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
         )
         self.assertEqual(violations, [])
 
+    def test_client_shutdown_timeout_resolution_uses_contract_parser(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        for client_module_path in (
+            repo_root / "mugen" / "core" / "client" / "matrix.py",
+            repo_root / "mugen" / "core" / "client" / "whatsapp.py",
+        ):
+            source = client_module_path.read_text(encoding="utf-8")
+            self.assertIn(
+                "from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings",
+                source,
+            )
+            self.assertNotIn("_default_shutdown_timeout_seconds", source)
+
 
 def _find_import_violations(
     *,
