@@ -152,6 +152,35 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
             di_source,
         )
 
+    def test_runtime_bootstrap_parser_is_contract_owned(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        contract_parser = (
+            repo_root / "mugen" / "core" / "contract" / "runtime_bootstrap.py"
+        )
+        legacy_runtime_parser = (
+            repo_root / "mugen" / "core" / "runtime" / "bootstrap_contract.py"
+        )
+        self.assertTrue(contract_parser.is_file())
+        self.assertFalse(legacy_runtime_parser.exists())
+
+    def test_di_and_runtime_depend_on_contract_runtime_bootstrap_parser(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        for module_path in (
+            repo_root / "mugen" / "core" / "di" / "__init__.py",
+            repo_root / "mugen" / "core" / "runtime" / "phase_b_controls.py",
+            repo_root / "mugen" / "__init__.py",
+            repo_root / "quartman.py",
+        ):
+            source = module_path.read_text(encoding="utf-8")
+            self.assertIn(
+                "from mugen.core.contract.runtime_bootstrap import",
+                source,
+            )
+            self.assertNotIn(
+                "mugen.core.runtime.bootstrap_contract",
+                source,
+            )
+
     def test_matrix_runtime_contract_module_stays_infrastructure_free(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         contract_module = (

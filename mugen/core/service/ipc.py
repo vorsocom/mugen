@@ -16,6 +16,7 @@ from mugen.core.contract.service.ipc import (
     IPCHandlerResult,
     IPCAggregateError,
     IPCAggregateResult,
+    IPCCriticalDispatchError,
 )
 from mugen.core.utility.config_value import parse_optional_positive_finite_float
 
@@ -159,6 +160,23 @@ class DefaultIPCService(IIPCService):
             )
         return ("result", normalized_result)
 
+    def _raise_if_critical_error(
+        self,
+        *,
+        request: IPCCommandRequest,
+        error: IPCAggregateError,
+    ) -> None:
+        handler_name = error.handler
+        if handler_name not in self._ipc_critical_handlers:
+            return
+        raise IPCCriticalDispatchError(
+            platform=request.platform,
+            command=request.command,
+            handler=handler_name,
+            code=error.code,
+            error=error.error,
+        )
+
     async def handle_ipc_request(self, request: IPCCommandRequest) -> IPCAggregateResult:
         started = perf_counter()
         command = request.command
@@ -208,6 +226,10 @@ class DefaultIPCService(IIPCService):
                 results.append(item)
             else:
                 errors.append(item)
+                self._raise_if_critical_error(
+                    request=request,
+                    error=item,
+                )
 
         duration_ms = int(max(0, (perf_counter() - started) * 1000))
         return IPCAggregateResult(

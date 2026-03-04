@@ -65,7 +65,12 @@ from mugen.core.contract.client.matrix_types import (
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
-from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
+from mugen.core.contract.service.ipc import (
+    IIPCService,
+    IPCCommandRequest,
+    IPCAggregateResult,
+    IPCCriticalDispatchError,
+)
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core.utility.config_value import parse_optional_positive_finite_float
@@ -137,6 +142,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._matrix_ipc_queue: asyncio.Queue | None = None
         self._matrix_ipc_worker_task: asyncio.Task | None = None
         self._matrix_ipc_worker_stop = asyncio.Event()
+        self._matrix_runtime_health_error: BaseException | None = None
+        self._matrix_runtime_health_signal = asyncio.Event()
         self._shutdown_timeout_seconds = self._resolve_shutdown_timeout_seconds()
         self._credentials_key_prefix = self._resolve_credentials_key_prefix()
         self._known_devices_list_key = self._keyval_key("known_devices_list")
@@ -286,6 +293,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     async def __aenter__(self) -> "DefaultMatrixClient":
         """Initialisation."""
+        self._clear_runtime_health_failure()
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
         try:
             self._ensure_credential_keys_initialized()
@@ -410,6 +418,15 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             full_state=full_state,
             set_presence=set_presence,
         )
+
+    async def monitor_runtime_health(self) -> None:
+        """Block until matrix runtime reports a health failure."""
+        self._ensure_runtime_health_state()
+        await self._matrix_runtime_health_signal.wait()
+        error = self._matrix_runtime_health_error
+        if isinstance(error, BaseException):
+            raise error
+        raise RuntimeError("Matrix runtime health monitor exited without an error.")
 
     def add_event_callback(self, callback, event_type) -> None:
         """Delegate event callback registration to the vendor client."""
@@ -708,6 +725,24 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             self._shutdown_timeout_seconds = parsed
         return parsed
 
+    def _ensure_runtime_health_state(self) -> None:
+        if "_matrix_runtime_health_error" not in self.__dict__:
+            self._matrix_runtime_health_error = None
+        if "_matrix_runtime_health_signal" not in self.__dict__:
+            self._matrix_runtime_health_signal = asyncio.Event()
+
+    def _clear_runtime_health_failure(self) -> None:
+        self._ensure_runtime_health_state()
+        self._matrix_runtime_health_error = None
+        self._matrix_runtime_health_signal.clear()
+
+    def _signal_runtime_health_failure(self, error: BaseException) -> None:
+        self._ensure_runtime_health_state()
+        if self._matrix_runtime_health_signal.is_set():
+            return
+        self._matrix_runtime_health_error = error
+        self._matrix_runtime_health_signal.set()
+
     def _start_matrix_ipc_worker(self) -> None:
         if self._ipc_service is None:
             return
@@ -754,7 +789,45 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             return
         maybe_dispatch = handle_ipc_request(request_payload)
         if inspect.isawaitable(maybe_dispatch):
-            await maybe_dispatch
+            dispatch_result = await maybe_dispatch
+            self._consume_matrix_ipc_dispatch_result(
+                request_payload=request_payload,
+                dispatch_result=dispatch_result,
+            )
+
+    def _consume_matrix_ipc_dispatch_result(
+        self,
+        *,
+        request_payload: IPCCommandRequest,
+        dispatch_result: object,
+    ) -> None:
+        if not isinstance(dispatch_result, IPCAggregateResult):
+            return
+        if not dispatch_result.errors:
+            return
+
+        payload_data = (
+            request_payload.data
+            if isinstance(request_payload.data, dict)
+            else {}
+        )
+        callback = str(payload_data.get("callback", "unknown_callback"))
+        event_type = str(payload_data.get("event_type", "UnknownEvent"))
+        error_codes: list[str] = []
+        for aggregate_error in dispatch_result.errors:
+            normalized_code = str(aggregate_error.code or "unknown")
+            error_codes.append(normalized_code)
+            self._increment_matrix_metric("matrix.ipc.dispatch.non_critical_failure")
+            self._increment_matrix_metric(
+                f"matrix.ipc.dispatch.non_critical_failure.{normalized_code}"
+            )
+        self._logging_gateway.warning(
+            "Matrix event extension dispatch completed with non-critical errors."
+            f" callback={callback}"
+            f" event={event_type}"
+            f" error_count={len(dispatch_result.errors)}"
+            f" error_codes={','.join(sorted(set(error_codes)))}"
+        )
 
     async def _matrix_ipc_worker_loop(self) -> None:
         while self._matrix_ipc_worker_stop.is_set() is not True:
@@ -768,6 +841,15 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 continue
             try:
                 await self._dispatch_matrix_ipc_request(payload)
+            except IPCCriticalDispatchError as exc:
+                self._increment_matrix_metric("matrix.ipc.dispatch.critical_failure")
+                self._logging_gateway.error(
+                    "Matrix event extension dispatch failed for critical handler."
+                    f" error={exc}"
+                )
+                self._signal_runtime_health_failure(exc)
+                self._matrix_ipc_worker_stop.set()
+                return
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 self._logging_gateway.warning(
                     "Matrix event extension dispatch failed."

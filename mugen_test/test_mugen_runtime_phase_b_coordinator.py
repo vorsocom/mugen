@@ -13,28 +13,6 @@ from mugen.core.runtime.task_shutdown import TaskCancellationOutcome
 
 
 class TestPhaseBCoordinator(unittest.TestCase):
-    def test_build_startup_plan_requires_timeout(self) -> None:
-        startup_plan = PhaseBStartupPlan(
-            active_platforms=[],
-            critical_platforms=[],
-            degrade_on_critical_exit=True,
-            readiness_grace_seconds=0.0,
-            startup_timeout_seconds=None,
-        )
-        with patch.object(
-            phase_b_coordinator,
-            "build_phase_b_startup_plan",
-            return_value=startup_plan,
-        ):
-            with self.assertRaises(RuntimeError):
-                phase_b_coordinator._build_startup_plan(  # pylint: disable=protected-access
-                    config=object(),
-                    bootstrap_state={},
-                    logger=object(),
-                    validate_phase_b_runtime_config=lambda **_kwargs: ([], [], True),
-                    validate_web_relational_runtime_config=lambda **_kwargs: None,
-                )
-
     def test_start_phase_b_runtime_starts_task_and_waits_for_critical_health(
         self,
     ) -> None:
@@ -110,7 +88,13 @@ class TestPhaseBCoordinator(unittest.TestCase):
         )
         config = SimpleNamespace(
             mugen=SimpleNamespace(
-                runtime=SimpleNamespace(provider_shutdown_timeout_seconds=0.25)
+                runtime=SimpleNamespace(
+                    profile="platform_full",
+                    provider_readiness_timeout_seconds=15.0,
+                    provider_shutdown_timeout_seconds=0.25,
+                    shutdown_timeout_seconds=60.0,
+                    phase_b=SimpleNamespace(startup_timeout_seconds=30.0),
+                )
             )
         )
 
@@ -139,44 +123,6 @@ class TestPhaseBCoordinator(unittest.TestCase):
             asyncio.run(_run())
         self.assertTrue(cancellation_seen["value"])
 
-    def test_start_phase_b_runtime_rejects_missing_startup_timeout(self) -> None:
-        startup_plan = PhaseBStartupPlan(
-            active_platforms=["web"],
-            critical_platforms=["web"],
-            degrade_on_critical_exit=True,
-            readiness_grace_seconds=0.0,
-            startup_timeout_seconds=None,
-        )
-
-        async def _runner(_app) -> None:
-            return None
-
-        async def _run() -> None:
-            with patch.object(
-                phase_b_coordinator,
-                "prepare_phase_b_startup_plan",
-                return_value=startup_plan,
-            ):
-                await phase_b_coordinator.start_phase_b_runtime(
-                    app=object(),
-                    config=object(),
-                    bootstrap_state={},
-                    logger=object(),
-                    run_platform_clients=_runner,
-                    wait_for_critical_startup=unittest.mock.AsyncMock(
-                        return_value=None
-                    ),
-                    validate_phase_b_runtime_config=lambda **_kwargs: (
-                        ["web"],
-                        ["web"],
-                        True,
-                    ),
-                    validate_web_relational_runtime_config=lambda **_kwargs: None,
-                )
-
-        with self.assertRaisesRegex(RuntimeError, "startup timeout is required"):
-            asyncio.run(_run())
-
     def test_start_phase_b_runtime_fails_fast_when_cancel_timeout_expires(self) -> None:
         startup_plan = PhaseBStartupPlan(
             active_platforms=["web"],
@@ -188,7 +134,13 @@ class TestPhaseBCoordinator(unittest.TestCase):
         runner_started = asyncio.Event()
         config = SimpleNamespace(
             mugen=SimpleNamespace(
-                runtime=SimpleNamespace(provider_shutdown_timeout_seconds=0.01)
+                runtime=SimpleNamespace(
+                    profile="platform_full",
+                    provider_readiness_timeout_seconds=15.0,
+                    provider_shutdown_timeout_seconds=0.01,
+                    shutdown_timeout_seconds=60.0,
+                    phase_b=SimpleNamespace(startup_timeout_seconds=30.0),
+                )
             )
         )
 

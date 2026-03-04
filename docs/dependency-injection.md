@@ -17,6 +17,27 @@ Keep `logging_gateway` as the bootstrap provider and keep the remaining provider
 - DI shutdown paths do not silently fall back to legacy default timeout values when these settings are missing/invalid.
 - Invalid timeout configuration must fail bootstrap validation before runtime startup.
 
+## Runtime Bootstrap Contract
+
+- Runtime bootstrap parsing is contract-owned in:
+  - `mugen/core/contract/runtime_bootstrap.py`
+- Adapter/runtime layers must consume that contract parser directly (no runtime-layer parser ownership).
+- The parser is strict fail-closed. Required fields:
+  - `mugen.runtime.profile` (`platform_full`)
+  - `mugen.runtime.provider_readiness_timeout_seconds` (`> 0`)
+  - `mugen.runtime.provider_shutdown_timeout_seconds` (`> 0`)
+  - `mugen.runtime.shutdown_timeout_seconds` (`> 0`)
+  - `mugen.runtime.phase_b.startup_timeout_seconds` (`> 0`)
+- Legacy optional parser switches (`require_*`) are removed. Callers must treat these
+  controls as unconditionally required.
+
+## Readiness Failure Surfacing
+
+- DI readiness configuration/parse failures must surface as `ProviderBootstrapError`
+  (not raw `RuntimeError`) through `ensure_container_readiness_async()`.
+- App bootstrap (`phase_a`) must convert container readiness failures into
+  `BootstrapConfigError` with deterministic phase state/error updates.
+
 ## Phase-B Shutdown Semantics
 
 - Phase-B shutdown is fail-closed for timeout paths.

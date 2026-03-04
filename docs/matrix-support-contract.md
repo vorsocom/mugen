@@ -83,6 +83,17 @@ supported.
   `reason`, optional `room_id`, and available `content`/`source` fields.
 - Core skip logging remains reason-coded even when extensions are not present.
 
+### IPC Failure Semantics
+
+- Non-critical IPC handler failures are fail-open:
+  - Matrix callback flow continues.
+  - aggregate errors are logged as warnings and tracked via
+    `matrix.ipc.dispatch.non_critical_failure*` metrics.
+- Critical IPC handler failures are fail-closed:
+  - core IPC raises `IPCCriticalDispatchError`,
+  - Matrix runtime health monitor surfaces that failure to orchestration,
+  - phase-B supervision degrades and restarts the Matrix runtime path.
+
 ### Observability
 
 - Structured decision logs for invite/message/media branches with

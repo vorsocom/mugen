@@ -29,12 +29,19 @@
 - During shutdown, any unresolved phase-B task timeout is fail-closed:
   - `phase_b_status` must remain `degraded` (never forced to `stopped`).
   - `phase_b_error` and platform-specific timeout errors are operator-facing terminal signals.
+- Critical IPC dispatch failure is fail-closed for Matrix runtime:
+  - expect Matrix platform degradation/restart under phase-B supervision,
+  - `phase_b_error` / `platform_errors.matrix` should include critical IPC failure detail,
+  - non-critical IPC errors remain warning-level and do not force degraded status alone.
 
 ## Triage Checklist
 1. Check `/api/core/health/ready` payload and identify `failed_platforms`.
 2. Correlate platform failure reason with runtime logs for the same platform name.
 3. For critical platform clean exits, confirm whether exit was expected shutdown or unexpected runtime stop.
 4. Validate timeout/profile settings (`mugen.runtime.profile`, `mugen.runtime.provider_readiness_timeout_seconds`, `mugen.runtime.provider_shutdown_timeout_seconds`, `mugen.runtime.shutdown_timeout_seconds`, gateway timeout keys, qdrant retry/timeout keys).
-   `mugen.runtime.provider_shutdown_timeout_seconds` and `mugen.runtime.shutdown_timeout_seconds` are required positive values; missing/invalid values must fail bootstrap.
-5. Roll back or restart only after readiness returns `ready=true` with empty `failed_platforms`.
-6. If shutdown timeout errors persist, treat the instance as not safely stopped and use process-level investigation/remediation before restart.
+   runtime bootstrap controls are strict required positives (`mugen.runtime.profile=platform_full`, `provider_readiness_timeout_seconds`, `provider_shutdown_timeout_seconds`, `shutdown_timeout_seconds`, `phase_b.startup_timeout_seconds`); missing/invalid values must fail bootstrap.
+5. For Matrix callback extension incidents, distinguish non-critical vs critical IPC outcomes:
+   - non-critical: warning logs + `matrix.ipc.dispatch.non_critical_failure*` metrics.
+   - critical: `IPCCriticalDispatchError` path, runtime degradation, supervisor restart.
+6. Roll back or restart only after readiness returns `ready=true` with empty `failed_platforms`.
+7. If shutdown timeout errors persist, treat the instance as not safely stopped and use process-level investigation/remediation before restart.

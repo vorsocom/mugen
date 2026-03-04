@@ -6,6 +6,7 @@ __all__ = [
     "IPCHandlerResult",
     "IPCAggregateError",
     "IPCAggregateResult",
+    "IPCCriticalDispatchError",
 ]
 
 from abc import ABC, abstractmethod
@@ -16,6 +17,7 @@ from mugen.core.contract.service.ipc_model import (
     IPCHandlerResult,
     IPCAggregateError,
     IPCAggregateResult,
+    IPCCriticalDispatchError,
 )
 
 

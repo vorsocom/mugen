@@ -157,3 +157,26 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(BootstrapConfigError):
             create_quart_app(config_provider=lambda: dummy_config)
+
+    async def test_create_quart_app_falls_back_when_logger_provider_raises(self):
+        dummy_config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                environment="development",
+            ),
+            quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
+        )
+
+        app = _create_quart_app(
+            config_provider=lambda: dummy_config,
+            logger_provider=lambda: (_ for _ in ()).throw(RuntimeError("logger down")),
+        )
+        self.assertIsInstance(app, Quart)
+
+    async def test_create_quart_app_wraps_config_provider_failure(self):
+        logger = unittest.mock.Mock()
+        with self.assertRaises(BootstrapConfigError):
+            _create_quart_app(
+                config_provider=lambda: (_ for _ in ()).throw(RuntimeError("bad config")),
+                logger_provider=lambda: logger,
+            )
+        logger.error.assert_called_with("Configuration unavailable.")

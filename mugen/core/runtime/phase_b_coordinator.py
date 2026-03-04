@@ -32,10 +32,6 @@ def _build_startup_plan(
         validate_web_relational_runtime_config=validate_web_relational_runtime_config,
         include_startup_timeout=True,
     )
-    if plan.startup_timeout_seconds is None:
-        raise RuntimeError(
-            "Invalid runtime configuration: startup timeout is required."
-        )
     return plan
 
 
@@ -111,12 +107,6 @@ async def start_phase_b_runtime(
         validate_phase_b_runtime_config=validate_phase_b_runtime_config,
         validate_web_relational_runtime_config=validate_web_relational_runtime_config,
     )
-    startup_timeout_seconds = plan.startup_timeout_seconds
-    if startup_timeout_seconds is None:
-        raise RuntimeError(
-            "Invalid runtime configuration: startup timeout is required."
-        )
-
     loop = asyncio.get_running_loop()
     task = loop.create_task(
         run_platform_clients(app),
@@ -126,7 +116,7 @@ async def start_phase_b_runtime(
         await wait_for_critical_startup(
             bootstrap_state,
             critical_platforms=plan.critical_platforms,
-            startup_timeout_seconds=startup_timeout_seconds,
+            startup_timeout_seconds=plan.startup_timeout_seconds,
         )
     except Exception:
         if not task.done():

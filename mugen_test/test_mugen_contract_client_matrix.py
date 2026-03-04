@@ -51,6 +51,9 @@ class _MatrixClientPort(IMatrixClient):
         _ = displayname
         return None
 
+    async def monitor_runtime_health(self) -> None:
+        return None
+
 
 class _IncompleteMatrixClientPort(IMatrixClient):
     synced = object()

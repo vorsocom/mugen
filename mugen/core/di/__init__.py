@@ -29,6 +29,7 @@ from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.matrix_runtime_config import (
     validate_matrix_enabled_runtime_config,
 )
+from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
@@ -43,7 +44,6 @@ from mugen.core.contract.service.nlp import INLPService
 from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.contract.service.user import IUserService
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
-from mugen.core.runtime.bootstrap_contract import parse_runtime_bootstrap_settings
 from mugen.core.utility.collection.namespace import NamespaceConfig, to_namespace
 from mugen.core.utility.config_value import (
     parse_nonnegative_finite_float,
@@ -174,6 +174,22 @@ def _validate_required_positive_timeout(
     _validate_optional_positive_timeout(value, path=path)
 
 
+def _validate_required_runtime_profile(
+    value: object,
+    *,
+    path: str,
+) -> None:
+    if not isinstance(value, str):
+        raise RuntimeError(
+            f"Invalid configuration: {path} is required and must be platform_full."
+        )
+    normalized = value.strip().lower()
+    if normalized != "platform_full":
+        raise RuntimeError(
+            f"Invalid configuration: {path} must be platform_full."
+        )
+
+
 def _validate_optional_nonnegative_timeout_like_value(
     value: object,
     *,
@@ -262,7 +278,11 @@ def _validate_core_module_schema(config: dict) -> None:
             "shutdown_timeout_seconds",
         },
     )
-    _validate_optional_positive_timeout(
+    _validate_required_runtime_profile(
+        runtime_cfg.get("profile"),
+        path="mugen.runtime.profile",
+    )
+    _validate_required_positive_timeout(
         runtime_cfg.get("provider_readiness_timeout_seconds"),
         path="mugen.runtime.provider_readiness_timeout_seconds",
     )
@@ -295,7 +315,7 @@ def _validate_core_module_schema(config: dict) -> None:
         phase_b_cfg.get("readiness_grace_seconds"),
         path="mugen.runtime.phase_b.readiness_grace_seconds",
     )
-    _validate_optional_positive_timeout(
+    _validate_required_positive_timeout(
         phase_b_cfg.get("startup_timeout_seconds"),
         path="mugen.runtime.phase_b.startup_timeout_seconds",
     )
@@ -492,12 +512,7 @@ def _normalize_platforms(values: list[str] | None) -> list[str]:
 
 
 def _resolve_runtime_profile_override(config: dict) -> str:
-    settings = parse_runtime_bootstrap_settings(
-        config,
-        require_profile=True,
-        require_startup_timeout_seconds=False,
-        require_provider_readiness_timeout_seconds=False,
-    )
+    settings = parse_runtime_bootstrap_settings(config)
     return str(settings.profile)
 
 
@@ -863,12 +878,7 @@ def _configured_token_for_spec(config: dict, spec: _ProviderSpec) -> object:
 
 def _resolve_readiness_provider_names(config: dict) -> list[str]:
     """Resolve providers that must pass readiness before bootstrap succeeds."""
-    settings = parse_runtime_bootstrap_settings(
-        config,
-        require_profile=True,
-        require_startup_timeout_seconds=False,
-        require_provider_readiness_timeout_seconds=False,
-    )
+    settings = parse_runtime_bootstrap_settings(config)
     active_platforms = list(settings.active_platforms)
     web_active = "web" in active_platforms
 
@@ -925,34 +935,17 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
 
 
 def _resolve_provider_readiness_timeout_seconds(config: dict) -> float:
-    settings = parse_runtime_bootstrap_settings(
-        config,
-        require_profile=False,
-        require_startup_timeout_seconds=False,
-        require_provider_readiness_timeout_seconds=True,
-    )
+    settings = parse_runtime_bootstrap_settings(config)
     return float(settings.provider_readiness_timeout_seconds)
 
 
 def _resolve_provider_shutdown_timeout_seconds(config: dict) -> float:
-    settings = parse_runtime_bootstrap_settings(
-        config,
-        require_profile=False,
-        require_startup_timeout_seconds=False,
-        require_provider_readiness_timeout_seconds=False,
-        require_provider_shutdown_timeout_seconds=True,
-    )
+    settings = parse_runtime_bootstrap_settings(config)
     return float(settings.provider_shutdown_timeout_seconds)
 
 
 def _resolve_shutdown_timeout_seconds(config: dict) -> float:
-    settings = parse_runtime_bootstrap_settings(
-        config,
-        require_profile=False,
-        require_startup_timeout_seconds=False,
-        require_provider_readiness_timeout_seconds=False,
-        require_shutdown_timeout_seconds=True,
-    )
+    settings = parse_runtime_bootstrap_settings(config)
     return float(settings.shutdown_timeout_seconds)
 
 
@@ -1486,14 +1479,21 @@ class _ContainerProxy:
         injector = self.build()
         if self._readiness_checked:
             return injector
-        config = _injector_config_dict(injector)
-        readiness_report = await _ensure_injector_readiness_async(config, injector)
-        self._last_readiness_report = readiness_report
-        if readiness_report.required_failures:
+        try:
+            config = _injector_config_dict(injector)
+            readiness_report = await _ensure_injector_readiness_async(config, injector)
+            self._last_readiness_report = readiness_report
+            if readiness_report.required_failures:
+                raise ProviderBootstrapError(
+                    _format_required_readiness_failure_message(readiness_report)
+                )
+            _validate_container(config, injector)
+        except ProviderBootstrapError:
+            raise
+        except RuntimeError as exc:
             raise ProviderBootstrapError(
-                _format_required_readiness_failure_message(readiness_report)
-            )
-        _validate_container(config, injector)
+                f"Provider readiness bootstrap configuration failed: {exc}"
+            ) from exc
         self._readiness_checked = True
         return injector
 

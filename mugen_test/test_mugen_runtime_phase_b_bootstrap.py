@@ -22,6 +22,10 @@ class TestMugenRuntimePhaseBBootstrap(unittest.TestCase):
             mugen=SimpleNamespace(
                 platforms=["web"],
                 runtime=SimpleNamespace(
+                    profile="platform_full",
+                    provider_readiness_timeout_seconds=15.0,
+                    provider_shutdown_timeout_seconds=10.0,
+                    shutdown_timeout_seconds=60.0,
                     phase_b=SimpleNamespace(
                         readiness_grace_seconds="1.5",
                         startup_timeout_seconds=startup_timeout_seconds,
@@ -68,7 +72,7 @@ class TestMugenRuntimePhaseBBootstrap(unittest.TestCase):
 
     def test_build_plan_skips_timeout_when_not_requested(self) -> None:
         plan = bootstrap.build_phase_b_startup_plan(
-            config=self._config(startup_timeout_seconds="invalid"),
+            config=self._config(startup_timeout_seconds=30.0),
             bootstrap_state={},
             logger=None,
             validate_phase_b_runtime_config=lambda **_: (["matrix"], ["matrix"], False),

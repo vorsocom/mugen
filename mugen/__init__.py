@@ -33,6 +33,7 @@ __all__ = [
 
 import asyncio
 import inspect
+import logging
 import random
 import re
 from time import perf_counter
@@ -77,7 +78,8 @@ from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.extension.registry import IExtensionRegistry
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.service.ipc import IIPCService
+from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
+from mugen.core.contract.service.ipc import IIPCService, IPCCriticalDispatchError
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.domain.use_case import (
@@ -93,7 +95,6 @@ from mugen.core.runtime.phase_b_coordinator import (
     prepare_phase_b_startup_plan,
     resolve_phase_b_startup_plan,
 )
-from mugen.core.runtime.bootstrap_contract import parse_runtime_bootstrap_settings
 from mugen.core.runtime.phase_b_controls import (
     parse_bool as _parse_bool,
 )
@@ -363,12 +364,7 @@ def _resolve_phase_b_critical_platforms(
     if resolved:
         return resolved
 
-    settings = parse_runtime_bootstrap_settings(
-        config,
-        require_profile=False,
-        require_startup_timeout_seconds=False,
-        require_provider_readiness_timeout_seconds=False,
-    )
+    settings = parse_runtime_bootstrap_settings(config)
     resolved = _normalize_platform_list(settings.critical_platforms)
     if resolved:
         return resolved
@@ -383,12 +379,7 @@ def validate_phase_b_runtime_config(
     logger: ILoggingGateway | None = None,
 ) -> tuple[list[str], list[str], bool]:
     """Resolve and validate runtime platform configuration for phase B."""
-    settings = parse_runtime_bootstrap_settings(
-        config,
-        require_profile=False,
-        require_startup_timeout_seconds=False,
-        require_provider_readiness_timeout_seconds=False,
-    )
+    settings = parse_runtime_bootstrap_settings(config)
     raw_platforms = settings.raw_platforms
     if not isinstance(raw_platforms, list):
         if logger is not None:
@@ -446,12 +437,7 @@ def _resolve_degrade_on_critical_exit(config: SimpleNamespace, bootstrap_state: 
     if state_value is not None:
         return _parse_bool(state_value, default=True)
 
-    settings = parse_runtime_bootstrap_settings(
-        config,
-        require_profile=False,
-        require_startup_timeout_seconds=False,
-        require_provider_readiness_timeout_seconds=False,
-    )
+    settings = parse_runtime_bootstrap_settings(config)
     return bool(settings.degrade_on_critical_exit)
 
 
@@ -515,13 +501,7 @@ def _resolve_phase_b_supervision_controls(
 
 
 def _resolve_runtime_shutdown_timeout_seconds(config: SimpleNamespace) -> float:
-    settings = parse_runtime_bootstrap_settings(
-        config,
-        require_profile=False,
-        require_startup_timeout_seconds=False,
-        require_provider_readiness_timeout_seconds=False,
-        require_shutdown_timeout_seconds=True,
-    )
+    settings = parse_runtime_bootstrap_settings(config)
     return float(settings.shutdown_timeout_seconds)
 
 
@@ -590,8 +570,16 @@ def create_quart_app(
     logger_provider=_logger_provider,
 ) -> Quart:
     """Application factory."""
-    config: SimpleNamespace = config_provider()
-    logger: ILoggingGateway = logger_provider()
+    try:
+        logger: ILoggingGateway | logging.Logger = logger_provider()
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger = logging.getLogger()
+
+    try:
+        config: SimpleNamespace = config_provider()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.error("Configuration unavailable.")
+        raise BootstrapConfigError("Configuration unavailable.") from exc
 
     # Create new Quart application.
     app = Quart(__name__)
@@ -634,7 +622,6 @@ async def bootstrap_app(
 ) -> None:
     """Phase A bootstrap for app extensions and API registration."""
     _ = logger_provider
-    config: SimpleNamespace = config_provider()
     bootstrap_state = get_bootstrap_state(app)
     capability_statuses = bootstrap_state.get(PHASE_A_CAPABILITY_STATUSES_KEY)
     if not isinstance(capability_statuses, dict):
@@ -646,6 +633,15 @@ async def bootstrap_app(
     bootstrap_state[PHASE_A_CAPABILITY_ERRORS_KEY] = capability_errors
     bootstrap_state[PHASE_A_BLOCKING_FAILURES_KEY] = []
     bootstrap_state[PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY] = []
+    try:
+        config: SimpleNamespace = config_provider()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        capability_statuses["container_configuration"] = PHASE_STATUS_DEGRADED
+        capability_errors["container_configuration"] = str(exc)
+        bootstrap_state[PHASE_A_BLOCKING_FAILURES_KEY] = ["container_configuration"]
+        bootstrap_state[PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY] = []
+        bootstrap_state[PHASE_A_ERROR_KEY] = "Configuration unavailable."
+        raise BootstrapConfigError("Configuration unavailable.") from exc
 
     try:
         await di.ensure_container_readiness_async()
@@ -747,8 +743,15 @@ async def run_platform_clients(
     web_runtime_store_provider=_web_runtime_store_provider,
 ) -> None:
     """Phase B bootstrap for long-running platform clients."""
-    config: SimpleNamespace = config_provider()
-    logger: ILoggingGateway = logger_provider()
+    try:
+        config: SimpleNamespace = config_provider()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise BootstrapConfigError("Configuration unavailable.") from exc
+
+    try:
+        logger: ILoggingGateway = logger_provider()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise BootstrapConfigError("Logging provider unavailable.") from exc
     bootstrap_state = get_bootstrap_state(app)
     bootstrap_state[SHUTDOWN_REQUESTED_KEY] = False
     startup_plan: PhaseBStartupPlan = resolve_phase_b_startup_plan(
@@ -1281,6 +1284,58 @@ async def run_matrix_client(
                 healthy_callback()
             runtime_degraded = False
 
+        async def _run_sync_with_runtime_health_monitor() -> None:
+            sync_task = asyncio.create_task(
+                client.sync_forever(
+                    since=client.sync_token,
+                    timeout=100,
+                    full_state=True,
+                    set_presence="online",
+                ),
+                name="mugen.matrix.sync_forever",
+            )
+            monitor_runtime_health = getattr(client, "monitor_runtime_health", None)
+            if callable(monitor_runtime_health):
+                health_task = asyncio.create_task(
+                    monitor_runtime_health(),
+                    name="mugen.matrix.runtime_health",
+                )
+            else:
+                health_task = asyncio.create_task(
+                    asyncio.Event().wait(),
+                    name="mugen.matrix.runtime_health",
+                )
+            try:
+                done, _pending = await asyncio.wait(
+                    (sync_task, health_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if health_task in done:
+                    try:
+                        await health_task
+                    except Exception:
+                        if not sync_task.done():
+                            sync_task.cancel()
+                        await asyncio.gather(sync_task, return_exceptions=True)
+                        raise
+                    if not sync_task.done():
+                        sync_task.cancel()
+                    await asyncio.gather(sync_task, return_exceptions=True)
+                    raise RuntimeError(
+                        "Matrix runtime health monitor exited unexpectedly."
+                    )
+
+                if not health_task.done():
+                    health_task.cancel()
+                await asyncio.gather(health_task, return_exceptions=True)
+                await sync_task
+            finally:
+                if not sync_task.done():
+                    sync_task.cancel()
+                if not health_task.done():
+                    health_task.cancel()
+                await asyncio.gather(sync_task, health_task, return_exceptions=True)
+
         while True:
             try:
                 synced_signal = getattr(client, "synced", None)
@@ -1293,20 +1348,20 @@ async def run_matrix_client(
                 # Start process loop.
                 await asyncio.gather(
                     asyncio.create_task(wait_on_sync_ready()),
-                    asyncio.create_task(
-                        client.sync_forever(
-                            since=client.sync_token,
-                            timeout=100,
-                            full_state=True,
-                            set_presence="online",
-                        )
-                    ),
+                    asyncio.create_task(_run_sync_with_runtime_health_monitor()),
                     return_exceptions=False,
                 )
                 logger.debug("Matrix client started.")
                 return
             except asyncio.exceptions.CancelledError:
                 logger.error("Matrix client shutting down.")
+                raise
+            except IPCCriticalDispatchError as exc:
+                if callable(degraded_callback):
+                    degraded_callback(f"{type(exc).__name__}: {exc}")
+                logger.error(
+                    "Matrix client critical IPC dispatch failure; shutting down."
+                )
                 raise
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 is_auth_failure = (
