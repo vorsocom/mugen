@@ -26,6 +26,7 @@ __all__ = [
     "bootstrap_app",
     "create_quart_app",
     "get_bootstrap_state",
+    "run_telegram_client",
     "run_web_client",
     "validate_web_relational_runtime_config",
     "validate_phase_b_runtime_config",
@@ -74,6 +75,7 @@ from mugen.core.bootstrap.extensions import (
 from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.extension.registry import IExtensionRegistry
@@ -112,6 +114,7 @@ from mugen.core.utility.platforms import (
 )
 
 _WHATSAPP_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
+_TELEGRAM_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
 
 
 class BootstrapError(RuntimeError):
@@ -136,6 +139,10 @@ def _logger_provider():
 
 def _whatsapp_provider():
     return di.container.whatsapp_client
+
+
+def _telegram_provider():
+    return di.container.telegram_client
 
 
 def _ipc_provider():
@@ -237,6 +244,12 @@ def _resolve_registered_fw_extension_tokens(extension_report: object) -> list[st
     if not isinstance(extension_report, dict):
         return []
     return _normalize_extension_token_list(extension_report.get("fw", []))
+
+
+def _resolve_registered_ipc_extension_tokens(extension_report: object) -> list[str]:
+    if not isinstance(extension_report, dict):
+        return []
+    return _normalize_extension_token_list(extension_report.get("ipc", []))
 
 
 def _config_path_exists(config: object, *path: str) -> bool:
@@ -680,10 +693,17 @@ async def bootstrap_app(
     registered_fw_extension_tokens = _resolve_registered_fw_extension_tokens(
         extension_report
     )
+    registered_ipc_extension_tokens = _resolve_registered_ipc_extension_tokens(
+        extension_report
+    )
     mh_mode = _resolve_messaging_mh_mode(config)
     has_web_client_runtime_path = (
         _config_path_exists(config, "mugen", "modules", "core", "client", "web")
         and _web_provider() is not None
+    )
+    has_telegram_client_runtime_path = (
+        _config_path_exists(config, "mugen", "modules", "core", "client", "telegram")
+        and _telegram_provider() is not None
     )
 
     capability_result = evaluate_runtime_capabilities(
@@ -692,7 +712,9 @@ async def bootstrap_app(
             messaging_handler_platforms=mh_extension_platforms,
             mh_mode=mh_mode,
             has_web_client_runtime_path=has_web_client_runtime_path,
+            has_telegram_client_runtime_path=has_telegram_client_runtime_path,
             registered_fw_extension_tokens=registered_fw_extension_tokens,
+            registered_ipc_extension_tokens=registered_ipc_extension_tokens,
             container_ready=(
                 capability_statuses.get("container_readiness") == PHASE_STATUS_HEALTHY
             ),
@@ -1035,6 +1057,24 @@ async def run_platform_clients(
             register_phase_b_platform_task(
                 bootstrap_state,
                 platform_name="whatsapp",
+                task=task,
+            )
+
+        if "telegram" in active_platforms:
+            logger.debug("Running telegram client.")
+            task = asyncio.create_task(
+                _supervise_platform_runner("telegram", run_telegram_client),
+                name="mugen.platform.telegram",
+            )
+            task.add_done_callback(
+                lambda done_task, platform_name="telegram": _on_platform_task_done(
+                    platform_name, done_task
+                )
+            )
+            tasks["telegram"] = task
+            register_phase_b_platform_task(
+                bootstrap_state,
+                platform_name="telegram",
                 task=task,
             )
 
@@ -1468,6 +1508,81 @@ async def run_whatsapp_client(
             if isinstance(runtime_error, asyncio.exceptions.CancelledError):
                 raise RuntimeError(
                     "WhatsApp client shutdown failed during cancellation: "
+                    f"{type(close_exc).__name__}: {close_exc}"
+                ) from close_exc
+            if runtime_error is None:
+                raise
+
+
+async def run_telegram_client(
+    logger_provider=_logger_provider,
+    telegram_provider=_telegram_provider,
+    started_callback=None,
+    degraded_callback=None,
+    healthy_callback=None,
+) -> None:
+    """Run assistant for the Telegram platform."""
+    logger: ILoggingGateway = logger_provider()
+    telegram_client: ITelegramClient = telegram_provider()
+    runtime_error: BaseException | None = None
+
+    try:
+        await telegram_client.init()
+        startup_verified = await telegram_client.verify_startup()
+        if startup_verified is not True:
+            raise RuntimeError("Telegram startup probe failed.")
+        if callable(started_callback):
+            started_callback()
+        if callable(healthy_callback):
+            healthy_callback()
+        logger.debug("Telegram client started.")
+        runtime_degraded = False
+        while True:
+            await asyncio.sleep(_TELEGRAM_RUNTIME_PROBE_INTERVAL_SECONDS)
+            try:
+                runtime_probe_ok = await telegram_client.verify_startup()
+            except asyncio.exceptions.CancelledError:
+                raise
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning(
+                    "Telegram runtime probe failed "
+                    f"(error_type={type(exc).__name__} error={exc})."
+                )
+                if runtime_degraded is not True and callable(degraded_callback):
+                    degraded_callback(f"{type(exc).__name__}: {exc}")
+                runtime_degraded = True
+                continue
+
+            if runtime_probe_ok is True:
+                if runtime_degraded is True and callable(healthy_callback):
+                    healthy_callback()
+                runtime_degraded = False
+                continue
+
+            logger.warning("Telegram runtime probe returned unhealthy status.")
+            if runtime_degraded is not True and callable(degraded_callback):
+                degraded_callback("Telegram runtime startup probe failed.")
+            runtime_degraded = True
+    except asyncio.exceptions.CancelledError as exc:
+        runtime_error = exc
+        logger.debug("Telegram client shutting down.")
+        raise
+    except Exception as exc:
+        runtime_error = exc
+        if callable(degraded_callback):
+            degraded_callback(f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        try:
+            await telegram_client.close()
+        except Exception as close_exc:  # pylint: disable=broad-exception-caught
+            logger.error(
+                "Telegram client shutdown failed "
+                f"error_type={type(close_exc).__name__} error={close_exc}"
+            )
+            if isinstance(runtime_error, asyncio.exceptions.CancelledError):
+                raise RuntimeError(
+                    "Telegram client shutdown failed during cancellation: "
                     f"{type(close_exc).__name__}: {close_exc}"
                 ) from close_exc
             if runtime_error is None:

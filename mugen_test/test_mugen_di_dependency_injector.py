@@ -5,6 +5,7 @@ import unittest
 
 from mugen.core import di
 from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -42,6 +43,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.messaging_service)
         self.assertIsNone(injector.knowledge_gateway)
         self.assertIsNone(injector.matrix_client)
+        self.assertIsNone(injector.telegram_client)
         self.assertIsNone(injector.whatsapp_client)
         self.assertIsNone(injector.web_client)
 
@@ -485,6 +487,121 @@ class TestDependencyInjector(unittest.TestCase):
             user_service=user_service,
         )
 
+        # Telegram Client
+        class DummyTelegramClientClass(ITelegramClient):
+            """Dummy Telegram client class."""
+
+            def __init__(  # pylint: disable=too-many-arguments
+                self,
+                config,
+                ipc_service,
+                keyval_storage_gateway,
+                logging_gateway,
+                messaging_service,
+                user_service,
+            ):
+                _ = (
+                    config,
+                    ipc_service,
+                    keyval_storage_gateway,
+                    logging_gateway,
+                    messaging_service,
+                    user_service,
+                )
+
+            async def init(self):
+                pass
+
+            async def verify_startup(self) -> bool:
+                return True
+
+            async def close(self):
+                pass
+
+            async def send_text_message(
+                self,
+                *,
+                chat_id: str,
+                text: str,
+                reply_markup: dict | None = None,
+                reply_to_message_id: int | None = None,
+            ) -> dict | None:
+                _ = (chat_id, text, reply_markup, reply_to_message_id)
+                return None
+
+            async def send_audio_message(
+                self,
+                *,
+                chat_id: str,
+                audio: dict,
+                reply_to_message_id: int | None = None,
+            ) -> dict | None:
+                _ = (chat_id, audio, reply_to_message_id)
+                return None
+
+            async def send_file_message(
+                self,
+                *,
+                chat_id: str,
+                document: dict,
+                reply_to_message_id: int | None = None,
+            ) -> dict | None:
+                _ = (chat_id, document, reply_to_message_id)
+                return None
+
+            async def send_image_message(
+                self,
+                *,
+                chat_id: str,
+                photo: dict,
+                reply_to_message_id: int | None = None,
+            ) -> dict | None:
+                _ = (chat_id, photo, reply_to_message_id)
+                return None
+
+            async def send_video_message(
+                self,
+                *,
+                chat_id: str,
+                video: dict,
+                reply_to_message_id: int | None = None,
+            ) -> dict | None:
+                _ = (chat_id, video, reply_to_message_id)
+                return None
+
+            async def answer_callback_query(
+                self,
+                *,
+                callback_query_id: str,
+                text: str | None = None,
+                show_alert: bool | None = None,
+            ) -> dict | None:
+                _ = (callback_query_id, text, show_alert)
+                return None
+
+            async def emit_processing_signal(
+                self,
+                chat_id: str,
+                *,
+                state: str,
+                message_id: str | None = None,
+            ) -> bool | None:
+                _ = (chat_id, state, message_id)
+                return True
+
+            async def download_media(self, file_id: str) -> dict | None:
+                _ = file_id
+                return None
+
+        telegram_client = DummyTelegramClientClass(
+            config=config,
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+
         # WhatsApp Client
         class DummyWhatsAppClientClass(IWhatsAppClient):
             """Dummy WhatsApp class."""
@@ -721,6 +838,7 @@ class TestDependencyInjector(unittest.TestCase):
             messaging_service=messaging_service,
             knowledge_gateway=knowledge_gateway,
             matrix_client=matrix_client,
+            telegram_client=telegram_client,
             whatsapp_client=whatsapp_client,
             web_client=web_client,
         )
@@ -741,6 +859,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.messaging_service, messaging_service)
         self.assertEqual(injector.knowledge_gateway, knowledge_gateway)
         self.assertEqual(injector.matrix_client, matrix_client)
+        self.assertEqual(injector.telegram_client, telegram_client)
         self.assertEqual(injector.whatsapp_client, whatsapp_client)
         self.assertEqual(injector.web_client, web_client)
 

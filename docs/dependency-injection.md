@@ -31,6 +31,7 @@ from `mugen/core/di/provider_registry.py` (never module paths):
 | `mugen.modules.core.service.platform` | `default` |
 | `mugen.modules.core.service.user` | `default` |
 | `mugen.modules.core.client.matrix` | `default` |
+| `mugen.modules.core.client.telegram` | `default` |
 | `mugen.modules.core.client.web` | `default` |
 | `mugen.modules.core.client.whatsapp` | `default` |
 

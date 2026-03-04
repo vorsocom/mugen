@@ -8,10 +8,16 @@ from typing import Iterable
 PHASE_STATUS_HEALTHY = "healthy"
 PHASE_STATUS_DEGRADED = "degraded"
 
-_MESSAGING_PLATFORMS = {"matrix", "web", "whatsapp"}
+_MESSAGING_PLATFORMS = {"matrix", "telegram", "web", "whatsapp"}
 _REQUIRED_WEB_FW_EXTENSION_TOKENS = (
     "core.fw.acp",
     "core.fw.web",
+)
+_REQUIRED_TELEGRAM_FW_EXTENSION_TOKENS = (
+    "core.fw.telegram_botapi",
+)
+_REQUIRED_TELEGRAM_IPC_EXTENSION_TOKENS = (
+    "core.ipc.telegram_botapi",
 )
 
 
@@ -23,7 +29,9 @@ class RuntimeCapabilityInput:
     messaging_handler_platforms: list[object]
     mh_mode: str
     has_web_client_runtime_path: bool
+    has_telegram_client_runtime_path: bool = False
     registered_fw_extension_tokens: list[object] | None = None
+    registered_ipc_extension_tokens: list[object] | None = None
     container_ready: bool = True
     provider_ready: bool = True
     optional_provider_failures: dict[str, str] | None = None
@@ -49,6 +57,9 @@ def evaluate_runtime_capabilities(
     mh_mode = _normalize_mh_mode(capability.mh_mode)
     registered_fw_extension_tokens = _normalize_extension_tokens(
         capability.registered_fw_extension_tokens
+    )
+    registered_ipc_extension_tokens = _normalize_extension_tokens(
+        capability.registered_ipc_extension_tokens
     )
 
     statuses: dict[str, str] = {}
@@ -158,6 +169,44 @@ def evaluate_runtime_capabilities(
             error=(
                 "Web platform requires registered FW extension token(s): "
                 + ", ".join(missing_tokens)
+                + "."
+            ),
+        )
+
+    if "telegram" in active_platforms:
+        _record(
+            "telegram.client_runtime_path",
+            healthy=capability.has_telegram_client_runtime_path,
+            error=(
+                "Telegram platform requires configured runtime client path at "
+                "mugen.modules.core.client.telegram."
+            ),
+        )
+        missing_fw_tokens = [
+            token
+            for token in _REQUIRED_TELEGRAM_FW_EXTENSION_TOKENS
+            if token not in registered_fw_extension_tokens
+        ]
+        _record(
+            "telegram.fw.extension_contract",
+            healthy=not missing_fw_tokens,
+            error=(
+                "Telegram platform requires registered FW extension token(s): "
+                + ", ".join(missing_fw_tokens)
+                + "."
+            ),
+        )
+        missing_ipc_tokens = [
+            token
+            for token in _REQUIRED_TELEGRAM_IPC_EXTENSION_TOKENS
+            if token not in registered_ipc_extension_tokens
+        ]
+        _record(
+            "telegram.ipc.extension_contract",
+            healthy=not missing_ipc_tokens,
+            error=(
+                "Telegram platform requires registered IPC extension token(s): "
+                + ", ".join(missing_ipc_tokens)
                 + "."
             ),
         )
