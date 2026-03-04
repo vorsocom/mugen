@@ -55,6 +55,7 @@ client.web = "default"
 gateway.completion = "sambanova"
 # gateway.email = "smtp"
 # gateway.email = "ses"
+# gateway.knowledge = "chromadb"
 # gateway.knowledge = "pgvector"
 # gateway.knowledge = "qdrant"
 gateway.logging = "standard"
@@ -277,6 +278,24 @@ api.url = ""
 api.timeout_seconds = 10.0
 api.max_retries = 2
 api.retry_backoff_seconds = 0.5
+encoder.max_concurrency = 4
+
+# === ChromaDB ===
+[chromadb]
+api.host = "localhost"
+api.port = 8000
+api.ssl = false
+api.headers = {}
+api.tenant = ""
+api.database = ""
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.collection = "downstream_kp_search_doc"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+encoder.model = "all-mpnet-base-v2"
 encoder.max_concurrency = 4
 
 # === pgvector ===

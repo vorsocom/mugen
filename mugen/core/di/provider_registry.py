@@ -114,6 +114,10 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             module_path="mugen.core.gateway.knowledge.pgvector",
             class_name="PgVectorKnowledgeGateway",
         ),
+        "chromadb": _ProviderTokenSpec(
+            module_path="mugen.core.gateway.knowledge.chromadb",
+            class_name="ChromaKnowledgeGateway",
+        ),
     },
     "matrix_client": {
         "default": _ProviderTokenSpec(

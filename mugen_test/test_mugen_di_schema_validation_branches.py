@@ -223,16 +223,17 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         di._validate_core_module_schema(cfg)
 
     def test_core_schema_accepts_optional_gateway_tokens_and_extensions(self) -> None:
-        cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["gateway"]["email"] = "smtp"
-        cfg["mugen"]["modules"]["core"]["gateway"]["knowledge"] = "qdrant"
-        cfg["mugen"]["modules"]["extensions"] = [
-            {
-                "type": "cp",
-                "token": "core.cp.clear_history",
-            }
-        ]
-        di._validate_core_module_schema(cfg)
+        for knowledge_token in ("qdrant", "chromadb"):
+            cfg = _valid_core_config()
+            cfg["mugen"]["modules"]["core"]["gateway"]["email"] = "smtp"
+            cfg["mugen"]["modules"]["core"]["gateway"]["knowledge"] = knowledge_token
+            cfg["mugen"]["modules"]["extensions"] = [
+                {
+                    "type": "cp",
+                    "token": "core.cp.clear_history",
+                }
+            ]
+            di._validate_core_module_schema(cfg)
 
     def test_core_schema_validates_required_runtime_shutdown_timeouts(self) -> None:
         cfg = _valid_core_config()

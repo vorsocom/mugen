@@ -10,8 +10,8 @@ This document explains gateway contracts and currently supported completion,
 knowledge, and email gateway implementations in muGen.
 
 Runtime configuration uses strict provider tokens (for example `bedrock`,
-`openai`, `sambanova`, `pgvector`, `qdrant`, `smtp`, `ses`), not Python module
-paths.
+`openai`, `sambanova`, `chromadb`, `pgvector`, `qdrant`, `smtp`, `ses`), not
+Python module paths.
 
 ## Completion Gateway Contract
 
@@ -357,6 +357,30 @@ Behavior:
 
 ## Knowledge Provider Gateways
 
+### ChromaDB
+
+Module: `mugen.core.gateway.knowledge.chromadb`
+
+Behavior:
+
+- Uses local sentence-transformer embeddings for semantic query vectors.
+- Uses ChromaDB HTTP collection queries with a mandatory `tenant_id` metadata
+  filter and optional scope filters (`channel`, `locale`, `category`).
+- Requires strict metadata projection keys per result row:
+  `tenant_id`, `knowledge_entry_revision_id`, `knowledge_pack_version_id`,
+  `channel`, `locale`, `category`, `title`, `body`.
+- Returns normalized items with revision/version IDs, scope values, title,
+  snippet, similarity, and distance.
+- Applies retry/timeout controls from `[chromadb] api.*`.
+- Wraps provider transport/runtime failures as `KnowledgeGatewayRuntimeError`.
+
+Readiness requirements:
+
+- `chromadb.api.host` is configured
+- `chromadb.search.collection` is configured
+- configured Chroma collection is reachable
+- local sentence-transformer encoder initializes successfully
+
 ### Qdrant
 
 Module: `mugen.core.gateway.knowledge.qdrant`
@@ -423,6 +447,7 @@ Behavior:
 [mugen.modules.core]
 gateway.completion = "bedrock"
 # Optional knowledge gateway.
+# gateway.knowledge = "chromadb"
 # gateway.knowledge = "pgvector"
 # gateway.knowledge = "qdrant"
 # Optional outbound email gateway.
@@ -457,6 +482,23 @@ api.session_token = ""
 api.endpoint_url = ""
 default_from = "noreply@example.com"
 configuration_set_name = ""
+
+[chromadb]
+api.host = "localhost"
+api.port = 8000
+api.ssl = false
+api.headers = {}
+api.tenant = ""
+api.database = ""
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.collection = "downstream_kp_search_doc"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
 
 [pgvector]
 search.schema = "mugen"
