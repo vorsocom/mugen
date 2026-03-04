@@ -26,6 +26,9 @@ import tomlkit
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
+from mugen.core.contract.matrix_runtime_config import (
+    validate_matrix_enabled_runtime_config,
+)
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
@@ -468,22 +471,7 @@ def _validate_core_module_schema(config: dict) -> None:
 
     active_platforms = normalize_platforms(mugen_cfg.get("platforms", []))
     if "matrix" in active_platforms:
-        security_cfg = config.get("security")
-        secrets_cfg = (
-            security_cfg.get("secrets")
-            if isinstance(security_cfg, dict)
-            else None
-        )
-        encryption_key = (
-            secrets_cfg.get("encryption_key")
-            if isinstance(secrets_cfg, dict)
-            else None
-        )
-        if not isinstance(encryption_key, str) or encryption_key.strip() == "":
-            raise RuntimeError(
-                "Invalid configuration: security.secrets.encryption_key is required "
-                "when matrix platform is enabled."
-            )
+        validate_matrix_enabled_runtime_config(config)
 
 
 def _get_active_platforms(config: dict) -> list[str] | None:

@@ -138,6 +138,43 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
         )
         self.assertNotIn('core_cfg.get("plugins"', env_source)
 
+    def test_di_schema_validation_uses_contract_matrix_runtime_validator(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        di_source = (repo_root / "mugen" / "core" / "di" / "__init__.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "from mugen.core.contract.matrix_runtime_config import",
+            di_source,
+        )
+        self.assertIn(
+            "validate_matrix_enabled_runtime_config(config)",
+            di_source,
+        )
+
+    def test_matrix_runtime_contract_module_stays_infrastructure_free(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        contract_module = (
+            repo_root / "mugen" / "core" / "contract" / "matrix_runtime_config.py"
+        )
+        violations = _find_import_violations(
+            python_files=[contract_module],
+            forbidden_prefixes=(
+                "quart",
+                "mugen.core.api",
+                "mugen.core.bootstrap",
+                "mugen.core.client",
+                "mugen.core.di",
+                "mugen.core.gateway",
+                "mugen.core.plugin",
+                "mugen.core.runtime",
+                "mugen.core.service",
+                "sqlalchemy",
+                "nio",
+            ),
+        )
+        self.assertEqual(violations, [])
+
 
 def _find_import_violations(
     *,

@@ -29,6 +29,27 @@ muGen core keeps Matrix support intentionally lean:
 - Direct-message invite gating (`matrix.invites.direct_only`).
 - Room direct-flag check before processing inbound user messages.
 
+### Runtime Configuration Contract (Matrix Enabled)
+
+When `matrix` is enabled in `mugen.platforms`, bootstrap is strict fail-closed.
+Core requires all of the following at startup:
+
+- `matrix.homeserver` (non-empty string)
+- `matrix.client.user` (non-empty string)
+- `matrix.client.password` (non-empty string)
+- `matrix.domains.allowed` (non-empty `list[str]`)
+- `matrix.domains.denied` (`list[str]`)
+- `matrix.invites.direct_only` (`bool`)
+- `matrix.media.allowed_mimetypes` (non-empty `list[str]`)
+- `matrix.media.max_download_bytes` (positive integer)
+- `matrix.security.device_trust.mode` (`strict_known|allowlist|permissive`)
+- if mode is `allowlist`, every entry must include non-empty `user_id` and
+  non-empty `device_ids`
+- `security.secrets.encryption_key` (non-empty string)
+
+Legacy permissive fallback behavior for malformed matrix runtime policy is not
+supported.
+
 ### Device Trust
 
 - Policy-driven trust modes:

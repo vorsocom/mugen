@@ -353,8 +353,10 @@ class DefaultWebClient(IWebClient):
 
         try:
             await self._media_storage_gateway.close()
-        except Exception:  # pylint: disable=broad-exception-caught
-            ...
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise RuntimeError(
+                "DefaultWebClient shutdown failed: media storage close failed."
+            ) from exc
 
     def _runtime_store(self) -> IWebRuntimeStore:
         if self._web_runtime_store is None:

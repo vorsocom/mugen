@@ -82,16 +82,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 ):
     """A custom implementation of IMatrixClient."""
 
-    _default_media_allowed_mimetypes: list[str] = [
-        "audio/*",
-        "image/*",
-        "video/*",
-        "application/*",
-        "text/*",
-    ]
-
-    _default_media_max_download_bytes: int = 20 * 1024 * 1024
-
     _callback_skip_reason_dm_scope: str = "unsupported_dm_scope"
 
     _device_trust_mode_allowlist: str = "allowlist"
@@ -862,13 +852,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 SimpleNamespace(),
             ),
             "mode",
-            self._device_trust_mode_strict_known,
+            None,
         )
-        if not isinstance(mode, str):
-            self._logging_gateway.warning(
-                "Matrix device trust mode invalid; using strict_known."
+        if not isinstance(mode, str) or mode.strip() == "":
+            raise RuntimeError(
+                "Invalid configuration: matrix.security.device_trust.mode "
+                "must be a non-empty string."
             )
-            return self._device_trust_mode_strict_known
 
         mode = mode.strip().lower()
         supported_modes = {
@@ -879,10 +869,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if mode in supported_modes:
             return mode
 
-        self._logging_gateway.warning(
-            f"Matrix device trust mode unsupported ({mode}); using strict_known."
+        raise RuntimeError(
+            "Invalid configuration: matrix.security.device_trust.mode "
+            "must be one of: allowlist, permissive, strict_known."
         )
-        return self._device_trust_mode_strict_known
 
     def _resolve_device_trust_allowlist(self) -> dict[str, set[str]]:
         allowlist = getattr(
@@ -896,17 +886,22 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 SimpleNamespace(),
             ),
             "allowlist",
-            [],
+            None,
         )
 
         if not isinstance(allowlist, list):
-            self._logging_gateway.warning(
-                "Matrix device trust allowlist invalid; expected list."
+            raise RuntimeError(
+                "Invalid configuration: matrix.security.device_trust.allowlist "
+                "must be a list."
             )
-            return {}
+        if not allowlist:
+            raise RuntimeError(
+                "Invalid configuration: matrix.security.device_trust.allowlist "
+                "must be non-empty when mode=allowlist."
+            )
 
         parsed_allowlist: dict[str, set[str]] = {}
-        for entry in allowlist:
+        for index, entry in enumerate(allowlist):
             user_id = None
             device_ids = None
 
@@ -916,15 +911,35 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             elif isinstance(entry, SimpleNamespace):
                 user_id = getattr(entry, "user_id", None)
                 device_ids = getattr(entry, "device_ids", None)
+            else:
+                raise RuntimeError(
+                    "Invalid configuration: matrix.security.device_trust.allowlist"
+                    f"[{index}] must be a table."
+                )
 
-            if not isinstance(user_id, str) or not isinstance(device_ids, list):
-                continue
+            if not isinstance(user_id, str) or user_id.strip() == "":
+                raise RuntimeError(
+                    "Invalid configuration: matrix.security.device_trust.allowlist"
+                    f"[{index}].user_id must be a non-empty string."
+                )
+            if not isinstance(device_ids, list) or not device_ids:
+                raise RuntimeError(
+                    "Invalid configuration: matrix.security.device_trust.allowlist"
+                    f"[{index}].device_ids must be a non-empty list of strings."
+                )
+            normalized_device_ids: set[str] = set()
+            for device_index, device_id in enumerate(device_ids):
+                if not isinstance(device_id, str) or device_id.strip() == "":
+                    raise RuntimeError(
+                        "Invalid configuration: matrix.security.device_trust.allowlist"
+                        f"[{index}].device_ids[{device_index}] must be a non-empty string."
+                    )
+                normalized_device_ids.add(device_id.strip())
 
-            if user_id not in parsed_allowlist:
-                parsed_allowlist[user_id] = set()
-            parsed_allowlist[user_id].update(
-                [str(device_id) for device_id in device_ids]
-            )
+            normalized_user_id = user_id.strip()
+            if normalized_user_id not in parsed_allowlist:
+                parsed_allowlist[normalized_user_id] = set()
+            parsed_allowlist[normalized_user_id].update(normalized_device_ids)
 
         return parsed_allowlist
 
@@ -955,58 +970,54 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         return domain_part
 
     def _direct_invites_only(self) -> bool:
-        return bool(
-            getattr(
-                getattr(getattr(self._config, "matrix", SimpleNamespace()), "invites", None),
-                "direct_only",
-                True,
-            )
+        direct_only = getattr(
+            getattr(getattr(self._config, "matrix", SimpleNamespace()), "invites", None),
+            "direct_only",
+            None,
         )
+        if isinstance(direct_only, bool) is not True:
+            raise RuntimeError(
+                "Invalid configuration: matrix.invites.direct_only must be a boolean."
+            )
+        return direct_only
 
     def _resolve_media_max_download_bytes(self) -> int:
         max_download_bytes = getattr(
             getattr(getattr(self._config, "matrix", SimpleNamespace()), "media", None),
             "max_download_bytes",
-            self._default_media_max_download_bytes,
+            None,
         )
-        try:
-            max_download_bytes = int(max_download_bytes)
-        except (TypeError, ValueError):
-            self._logging_gateway.warning(
-                "Matrix media max download bytes invalid; using default."
+        if isinstance(max_download_bytes, bool) or not isinstance(max_download_bytes, int):
+            raise RuntimeError(
+                "Invalid configuration: matrix.media.max_download_bytes "
+                "must be a positive integer."
             )
-            return self._default_media_max_download_bytes
-
         if max_download_bytes <= 0:
-            self._logging_gateway.warning(
-                "Matrix media max download bytes invalid; using default."
+            raise RuntimeError(
+                "Invalid configuration: matrix.media.max_download_bytes "
+                "must be a positive integer."
             )
-            return self._default_media_max_download_bytes
-
         return max_download_bytes
 
     def _resolve_media_allowed_mimetypes(self) -> list[str]:
         allowed_mimetypes = getattr(
             getattr(getattr(self._config, "matrix", SimpleNamespace()), "media", None),
             "allowed_mimetypes",
-            self._default_media_allowed_mimetypes,
+            None,
         )
-        if not isinstance(allowed_mimetypes, list):
-            self._logging_gateway.warning(
-                "Matrix media allowed mimetypes invalid; using defaults."
+        if not isinstance(allowed_mimetypes, list) or not allowed_mimetypes:
+            raise RuntimeError(
+                "Invalid configuration: matrix.media.allowed_mimetypes "
+                "must be a non-empty list of strings."
             )
-            return list(self._default_media_allowed_mimetypes)
-
-        normalized = [
-            str(pattern).strip().lower()
-            for pattern in allowed_mimetypes
-            if str(pattern).strip() != ""
-        ]
-        if not normalized:
-            self._logging_gateway.warning(
-                "Matrix media allowed mimetypes empty; using defaults."
-            )
-            return list(self._default_media_allowed_mimetypes)
+        normalized: list[str] = []
+        for index, pattern in enumerate(allowed_mimetypes):
+            if not isinstance(pattern, str) or pattern.strip() == "":
+                raise RuntimeError(
+                    "Invalid configuration: matrix.media.allowed_mimetypes"
+                    f"[{index}] must be a non-empty string."
+                )
+            normalized.append(pattern.strip().lower())
 
         return normalized
 

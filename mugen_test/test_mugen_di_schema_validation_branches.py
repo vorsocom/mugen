@@ -65,6 +65,35 @@ def _valid_core_config() -> dict:
             },
             "platforms": [],
         },
+        "matrix": {
+            "homeserver": "https://matrix.example.com",
+            "client": {
+                "user": "@assistant:example.com",
+                "password": "matrix-password",
+            },
+            "domains": {
+                "allowed": ["example.com"],
+                "denied": [],
+            },
+            "invites": {
+                "direct_only": True,
+            },
+            "media": {
+                "allowed_mimetypes": ["image/*", "video/*"],
+                "max_download_bytes": 20971520,
+            },
+            "security": {
+                "device_trust": {
+                    "mode": "strict_known",
+                    "allowlist": [],
+                }
+            },
+        },
+        "security": {
+            "secrets": {
+                "encryption_key": "matrix-secret",
+            }
+        },
     }
 
 
@@ -245,7 +274,6 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
     def test_core_schema_requires_matrix_encryption_key_when_matrix_enabled(self) -> None:
         for mutate in (
-            lambda cfg: cfg,
             lambda cfg: cfg.update({"security": "invalid-shape"}),
             lambda cfg: cfg.update({"security": {}}),
             lambda cfg: cfg.update({"security": {"secrets": {}}}),
@@ -263,7 +291,98 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["matrix"]
-        cfg["security"] = {"secrets": {"encryption_key": "matrix-secret"}}
+        di._validate_core_module_schema(cfg)
+
+    def test_core_schema_requires_strict_matrix_runtime_contract_when_enabled(self) -> None:
+        cases: list[tuple[dict, str]] = []
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["homeserver"] = ""
+        cases.append((cfg, "matrix.homeserver"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["client"]["user"] = ""
+        cases.append((cfg, "matrix.client.user"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["client"]["password"] = ""
+        cases.append((cfg, "matrix.client.password"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["domains"]["allowed"] = []
+        cases.append((cfg, "matrix.domains.allowed"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["domains"]["denied"] = "example.com"
+        cases.append((cfg, "matrix.domains.denied"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["invites"]["direct_only"] = "true"
+        cases.append((cfg, "matrix.invites.direct_only"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["media"]["allowed_mimetypes"] = []
+        cases.append((cfg, "matrix.media.allowed_mimetypes"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["media"]["max_download_bytes"] = 0
+        cases.append((cfg, "matrix.media.max_download_bytes"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["security"]["device_trust"]["mode"] = "invalid"
+        cases.append((cfg, "matrix.security.device_trust.mode"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["security"]["device_trust"]["mode"] = "allowlist"
+        cfg["matrix"]["security"]["device_trust"]["allowlist"] = []
+        cases.append((cfg, "matrix.security.device_trust.allowlist"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["security"]["device_trust"]["mode"] = "allowlist"
+        cfg["matrix"]["security"]["device_trust"]["allowlist"] = [
+            {
+                "user_id": "   ",
+                "device_ids": ["DEV-1"],
+            }
+        ]
+        cases.append((cfg, "matrix.security.device_trust.allowlist[0].user_id"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["security"]["device_trust"]["mode"] = "allowlist"
+        cfg["matrix"]["security"]["device_trust"]["allowlist"] = [
+            {
+                "user_id": "@user:example.com",
+                "device_ids": [],
+            }
+        ]
+        cases.append((cfg, "matrix.security.device_trust.allowlist[0].device_ids"))
+
+        for candidate, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(RuntimeError, re.escape(message)):
+                    di._validate_core_module_schema(candidate)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["security"]["device_trust"]["mode"] = "allowlist"
+        cfg["matrix"]["security"]["device_trust"]["allowlist"] = [
+            {
+                "user_id": "@user:example.com",
+                "device_ids": ["DEV-1"],
+            }
+        ]
         di._validate_core_module_schema(cfg)
 
     def test_build_provider_logs_relational_runtime_bootstrap_failure(self) -> None:

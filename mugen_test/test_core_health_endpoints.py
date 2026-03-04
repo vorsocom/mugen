@@ -69,6 +69,10 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(payload["ready"])
         self.assertEqual(payload["critical_platforms"], ["web"])
+        self.assertEqual(payload["platform_statuses"], {"web": PHASE_STATUS_HEALTHY})
+        self.assertEqual(payload["platform_errors"], {})
+        self.assertEqual(payload["degraded_platforms"], [])
+        self.assertEqual(payload["non_critical_degraded_platforms"], [])
         self.assertEqual(payload["failed_platforms"], [])
         self.assertEqual(payload["reasons"], {})
 
@@ -137,6 +141,8 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(payload["ready"])
         self.assertEqual(payload["failed_platforms"], ["matrix"])
         self.assertEqual(payload["reasons"], {"matrix": "RuntimeError: sync failed"})
+        self.assertEqual(payload["degraded_platforms"], ["matrix"])
+        self.assertEqual(payload["non_critical_degraded_platforms"], [])
 
     async def test_ready_endpoint_returns_200_after_runtime_recovery_signal(self) -> None:
         state = self._bootstrap_state()
@@ -162,6 +168,38 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_response.status_code, 200)
         self.assertTrue(second_payload["ready"])
         self.assertEqual(second_payload["failed_platforms"], [])
+
+    async def test_ready_endpoint_surfaces_non_critical_degraded_platforms(self) -> None:
+        state = self._bootstrap_state()
+        state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_HEALTHY
+        state[PHASE_B_ERROR_KEY] = None
+        state["phase_b_critical_platforms"] = ["web"]
+        state[PHASE_B_PLATFORM_STATUSES_KEY] = {
+            "web": PHASE_STATUS_HEALTHY,
+            "whatsapp": PHASE_STATUS_DEGRADED,
+        }
+        state[PHASE_B_PLATFORM_ERRORS_KEY] = {
+            "web": None,
+            "whatsapp": "non-critical transport issue",
+        }
+
+        async with self.app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/api/core/health/ready")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["failed_platforms"], [])
+        self.assertEqual(payload["platform_statuses"]["web"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(payload["platform_statuses"]["whatsapp"], PHASE_STATUS_DEGRADED)
+        self.assertEqual(
+            payload["platform_errors"],
+            {"whatsapp": "non-critical transport issue"},
+        )
+        self.assertEqual(payload["degraded_platforms"], ["whatsapp"])
+        self.assertEqual(payload["non_critical_degraded_platforms"], ["whatsapp"])
 
     async def test_ready_endpoint_returns_503_when_starting_past_grace(self) -> None:
         state = self._bootstrap_state()
@@ -314,6 +352,10 @@ class TestCoreHealthEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(payload["ready"])
         self.assertEqual(payload["critical_platforms"], [])
+        self.assertEqual(payload["platform_statuses"], {})
+        self.assertEqual(payload["platform_errors"], {})
+        self.assertEqual(payload["degraded_platforms"], [])
+        self.assertEqual(payload["non_critical_degraded_platforms"], [])
 
     async def test_ready_endpoint_includes_phase_a_capability_error_reasons(self) -> None:
         state = self._bootstrap_state()

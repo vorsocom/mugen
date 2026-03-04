@@ -11,6 +11,10 @@
 - `phase_a_non_blocking_degraded_capabilities`: degraded optional capabilities visible to operators but non-blocking.
 - `phase_b_status`: platform runtime aggregate status.
 - `critical_platforms`: configured critical platform list.
+- `platform_statuses`: normalized per-platform phase-B status map.
+- `platform_errors`: normalized per-platform error map (non-empty errors only).
+- `degraded_platforms`: all currently degraded platforms visible to operators.
+- `non_critical_degraded_platforms`: degraded platforms outside the critical set.
 - `failed_platforms`: critical platforms currently not healthy.
 - `reasons`: per-platform degradation reasons.
 
@@ -19,6 +23,8 @@
 - Non-empty `phase_a_blocking_failed_capabilities`: treat as not-ready even if phase-A status appears healthy in stale state snapshots.
 - Non-empty `phase_a_non_blocking_degraded_capabilities`: investigate and alert, but this does not block readiness by itself.
 - `phase_b_status == starting`: platform runtime is warming up; readiness can stay green only within grace period.
+- Non-empty `degraded_platforms`: runtime is degraded somewhere, even if not traffic-blocking yet.
+- Non-empty `non_critical_degraded_platforms`: investigate promptly; readiness may remain green by design.
 - `failed_platforms` non-empty: inspect platform-specific logs and treat as degraded runtime.
 - During shutdown, any unresolved phase-B task timeout is fail-closed:
   - `phase_b_status` must remain `degraded` (never forced to `stopped`).

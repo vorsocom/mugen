@@ -42,6 +42,16 @@ class PhaseBHealthResult:
     ignore_starting: bool
 
 
+@dataclass(slots=True, frozen=True)
+class PhaseBPlatformObservability:
+    """Normalized platform state for readiness diagnostics."""
+
+    platform_statuses: dict[str, str]
+    platform_errors: dict[str, str]
+    degraded_platforms: list[str]
+    non_critical_degraded_platforms: list[str]
+
+
 def evaluate_phase_b_health(phase: PhaseBHealthInput) -> PhaseBHealthResult:
     """Evaluate aggregate phase-B status and critical-platform failures."""
     platform_statuses = _normalize_platform_statuses(phase.platform_statuses)
@@ -147,6 +157,52 @@ def evaluate_phase_b_health(phase: PhaseBHealthInput) -> PhaseBHealthResult:
         failed_critical_platforms=failed_platforms,
         reasons=reasons,
         ignore_starting=ignore_starting,
+    )
+
+
+def summarize_phase_b_platform_observability(
+    *,
+    platform_statuses: Mapping[str, Any],
+    platform_errors: Mapping[str, Any],
+    critical_platforms: list[str],
+    degrade_on_critical_exit: bool,
+) -> PhaseBPlatformObservability:
+    """Normalize platform diagnostics for readiness payload visibility."""
+    normalized_critical_platforms = _normalize_platform_list(critical_platforms)
+    normalized_platform_statuses = _normalize_platform_statuses(platform_statuses)
+    normalized_platform_errors_raw = _normalize_platform_errors(platform_errors)
+    normalized_platform_errors: dict[str, str] = {}
+
+    for platform, error in normalized_platform_errors_raw.items():
+        normalized_error = _string_or_none(error)
+        if normalized_error is None:
+            continue
+        normalized_platform_errors[platform] = normalized_error
+        normalized_platform_statuses.setdefault(platform, PHASE_STATUS_DEGRADED)
+
+    for platform in normalized_critical_platforms:
+        normalized_platform_statuses.setdefault(platform, PHASE_STATUS_STARTING)
+
+    degraded_platforms = [
+        platform
+        for platform in sorted(normalized_platform_statuses.keys())
+        if _status_is_operator_degraded(
+            normalized_platform_statuses[platform],
+            degrade_on_critical_exit=degrade_on_critical_exit,
+        )
+    ]
+    critical_platform_set = set(normalized_critical_platforms)
+    non_critical_degraded_platforms = [
+        platform
+        for platform in degraded_platforms
+        if platform not in critical_platform_set
+    ]
+
+    return PhaseBPlatformObservability(
+        platform_statuses=normalized_platform_statuses,
+        platform_errors=normalized_platform_errors,
+        degraded_platforms=degraded_platforms,
+        non_critical_degraded_platforms=non_critical_degraded_platforms,
     )
 
 
@@ -281,6 +337,19 @@ def _resolve_failed_platforms(
                 reason = f"platform status={status}"
         reasons[platform] = reason
     return failed, reasons
+
+
+def _status_is_operator_degraded(
+    status: str,
+    *,
+    degrade_on_critical_exit: bool,
+) -> bool:
+    normalized = _normalize_status(status)
+    if normalized in {PHASE_STATUS_HEALTHY, PHASE_STATUS_STARTING}:
+        return False
+    if normalized == PHASE_STATUS_STOPPED and degrade_on_critical_exit is not True:
+        return False
+    return True
 
 
 def _string_or_none(value: Any) -> str | None:
