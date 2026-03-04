@@ -225,7 +225,7 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         di._validate_core_module_schema(cfg)
 
     def test_core_schema_accepts_optional_gateway_tokens_and_extensions(self) -> None:
-        for knowledge_token in ("qdrant", "chromadb", "milvus", "pgvector"):
+        for knowledge_token in ("qdrant", "chromadb", "milvus", "pgvector", "pinecone"):
             cfg = _valid_core_config()
             cfg["mugen"]["modules"]["core"]["gateway"]["email"] = "smtp"
             cfg["mugen"]["modules"]["core"]["gateway"]["knowledge"] = knowledge_token

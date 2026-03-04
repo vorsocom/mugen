@@ -57,6 +57,7 @@ gateway.completion = "sambanova"
 # gateway.email = "ses"
 # gateway.knowledge = "chromadb"
 # gateway.knowledge = "milvus"
+# gateway.knowledge = "pinecone"
 # gateway.knowledge = "pgvector"
 # gateway.knowledge = "qdrant"
 gateway.logging = "standard"
@@ -279,6 +280,21 @@ api.url = ""
 api.timeout_seconds = 10.0
 api.max_retries = 2
 api.retry_backoff_seconds = 0.5
+encoder.max_concurrency = 4
+
+# === Pinecone ===
+[pinecone]
+api.key = "<pinecone-api-key>"
+api.host = "https://your-index-host.svc.pinecone.io"
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.namespace = ""
+search.metric = "cosine"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+encoder.model = "all-mpnet-base-v2"
 encoder.max_concurrency = 4
 
 # === ChromaDB ===
