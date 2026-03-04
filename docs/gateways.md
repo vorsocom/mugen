@@ -1,16 +1,17 @@
 # Working with muGen Gateways
 
 Status: Draft  
-Last Updated: 2026-02-21  
+Last Updated: 2026-03-04  
 Audience: Core and downstream plugin teams
 
 ## Purpose
 
-This document explains gateway contracts and currently supported completion
-and email gateway implementations in muGen.
+This document explains gateway contracts and currently supported completion,
+knowledge, and email gateway implementations in muGen.
 
 Runtime configuration uses strict provider tokens (for example `bedrock`,
-`openai`, `sambanova`, `smtp`, `ses`), not Python module paths.
+`openai`, `sambanova`, `pgvector`, `qdrant`, `smtp`, `ses`), not Python module
+paths.
 
 ## Completion Gateway Contract
 
@@ -51,6 +52,23 @@ Request and response payloads are normalized by
   - Optional strings are normalized and defaults are materialized.
 - `EmailSendResult(message_id, accepted_recipients, rejected_recipients)`
 - `EmailGatewayError(provider, operation, message, cause)`
+
+## Knowledge Gateway Contract
+
+Knowledge gateways implement:
+
+- `IKnowledgeGateway.check_readiness()`
+- `IKnowledgeGateway.search(params)`
+- `IKnowledgeGateway.aclose()`
+
+Request and response payloads are normalized by
+`mugen/core/contract/gateway/knowledge.py`:
+
+- `KnowledgeSearchResult(items, total_count, raw_vendor)`
+- `KnowledgeGatewayRuntimeError(provider, operation, cause)`
+
+Provider-specific search params are carried by vendor DTO types under
+`mugen/core/contract/dto/*`.
 
 ## Completion Provider Gateways
 
@@ -337,6 +355,45 @@ Behavior:
   - optional `username`/`password` login when both are configured.
 - Transport/config/attachment failures raise `EmailGatewayError`.
 
+## Knowledge Provider Gateways
+
+### Qdrant
+
+Module: `mugen.core.gateway.knowledge.qdrant`
+
+Behavior:
+
+- Uses local sentence-transformer embeddings for semantic query vectors.
+- Supports dataset/date/keyword filtering and count/search strategies.
+- Applies retry/timeout controls from `[qdrant] api.*`.
+- Wraps provider transport/runtime failures as `KnowledgeGatewayRuntimeError`.
+
+### pgvector
+
+Module: `mugen.core.gateway.knowledge.pgvector`
+
+Behavior:
+
+- Uses local sentence-transformer embeddings for semantic query vectors.
+- Queries a configured Postgres projection table with pgvector cosine distance.
+- Enforces tenant filter and optional scope filters (`channel`, `locale`,
+  `category`).
+- Returns normalized items with revision/version IDs, scope values, title,
+  snippet, similarity, and distance.
+- Applies retry/timeout controls from `[pgvector] api.*`.
+- Wraps provider transport/runtime failures as `KnowledgeGatewayRuntimeError`.
+
+Readiness requirements:
+
+- DB connectivity (`SELECT 1`)
+- `vector` extension installed
+- configured projection table exists
+- required columns exist (`tenant_id`, `knowledge_entry_revision_id`,
+  `knowledge_pack_version_id`, `channel`, `locale`, `category`, `title`, `body`,
+  `embedding`)
+- `embedding` column type is `vector`
+- at least one `ivfflat` or `hnsw` index on `embedding`
+
 ### Amazon SES
 
 Module: `mugen.core.gateway.email.ses`
@@ -365,6 +422,9 @@ Behavior:
 ```toml
 [mugen.modules.core]
 gateway.completion = "bedrock"
+# Optional knowledge gateway.
+# gateway.knowledge = "pgvector"
+# gateway.knowledge = "qdrant"
 # Optional outbound email gateway.
 # gateway.email = "smtp"
 # gateway.email = "ses"
@@ -397,4 +457,17 @@ api.session_token = ""
 api.endpoint_url = ""
 default_from = "noreply@example.com"
 configuration_set_name = ""
+
+[pgvector]
+search.schema = "mugen"
+search.table = "downstream_kp_search_doc"
+search.metric = "cosine"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
 ```

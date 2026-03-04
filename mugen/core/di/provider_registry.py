@@ -110,6 +110,10 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             module_path="mugen.core.gateway.knowledge.qdrant",
             class_name="QdrantKnowledgeGateway",
         ),
+        "pgvector": _ProviderTokenSpec(
+            module_path="mugen.core.gateway.knowledge.pgvector",
+            class_name="PgVectorKnowledgeGateway",
+        ),
     },
     "matrix_client": {
         "default": _ProviderTokenSpec(

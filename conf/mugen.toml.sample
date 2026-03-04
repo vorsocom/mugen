@@ -55,6 +55,7 @@ client.web = "default"
 gateway.completion = "sambanova"
 # gateway.email = "smtp"
 # gateway.email = "ses"
+# gateway.knowledge = "pgvector"
 # gateway.knowledge = "qdrant"
 gateway.logging = "standard"
 gateway.storage.keyval = "relational"
@@ -276,6 +277,22 @@ api.url = ""
 api.timeout_seconds = 10.0
 api.max_retries = 2
 api.retry_backoff_seconds = 0.5
+encoder.max_concurrency = 4
+
+# === pgvector ===
+[pgvector]
+# Optional override; defaults to rdbms.migration_tracks.core.schema.
+search.schema = "mugen"
+# Required projection table name in search.schema.
+search.table = "downstream_kp_search_doc"
+search.metric = "cosine"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+encoder.model = "all-mpnet-base-v2"
 encoder.max_concurrency = 4
 
 # === Quart ===
