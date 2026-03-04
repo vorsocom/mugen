@@ -27,6 +27,7 @@ from mugen.core.domain.use_case.phase_b_health import (
     PHASE_STATUS_DEGRADED,
     PhaseBHealthInput,
     evaluate_phase_b_health,
+    summarize_phase_b_platform_observability,
 )
 from mugen.core.utility.config_value import (
     parse_bool_flag,
@@ -181,6 +182,12 @@ async def core_health_ready():
     phase_b_error = health.phase_b_error
     failed_platforms = health.failed_critical_platforms
     reasons: dict[str, str] = dict(health.reasons)
+    platform_observability = summarize_phase_b_platform_observability(
+        platform_statuses=status["phase_b_platform_statuses"],
+        platform_errors=status["phase_b_platform_errors"],
+        critical_platforms=critical_platforms,
+        degrade_on_critical_exit=degrade_on_critical_exit,
+    )
 
     if phase_a_status != PHASE_STATUS_HEALTHY:
         if isinstance(phase_a_error, str) and phase_a_error.strip():
@@ -233,6 +240,12 @@ async def core_health_ready():
                 "phase_b_status": phase_b_status,
                 "phase_b_error": phase_b_error,
                 "critical_platforms": critical_platforms,
+                "platform_statuses": platform_observability.platform_statuses,
+                "platform_errors": platform_observability.platform_errors,
+                "degraded_platforms": platform_observability.degraded_platforms,
+                "non_critical_degraded_platforms": (
+                    platform_observability.non_critical_degraded_platforms
+                ),
                 "failed_platforms": failed_platforms,
                 "reasons": reasons,
             }

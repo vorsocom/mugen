@@ -325,6 +325,16 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                     allowed=["example.com"],
                     denied=[],
                 ),
+                media=SimpleNamespace(
+                    max_download_bytes=20 * 1024 * 1024,
+                    allowed_mimetypes=[
+                        "audio/*",
+                        "image/*",
+                        "video/*",
+                        "application/*",
+                        "text/*",
+                    ],
+                ),
                 beta=SimpleNamespace(users=["@beta:example.com"]),
                 invites=SimpleNamespace(direct_only=True),
                 security=SimpleNamespace(
@@ -1374,57 +1384,108 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._logging_gateway.warning.call_args.args[0],
         )
 
-    async def test_resolve_device_trust_mode_defaults_and_invalid_values(self) -> None:
+    async def test_resolve_device_trust_mode_rejects_invalid_values(self) -> None:
         client = self._client()
         del client._config.matrix.security
-        self.assertEqual(
-            client._resolve_device_trust_mode(),  # pylint: disable=protected-access
-            "strict_known",
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.security.device_trust.mode",
+        ):
+            client._resolve_device_trust_mode()  # pylint: disable=protected-access
 
         client._config.matrix.security = SimpleNamespace(
             device_trust=SimpleNamespace(mode=42)
         )
-        self.assertEqual(
-            client._resolve_device_trust_mode(),  # pylint: disable=protected-access
-            "strict_known",
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.security.device_trust.mode",
+        ):
+            client._resolve_device_trust_mode()  # pylint: disable=protected-access
 
         client._config.matrix.security.device_trust.mode = "unsupported"
-        self.assertEqual(
-            client._resolve_device_trust_mode(),  # pylint: disable=protected-access
-            "strict_known",
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.security.device_trust.mode",
+        ):
+            client._resolve_device_trust_mode()  # pylint: disable=protected-access
 
-    async def test_resolve_device_trust_allowlist_parses_and_validates_entries(
+    async def test_resolve_device_trust_allowlist_parses_valid_entries(
         self,
     ) -> None:
         client = self._client()
         client._config.matrix.security.device_trust.allowlist = [
             {
                 "user_id": "@user:example.com",
-                "device_ids": ["DEV-1", 2],
+                "device_ids": ["DEV-1", "DEV-2"],
             },
             SimpleNamespace(
                 user_id="@user:example.com",
-                device_ids=["DEV-2"],
+                device_ids=["DEV-3"],
             ),
-            {
-                "user_id": "@invalid:example.com",
-                "device_ids": "DEV-3",
-            },
-            object(),
         ]
         self.assertEqual(
             client._resolve_device_trust_allowlist(),  # pylint: disable=protected-access
-            {"@user:example.com": {"DEV-1", "2", "DEV-2"}},
+            {"@user:example.com": {"DEV-1", "DEV-2", "DEV-3"}},
         )
 
+    async def test_resolve_device_trust_allowlist_rejects_invalid_entries(self) -> None:
+        client = self._client()
         client._config.matrix.security.device_trust.allowlist = "invalid"
-        self.assertEqual(
-            client._resolve_device_trust_allowlist(),  # pylint: disable=protected-access
-            {},
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.security.device_trust.allowlist must be a list",
+        ):
+            client._resolve_device_trust_allowlist()  # pylint: disable=protected-access
+
+        client._config.matrix.security.device_trust.allowlist = []
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.security.device_trust.allowlist must be non-empty",
+        ):
+            client._resolve_device_trust_allowlist()  # pylint: disable=protected-access
+
+        client._config.matrix.security.device_trust.allowlist = [object()]
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.security.device_trust.allowlist\\[0\\] must be a table",
+        ):
+            client._resolve_device_trust_allowlist()  # pylint: disable=protected-access
+
+        client._config.matrix.security.device_trust.allowlist = [
+            {
+                "user_id": "@user:example.com",
+                "device_ids": [],
+            }
+        ]
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.security.device_trust.allowlist\\[0\\].device_ids",
+        ):
+            client._resolve_device_trust_allowlist()  # pylint: disable=protected-access
+
+        client._config.matrix.security.device_trust.allowlist = [
+            {
+                "user_id": "   ",
+                "device_ids": ["DEV-1"],
+            }
+        ]
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.security.device_trust.allowlist\\[0\\].user_id",
+        ):
+            client._resolve_device_trust_allowlist()  # pylint: disable=protected-access
+
+        client._config.matrix.security.device_trust.allowlist = [
+            {
+                "user_id": "@user:example.com",
+                "device_ids": ["DEV-1", "   "],
+            }
+        ]
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.security.device_trust.allowlist\\[0\\].device_ids\\[1\\]",
+        ):
+            client._resolve_device_trust_allowlist()  # pylint: disable=protected-access
 
     async def test_is_direct_message_and_validate_message_paths(self) -> None:
         client = self._client()
@@ -2425,20 +2486,23 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             max_download_bytes="invalid",
             allowed_mimetypes="text/plain",
         )
-        self.assertEqual(
-            client._resolve_media_max_download_bytes(),  # pylint: disable=protected-access
-            client._default_media_max_download_bytes,  # pylint: disable=protected-access
-        )
-        self.assertEqual(
-            client._resolve_media_allowed_mimetypes(),  # pylint: disable=protected-access
-            list(client._default_media_allowed_mimetypes),  # pylint: disable=protected-access
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.media.max_download_bytes",
+        ):
+            client._resolve_media_max_download_bytes()  # pylint: disable=protected-access
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.media.allowed_mimetypes",
+        ):
+            client._resolve_media_allowed_mimetypes()  # pylint: disable=protected-access
 
         client._config.matrix.media.max_download_bytes = 0
-        self.assertEqual(
-            client._resolve_media_max_download_bytes(),  # pylint: disable=protected-access
-            client._default_media_max_download_bytes,  # pylint: disable=protected-access
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.media.max_download_bytes",
+        ):
+            client._resolve_media_max_download_bytes()  # pylint: disable=protected-access
 
         client._config.matrix.media.max_download_bytes = 1024
         self.assertEqual(
@@ -2447,10 +2511,11 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
 
         client._config.matrix.media.allowed_mimetypes = []
-        self.assertEqual(
-            client._resolve_media_allowed_mimetypes(),  # pylint: disable=protected-access
-            list(client._default_media_allowed_mimetypes),  # pylint: disable=protected-access
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.media.allowed_mimetypes",
+        ):
+            client._resolve_media_allowed_mimetypes()  # pylint: disable=protected-access
 
         client._config.matrix.media.allowed_mimetypes = ["application/pdf"]
         self.assertTrue(
@@ -2470,6 +2535,22 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 "image/png"
             )
         )
+
+        client._config.matrix.media.allowed_mimetypes = ["image/*", "   "]
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.media.allowed_mimetypes\\[1\\]",
+        ):
+            client._resolve_media_allowed_mimetypes()  # pylint: disable=protected-access
+
+    async def test_direct_invites_only_requires_boolean(self) -> None:
+        client = self._client()
+        client._config.matrix.invites.direct_only = "true"
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "matrix.invites.direct_only must be a boolean",
+        ):
+            client._direct_invites_only()  # pylint: disable=protected-access
 
     async def test_cleanup_temp_file_handles_empty_missing_and_os_error(self) -> None:
         client = self._client()

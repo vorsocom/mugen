@@ -79,6 +79,16 @@ class TestCoreDomainArchitecture(unittest.TestCase):
 
         self.assertEqual(missing_imports, [])
 
+    def test_endpoint_imports_phase_b_platform_observability_helper(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        endpoint_path = repo_root / "mugen" / "core" / "api" / "endpoint.py"
+        endpoint_source = endpoint_path.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "summarize_phase_b_platform_observability",
+            endpoint_source,
+        )
+
     def test_endpoint_does_not_redeclare_phase_b_failure_helpers(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         endpoint_path = repo_root / "mugen" / "core" / "api" / "endpoint.py"

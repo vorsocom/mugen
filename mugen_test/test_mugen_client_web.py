@@ -1336,7 +1336,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_mark_job_status_else_branch_and_close_error_swallow(self) -> None:
+    async def test_mark_job_status_else_branch_and_close_error_raises(self) -> None:
         payload = await self.client.enqueue_message(
             auth_user="user-1",
             conversation_id="conv-mark",
@@ -1357,7 +1357,14 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.client._media_storage_gateway.close = AsyncMock(  # pylint: disable=protected-access
             side_effect=RuntimeError("boom")
         )
-        await self.client.close()
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "DefaultWebClient shutdown failed: media storage close failed",
+        ):
+            await self.client.close()
+        self.client._media_storage_gateway.close = AsyncMock(  # pylint: disable=protected-access
+            return_value=None
+        )
 
     async def test_mark_job_done_skips_invalid_terminal_transition_for_keyval(self) -> None:
         payload = await self.client.enqueue_message(
