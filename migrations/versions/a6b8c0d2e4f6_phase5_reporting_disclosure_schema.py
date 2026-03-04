@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -20,7 +21,7 @@ down_revision: Union[str, None] = "f6d9c2b4a1e7"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -155,13 +156,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_reporting_export_job__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["created_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_reporting_export_job__created_by_user_id__admin_user",
         ),
@@ -302,15 +303,15 @@ def upgrade() -> None:
         sa.Column("meta_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_reporting_export_item__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "export_job_id"],
             [
-                "mugen.ops_reporting_export_job.tenant_id",
-                "mugen.ops_reporting_export_job.id",
+                f"{_SCHEMA}.ops_reporting_export_job.tenant_id",
+                f"{_SCHEMA}.ops_reporting_export_job.id",
             ],
             ondelete="CASCADE",
             name="fkx_ops_reporting_export_item__tenant_export_job",

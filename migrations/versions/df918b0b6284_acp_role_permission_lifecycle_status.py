@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 
@@ -20,27 +21,30 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+_SCHEMA = resolve_runtime_schema()
+
+
 def upgrade() -> None:
     """Upgrade schema."""
     role_status = postgresql.ENUM(
         "active",
         "deprecated",
         name="admin_role_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
     permission_object_status = postgresql.ENUM(
         "active",
         "deprecated",
         name="admin_permission_object_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
     permission_type_status = postgresql.ENUM(
         "active",
         "deprecated",
         name="admin_permission_type_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
 
@@ -56,14 +60,14 @@ def upgrade() -> None:
             server_default=sa.text("'active'"),
             nullable=False,
         ),
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_admin_role_status"),
         "admin_role",
         ["status"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
 
     op.add_column(
@@ -74,14 +78,14 @@ def upgrade() -> None:
             server_default=sa.text("'active'"),
             nullable=False,
         ),
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_admin_permission_object_status"),
         "admin_permission_object",
         ["status"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
 
     op.add_column(
@@ -92,14 +96,14 @@ def upgrade() -> None:
             server_default=sa.text("'active'"),
             nullable=False,
         ),
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_admin_permission_type_status"),
         "admin_permission_type",
         ["status"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
 
 
@@ -108,43 +112,43 @@ def downgrade() -> None:
     op.drop_index(
         op.f("ix_mugen_admin_permission_type_status"),
         table_name="admin_permission_type",
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.drop_column("admin_permission_type", "status", schema="mugen")
+    op.drop_column("admin_permission_type", "status", schema=_SCHEMA)
 
     op.drop_index(
         op.f("ix_mugen_admin_permission_object_status"),
         table_name="admin_permission_object",
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.drop_column("admin_permission_object", "status", schema="mugen")
+    op.drop_column("admin_permission_object", "status", schema=_SCHEMA)
 
     op.drop_index(
         op.f("ix_mugen_admin_role_status"),
         table_name="admin_role",
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.drop_column("admin_role", "status", schema="mugen")
+    op.drop_column("admin_role", "status", schema=_SCHEMA)
 
     permission_type_status = postgresql.ENUM(
         "active",
         "deprecated",
         name="admin_permission_type_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
     permission_object_status = postgresql.ENUM(
         "active",
         "deprecated",
         name="admin_permission_object_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
     role_status = postgresql.ENUM(
         "active",
         "deprecated",
         name="admin_role_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
 

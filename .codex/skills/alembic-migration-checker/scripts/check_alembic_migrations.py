@@ -13,11 +13,28 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from typing import Iterable
 
 
 class CheckerError(RuntimeError):
     """Raised when a validation step cannot complete."""
+
+
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_identifier(value: object, *, label: str) -> str:
+    if not isinstance(value, str):
+        raise CheckerError(f"{label} must be a SQL identifier string.")
+    clean = value.strip()
+    if not _IDENTIFIER_RE.fullmatch(clean):
+        raise CheckerError(f"Invalid {label}: {value!r}")
+    return clean
+
+
+def _quote_identifier(identifier: str) -> str:
+    return f'"{identifier}"'
 
 
 def _build_env(repo_root: Path) -> dict[str, str]:
@@ -111,6 +128,137 @@ def _parse_duplicate_create_type(sql_path: Path) -> list[str]:
     return duplicates
 
 
+def _load_core_track_contract(config_path: Path) -> dict[str, str]:
+    """Load core migration-track identifiers used by Alembic env contract."""
+    try:
+        with config_path.open("rb") as handle:
+            config = tomllib.load(handle)
+    except FileNotFoundError as exc:
+        raise CheckerError(f"Config file not found: {config_path}") from exc
+    except PermissionError as exc:
+        raise CheckerError(f"Config file is not readable: {config_path}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise CheckerError(f"Config file is not valid TOML: {config_path}") from exc
+
+    if not isinstance(config, dict):
+        raise CheckerError(f"Config file must parse to TOML table: {config_path}")
+
+    tracks_cfg = config.get("rdbms", {}).get("migration_tracks", {})
+    if not isinstance(tracks_cfg, dict):
+        raise CheckerError("rdbms.migration_tracks must be a table")
+
+    core_cfg = tracks_cfg.get("core", {})
+    if not isinstance(core_cfg, dict):
+        raise CheckerError("rdbms.migration_tracks.core must be a table")
+
+    schema = core_cfg.get("schema")
+    if schema in [None, ""]:
+        raise CheckerError("rdbms.migration_tracks.core.schema is required")
+
+    normalized_schema = _validate_identifier(
+        schema,
+        label="rdbms.migration_tracks.core.schema",
+    )
+    normalized_version_table = _validate_identifier(
+        core_cfg.get("version_table", "alembic_version"),
+        label="rdbms.migration_tracks.core.version_table",
+    )
+    normalized_version_table_schema = _validate_identifier(
+        core_cfg.get("version_table_schema", normalized_schema),
+        label="rdbms.migration_tracks.core.version_table_schema",
+    )
+    return {
+        "track": "core",
+        "schema": normalized_schema,
+        "version_table": normalized_version_table,
+        "version_table_schema": normalized_version_table_schema,
+    }
+
+
+def _with_core_track_env(env: dict[str, str], track: dict[str, str]) -> dict[str, str]:
+    """Attach required Alembic env vars for core-track command execution."""
+    resolved = dict(env)
+    resolved["MUGEN_ALEMBIC_TRACK"] = track["track"]
+    resolved["MUGEN_ALEMBIC_SCHEMA"] = track["schema"]
+    resolved["MUGEN_ALEMBIC_VERSION_TABLE"] = track["version_table"]
+    resolved["MUGEN_ALEMBIC_VERSION_TABLE_SCHEMA"] = track["version_table_schema"]
+    return resolved
+
+
+def _check_hardcoded_core_schema_literals(files: Iterable[Path]) -> list[str]:
+    """
+    Reject hardcoded core schema literals outside approved rewrite wrappers.
+
+    Allowed:
+    - import paths like `from mugen.core...`
+    - plugin keys containing `com.vorsocomputing.mugen...`
+    - string constants passed directly to `_sql`, `_sql_text`, `_execute`,
+      or `rewrite_mugen_schema_sql`.
+    """
+    failures: list[str] = []
+
+    for path in files:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        parents: dict[ast.AST, ast.AST] = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                for keyword in node.keywords:
+                    if keyword.arg != "schema":
+                        continue
+                    if (
+                        isinstance(keyword.value, ast.Constant)
+                        and isinstance(keyword.value.value, str)
+                        and keyword.value.value.strip() == "mugen"
+                    ):
+                        failures.append(
+                            f"{path}:{keyword.value.lineno}: hardcoded schema='mugen'"
+                        )
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            value = node.value
+            if "mugen." not in value:
+                continue
+
+            if "com.vorsocomputing.mugen." in value:
+                continue
+            if "mugen.core." in value:
+                continue
+            if "mugen.modules" in value:
+                continue
+
+            allowed = False
+            parent = parents.get(node)
+            while parent is not None:
+                if isinstance(parent, ast.Call):
+                    func_name = None
+                    if isinstance(parent.func, ast.Name):
+                        func_name = parent.func.id
+                    elif isinstance(parent.func, ast.Attribute):
+                        func_name = parent.func.attr
+                    if func_name in {
+                        "_sql",
+                        "_sql_text",
+                        "_execute",
+                        "rewrite_mugen_schema_sql",
+                    }:
+                        allowed = True
+                        break
+                parent = parents.get(parent)
+
+            if not allowed:
+                failures.append(
+                    f"{path}:{node.lineno}: hardcoded schema literal contains 'mugen.'"
+                )
+    return failures
+
+
 def _replace_db_urls(config_path: Path, test_url: str) -> str:
     """Replace `url =` entries in mugen.toml and return original text."""
     text = config_path.read_text(encoding="utf-8")
@@ -139,6 +287,7 @@ def _run_roundtrip(
     workdir: Path,
     config_file: Path,
     env: dict[str, str],
+    core_track: dict[str, str],
     port_start: int,
     port_end: int,
     db_name: str,
@@ -154,6 +303,10 @@ def _run_roundtrip(
 
     selected_port: int | None = None
     original_config: str | None = None
+    version_table_ref = (
+        f"{_quote_identifier(core_track['version_table_schema'])}."
+        f"{_quote_identifier(core_track['version_table'])}"
+    )
 
     try:
         _run_capture([initdb, "-D", str(pgdata), "-A", "trust"], cwd=workdir, env=env, check=True)
@@ -195,10 +348,12 @@ def _run_roundtrip(
 
         original_config = _replace_db_urls(config_file, test_url)
 
+        roundtrip_env = _with_core_track_env(env, core_track)
+
         _run_capture(
             [python_bin, "-m", "alembic", "-c", str(alembic_config), "upgrade", "head"],
             cwd=workdir,
-            env=env,
+            env=roundtrip_env,
             check=True,
         )
 
@@ -212,7 +367,7 @@ def _run_roundtrip(
                 "-d",
                 db_name,
                 "-Atc",
-                "select version_num from mugen.alembic_version;",
+                f"select version_num from {version_table_ref};",
             ],
             cwd=workdir,
             env=env,
@@ -222,7 +377,7 @@ def _run_roundtrip(
         _run_capture(
             [python_bin, "-m", "alembic", "-c", str(alembic_config), "downgrade", "base"],
             cwd=workdir,
-            env=env,
+            env=roundtrip_env,
             check=True,
         )
 
@@ -236,7 +391,7 @@ def _run_roundtrip(
                 "-d",
                 db_name,
                 "-Atc",
-                "select count(*) from mugen.alembic_version;",
+                f"select count(*) from {version_table_ref};",
             ],
             cwd=workdir,
             env=env,
@@ -244,7 +399,11 @@ def _run_roundtrip(
         ).stdout.strip()
 
         if down_count != "0":
-            raise CheckerError(f"Expected 0 rows in mugen.alembic_version after downgrade, got: {down_count}")
+            raise CheckerError(
+                "Expected 0 rows in "
+                f"{core_track['version_table_schema']}.{core_track['version_table']} "
+                f"after downgrade, got: {down_count}"
+            )
 
         return {"port": str(selected_port), "upgrade_revision": up_rev, "downgrade_version_rows": down_count}
     finally:
@@ -280,7 +439,13 @@ def main() -> int:
     migrations_dir = (repo_root / args.migrations_dir).resolve()
     config_file = (repo_root / args.config_file).resolve()
 
-    env = _build_env(repo_root)
+    try:
+        core_track = _load_core_track_contract(config_file)
+    except CheckerError as exc:
+        print(f"ERROR: {exc}")
+        return 1
+
+    env = _with_core_track_env(_build_env(repo_root), core_track)
     failures: list[str] = []
     warnings: list[str] = []
 
@@ -292,6 +457,7 @@ def main() -> int:
 
     print(f"[1/6] Checking revision AST on {len(revision_files)} files...")
     failures.extend(_check_revision_ast(revision_files))
+    failures.extend(_check_hardcoded_core_schema_literals(revision_files))
 
     print("[2/6] Running alembic heads/history...")
     try:
@@ -354,6 +520,7 @@ def main() -> int:
                 workdir=workdir,
                 config_file=config_file,
                 env=env,
+                core_track=core_track,
                 port_start=args.roundtrip_port_start,
                 port_end=args.roundtrip_port_end,
                 db_name=args.roundtrip_db_name,

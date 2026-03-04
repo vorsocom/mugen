@@ -12,6 +12,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op, context
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
 from werkzeug.security import check_password_hash
@@ -26,7 +27,7 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 # pylint: disable=no-member

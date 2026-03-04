@@ -60,7 +60,7 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
             env=env,
         )
 
-    def test_defaults_core_schema_to_mugen(self) -> None:
+    def test_requires_explicit_core_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             result = self._run_script(
@@ -68,8 +68,11 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
                 repo_root=repo_root,
             )
 
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("track=core schema=mugen", result.stdout)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "rdbms.migration_tracks.core.schema is required",
+            result.stderr,
+        )
 
     def test_uses_configured_core_schema(self) -> None:
         config_text = textwrap.dedent("""
@@ -142,7 +145,10 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             config_path = repo_root / "custom.toml"
-            config_path.write_text("", encoding="utf-8")
+            config_path.write_text(
+                '[rdbms.migration_tracks.core]\nschema = "core_runtime"\n',
+                encoding="utf-8",
+            )
             (repo_root / "alembic.py").write_text(
                 textwrap.dedent("""
                     import os
@@ -184,6 +190,7 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         config_text = textwrap.dedent("""
             [rdbms.migration_tracks.core]
             enabled = true
+            schema = "core_runtime"
 
             [[rdbms.migration_tracks.plugins]]
             name = "broken_plugin"
@@ -205,6 +212,7 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         config_text = textwrap.dedent("""
             [rdbms.migration_tracks.core]
             enabled = true
+            schema = "core_runtime"
 
             [[rdbms.migration_tracks.plugins]]
             name = "broken_plugin"
@@ -229,6 +237,7 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         config_text = textwrap.dedent("""
             [rdbms.migration_tracks.core]
             enabled = true
+            schema = "core_runtime"
 
             [[rdbms.migration_tracks.plugins]]
             name = "disabled_plugin"
@@ -251,6 +260,7 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         config_text = textwrap.dedent("""
             [rdbms.migration_tracks.core]
             enabled = false
+            schema = "core_runtime"
             """)
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)

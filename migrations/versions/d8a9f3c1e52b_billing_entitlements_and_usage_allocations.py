@@ -10,7 +10,24 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import rewrite_mugen_schema_sql
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _sql_text(statement: str):
+    return sa.text(_sql(statement))
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
+
 
 # pylint: disable=no-member
 
@@ -21,31 +38,34 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+_SCHEMA = resolve_runtime_schema()
+
+
 def upgrade() -> None:
     op.create_table(
         "billing_entitlement_bucket",
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -58,44 +78,44 @@ def upgrade() -> None:
         sa.Column(
             "included_quantity",
             sa.BigInteger(),
-            server_default=sa.text("0"),
+            server_default=_sql_text("0"),
             nullable=False,
         ),
         sa.Column(
             "consumed_quantity",
             sa.BigInteger(),
-            server_default=sa.text("0"),
+            server_default=_sql_text("0"),
             nullable=False,
         ),
         sa.Column(
             "rollover_quantity",
             sa.BigInteger(),
-            server_default=sa.text("0"),
+            server_default=_sql_text("0"),
             nullable=False,
         ),
         sa.Column("external_ref", postgresql.CITEXT(length=255), nullable=True),
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_entitlement_bucket__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "account_id"],
-            ["mugen.billing_account.tenant_id", "mugen.billing_account.id"],
+            [f"{_SCHEMA}.billing_account.tenant_id", f"{_SCHEMA}.billing_account.id"],
             ondelete="RESTRICT",
             name="fkx_billing_entitlement_bucket__tenant_account",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "subscription_id"],
-            ["mugen.billing_subscription.tenant_id", "mugen.billing_subscription.id"],
+            [f"{_SCHEMA}.billing_subscription.tenant_id", f"{_SCHEMA}.billing_subscription.id"],
             ondelete="SET NULL",
             name="fkx_billing_entitlement_bucket__tenant_subscription",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "price_id"],
-            ["mugen.billing_price.tenant_id", "mugen.billing_price.id"],
+            [f"{_SCHEMA}.billing_price.tenant_id", f"{_SCHEMA}.billing_price.id"],
             ondelete="SET NULL",
             name="fkx_billing_entitlement_bucket__tenant_price",
         ),
@@ -133,85 +153,85 @@ def upgrade() -> None:
             "id",
             name="ux_billing_entitlement_bucket__tenant_id_id",
         ),
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_entitlement_bucket_tenant_id"),
         "billing_entitlement_bucket",
         ["tenant_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_entitlement_bucket_account_id"),
         "billing_entitlement_bucket",
         ["account_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_entitlement_bucket_subscription_id"),
         "billing_entitlement_bucket",
         ["subscription_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_entitlement_bucket_price_id"),
         "billing_entitlement_bucket",
         ["price_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_entitlement_bucket_meter_code"),
         "billing_entitlement_bucket",
         ["meter_code"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_entitlement_bucket_period_start"),
         "billing_entitlement_bucket",
         ["period_start"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_entitlement_bucket_period_end"),
         "billing_entitlement_bucket",
         ["period_end"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_entitlement_bucket_external_ref"),
         "billing_entitlement_bucket",
         ["external_ref"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_entitlement_bucket__tenant_account_meter_period",
         "billing_entitlement_bucket",
         ["tenant_id", "account_id", "meter_code", "period_start"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_entitlement_bucket__tenant_subscription_meter_period",
         "billing_entitlement_bucket",
         ["tenant_id", "subscription_id", "meter_code", "period_start"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ux_billing_entitlement_bucket__tenant_external_ref",
         "billing_entitlement_bucket",
         ["tenant_id", "external_ref"],
         unique=True,
-        schema="mugen",
-        postgresql_where=sa.text("external_ref IS NOT NULL"),
+        schema=_SCHEMA,
+        postgresql_where=_sql_text("external_ref IS NOT NULL"),
     )
 
     op.create_table(
@@ -219,25 +239,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -248,19 +268,19 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_usage_allocation__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "usage_event_id"],
-            ["mugen.billing_usage_event.tenant_id", "mugen.billing_usage_event.id"],
+            [f"{_SCHEMA}.billing_usage_event.tenant_id", f"{_SCHEMA}.billing_usage_event.id"],
             ondelete="RESTRICT",
             name="fkx_billing_usage_allocation__tenant_usage_event",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "entitlement_bucket_id"],
-            ["mugen.billing_entitlement_bucket.tenant_id", "mugen.billing_entitlement_bucket.id"],
+            [f"{_SCHEMA}.billing_entitlement_bucket.tenant_id", f"{_SCHEMA}.billing_entitlement_bucket.id"],
             ondelete="RESTRICT",
             name="fkx_billing_usage_allocation__tenant_entitlement_bucket",
         ),
@@ -284,60 +304,60 @@ def upgrade() -> None:
             "entitlement_bucket_id",
             name="ux_billing_usage_allocation__tenant_usage_event_bucket",
         ),
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_usage_allocation_tenant_id"),
         "billing_usage_allocation",
         ["tenant_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_usage_allocation_usage_event_id"),
         "billing_usage_allocation",
         ["usage_event_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_usage_allocation_entitlement_bucket_id"),
         "billing_usage_allocation",
         ["entitlement_bucket_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_usage_allocation_external_ref"),
         "billing_usage_allocation",
         ["external_ref"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_usage_allocation__tenant_usage_event",
         "billing_usage_allocation",
         ["tenant_id", "usage_event_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_usage_allocation__tenant_entitlement_bucket",
         "billing_usage_allocation",
         ["tenant_id", "entitlement_bucket_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ux_billing_usage_allocation__tenant_external_ref",
         "billing_usage_allocation",
         ["tenant_id", "external_ref"],
         unique=True,
-        schema="mugen",
-        postgresql_where=sa.text("external_ref IS NOT NULL"),
+        schema=_SCHEMA,
+        postgresql_where=_sql_text("external_ref IS NOT NULL"),
     )
 
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE FUNCTION mugen.tg_billing_usage_allocation_rollup_consumed()
             RETURNS TRIGGER
@@ -387,7 +407,7 @@ def upgrade() -> None:
         $tg_billing_usage_allocation_rollup_consumed$;
         """
     )
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE TRIGGER tr_billing_usage_allocation_rollup_consumed
         AFTER INSERT OR UPDATE OR DELETE ON mugen.billing_usage_allocation
@@ -395,14 +415,14 @@ def upgrade() -> None:
         """
     )
 
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE TRIGGER tr_touch_updated_at_row_version__billing_entitlement_bucket
         BEFORE UPDATE ON mugen.billing_entitlement_bucket
         FOR EACH ROW EXECUTE FUNCTION util.tg_touch_updated_at_row_version();
         """
     )
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE TRIGGER tr_touch_updated_at_row_version__billing_usage_allocation
         BEFORE UPDATE ON mugen.billing_usage_allocation
@@ -412,110 +432,110 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
+    _execute(
         "DROP TRIGGER IF EXISTS tr_billing_usage_allocation_rollup_consumed ON mugen.billing_usage_allocation;"
     )
-    op.execute(
+    _execute(
         "DROP FUNCTION IF EXISTS mugen.tg_billing_usage_allocation_rollup_consumed();"
     )
 
-    op.execute(
+    _execute(
         "DROP TRIGGER IF EXISTS tr_touch_updated_at_row_version__billing_usage_allocation ON mugen.billing_usage_allocation;"
     )
-    op.execute(
+    _execute(
         "DROP TRIGGER IF EXISTS tr_touch_updated_at_row_version__billing_entitlement_bucket ON mugen.billing_entitlement_bucket;"
     )
 
     op.drop_index(
         "ux_billing_usage_allocation__tenant_external_ref",
         table_name="billing_usage_allocation",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_billing_usage_allocation__tenant_entitlement_bucket",
         table_name="billing_usage_allocation",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_billing_usage_allocation__tenant_usage_event",
         table_name="billing_usage_allocation",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_usage_allocation_external_ref"),
         table_name="billing_usage_allocation",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_usage_allocation_entitlement_bucket_id"),
         table_name="billing_usage_allocation",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_usage_allocation_usage_event_id"),
         table_name="billing_usage_allocation",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_usage_allocation_tenant_id"),
         table_name="billing_usage_allocation",
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.drop_table("billing_usage_allocation", schema="mugen")
+    op.drop_table("billing_usage_allocation", schema=_SCHEMA)
 
     op.drop_index(
         "ux_billing_entitlement_bucket__tenant_external_ref",
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_billing_entitlement_bucket__tenant_subscription_meter_period",
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_billing_entitlement_bucket__tenant_account_meter_period",
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_entitlement_bucket_external_ref"),
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_entitlement_bucket_period_end"),
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_entitlement_bucket_period_start"),
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_entitlement_bucket_meter_code"),
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_entitlement_bucket_price_id"),
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_entitlement_bucket_subscription_id"),
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_entitlement_bucket_account_id"),
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_entitlement_bucket_tenant_id"),
         table_name="billing_entitlement_bucket",
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.drop_table("billing_entitlement_bucket", schema="mugen")
+    op.drop_table("billing_entitlement_bucket", schema=_SCHEMA)

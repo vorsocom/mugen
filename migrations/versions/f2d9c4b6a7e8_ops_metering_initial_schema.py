@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -20,7 +21,7 @@ down_revision: Union[str, None] = "c5a8f2d19e7b"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -134,7 +135,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_metering_meter_definition__tenant_id__admin_tenant",
         ),
@@ -231,15 +232,15 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_metering_meter_policy__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "meter_definition_id"],
             [
-                "mugen.ops_metering_meter_definition.tenant_id",
-                "mugen.ops_metering_meter_definition.id",
+                f"{_SCHEMA}.ops_metering_meter_definition.tenant_id",
+                f"{_SCHEMA}.ops_metering_meter_definition.id",
             ],
             ondelete="CASCADE",
             name="fkx_ops_metering_meter_policy__tenant_meter_definition",
@@ -366,15 +367,15 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_metering_usage_session__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "meter_definition_id"],
             [
-                "mugen.ops_metering_meter_definition.tenant_id",
-                "mugen.ops_metering_meter_definition.id",
+                f"{_SCHEMA}.ops_metering_meter_definition.tenant_id",
+                f"{_SCHEMA}.ops_metering_meter_definition.id",
             ],
             ondelete="RESTRICT",
             name="fkx_ops_metering_usage_session__tenant_meter_definition",
@@ -382,15 +383,15 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["tenant_id", "meter_policy_id"],
             [
-                "mugen.ops_metering_meter_policy.tenant_id",
-                "mugen.ops_metering_meter_policy.id",
+                f"{_SCHEMA}.ops_metering_meter_policy.tenant_id",
+                f"{_SCHEMA}.ops_metering_meter_policy.id",
             ],
             ondelete="SET NULL",
             name="fkx_ops_metering_usage_session__tenant_meter_policy",
         ),
         sa.ForeignKeyConstraint(
             ["last_actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_metering_usage_session__last_actor_uid__admin_user",
         ),
@@ -516,15 +517,15 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_metering_usage_record__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "meter_definition_id"],
             [
-                "mugen.ops_metering_meter_definition.tenant_id",
-                "mugen.ops_metering_meter_definition.id",
+                f"{_SCHEMA}.ops_metering_meter_definition.tenant_id",
+                f"{_SCHEMA}.ops_metering_meter_definition.id",
             ],
             ondelete="RESTRICT",
             name="fkx_ops_metering_usage_record__tenant_meter_definition",
@@ -532,8 +533,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["tenant_id", "meter_policy_id"],
             [
-                "mugen.ops_metering_meter_policy.tenant_id",
-                "mugen.ops_metering_meter_policy.id",
+                f"{_SCHEMA}.ops_metering_meter_policy.tenant_id",
+                f"{_SCHEMA}.ops_metering_meter_policy.id",
             ],
             ondelete="SET NULL",
             name="fkx_ops_metering_usage_record__tenant_meter_policy",
@@ -541,8 +542,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["tenant_id", "usage_session_id"],
             [
-                "mugen.ops_metering_usage_session.tenant_id",
-                "mugen.ops_metering_usage_session.id",
+                f"{_SCHEMA}.ops_metering_usage_session.tenant_id",
+                f"{_SCHEMA}.ops_metering_usage_session.id",
             ],
             ondelete="SET NULL",
             name="fkx_ops_metering_usage_record__tenant_usage_session",
@@ -694,15 +695,15 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_metering_rated_usage__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "usage_record_id"],
             [
-                "mugen.ops_metering_usage_record.tenant_id",
-                "mugen.ops_metering_usage_record.id",
+                f"{_SCHEMA}.ops_metering_usage_record.tenant_id",
+                f"{_SCHEMA}.ops_metering_usage_record.id",
             ],
             ondelete="CASCADE",
             name="fkx_ops_metering_rated_usage__tenant_usage_record",
@@ -710,8 +711,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["tenant_id", "meter_definition_id"],
             [
-                "mugen.ops_metering_meter_definition.tenant_id",
-                "mugen.ops_metering_meter_definition.id",
+                f"{_SCHEMA}.ops_metering_meter_definition.tenant_id",
+                f"{_SCHEMA}.ops_metering_meter_definition.id",
             ],
             ondelete="RESTRICT",
             name="fkx_ops_metering_rated_usage__tenant_meter_definition",
@@ -719,8 +720,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["tenant_id", "meter_policy_id"],
             [
-                "mugen.ops_metering_meter_policy.tenant_id",
-                "mugen.ops_metering_meter_policy.id",
+                f"{_SCHEMA}.ops_metering_meter_policy.tenant_id",
+                f"{_SCHEMA}.ops_metering_meter_policy.id",
             ],
             ondelete="SET NULL",
             name="fkx_ops_metering_rated_usage__tenant_meter_policy",

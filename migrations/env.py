@@ -102,9 +102,11 @@ def _get_explicit_model_modules() -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def _get_identifier_from_env(name: str, default: str) -> str:
-    """Return validated SQL identifier from env var fallback."""
-    value = os.getenv(name, default).strip() or default
+def _get_required_identifier_from_env(name: str) -> str:
+    """Return validated required SQL identifier from env var."""
+    value = os.getenv(name, "").strip()
+    if value == "":
+        raise RuntimeError(f"Missing required Alembic environment variable: {name}")
     if not _IDENTIFIER_RE.fullmatch(value):
         raise RuntimeError(f"Invalid identifier for {name}: {value!r}")
     return value
@@ -155,14 +157,10 @@ def get_url(cfg: dict) -> str:
 
 _mugen_cfg = load_mugen_config(resolve_mugen_config_path())
 
-_RUNTIME_SCHEMA = _get_identifier_from_env("MUGEN_ALEMBIC_SCHEMA", "mugen")
-_VERSION_TABLE = _get_identifier_from_env(
-    "MUGEN_ALEMBIC_VERSION_TABLE",
-    "alembic_version",
-)
-_VERSION_TABLE_SCHEMA = _get_identifier_from_env(
+_RUNTIME_SCHEMA = _get_required_identifier_from_env("MUGEN_ALEMBIC_SCHEMA")
+_VERSION_TABLE = _get_required_identifier_from_env("MUGEN_ALEMBIC_VERSION_TABLE")
+_VERSION_TABLE_SCHEMA = _get_required_identifier_from_env(
     "MUGEN_ALEMBIC_VERSION_TABLE_SCHEMA",
-    _RUNTIME_SCHEMA,
 )
 
 config.attributes["mugen_cfg"] = _mugen_cfg

@@ -737,6 +737,11 @@ def _force_relational_session(client: DefaultWebClient, session: _SequenceSessio
 def _build_config(*, basedir: str, replay_max_events: int = 5) -> SimpleNamespace:
     return SimpleNamespace(
         basedir=basedir,
+        rdbms=SimpleNamespace(
+            migration_tracks=SimpleNamespace(
+                core=SimpleNamespace(schema="mugen"),
+            )
+        ),
         web=SimpleNamespace(
             sse=SimpleNamespace(
                 keepalive_seconds=1,
@@ -4803,7 +4808,14 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
 
         abs_path = self.client._resolve_storage_path("/tmp/x")  # pylint: disable=protected-access
         self.assertEqual(abs_path, "/tmp/x")
-        no_base_cfg = SimpleNamespace(web=SimpleNamespace(media=SimpleNamespace()))
+        no_base_cfg = SimpleNamespace(
+            rdbms=SimpleNamespace(
+                migration_tracks=SimpleNamespace(
+                    core=SimpleNamespace(schema="mugen"),
+                )
+            ),
+            web=SimpleNamespace(media=SimpleNamespace()),
+        )
         no_base_relational = _InMemoryWebRelationalGateway()
         no_base_client = DefaultWebClient(
             config=no_base_cfg,

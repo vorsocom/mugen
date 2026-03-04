@@ -10,7 +10,24 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import rewrite_mugen_schema_sql
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _sql_text(statement: str):
+    return sa.text(_sql(statement))
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
+
 
 # pylint: disable=no-member
 
@@ -20,22 +37,22 @@ down_revision: Union[str, None] = "a2b4c6d8e0f1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
-    op.execute(
+    _execute(
         "ALTER TYPE mugen.ops_workflow_event_type ADD VALUE IF NOT EXISTS 'replayed';"
     )
-    op.execute(
+    _execute(
         "ALTER TYPE mugen.ops_workflow_event_type "
         "ADD VALUE IF NOT EXISTS 'compensation_requested';"
     )
-    op.execute(
+    _execute(
         "ALTER TYPE mugen.ops_workflow_event_type "
         "ADD VALUE IF NOT EXISTS 'compensation_planned';"
     )
-    op.execute(
+    _execute(
         "ALTER TYPE mugen.ops_workflow_event_type "
         "ADD VALUE IF NOT EXISTS 'compensation_failed';"
     )
@@ -53,7 +70,7 @@ def upgrade() -> None:
         schema=_SCHEMA,
     )
 
-    op.execute("""
+    _execute("""
         WITH ranked AS (
             SELECT
                 id,
@@ -95,25 +112,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -129,21 +146,21 @@ def upgrade() -> None:
         sa.Column("last_actor_user_id", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_wf_action_dedup_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["last_actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_wf_action_dedup_last_actor",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_instance_id"),
             (
-                "mugen.ops_workflow_workflow_instance.tenant_id",
-                "mugen.ops_workflow_workflow_instance.id",
+                f"{_SCHEMA}.ops_workflow_workflow_instance.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_instance.id",
             ),
             name="fkx_ops_wf_action_dedup_tenant_instance",
             ondelete="CASCADE",

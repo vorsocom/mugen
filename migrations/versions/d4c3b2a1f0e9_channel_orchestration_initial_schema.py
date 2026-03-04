@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -20,7 +21,7 @@ down_revision: Union[str, None] = "c2e4f6a8d0b2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -85,7 +86,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_chorch_policy_tenant",
         ),
@@ -159,13 +160,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_chorch_profile_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["policy_id"],
-            ["mugen.channel_orchestration_orchestration_policy.id"],
+            [f"{_SCHEMA}.channel_orchestration_orchestration_policy.id"],
             ondelete="SET NULL",
             name="fk_chorch_profile_policy",
         ),
@@ -242,13 +243,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_chorch_intake_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["channel_profile_id"],
-            ["mugen.channel_orchestration_channel_profile.id"],
+            [f"{_SCHEMA}.channel_orchestration_channel_profile.id"],
             ondelete="SET NULL",
             name="fk_chorch_intake_profile",
         ),
@@ -338,19 +339,19 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_chorch_routing_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["channel_profile_id"],
-            ["mugen.channel_orchestration_channel_profile.id"],
+            [f"{_SCHEMA}.channel_orchestration_channel_profile.id"],
             ondelete="SET NULL",
             name="fk_chorch_routing_profile",
         ),
         sa.ForeignKeyConstraint(
             ["owner_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_chorch_routing_owner",
         ),
@@ -454,13 +455,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_chorch_throttle_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["channel_profile_id"],
-            ["mugen.channel_orchestration_channel_profile.id"],
+            [f"{_SCHEMA}.channel_orchestration_channel_profile.id"],
             ondelete="SET NULL",
             name="fk_chorch_throttle_profile",
         ),
@@ -587,31 +588,31 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_chorch_state_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["channel_profile_id"],
-            ["mugen.channel_orchestration_channel_profile.id"],
+            [f"{_SCHEMA}.channel_orchestration_channel_profile.id"],
             ondelete="SET NULL",
             name="fk_chorch_state_profile",
         ),
         sa.ForeignKeyConstraint(
             ["policy_id"],
-            ["mugen.channel_orchestration_orchestration_policy.id"],
+            [f"{_SCHEMA}.channel_orchestration_orchestration_policy.id"],
             ondelete="SET NULL",
             name="fk_chorch_state_policy",
         ),
         sa.ForeignKeyConstraint(
             ["assigned_owner_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_chorch_state_owner",
         ),
         sa.ForeignKeyConstraint(
             ["last_intake_rule_id"],
-            ["mugen.channel_orchestration_intake_rule.id"],
+            [f"{_SCHEMA}.channel_orchestration_intake_rule.id"],
             ondelete="SET NULL",
             name="fk_chorch_state_last_intake",
         ),
@@ -693,25 +694,25 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_chorch_blocklist_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["channel_profile_id"],
-            ["mugen.channel_orchestration_channel_profile.id"],
+            [f"{_SCHEMA}.channel_orchestration_channel_profile.id"],
             ondelete="SET NULL",
             name="fk_chorch_blocklist_profile",
         ),
         sa.ForeignKeyConstraint(
             ["blocked_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_chorch_blocklist_blocked_by",
         ),
         sa.ForeignKeyConstraint(
             ["unblocked_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_chorch_blocklist_unblocked_by",
         ),
@@ -786,25 +787,25 @@ def upgrade() -> None:
         sa.Column("source", postgresql.CITEXT(length=128), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_chorch_event_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["conversation_state_id"],
-            ["mugen.channel_orchestration_conversation_state.id"],
+            [f"{_SCHEMA}.channel_orchestration_conversation_state.id"],
             ondelete="SET NULL",
             name="fk_chorch_event_state",
         ),
         sa.ForeignKeyConstraint(
             ["channel_profile_id"],
-            ["mugen.channel_orchestration_channel_profile.id"],
+            [f"{_SCHEMA}.channel_orchestration_channel_profile.id"],
             ondelete="SET NULL",
             name="fk_chorch_event_profile",
         ),
         sa.ForeignKeyConstraint(
             ["actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_chorch_event_actor",
         ),

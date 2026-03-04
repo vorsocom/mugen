@@ -10,6 +10,8 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
+from migrations.schema_contract import rewrite_mugen_schema_sql
 
 from mugen.core.plugin.acp.constants import (
     GLOBAL_TENANT_ID,
@@ -23,11 +25,26 @@ down_revision: Union[str, Sequence[str], None] = "c7d3e9f5a1b2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
+
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _sql_text(statement: str):
+    return sa.text(_sql(statement))
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
 
 
 def upgrade() -> None:
-    op.execute(
+    _execute(
         f"""
         INSERT INTO mugen.admin_tenant (
             id,
@@ -52,11 +69,11 @@ def upgrade() -> None:
         """
     )
 
-    op.execute(
+    _execute(
         "DROP INDEX IF EXISTS mugen.ux_schema_binding__tenant_target_kind_active;"
     )
 
-    op.execute(
+    _execute(
         """
         WITH ranked AS (
             SELECT
@@ -81,7 +98,7 @@ def upgrade() -> None:
         """
     )
 
-    op.execute(
+    _execute(
         """
         WITH ranked AS (
             SELECT
@@ -118,7 +135,7 @@ def upgrade() -> None:
         ],
         unique=True,
         schema=_SCHEMA,
-        postgresql_where=sa.text("is_active AND target_action IS NULL"),
+        postgresql_where=_sql_text("is_active AND target_action IS NULL"),
     )
     op.create_index(
         "ux_schema_binding__tenant_target_kind_active_with_action",
@@ -132,7 +149,7 @@ def upgrade() -> None:
         ],
         unique=True,
         schema=_SCHEMA,
-        postgresql_where=sa.text("is_active AND target_action IS NOT NULL"),
+        postgresql_where=_sql_text("is_active AND target_action IS NOT NULL"),
     )
 
 
@@ -160,5 +177,5 @@ def downgrade() -> None:
         ],
         unique=True,
         schema=_SCHEMA,
-        postgresql_where=sa.text("is_active"),
+        postgresql_where=_sql_text("is_active"),
     )

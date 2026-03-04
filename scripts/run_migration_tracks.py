@@ -21,7 +21,6 @@ from mugen.core.contract.migration_config import (
     resolve_mugen_config_path,
 )
 from mugen.core.utility.rdbms_schema import (
-    DEFAULT_CORE_RDBMS_SCHEMA,
     resolve_core_rdbms_schema,
     validate_sql_identifier,
 )
@@ -130,7 +129,7 @@ def _load_track_specs(cfg: dict, repo_root: Path) -> list[MigrationTrackSpec]:
     if tracks_cfg and not isinstance(tracks_cfg, dict):
         raise RuntimeError("rdbms.migration_tracks must be a table")
 
-    core_schema = resolve_core_rdbms_schema(cfg, default=DEFAULT_CORE_RDBMS_SCHEMA)
+    core_schema = resolve_core_rdbms_schema(cfg)
     core_defaults = {
         "alembic_config": "alembic.ini",
         "schema": core_schema,

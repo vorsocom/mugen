@@ -24,6 +24,7 @@ class TestCoreDomainArchitecture(unittest.TestCase):
             "mugen.core.service",
             "mugen.core.di",
             "mugen.core.runtime",
+            "migrations.schema_contract",
             "quart",
             "sqlalchemy",
         )

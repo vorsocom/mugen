@@ -31,6 +31,8 @@ import logging
 
 from alembic import context
 from alembic import op
+from migrations.schema_contract import rewrite_mugen_schema_sql
+from migrations.schema_contract import resolve_runtime_schema
 
 # Set up a logger for this specific script
 log = logging.getLogger(__name__)
@@ -42,7 +44,18 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
+
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
 
 
 # pylint: disable=no-member

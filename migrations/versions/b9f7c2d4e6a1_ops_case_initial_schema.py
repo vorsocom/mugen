@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -20,7 +21,7 @@ down_revision: Union[str, None] = "e1b2c3d4f5a6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -156,37 +157,37 @@ def upgrade() -> None:
         sa.Column("deleted_by_user_id", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_case_case__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["owner_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_case_case__owner_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["escalated_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_case_case__escalated_by_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["created_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_case_case__created_by_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["last_actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_case_case__last_actor_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["deleted_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             name="fk_ops_case_case__deleted_by_uid__admin_user",
         ),
         sa.CheckConstraint(
@@ -421,19 +422,19 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_case_case_event__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_case_case_event__actor_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "case_id"),
-            ("mugen.ops_case_case.tenant_id", "mugen.ops_case_case.id"),
+            (f"{_SCHEMA}.ops_case_case.tenant_id", f"{_SCHEMA}.ops_case_case.id"),
             name="fkx_ops_case_case_event__tenant_case",
             ondelete="CASCADE",
         ),
@@ -541,25 +542,25 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_case_case_assignment__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["owner_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_case_case_assignment__owner_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["assigned_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_case_case_assignment__assigned_by_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "case_id"),
-            ("mugen.ops_case_case.tenant_id", "mugen.ops_case_case.id"),
+            (f"{_SCHEMA}.ops_case_case.tenant_id", f"{_SCHEMA}.ops_case_case.id"),
             name="fkx_ops_case_case_assignment__tenant_case",
             ondelete="CASCADE",
         ),
@@ -701,24 +702,24 @@ def upgrade() -> None:
         sa.Column("deleted_by_user_id", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_case_case_link__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["created_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_case_case_link__created_by_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["deleted_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             name="fk_ops_case_case_link__deleted_by_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "case_id"),
-            ("mugen.ops_case_case.tenant_id", "mugen.ops_case_case.id"),
+            (f"{_SCHEMA}.ops_case_case.tenant_id", f"{_SCHEMA}.ops_case_case.id"),
             name="fkx_ops_case_case_link__tenant_case",
             ondelete="CASCADE",
         ),

@@ -10,7 +10,24 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import rewrite_mugen_schema_sql
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _sql_text(statement: str):
+    return sa.text(_sql(statement))
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
+
 
 # pylint: disable=no-member
 
@@ -20,11 +37,11 @@ down_revision: Union[str, None] = "a8c3b1d4e5f6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
-    op.execute("CREATE SCHEMA IF NOT EXISTS mugen;")
+    _execute("CREATE SCHEMA IF NOT EXISTS mugen;")
 
     knowledge_pack_publication_status = postgresql.ENUM(
         "draft",
@@ -57,25 +74,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -85,14 +102,14 @@ def upgrade() -> None:
         sa.Column(
             "is_active",
             sa.Boolean(),
-            server_default=sa.text("true"),
+            server_default=_sql_text("true"),
             nullable=False,
         ),
         sa.Column("current_version_id", sa.Uuid(), nullable=True),
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_knowledge_pack_pack__tenant_id__admin_tenant",
         ),
@@ -134,25 +151,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -161,7 +178,7 @@ def upgrade() -> None:
         sa.Column(
             "status",
             knowledge_pack_publication_status,
-            server_default=sa.text("'draft'::mugen.knowledge_pack_publication_status"),
+            server_default=_sql_text("'draft'::mugen.knowledge_pack_publication_status"),
             nullable=False,
         ),
         sa.Column("submitted_at", sa.DateTime(timezone=True), nullable=True),
@@ -177,45 +194,45 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_knowledge_pack_version__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["submitted_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_knowledge_pack_version__submitted_by__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["approved_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_knowledge_pack_version__approved_by__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["published_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_knowledge_pack_version__published_by__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["archived_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_knowledge_pack_version__archived_by__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["rollback_of_version_id"],
-            ["mugen.knowledge_pack_knowledge_pack_version.id"],
+            [f"{_SCHEMA}.knowledge_pack_knowledge_pack_version.id"],
             ondelete="SET NULL",
             name="fk_knowledge_pack_version__rollback_of_version_id",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "knowledge_pack_id"),
             (
-                "mugen.knowledge_pack_knowledge_pack.tenant_id",
-                "mugen.knowledge_pack_knowledge_pack.id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack.tenant_id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack.id",
             ),
             name="fkx_knowledge_pack_version__tenant_pack",
             ondelete="CASCADE",
@@ -266,25 +283,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -296,21 +313,21 @@ def upgrade() -> None:
         sa.Column(
             "is_active",
             sa.Boolean(),
-            server_default=sa.text("true"),
+            server_default=_sql_text("true"),
             nullable=False,
         ),
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_knowledge_entry__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "knowledge_pack_id"),
             (
-                "mugen.knowledge_pack_knowledge_pack.tenant_id",
-                "mugen.knowledge_pack_knowledge_pack.id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack.tenant_id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack.id",
             ),
             name="fkx_knowledge_entry__tenant_pack",
             ondelete="CASCADE",
@@ -318,8 +335,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "knowledge_pack_version_id"),
             (
-                "mugen.knowledge_pack_knowledge_pack_version.tenant_id",
-                "mugen.knowledge_pack_knowledge_pack_version.id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack_version.tenant_id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack_version.id",
             ),
             name="fkx_knowledge_entry__tenant_pack_version",
             ondelete="CASCADE",
@@ -363,25 +380,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -391,7 +408,7 @@ def upgrade() -> None:
         sa.Column(
             "status",
             knowledge_pack_publication_status,
-            server_default=sa.text("'draft'::mugen.knowledge_pack_publication_status"),
+            server_default=_sql_text("'draft'::mugen.knowledge_pack_publication_status"),
             nullable=False,
         ),
         sa.Column("body", sa.String(length=8192), nullable=True),
@@ -406,27 +423,27 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_knowledge_entry_revision__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["published_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_knowledge_entry_revision__published_by__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["archived_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_knowledge_entry_revision__archived_by__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "knowledge_entry_id"),
             (
-                "mugen.knowledge_pack_knowledge_entry.tenant_id",
-                "mugen.knowledge_pack_knowledge_entry.id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_entry.tenant_id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_entry.id",
             ),
             name="fkx_knowledge_entry_revision__tenant_entry",
             ondelete="CASCADE",
@@ -434,8 +451,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "knowledge_pack_version_id"),
             (
-                "mugen.knowledge_pack_knowledge_pack_version.tenant_id",
-                "mugen.knowledge_pack_knowledge_pack_version.id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack_version.tenant_id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack_version.id",
             ),
             name="fkx_knowledge_entry_revision__tenant_pack_version",
             ondelete="CASCADE",
@@ -498,25 +515,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -527,28 +544,28 @@ def upgrade() -> None:
         sa.Column(
             "occurred_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column("note", sa.String(length=2048), nullable=True),
         sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_knowledge_approval__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_knowledge_approval__actor_user_id__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "knowledge_pack_version_id"),
             (
-                "mugen.knowledge_pack_knowledge_pack_version.tenant_id",
-                "mugen.knowledge_pack_knowledge_pack_version.id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack_version.tenant_id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack_version.id",
             ),
             name="fkx_knowledge_approval__tenant_pack_version",
             ondelete="CASCADE",
@@ -556,8 +573,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "knowledge_entry_revision_id"),
             (
-                "mugen.knowledge_pack_knowledge_entry_revision.tenant_id",
-                "mugen.knowledge_pack_knowledge_entry_revision.id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_entry_revision.tenant_id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_entry_revision.id",
             ),
             name="fkx_knowledge_approval__tenant_entry_revision",
             ondelete="SET NULL",
@@ -587,25 +604,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -617,21 +634,21 @@ def upgrade() -> None:
         sa.Column(
             "is_active",
             sa.Boolean(),
-            server_default=sa.text("true"),
+            server_default=_sql_text("true"),
             nullable=False,
         ),
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_knowledge_scope__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "knowledge_pack_version_id"),
             (
-                "mugen.knowledge_pack_knowledge_pack_version.tenant_id",
-                "mugen.knowledge_pack_knowledge_pack_version.id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack_version.tenant_id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_pack_version.id",
             ),
             name="fkx_knowledge_scope__tenant_pack_version",
             ondelete="CASCADE",
@@ -639,8 +656,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "knowledge_entry_revision_id"),
             (
-                "mugen.knowledge_pack_knowledge_entry_revision.tenant_id",
-                "mugen.knowledge_pack_knowledge_entry_revision.id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_entry_revision.tenant_id",
+                f"{_SCHEMA}.knowledge_pack_knowledge_entry_revision.id",
             ),
             name="fkx_knowledge_scope__tenant_entry_revision",
             ondelete="CASCADE",

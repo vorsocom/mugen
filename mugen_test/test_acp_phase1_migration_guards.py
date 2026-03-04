@@ -16,6 +16,9 @@ class TestAcpPhase1MigrationGuards(unittest.TestCase):
         )
         text = migration.read_text(encoding="utf8")
 
+        self.assertIn("resolve_runtime_schema", text)
+        self.assertIn("rewrite_mugen_schema_sql", text)
+        self.assertIn("def _execute(statement)", text)
         self.assertIn("INSERT INTO mugen.admin_tenant", text)
         self.assertIn("ON CONFLICT (id) DO UPDATE", text)
         self.assertIn(

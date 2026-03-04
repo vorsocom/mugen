@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import re
 
-DEFAULT_CORE_RDBMS_SCHEMA = "mugen"
-
 _CORE_SCHEMA_PATH = ("rdbms", "migration_tracks", "core", "schema")
 _SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MISSING = object()
@@ -39,17 +37,13 @@ def validate_sql_identifier(value: object, *, label: str) -> str:
 
 def resolve_core_rdbms_schema(
     config: object,
-    *,
-    default: str = DEFAULT_CORE_RDBMS_SCHEMA,
 ) -> str:
     """Resolve core runtime schema from migration-track contract."""
-    fallback_schema = validate_sql_identifier(
-        default,
-        label="default core schema",
-    )
     raw_schema = _read_path(config, *_CORE_SCHEMA_PATH)
     if raw_schema is _MISSING or raw_schema is None or raw_schema == "":
-        return fallback_schema
+        raise RuntimeError(
+            "Invalid configuration: rdbms.migration_tracks.core.schema is required."
+        )
     return validate_sql_identifier(
         raw_schema,
         label="rdbms.migration_tracks.core.schema",

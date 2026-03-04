@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -20,7 +21,7 @@ down_revision: Union[str, None] = "c13f8d2a7b9e"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -116,7 +117,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_sla_calendar__tenant_id__admin_tenant",
         ),
@@ -197,13 +198,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_sla_policy__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["calendar_id"],
-            ["mugen.ops_sla_calendar.id"],
+            [f"{_SCHEMA}.ops_sla_calendar.id"],
             ondelete="SET NULL",
             name="fk_ops_sla_policy__calendar_id__ops_sla_calendar",
         ),
@@ -279,13 +280,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_sla_target__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["policy_id"],
-            ["mugen.ops_sla_policy.id"],
+            [f"{_SCHEMA}.ops_sla_policy.id"],
             ondelete="CASCADE",
             name="fk_ops_sla_target__policy_id__ops_sla_policy",
         ),
@@ -399,31 +400,31 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_sla_clock__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["policy_id"],
-            ["mugen.ops_sla_policy.id"],
+            [f"{_SCHEMA}.ops_sla_policy.id"],
             ondelete="SET NULL",
             name="fk_ops_sla_clock__policy_id__ops_sla_policy",
         ),
         sa.ForeignKeyConstraint(
             ["calendar_id"],
-            ["mugen.ops_sla_calendar.id"],
+            [f"{_SCHEMA}.ops_sla_calendar.id"],
             ondelete="SET NULL",
             name="fk_ops_sla_clock__calendar_id__ops_sla_calendar",
         ),
         sa.ForeignKeyConstraint(
             ["target_id"],
-            ["mugen.ops_sla_target.id"],
+            [f"{_SCHEMA}.ops_sla_target.id"],
             ondelete="SET NULL",
             name="fk_ops_sla_clock__target_id__ops_sla_target",
         ),
         sa.ForeignKeyConstraint(
             ["last_actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_sla_clock__last_actor_uid__admin_user",
         ),
@@ -525,19 +526,19 @@ def upgrade() -> None:
         sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_sla_breach_event__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_sla_breach_event__actor_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "clock_id"],
-            ["mugen.ops_sla_clock.tenant_id", "mugen.ops_sla_clock.id"],
+            [f"{_SCHEMA}.ops_sla_clock.tenant_id", f"{_SCHEMA}.ops_sla_clock.id"],
             ondelete="CASCADE",
             name="fkx_ops_sla_breach_event__tenant_clock",
         ),

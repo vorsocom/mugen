@@ -296,10 +296,16 @@ def _make_config(
     namespace_default="core",
     list_limit_default=200,
     basedir="/srv/mugen",
+    core_schema="mugen",
 ):
     return SimpleNamespace(
         basedir=basedir,
-        rdbms=SimpleNamespace(sqlalchemy=SimpleNamespace(url="postgresql+asyncpg://test")),
+        rdbms=SimpleNamespace(
+            sqlalchemy=SimpleNamespace(url="postgresql+asyncpg://test"),
+            migration_tracks=SimpleNamespace(
+                core=SimpleNamespace(schema=core_schema),
+            ),
+        ),
         mugen=SimpleNamespace(
             storage=SimpleNamespace(
                 keyval=SimpleNamespace(

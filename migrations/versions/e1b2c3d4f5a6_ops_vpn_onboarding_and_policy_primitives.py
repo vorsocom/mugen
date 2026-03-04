@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
@@ -18,7 +19,7 @@ down_revision: Union[str, None] = "c4d9e8f1a2b3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -70,7 +71,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_verification_criterion__tenant_id__admin_tenant",
         ),
@@ -192,21 +193,21 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_vendor_verification_check__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["checked_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_vpn_vendor_verif_check__checked_by_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "vendor_verification_id"),
             (
-                "mugen.ops_vpn_vendor_verification.tenant_id",
-                "mugen.ops_vpn_vendor_verification.id",
+                f"{_SCHEMA}.ops_vpn_vendor_verification.tenant_id",
+                f"{_SCHEMA}.ops_vpn_vendor_verification.id",
             ),
             name="fkx_ops_vpn_vendor_verification_check__tenant_verification",
             ondelete="CASCADE",
@@ -214,8 +215,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "criterion_id"),
             (
-                "mugen.ops_vpn_verification_criterion.tenant_id",
-                "mugen.ops_vpn_verification_criterion.id",
+                f"{_SCHEMA}.ops_vpn_verification_criterion.tenant_id",
+                f"{_SCHEMA}.ops_vpn_verification_criterion.id",
             ),
             name="fkx_ops_vpn_vendor_verification_check__tenant_criterion",
             ondelete="SET NULL",
@@ -353,21 +354,21 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_vendor_verif_artifact__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["uploaded_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_vpn_vendor_verif_artifact__uploaded_by_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "vendor_verification_id"),
             (
-                "mugen.ops_vpn_vendor_verification.tenant_id",
-                "mugen.ops_vpn_vendor_verification.id",
+                f"{_SCHEMA}.ops_vpn_vendor_verification.tenant_id",
+                f"{_SCHEMA}.ops_vpn_vendor_verification.id",
             ),
             name="fkx_ops_vpn_vendor_verification_artifact__tenant_verification",
             ondelete="CASCADE",
@@ -375,8 +376,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "verification_check_id"),
             (
-                "mugen.ops_vpn_vendor_verification_check.tenant_id",
-                "mugen.ops_vpn_vendor_verification_check.id",
+                f"{_SCHEMA}.ops_vpn_vendor_verification_check.tenant_id",
+                f"{_SCHEMA}.ops_vpn_vendor_verification_check.id",
             ),
             name="fkx_ops_vpn_vendor_verification_artifact__tenant_check",
             ondelete="SET NULL",
@@ -534,7 +535,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_scorecard_policy__tenant_id__admin_tenant",
         ),

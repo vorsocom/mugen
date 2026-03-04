@@ -103,7 +103,14 @@ class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
             metadata,
             Column("id", Integer, primary_key=True),
         )
-        self.config = SimpleNamespace(mugen=SimpleNamespace(platforms=[]))
+        self.config = SimpleNamespace(
+            mugen=SimpleNamespace(platforms=[]),
+            rdbms=SimpleNamespace(
+                migration_tracks=SimpleNamespace(
+                    core=SimpleNamespace(schema="mugen"),
+                )
+            ),
+        )
         self.runtime = SimpleNamespace(engine="engine", session_maker="session-maker")
 
     def test_init_and_register_tables(self) -> None:
@@ -283,7 +290,14 @@ class TestMugenSQLAGateway(unittest.IsolatedAsyncioTestCase):
             return_value={"widgets": self.widgets},
         ):
             gateway = SQLAlchemyRelationalStorageGateway(
-                config=SimpleNamespace(mugen=SimpleNamespace(platforms=[])),
+                config=SimpleNamespace(
+                    mugen=SimpleNamespace(platforms=[]),
+                    rdbms=SimpleNamespace(
+                        migration_tracks=SimpleNamespace(
+                            core=SimpleNamespace(schema="mugen"),
+                        )
+                    ),
+                ),
                 logging_gateway=SimpleNamespace(),
                 relational_runtime=self.runtime,
             )

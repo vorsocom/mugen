@@ -96,8 +96,15 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
             engine=engine,
             session_maker=Mock(return_value=active_session),
         )
+        resolved_config = config or SimpleNamespace(
+            rdbms=SimpleNamespace(
+                migration_tracks=SimpleNamespace(
+                    core=SimpleNamespace(schema="mugen"),
+                )
+            )
+        )
         store = RelationalWebRuntimeStore(
-            config=config or SimpleNamespace(),
+            config=resolved_config,
             logging_gateway=Mock(),
             relational_runtime=runtime,
         )
