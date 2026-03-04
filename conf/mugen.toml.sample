@@ -60,6 +60,7 @@ gateway.completion = "sambanova"
 # gateway.knowledge = "pinecone"
 # gateway.knowledge = "pgvector"
 # gateway.knowledge = "qdrant"
+# gateway.knowledge = "weaviate"
 gateway.logging = "standard"
 gateway.storage.keyval = "relational"
 gateway.storage.media = "default"
@@ -343,6 +344,27 @@ search.snippet_max_chars = 240
 api.timeout_seconds = 10.0
 api.max_retries = 2
 api.retry_backoff_seconds = 0.5
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
+
+# === Weaviate ===
+[weaviate]
+api.http_host = "localhost"
+api.http_port = 8080
+api.http_secure = false
+api.grpc_host = "localhost"
+api.grpc_port = 50051
+api.grpc_secure = false
+api.key = ""
+api.headers = {}
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.collection = "DownstreamKPSearchDoc"
+search.target_vector = ""
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
 encoder.model = "all-mpnet-base-v2"
 encoder.max_concurrency = 4
 
