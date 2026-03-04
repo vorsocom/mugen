@@ -404,6 +404,48 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
             "Web platform requires registered FW extension token(s): core.fw.acp.",
         )
 
+        missing_telegram_contract = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["telegram"],
+                messaging_handler_platforms=[["telegram"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                has_telegram_client_runtime_path=False,
+                registered_fw_extension_tokens=[],
+                registered_ipc_extension_tokens=[],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertFalse(missing_telegram_contract.healthy)
+        self.assertIn(
+            "telegram.client_runtime_path",
+            missing_telegram_contract.failed_capabilities,
+        )
+        self.assertIn(
+            "telegram.fw.extension_contract",
+            missing_telegram_contract.failed_capabilities,
+        )
+        self.assertIn(
+            "telegram.ipc.extension_contract",
+            missing_telegram_contract.failed_capabilities,
+        )
+
+        healthy_telegram_contract = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["telegram"],
+                messaging_handler_platforms=[["telegram"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                has_telegram_client_runtime_path=True,
+                registered_fw_extension_tokens=["core.fw.telegram_botapi"],
+                registered_ipc_extension_tokens=["core.ipc.telegram_botapi"],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertTrue(healthy_telegram_contract.healthy)
+
     def test_web_stream_continuity_use_case(self) -> None:
         generation_changed = evaluate_web_stream_continuity(
             WebStreamContinuityInput(

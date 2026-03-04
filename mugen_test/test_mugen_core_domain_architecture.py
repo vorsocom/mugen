@@ -146,7 +146,10 @@ class TestCoreDomainArchitecture(unittest.TestCase):
         self.assertIn("bind_rpp_extension", messaging_function_names)
 
     def test_core_platform_allow_list_excludes_telnet(self) -> None:
-        self.assertEqual(set(SUPPORTED_CORE_PLATFORMS), {"matrix", "web", "whatsapp"})
+        self.assertEqual(
+            set(SUPPORTED_CORE_PLATFORMS),
+            {"matrix", "telegram", "web", "whatsapp"},
+        )
         self.assertNotIn("telnet", SUPPORTED_CORE_PLATFORMS)
 
     def test_core_runtime_bootstrap_does_not_import_dev_telnet_harness(self) -> None:

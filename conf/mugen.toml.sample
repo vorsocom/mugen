@@ -9,6 +9,7 @@ logger.name = "COM.VORSOCOMPUTING.MUGEN"
 platforms = [
   "web",
   # "matrix",
+  # "telegram",
   # "whatsapp",
 ]
 storage.keyval.relational.namespace_default = "core"
@@ -50,6 +51,7 @@ max_timeout_seconds = 30.0
 # `openai`, `azure_foundry`, `vertex`, `smtp`),
 # not Python module paths.
 client.matrix = "default"
+client.telegram = "default"
 client.whatsapp = "default"
 client.web = "default"
 
@@ -94,6 +96,15 @@ token = "core.fw.acp"
 [[mugen.modules.core.extensions]]
 type = "fw"
 token = "core.fw.web"
+
+# Telegram platform FW/IPC contract (required when `telegram` is active).
+# [[mugen.modules.core.extensions]]
+# type = "fw"
+# token = "core.fw.telegram_botapi"
+#
+# [[mugen.modules.core.extensions]]
+# type = "ipc"
+# token = "core.ipc.telegram_botapi"
 
 # Plugin and downstream extensions (opt-in).
 # [[mugen.modules.extensions]]
@@ -343,6 +354,31 @@ storage.olm.path = "/absolute/path/to/data/.olmstore"
 [security.secrets]
 # Required whenever Matrix platform is enabled.
 encryption_key = "<set-secret-encryption-key>"
+
+# === Telegram ===
+[telegram]
+# Telegram Bot API token.
+bot.token = "<telegram-bot-token>"
+# Fixed path token for webhook endpoint: /api/telegram/botapi/webhook/<path_token>
+webhook.path_token = "<telegram-webhook-path-token>"
+# Value expected in X-Telegram-Bot-Api-Secret-Token.
+webhook.secret_token = "<telegram-webhook-secret-token>"
+# Dedupe retention window for webhook event keys.
+webhook.dedupe_ttl_seconds = 86400
+api.base_url = "https://api.telegram.org"
+api.timeout_seconds = 10.0
+api.max_api_retries = 2
+api.retry_backoff_seconds = 0.5
+media.allowed_mimetypes = [
+  "audio/*",
+  "image/*",
+  "video/*",
+  "application/*",
+  "text/*",
+]
+media.max_download_bytes = 20_971_520   # 20 MiB
+# Enables best-effort typing indicators for processing messages.
+typing.enabled = true
 
 # === Qdrant ===
 [qdrant]

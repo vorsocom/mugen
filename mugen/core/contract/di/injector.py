@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 
 from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -106,6 +107,11 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def matrix_client(self) -> IMatrixClient:
         """Get the global Matrix client."""
+
+    @property
+    @abstractmethod
+    def telegram_client(self) -> ITelegramClient:
+        """Get the global Telegram client."""
 
     @property
     @abstractmethod

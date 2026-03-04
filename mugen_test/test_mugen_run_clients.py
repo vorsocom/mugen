@@ -43,10 +43,15 @@ def _test_config(*, platforms: list[str], mh_mode: str = "optional") -> SimpleNa
             )
         ),
     )
-    if "web" in platforms:
+    if "web" in platforms or "telegram" in platforms:
+        client_cfg = {}
+        if "web" in platforms:
+            client_cfg["web"] = "default"
+        if "telegram" in platforms:
+            client_cfg["telegram"] = "default"
         mugen_cfg.modules = SimpleNamespace(
             core=SimpleNamespace(
-                client=SimpleNamespace(web="default"),
+                client=SimpleNamespace(**client_cfg),
                 gateway=SimpleNamespace(
                     storage=SimpleNamespace(
                         relational="configured",
@@ -72,6 +77,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             "container",
             SimpleNamespace(
                 messaging_service=None,
+                telegram_client=None,
                 whatsapp_client=None,
                 web_client=object(),
                 relational_storage_gateway=_ReadyProvider(),
@@ -193,6 +199,29 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 logger.output[0],
                 "DEBUG:test_app:Running whatsapp client.",
+            )
+
+    async def test_telegram_platform_enabled(self) -> None:
+        """Test running telegram platform."""
+        app = Quart("test_app")
+        config = _test_config(platforms=["telegram"])
+
+        _run_telegram_client = unittest.mock.AsyncMock()
+
+        with (
+            self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            unittest.mock.patch(
+                target="mugen.run_telegram_client", new=_run_telegram_client
+            ),
+        ):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+            self.assertEqual(
+                logger.output[0],
+                "DEBUG:test_app:Running telegram client.",
             )
 
     async def test_web_platform_enabled(self) -> None:
@@ -1256,6 +1285,93 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(statuses["web.fw.extension_contract"], PHASE_STATUS_DEGRADED)
         self.assertIn("core.fw.acp", errors["web.fw.extension_contract"])
 
+    async def test_bootstrap_app_fails_when_telegram_extension_contract_tokens_missing(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=["telegram"], mh_mode="optional")
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=unittest.mock.AsyncMock(return_value={"fw": [], "ipc": []}),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_messaging_provider",
+                return_value=SimpleNamespace(mh_extensions=[]),
+            ),
+            unittest.mock.patch.object(mugen_mod, "_telegram_provider", return_value=object()),
+            self.assertRaisesRegex(
+                BootstrapConfigError,
+                "telegram.fw.extension_contract",
+            ),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
+        self.assertEqual(
+            statuses["telegram.fw.extension_contract"],
+            PHASE_STATUS_DEGRADED,
+        )
+        self.assertEqual(
+            statuses["telegram.ipc.extension_contract"],
+            PHASE_STATUS_DEGRADED,
+        )
+
+    async def test_bootstrap_app_marks_telegram_capabilities_healthy_when_satisfied(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=["telegram"], mh_mode="required")
+        register_extensions_mock = unittest.mock.AsyncMock(
+            return_value={
+                "fw": ["core.fw.telegram_botapi"],
+                "ipc": ["core.ipc.telegram_botapi"],
+            }
+        )
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=register_extensions_mock,
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_messaging_provider",
+                return_value=SimpleNamespace(
+                    mh_extensions=[SimpleNamespace(platforms=["telegram"])]
+                ),
+            ),
+            unittest.mock.patch.object(mugen_mod, "_telegram_provider", return_value=object()),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
+        self.assertEqual(statuses["telegram.client_runtime_path"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["telegram.fw.extension_contract"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["telegram.ipc.extension_contract"], PHASE_STATUS_HEALTHY)
+
     async def test_bootstrap_app_marks_required_capabilities_healthy_when_satisfied(
         self,
     ) -> None:
@@ -1355,6 +1471,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             {"email_gateway": "smtp unavailable"},
         )
         self.assertEqual(runtime_input.registered_fw_extension_tokens, [])
+        self.assertEqual(runtime_input.registered_ipc_extension_tokens, [])
 
     async def test_bootstrap_app_normalizes_non_dict_phase_a_capability_state(self) -> None:
         app = Quart("test_app")
@@ -1528,6 +1645,12 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 ["core.fw.web", "", " CORE.FW.WEB ", 1]
             ),
             ["core.fw.web"],
+        )
+        self.assertEqual(
+            mugen_mod._resolve_registered_ipc_extension_tokens(  # pylint: disable=protected-access
+                {"ipc": ["core.ipc.telegram_botapi", "", " CORE.IPC.TELEGRAM_BOTAPI ", 1]}
+            ),
+            ["core.ipc.telegram_botapi"],
         )
         self.assertEqual(
             mugen_mod._normalize_platform_list([" web ", "", "web", "matrix"]),  # pylint: disable=protected-access

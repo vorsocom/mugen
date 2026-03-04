@@ -89,6 +89,29 @@ def _valid_core_config() -> dict:
                 }
             },
         },
+        "telegram": {
+            "bot": {
+                "token": "token-1",
+            },
+            "webhook": {
+                "path_token": "path-token",
+                "secret_token": "secret-token",
+                "dedupe_ttl_seconds": 86400,
+            },
+            "api": {
+                "base_url": "https://api.telegram.org",
+                "timeout_seconds": 10.0,
+                "max_api_retries": 2,
+                "retry_backoff_seconds": 0.5,
+            },
+            "media": {
+                "allowed_mimetypes": ["image/*"],
+                "max_download_bytes": 1024,
+            },
+            "typing": {
+                "enabled": True,
+            },
+        },
         "security": {
             "secrets": {
                 "encryption_key": "0123456789abcdef0123456789abcdef",
@@ -427,6 +450,35 @@ class TestDISchemaValidationBranches(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(RuntimeError, re.escape(message)):
                     di._validate_core_module_schema(candidate)
+
+    def test_core_schema_requires_strict_telegram_runtime_contract_when_enabled(
+        self,
+    ) -> None:
+        cases: list[tuple[dict, str]] = []
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["telegram"]
+        cfg["telegram"]["bot"]["token"] = ""
+        cases.append((cfg, "telegram.bot.token"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["telegram"]
+        cfg["telegram"]["webhook"]["path_token"] = ""
+        cases.append((cfg, "telegram.webhook.path_token"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["telegram"]
+        cfg["telegram"]["typing"]["enabled"] = "true"
+        cases.append((cfg, "telegram.typing.enabled"))
+
+        for candidate, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(RuntimeError, re.escape(message)):
+                    di._validate_core_module_schema(candidate)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["telegram"]
+        di._validate_core_module_schema(cfg)
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["matrix"]

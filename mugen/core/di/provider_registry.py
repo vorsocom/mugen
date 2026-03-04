@@ -149,6 +149,12 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             class_name="DefaultMatrixClient",
         ),
     },
+    "telegram_client": {
+        "default": _ProviderTokenSpec(
+            module_path="mugen.core.client.telegram",
+            class_name="DefaultTelegramClient",
+        ),
+    },
     "whatsapp_client": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.client.whatsapp",
