@@ -388,9 +388,27 @@ Module: `mugen.core.gateway.knowledge.qdrant`
 Behavior:
 
 - Uses local sentence-transformer embeddings for semantic query vectors.
-- Supports dataset/date/keyword filtering and count/search strategies.
+- Queries a configured Qdrant collection using tenant-scoped and optional scope
+  filters (`channel`, `locale`, `category`).
+- Requires strict payload keys per point:
+  `tenant_id`, `knowledge_entry_revision_id`, `knowledge_pack_version_id`,
+  `channel`, `locale`, `category`, `title`, `body`.
+- Returns normalized items with revision/version IDs, scope values, title,
+  snippet, similarity, and distance.
 - Applies retry/timeout controls from `[qdrant] api.*`.
 - Wraps provider transport/runtime failures as `KnowledgeGatewayRuntimeError`.
+
+Readiness requirements:
+
+- `qdrant.api.url` is configured
+- `qdrant.search.collection` exists and is reachable
+- local sentence-transformer encoder initializes successfully
+
+Migration note:
+
+- Legacy Qdrant request fields (`collection_name`, `count`, `strategy`,
+  `dataset`, `date_from`, `date_to`, `keywords`, `limit`) were removed in favor
+  of the shared tenant-scoped semantic-search contract.
 
 ### Milvus
 
@@ -601,6 +619,19 @@ api.max_retries = 2
 api.retry_backoff_seconds = 0.5
 search.namespace = ""
 search.metric = "cosine"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
+
+[qdrant]
+api.key = "<qdrant-api-key>"
+api.url = ""
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.collection = "downstream_kp_search_doc"
 search.default_top_k = 10
 search.max_top_k = 50
 search.snippet_max_chars = 240
