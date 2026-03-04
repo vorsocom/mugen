@@ -18,7 +18,7 @@ from `mugen/core/di/provider_registry.py` (never module paths):
 | Config Key | Allowed Tokens |
 | --- | --- |
 | `mugen.modules.core.gateway.logging` | `standard` |
-| `mugen.modules.core.gateway.completion` | `bedrock`, `deterministic`, `groq`, `openai`, `sambanova` |
+| `mugen.modules.core.gateway.completion` | `bedrock`, `deterministic`, `groq`, `openai`, `sambanova`, `vertex` |
 | `mugen.modules.core.gateway.email` | `ses`, `smtp` |
 | `mugen.modules.core.gateway.knowledge` | `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate` |
 | `mugen.modules.core.gateway.storage.keyval` | `relational` |

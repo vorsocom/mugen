@@ -46,7 +46,7 @@ timeout_seconds = 10.0
 max_timeout_seconds = 30.0
 
 [mugen.modules.core]
-# Provider values are strict tokens (for example `bedrock`, `openai`, `smtp`),
+# Provider values are strict tokens (for example `bedrock`, `openai`, `vertex`, `smtp`),
 # not Python module paths.
 client.matrix = "default"
 client.whatsapp = "default"
@@ -241,6 +241,27 @@ api.completion.max_completion_tokens = 1024
 api.base_url = ""
 api.timeout_seconds = 30.0
 api.key = "<openai-api-key>"
+
+# === GCP Vertex (Gemini native generateContent) ===
+[gcp.vertex]
+# Operation defaults for Vertex Gemini native generateContent.
+# max_completion_tokens is the canonical token-limit field.
+# Authentication precedence:
+# 1) api.access_token (if set) is used directly.
+# 2) Otherwise, ADC is used via google-auth.
+api.project = ""
+api.location = "us-central1"
+api.access_token = ""
+api.classification.model = ""
+api.classification.temp = 0.0
+api.classification.top_p = 1.0
+api.classification.max_completion_tokens = 1024
+api.completion.model = ""
+api.completion.temp = 0.0
+api.completion.top_p = 1.0
+api.completion.max_completion_tokens = 1024
+api.connect_timeout_seconds = 10.0
+api.read_timeout_seconds = 30.0
 
 # === Matrix ===
 [matrix]

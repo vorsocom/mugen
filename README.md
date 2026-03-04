@@ -99,7 +99,7 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 # If web platform is enabled, keep both core.fw.acp and core.fw.web enabled.
 # If matrix platform is enabled, set security.secrets.encryption_key.
 # Gateways are currently provided for AWS Bedrock,
-# Groq, OpenAI, and SambaNova.
+# Groq, OpenAI, SambaNova, and Vertex AI.
 # See docs/gateways.md for provider-specific
 # options and Bedrock model-family behavior.
 # For example, to use AWS Bedrock:
