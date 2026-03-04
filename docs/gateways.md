@@ -10,7 +10,9 @@ This document explains gateway contracts and currently supported completion,
 knowledge, and email gateway implementations in muGen.
 
 Runtime configuration uses strict provider tokens (for example `bedrock`,
-`openai`, `azure_foundry`, `sambanova`, `vertex`, `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate`, `smtp`, `ses`), not
+`cerebras`, `groq`, `openai`, `azure_foundry`, `sambanova`, `vertex`,
+`chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate`, `smtp`,
+`ses`), not
 Python module paths.
 
 ## Completion Gateway Contract
@@ -282,6 +284,60 @@ OpenAI compatibility notes:
   structured output blocks in normalized response fields.
 
 #### OpenAI Readiness Behavior
+
+- Validates both `classification` and `completion` operation configs.
+- Executes a bounded `models.list` probe at startup.
+- Supports SDK signature differences (`list(limit=1)` fallback to `list()`).
+- Fails readiness on missing probe hooks, timeouts, or provider/network errors.
+
+### Cerebras
+
+Module: `mugen.core.gateway.completion.cerebras`
+
+Cerebras surface routing:
+
+- Operation default:
+  - `[cerebras] api.<operation>.surface = "chat_completions"`
+- Per-request override:
+  - `CompletionRequest.vendor_params["cerebras_api"]`
+  - allowed value: `chat_completions`
+
+Compatibility notes:
+
+- Only chat completions are supported in this gateway.
+- `CompletionRequest.vendor_params["openai_api"]` is rejected.
+- Optional endpoint and timeout settings are supported via
+  `[cerebras] api.base_url` and `[cerebras] api.timeout_seconds`.
+- If `api.base_url` is empty, the gateway defaults to `https://api.cerebras.ai/v1`.
+- Non-stream and stream responses preserve tool calls and usage metadata in
+  normalized response fields.
+
+Supports normalized inference fields:
+
+- `max_completion_tokens`
+- `temperature`
+- `top_p`
+- `stop`
+- `stream`
+
+Cerebras-specific optional keys are forwarded from
+`CompletionRequest.vendor_params`:
+
+- `clear_thinking`
+- `logprobs`
+- `n`
+- `parallel_tool_calls`
+- `prediction`
+- `reasoning_effort`
+- `response_format`
+- `seed`
+- `service_tier`
+- `tool_choice`
+- `tools`
+- `top_logprobs`
+- `user`
+
+#### Cerebras Readiness Behavior
 
 - Validates both `classification` and `completion` operation configs.
 - Executes a bounded `models.list` probe at startup.
@@ -629,6 +685,7 @@ Behavior:
 ```toml
 [mugen.modules.core]
 gateway.completion = "bedrock"
+# gateway.completion = "cerebras"
 # gateway.completion = "azure_foundry"
 # gateway.completion = "vertex"
 # Optional knowledge gateway.
@@ -650,6 +707,21 @@ api.completion.model = "amazon.nova-lite-v1:0"
 api.completion.max_tokens = 1024
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+
+[cerebras]
+api.key = "<cerebras-api-key>"
+api.base_url = "https://api.cerebras.ai/v1"
+api.classification.model = "llama-4-scout-17b-16e-instruct"
+api.classification.surface = "chat_completions"
+api.classification.temp = 0.0
+api.classification.top_p = 1.0
+api.classification.max_completion_tokens = 256
+api.completion.model = "llama-4-scout-17b-16e-instruct"
+api.completion.surface = "chat_completions"
+api.completion.temp = 0.2
+api.completion.top_p = 0.9
+api.completion.max_completion_tokens = 1024
+api.timeout_seconds = 30.0
 
 [azure.foundry]
 api.key = "<azure-foundry-api-key>"

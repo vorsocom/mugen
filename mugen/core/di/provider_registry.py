@@ -24,6 +24,10 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             module_path="mugen.core.gateway.completion.openai",
             class_name="OpenAICompletionGateway",
         ),
+        "cerebras": _ProviderTokenSpec(
+            module_path="mugen.core.gateway.completion.cerebras",
+            class_name="CerebrasCompletionGateway",
+        ),
         "sambanova": _ProviderTokenSpec(
             module_path="mugen.core.gateway.completion.sambanova",
             class_name="SambaNovaCompletionGateway",

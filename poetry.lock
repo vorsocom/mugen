@@ -732,6 +732,29 @@ files = [
 ]
 
 [[package]]
+name = "cerebras-cloud-sdk"
+version = "1.67.0"
+description = "The official Python library for the cerebras API"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "cerebras_cloud_sdk-1.67.0-py3-none-any.whl", hash = "sha256:658b79ca2e9c16f75cc6b4e5d523ee014c9e54a88bd39f88905c28ecb33daae1"},
+    {file = "cerebras_cloud_sdk-1.67.0.tar.gz", hash = "sha256:3aed6f86c6c7a83ee9d4cfb08a2acea089cebf2af5b8aed116ef79995a4f4813"},
+]
+
+[package.dependencies]
+anyio = ">=3.5.0,<5"
+distro = ">=1.7.0,<2"
+httpx = {version = ">=0.23.0,<1", extras = ["http2"]}
+pydantic = ">=1.9.0,<3"
+sniffio = "*"
+typing-extensions = ">=4.10,<5"
+
+[package.extras]
+aiohttp = ["aiohttp", "httpx-aiohttp (>=0.1.9)"]
+
+[[package]]
 name = "certifi"
 version = "2025.11.12"
 description = "Python package for providing Mozilla's CA Bundle."
@@ -6829,4 +6852,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "74da6e32ac8a2a81f3a817a9851abc31d51c02e35d05d3b1fd4ecd74cb3c2ca1"
+content-hash = "72fe34a8b7bf2182530e40c43b3316b0a708b2e2bee0b09e38c5b5f3990e4f22"

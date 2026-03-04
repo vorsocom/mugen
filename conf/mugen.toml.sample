@@ -46,14 +46,15 @@ timeout_seconds = 10.0
 max_timeout_seconds = 30.0
 
 [mugen.modules.core]
-# Provider values are strict tokens (for example `bedrock`, `openai`,
-# `azure_foundry`, `vertex`, `smtp`),
+# Provider values are strict tokens (for example `bedrock`, `cerebras`,
+# `openai`, `azure_foundry`, `vertex`, `smtp`),
 # not Python module paths.
 client.matrix = "default"
 client.whatsapp = "default"
 client.web = "default"
 
 gateway.completion = "sambanova"
+# gateway.completion = "cerebras"
 # gateway.completion = "azure_foundry"
 # gateway.email = "smtp"
 # gateway.email = "ses"
@@ -243,6 +244,27 @@ api.completion.max_completion_tokens = 1024
 api.base_url = ""
 api.timeout_seconds = 30.0
 api.key = "<openai-api-key>"
+
+# === Cerebras ===
+[cerebras]
+# Operation defaults for Cerebras chat completions.
+# Only chat_completions surface is supported.
+# Per-request override remains available through
+# CompletionRequest.vendor_params["cerebras_api"].
+# max_completion_tokens is the canonical token-limit field.
+api.classification.model = ""
+api.classification.surface = "chat_completions"
+api.classification.temp = 0.0
+api.classification.top_p = 1.0
+api.classification.max_completion_tokens = 1024
+api.completion.model = ""
+api.completion.surface = "chat_completions"
+api.completion.temp = 0.0
+api.completion.top_p = 1.0
+api.completion.max_completion_tokens = 1024
+api.base_url = "https://api.cerebras.ai/v1"
+api.timeout_seconds = 30.0
+api.key = "<cerebras-api-key>"
 
 # === Azure AI Foundry (OpenAI-compatible models endpoint) ===
 [azure.foundry]
