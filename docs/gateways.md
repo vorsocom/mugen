@@ -10,7 +10,7 @@ This document explains gateway contracts and currently supported completion,
 knowledge, and email gateway implementations in muGen.
 
 Runtime configuration uses strict provider tokens (for example `bedrock`,
-`openai`, `sambanova`, `chromadb`, `milvus`, `pgvector`, `qdrant`, `smtp`, `ses`), not
+`openai`, `sambanova`, `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `smtp`, `ses`), not
 Python module paths.
 
 ## Completion Gateway Contract
@@ -415,6 +415,34 @@ Readiness requirements:
 - `milvus.search.collection` exists and is reachable
 - local sentence-transformer encoder initializes successfully
 
+### Pinecone
+
+Module: `mugen.core.gateway.knowledge.pinecone`
+
+Behavior:
+
+- Uses local sentence-transformer embeddings for semantic query vectors.
+- Queries a configured Pinecone index host with required tenant metadata
+  filtering and optional scope filters (`channel`, `locale`, `category`).
+- Requires strict metadata keys per match:
+  `tenant_id`, `knowledge_entry_revision_id`, `knowledge_pack_version_id`,
+  `channel`, `locale`, `category`, `title`, `body`.
+- Returns normalized items with revision/version IDs, scope values, title,
+  snippet, similarity, and distance.
+- Supports metric-aware score mapping configured by `pinecone.search.metric`:
+  - `cosine`: `similarity = score`, `distance = 1 - score`
+  - `dotproduct`: `similarity = score`, `distance = null`
+  - `euclidean`: `similarity = score`, `distance = null`
+- Applies retry/timeout controls from `[pinecone] api.*`.
+- Wraps provider transport/runtime failures as `KnowledgeGatewayRuntimeError`.
+
+Readiness requirements:
+
+- `pinecone.api.key` is configured
+- `pinecone.api.host` is configured
+- bounded `describe_index_stats` probe succeeds
+- local sentence-transformer encoder initializes successfully
+
 ### pgvector
 
 Module: `mugen.core.gateway.knowledge.pgvector`
@@ -472,6 +500,7 @@ gateway.completion = "bedrock"
 # Optional knowledge gateway.
 # gateway.knowledge = "chromadb"
 # gateway.knowledge = "milvus"
+# gateway.knowledge = "pinecone"
 # gateway.knowledge = "pgvector"
 # gateway.knowledge = "qdrant"
 # Optional outbound email gateway.
@@ -532,6 +561,20 @@ api.max_retries = 2
 api.retry_backoff_seconds = 0.5
 search.collection = "downstream_kp_search_doc"
 search.vector_field = "embedding"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
+
+[pinecone]
+api.key = "<pinecone-api-key>"
+api.host = "https://your-index-host.svc.pinecone.io"
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.namespace = ""
+search.metric = "cosine"
 search.default_top_k = 10
 search.max_top_k = 50
 search.snippet_max_chars = 240

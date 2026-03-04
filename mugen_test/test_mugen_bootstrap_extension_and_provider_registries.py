@@ -570,3 +570,15 @@ class TestProviderRegistryResolution(unittest.TestCase):
                 interface=IKnowledgeGateway,
             )
         self.assertIs(resolved, _DummyKnowledge)
+
+    def test_pinecone_knowledge_provider_token_resolves(self) -> None:
+        with patch(
+            "mugen.core.di.provider_registry.importlib.import_module",
+            return_value=SimpleNamespace(PineconeKnowledgeGateway=_DummyKnowledge),
+        ):
+            resolved = provider_registry.resolve_provider_class(
+                provider_name="knowledge_gateway",
+                token="pinecone",
+                interface=IKnowledgeGateway,
+            )
+        self.assertIs(resolved, _DummyKnowledge)

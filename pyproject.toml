@@ -34,6 +34,7 @@ quart-cors = "^0.8.0"
 psycopg = "^3.3.2"
 argon2-cffi = "^25.1.0"
 pydantic = {extras = ["email"], version = "^2.12.5"}
+pinecone = {extras = ["asyncio"], version = "^8.1.0"}
 cryptography = "^46.0.3"
 openai = "^1.98.0"
 
