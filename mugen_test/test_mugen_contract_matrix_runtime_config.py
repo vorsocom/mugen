@@ -39,7 +39,7 @@ def _valid_config() -> dict:
         },
         "security": {
             "secrets": {
-                "encryption_key": "matrix-secret",
+                "encryption_key": "0123456789abcdef0123456789abcdef",
             }
         },
     }
@@ -220,9 +220,17 @@ class TestMatrixRuntimeConfigContract(unittest.TestCase):
         cases.append(
             (
                 cfg,
-                "security.secrets.encryption_key is required when matrix platform is enabled",
+                "security.secrets.encryption_key must be non-empty",
             )
         )
+
+        cfg = _valid_config()
+        cfg["security"] = {"secrets": {"encryption_key": "short"}}
+        cases.append((cfg, "security.secrets.encryption_key must contain at least 32 characters"))
+
+        cfg = _valid_config()
+        cfg["security"] = {"secrets": {"encryption_key": "<set-secret-encryption-key>"}}
+        cases.append((cfg, "security.secrets.encryption_key must not use placeholder values"))
 
         for candidate, pattern in cases:
             with self.subTest(pattern=pattern):

@@ -820,7 +820,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 field_name="token",
             )
         client._config.security = SimpleNamespace(
-            secrets=SimpleNamespace(encryption_key="test-secret")
+            secrets=SimpleNamespace(encryption_key="0123456789abcdef0123456789abcdef")
         )
         client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
 
@@ -847,6 +847,16 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 field_name="token",
             )
 
+    def test_build_secret_cipher_rejects_placeholder_when_matrix_enabled(self) -> None:
+        client = self._client()
+        client._config.mugen.platforms = ["matrix"]
+        client._config.security = SimpleNamespace(
+            secrets=SimpleNamespace(encryption_key="<set-secret-encryption-key>")
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "must not use placeholder values"):
+            client._build_secret_cipher()  # pylint: disable=protected-access
+
     def test_secret_decoding_requires_valid_cipher_and_payload(self) -> None:
         client = self._client()
         encrypted_value = f"{client._encrypted_secret_prefix}payload"  # pylint: disable=protected-access
@@ -859,7 +869,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             )
 
         client._config.security = SimpleNamespace(
-            secrets=SimpleNamespace(encryption_key="test-secret")
+            secrets=SimpleNamespace(encryption_key="0123456789abcdef0123456789abcdef")
         )
         client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
         with self.assertRaises(RuntimeError):
@@ -1177,7 +1187,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client = self._client()
         client._ensure_credential_keys_initialized()  # pylint: disable=protected-access
         client._config.security = SimpleNamespace(
-            secrets=SimpleNamespace(encryption_key="test-secret")
+            secrets=SimpleNamespace(encryption_key="0123456789abcdef0123456789abcdef")
         )
         client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
 
@@ -1210,7 +1220,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
     async def test_aenter_password_login_success_saves_credentials(self) -> None:
         client = self._client()
         client._config.security = SimpleNamespace(
-            secrets=SimpleNamespace(encryption_key="test-secret")
+            secrets=SimpleNamespace(encryption_key="0123456789abcdef0123456789abcdef")
         )
         client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
         client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)

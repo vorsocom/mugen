@@ -9,6 +9,9 @@ Audience: Core and downstream plugin teams
 This document explains gateway contracts and currently supported completion
 and email gateway implementations in muGen.
 
+Runtime configuration uses strict provider tokens (for example `bedrock`,
+`openai`, `sambanova`, `smtp`, `ses`), not Python module paths.
+
 ## Completion Gateway Contract
 
 Completion gateways implement:
@@ -361,10 +364,10 @@ Behavior:
 
 ```toml
 [mugen.modules.core]
-gateway.completion = "mugen.core.gateway.completion.bedrock"
+gateway.completion = "bedrock"
 # Optional outbound email gateway.
-# gateway.email = "mugen.core.gateway.email.smtp"
-# gateway.email = "mugen.core.gateway.email.ses"
+# gateway.email = "smtp"
+# gateway.email = "ses"
 
 [aws.bedrock]
 api.region = "us-east-1"

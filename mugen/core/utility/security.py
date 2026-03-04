@@ -28,27 +28,22 @@ _COMMON_PLACEHOLDER_SUBSTRINGS = (
 )
 
 
-def validate_quart_secret_key(
+def _validate_secret_value(
     value: object,
     *,
-    min_length: int = _DEFAULT_MIN_SECRET_KEY_LENGTH,
+    path: str,
+    min_length: int,
 ) -> str:
-    """Validate Quart secret key quality for deployment-safe defaults."""
+    """Validate secret-like string values with placeholder rejection."""
     if isinstance(value, str) is not True:
         raise RuntimeError(
-            "Invalid configuration: quart.secret_key must be a string."
+            f"Invalid configuration: {path} must be a string."
         )
 
     normalized = value.strip()
     if normalized == "":
         raise RuntimeError(
-            "Invalid configuration: quart.secret_key must be non-empty."
-        )
-
-    if len(normalized) < min_length:
-        raise RuntimeError(
-            "Invalid configuration: quart.secret_key must contain at least "
-            f"{min_length} characters."
+            f"Invalid configuration: {path} must be non-empty."
         )
 
     lowered = normalized.lower()
@@ -56,7 +51,7 @@ def validate_quart_secret_key(
         marker in lowered for marker in _COMMON_PLACEHOLDER_SUBSTRINGS
     ):
         raise RuntimeError(
-            "Invalid configuration: quart.secret_key must not use placeholder values."
+            f"Invalid configuration: {path} must not use placeholder values."
         )
 
     if (
@@ -65,7 +60,39 @@ def validate_quart_secret_key(
         or (normalized.startswith("<") and normalized.endswith(">"))
     ):
         raise RuntimeError(
-            "Invalid configuration: quart.secret_key must not use placeholder values."
+            f"Invalid configuration: {path} must not use placeholder values."
+        )
+
+    if len(normalized) < min_length:
+        raise RuntimeError(
+            f"Invalid configuration: {path} must contain at least "
+            f"{min_length} characters."
         )
 
     return normalized
+
+
+def validate_quart_secret_key(
+    value: object,
+    *,
+    min_length: int = _DEFAULT_MIN_SECRET_KEY_LENGTH,
+) -> str:
+    """Validate Quart secret key quality for deployment-safe defaults."""
+    return _validate_secret_value(
+        value,
+        path="quart.secret_key",
+        min_length=min_length,
+    )
+
+
+def validate_matrix_secret_encryption_key(
+    value: object,
+    *,
+    min_length: int = _DEFAULT_MIN_SECRET_KEY_LENGTH,
+) -> str:
+    """Validate Matrix secret-encryption key quality for safe deployments."""
+    return _validate_secret_value(
+        value,
+        path="security.secrets.encryption_key",
+        min_length=min_length,
+    )

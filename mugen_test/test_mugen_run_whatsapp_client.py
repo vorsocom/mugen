@@ -70,10 +70,17 @@ class TestMuGenInitRunTelnetClient(unittest.IsolatedAsyncioTestCase):
             )
             await asyncio.sleep(0)
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            results = await asyncio.gather(task, return_exceptions=True)
 
         self.assertTrue(
             any("WhatsApp client shutdown failed" in msg for msg in logger.output)
+        )
+        self.assertTrue(
+            any(
+                isinstance(result, RuntimeError)
+                and "shutdown failed during cancellation" in str(result)
+                for result in results
+            )
         )
 
     async def test_close_error_is_raised_when_runtime_path_has_no_primary_error(

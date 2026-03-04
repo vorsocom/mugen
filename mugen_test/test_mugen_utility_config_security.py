@@ -10,7 +10,10 @@ from mugen.core.utility.rdbms_schema import (
     resolve_core_rdbms_schema,
     validate_sql_identifier,
 )
-from mugen.core.utility.security import validate_quart_secret_key
+from mugen.core.utility.security import (
+    validate_matrix_secret_encryption_key,
+    validate_quart_secret_key,
+)
 
 
 class TestMugenUtilityRdbmsSchema(unittest.TestCase):
@@ -106,3 +109,17 @@ class TestMugenUtilitySecurity(unittest.TestCase):
             validate_quart_secret_key("<set-quart-secret-key-xxxxxxxxxxxxx>")
         with self.assertRaisesRegex(RuntimeError, "must not use placeholder"):
             validate_quart_secret_key("<aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa>")
+
+    def test_validate_matrix_secret_encryption_key_accepts_strong_value(self) -> None:
+        secret = "0123456789abcdef0123456789abcdef"
+        self.assertEqual(validate_matrix_secret_encryption_key(secret), secret)
+
+    def test_validate_matrix_secret_encryption_key_rejects_invalid_values(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be a string"):
+            validate_matrix_secret_encryption_key(123)
+        with self.assertRaisesRegex(RuntimeError, "must be non-empty"):
+            validate_matrix_secret_encryption_key("   ")
+        with self.assertRaisesRegex(RuntimeError, "at least 32 characters"):
+            validate_matrix_secret_encryption_key("short")
+        with self.assertRaisesRegex(RuntimeError, "must not use placeholder"):
+            validate_matrix_secret_encryption_key("<set-secret-encryption-key>")

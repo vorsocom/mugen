@@ -104,9 +104,11 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 # options and Bedrock model-family behavior.
 # For example, to use AWS Bedrock:
 #   1. Set mugen.modules.core.gateway.completion to
-#      "mugen.core.gateway.completion.bedrock".
+#      "bedrock".
 #   2. Configure your AWS Bedrock credentials in the
 #      [aws.bedrock] section.
+# Provider config values are strict tokens (not module paths).
+# See docs/dependency-injection.md for the canonical token table.
 ~$ nano mugen.toml
 
 # Install Python dependencies.

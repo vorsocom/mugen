@@ -942,6 +942,59 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 whatsapp_provider=lambda: None,
             )
 
+    async def test_run_platform_clients_marks_whatsapp_degraded_when_shutdown_cleanup_fails(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _test_config(platforms=["whatsapp"])
+        started = asyncio.Event()
+
+        async def _cancel_to_runtime_error(
+            *,
+            started_callback=None,
+            degraded_callback=None,
+            healthy_callback=None,
+        ) -> None:
+            _ = degraded_callback
+            _ = healthy_callback
+            if callable(started_callback):
+                started_callback()
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError as exc:
+                raise RuntimeError(
+                    "WhatsApp client shutdown failed during cancellation: "
+                    "RuntimeError: close failed"
+                ) from exc
+
+        with unittest.mock.patch(
+            target="mugen.run_whatsapp_client",
+            new=_cancel_to_runtime_error,
+        ):
+            runner = asyncio.create_task(
+                run_platform_clients(
+                    app,
+                    config_provider=lambda: config,
+                    logger_provider=lambda: app.logger,
+                    whatsapp_provider=lambda: None,
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+
+        state = app.extensions["mugen"]["bootstrap"]
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["whatsapp"],
+            PHASE_STATUS_DEGRADED,
+        )
+        self.assertIn(
+            "shutdown failed during cancellation",
+            str(state[PHASE_B_PLATFORM_ERRORS_KEY]["whatsapp"]),
+        )
+        self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
+
     async def test_run_platform_clients_rejects_telnet_platform(self) -> None:
         app = Quart("test_app")
         config = _test_config(platforms=["telnet"])

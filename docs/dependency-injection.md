@@ -10,6 +10,30 @@ This note documents the core DI structure in `mugen/core/di/__init__.py` and the
 
 Keep `logging_gateway` as the bootstrap provider and keep the remaining providers in `_PROVIDER_BUILD_ORDER` dependency-safe order.
 
+## Canonical Provider Tokens
+
+Runtime config values under `mugen.modules.core.*` must use these token values
+from `mugen/core/di/provider_registry.py` (never module paths):
+
+| Config Key | Allowed Tokens |
+| --- | --- |
+| `mugen.modules.core.gateway.logging` | `standard` |
+| `mugen.modules.core.gateway.completion` | `bedrock`, `deterministic`, `groq`, `openai`, `sambanova` |
+| `mugen.modules.core.gateway.email` | `ses`, `smtp` |
+| `mugen.modules.core.gateway.knowledge` | `qdrant` |
+| `mugen.modules.core.gateway.storage.keyval` | `relational` |
+| `mugen.modules.core.gateway.storage.media` | `default` |
+| `mugen.modules.core.gateway.storage.relational` | `sqlalchemy` |
+| `mugen.modules.core.gateway.storage.web_runtime` | `relational` |
+| `mugen.modules.core.service.ipc` | `default` |
+| `mugen.modules.core.service.messaging` | `default` |
+| `mugen.modules.core.service.nlp` | `default` |
+| `mugen.modules.core.service.platform` | `default` |
+| `mugen.modules.core.service.user` | `default` |
+| `mugen.modules.core.client.matrix` | `default` |
+| `mugen.modules.core.client.web` | `default` |
+| `mugen.modules.core.client.whatsapp` | `default` |
+
 ## Runtime Shutdown Timeout Contract
 
 - `mugen.runtime.provider_shutdown_timeout_seconds` is required and must be `> 0`.

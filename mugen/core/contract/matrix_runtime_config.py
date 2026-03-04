@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from mugen.core.utility.security import validate_matrix_secret_encryption_key
+
 MATRIX_DEVICE_TRUST_MODE_STRICT_KNOWN = "strict_known"
 MATRIX_DEVICE_TRUST_MODE_ALLOWLIST = "allowlist"
 MATRIX_DEVICE_TRUST_MODE_PERMISSIVE = "permissive"
@@ -189,8 +191,9 @@ def validate_matrix_enabled_runtime_config(config: Mapping[str, Any]) -> None:
         if isinstance(secrets_cfg, Mapping)
         else None
     )
-    if not isinstance(encryption_key, str) or encryption_key.strip() == "":
+    if encryption_key in [None, ""]:
         raise RuntimeError(
             "Invalid configuration: security.secrets.encryption_key is required "
             "when matrix platform is enabled."
         )
+    validate_matrix_secret_encryption_key(encryption_key)
