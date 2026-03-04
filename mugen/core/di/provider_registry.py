@@ -106,6 +106,10 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
         ),
     },
     "knowledge_gateway": {
+        "milvus": _ProviderTokenSpec(
+            module_path="mugen.core.gateway.knowledge.milvus",
+            class_name="MilvusKnowledgeGateway",
+        ),
         "qdrant": _ProviderTokenSpec(
             module_path="mugen.core.gateway.knowledge.qdrant",
             class_name="QdrantKnowledgeGateway",

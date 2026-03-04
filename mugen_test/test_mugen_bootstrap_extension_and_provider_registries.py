@@ -84,7 +84,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             ext_mod.resolve_extension_spec(123)
         with self.assertRaisesRegex(RuntimeError, "must be non-empty"):
             ext_mod.resolve_extension_spec("   ")
-        with self.assertRaisesRegex(RuntimeError, "module:Class paths are not supported"):
+        with self.assertRaisesRegex(
+            RuntimeError, "module:Class paths are not supported"
+        ):
             ext_mod.resolve_extension_spec("module:Class")
         with self.assertRaisesRegex(RuntimeError, "Unknown extension token"):
             ext_mod.resolve_extension_spec("unknown.token")
@@ -105,21 +107,27 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 "mugen.core.bootstrap.extensions.importlib.import_module",
                 side_effect=ImportError("missing"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "Invalid extension class binding"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "Invalid extension class binding"
+                ):
                     ext_mod.resolve_extension_spec("test.cp.dummy", scope="core")
 
             with patch(
                 "mugen.core.bootstrap.extensions.importlib.import_module",
                 return_value=SimpleNamespace(DummyClass=object()),
             ):
-                with self.assertRaisesRegex(RuntimeError, "Invalid extension class binding"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "Invalid extension class binding"
+                ):
                     ext_mod.resolve_extension_spec("test.cp.dummy", scope="core")
 
             with patch(
                 "mugen.core.bootstrap.extensions.importlib.import_module",
                 return_value=SimpleNamespace(DummyClass=type("Wrong", (), {})),
             ):
-                with self.assertRaisesRegex(RuntimeError, "Invalid extension class binding"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "Invalid extension class binding"
+                ):
                     ext_mod.resolve_extension_spec("test.cp.dummy", scope="core")
 
     def test_resolve_extension_spec_success(self) -> None:
@@ -144,7 +152,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         self.assertIs(spec.extension_class, _DummyCPExt)
 
     def test_parse_plugin_extension_class_ref_rejects_invalid_shape(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "Invalid plugin extension class binding"):
+        with self.assertRaisesRegex(
+            RuntimeError, "Invalid plugin extension class binding"
+        ):
             ext_mod._parse_plugin_extension_class_ref(  # pylint: disable=protected-access
                 "plugin.cp.bad",
                 ("cp", ICPExtension, "dummy.module"),
@@ -164,11 +174,15 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE",
             cached_registry,
         ):
-            resolved = ext_mod._plugin_extension_token_registry()  # pylint: disable=protected-access
+            resolved = (
+                ext_mod._plugin_extension_token_registry()
+            )  # pylint: disable=protected-access
         self.assertIs(resolved, cached_registry)
 
     def test_plugin_extension_registry_rejects_import_or_provider_shape(self) -> None:
-        with patch.object(ext_mod, "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE", None), patch(
+        with patch.object(
+            ext_mod, "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE", None
+        ), patch(
             "mugen.core.bootstrap.extensions.importlib.import_module",
             side_effect=ImportError("missing"),
         ):
@@ -179,9 +193,13 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 ext_mod._plugin_extension_token_registry()  # pylint: disable=protected-access
 
         bad_provider_module = SimpleNamespace(
-            **{ext_mod._PLUGIN_EXTENSION_REGISTRY_FUNC: object()}  # pylint: disable=protected-access
+            **{
+                ext_mod._PLUGIN_EXTENSION_REGISTRY_FUNC: object()
+            }  # pylint: disable=protected-access
         )
-        with patch.object(ext_mod, "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE", None), patch(
+        with patch.object(
+            ext_mod, "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE", None
+        ), patch(
             "mugen.core.bootstrap.extensions.importlib.import_module",
             return_value=bad_provider_module,
         ):
@@ -192,9 +210,13 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 ext_mod._plugin_extension_token_registry()  # pylint: disable=protected-access
 
         bad_registry_module = SimpleNamespace(
-            **{ext_mod._PLUGIN_EXTENSION_REGISTRY_FUNC: lambda: []}  # pylint: disable=protected-access
+            **{
+                ext_mod._PLUGIN_EXTENSION_REGISTRY_FUNC: lambda: []
+            }  # pylint: disable=protected-access
         )
-        with patch.object(ext_mod, "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE", None), patch(
+        with patch.object(
+            ext_mod, "_PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE", None
+        ), patch(
             "mugen.core.bootstrap.extensions.importlib.import_module",
             return_value=bad_registry_module,
         ):
@@ -251,7 +273,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 critical=False,
             )
 
-        registry._platform_service = SimpleNamespace(extension_supported=lambda ext: False)  # pylint: disable=protected-access
+        registry._platform_service = SimpleNamespace(
+            extension_supported=lambda ext: False
+        )  # pylint: disable=protected-access
         supported = await registry.register(
             app=object(),
             extension_type="cp",
@@ -261,7 +285,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(supported)
 
-        registry._platform_service = SimpleNamespace(extension_supported=lambda ext: True)  # pylint: disable=protected-access
+        registry._platform_service = SimpleNamespace(
+            extension_supported=lambda ext: True
+        )  # pylint: disable=protected-access
         fw = _DummyFWExt()
         fw.setup = AsyncMock(return_value=None)
         supported = await registry.register(
@@ -310,7 +336,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(AttributeError, "bind_cp_extension"):
             registry = ext_mod.DefaultExtensionRegistry(
-                messaging_service=SimpleNamespace(register_cp_extension=lambda ext: ext),
+                messaging_service=SimpleNamespace(
+                    register_cp_extension=lambda ext: ext
+                ),
                 ipc_service=SimpleNamespace(),
                 platform_service=SimpleNamespace(extension_supported=lambda ext: True),
                 logging_gateway=Mock(),
@@ -378,7 +406,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 bind_rag_extension=_bind("rag"),
                 bind_rpp_extension=_bind("rpp"),
             ),
-            ipc_service=SimpleNamespace(bind_ipc_extension=lambda _ext, **_kwargs: None),
+            ipc_service=SimpleNamespace(
+                bind_ipc_extension=lambda _ext, **_kwargs: None
+            ),
             platform_service=SimpleNamespace(extension_supported=lambda ext: True),
             logging_gateway=Mock(),
         )
@@ -483,7 +513,9 @@ class TestProviderRegistryResolution(unittest.TestCase):
     def test_successful_resolution_returns_provider_class(self) -> None:
         with patch(
             "mugen.core.di.provider_registry.importlib.import_module",
-            return_value=SimpleNamespace(DeterministicCompletionGateway=_DummyCompletion),
+            return_value=SimpleNamespace(
+                DeterministicCompletionGateway=_DummyCompletion
+            ),
         ):
             resolved = provider_registry.resolve_provider_class(
                 provider_name="completion_gateway",
@@ -523,6 +555,18 @@ class TestProviderRegistryResolution(unittest.TestCase):
             resolved = provider_registry.resolve_provider_class(
                 provider_name="knowledge_gateway",
                 token="chromadb",
+                interface=IKnowledgeGateway,
+            )
+        self.assertIs(resolved, _DummyKnowledge)
+
+    def test_milvus_knowledge_provider_token_resolves(self) -> None:
+        with patch(
+            "mugen.core.di.provider_registry.importlib.import_module",
+            return_value=SimpleNamespace(MilvusKnowledgeGateway=_DummyKnowledge),
+        ):
+            resolved = provider_registry.resolve_provider_class(
+                provider_name="knowledge_gateway",
+                token="milvus",
                 interface=IKnowledgeGateway,
             )
         self.assertIs(resolved, _DummyKnowledge)

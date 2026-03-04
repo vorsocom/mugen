@@ -200,7 +200,9 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cases.append((cfg, ".token is required and must be a string"))
 
         cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["extensions"] = [{"type": "cp", "token": "mod:Cls"}]
+        cfg["mugen"]["modules"]["core"]["extensions"] = [
+            {"type": "cp", "token": "mod:Cls"}
+        ]
         cases.append((cfg, ".token must be a token"))
 
         cfg = _valid_core_config()
@@ -223,7 +225,7 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         di._validate_core_module_schema(cfg)
 
     def test_core_schema_accepts_optional_gateway_tokens_and_extensions(self) -> None:
-        for knowledge_token in ("qdrant", "chromadb"):
+        for knowledge_token in ("qdrant", "chromadb", "milvus", "pgvector"):
             cfg = _valid_core_config()
             cfg["mugen"]["modules"]["core"]["gateway"]["email"] = "smtp"
             cfg["mugen"]["modules"]["core"]["gateway"]["knowledge"] = knowledge_token
@@ -311,12 +313,16 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         ):
             di._validate_core_module_schema(cfg)
 
-    def test_core_schema_requires_matrix_encryption_key_when_matrix_enabled(self) -> None:
+    def test_core_schema_requires_matrix_encryption_key_when_matrix_enabled(
+        self,
+    ) -> None:
         for mutate in (
             lambda cfg: cfg.update({"security": "invalid-shape"}),
             lambda cfg: cfg.update({"security": {}}),
             lambda cfg: cfg.update({"security": {"secrets": {}}}),
-            lambda cfg: cfg.update({"security": {"secrets": {"encryption_key": "   "}}}),
+            lambda cfg: cfg.update(
+                {"security": {"secrets": {"encryption_key": "   "}}}
+            ),
         ):
             cfg = _valid_core_config()
             cfg["mugen"]["platforms"] = ["matrix"]
@@ -332,7 +338,9 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cfg["mugen"]["platforms"] = ["matrix"]
         di._validate_core_module_schema(cfg)
 
-    def test_core_schema_requires_strict_matrix_runtime_contract_when_enabled(self) -> None:
+    def test_core_schema_requires_strict_matrix_runtime_contract_when_enabled(
+        self,
+    ) -> None:
         cases: list[tuple[dict, str]] = []
 
         cfg = _valid_core_config()
@@ -432,7 +440,9 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         )
 
         class _DummyKeyval:  # pylint: disable=too-few-public-methods
-            def __init__(self, config, logging_gateway, relational_runtime):  # noqa: ANN001
+            def __init__(
+                self, config, logging_gateway, relational_runtime
+            ):  # noqa: ANN001
                 _ = (config, logging_gateway, relational_runtime)
 
         with (
@@ -449,7 +459,9 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
         self.assertIsNone(injector.keyval_storage_gateway)
 
-    def test_build_provider_raises_relational_runtime_bootstrap_failure_strict(self) -> None:
+    def test_build_provider_raises_relational_runtime_bootstrap_failure_strict(
+        self,
+    ) -> None:
         config = _valid_core_config()
         injector = di.injector.DependencyInjector(
             config=SimpleNamespace(),
@@ -457,7 +469,9 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         )
 
         class _DummyKeyval:  # pylint: disable=too-few-public-methods
-            def __init__(self, config, logging_gateway, relational_runtime):  # noqa: ANN001
+            def __init__(
+                self, config, logging_gateway, relational_runtime
+            ):  # noqa: ANN001
                 _ = (config, logging_gateway, relational_runtime)
 
         with (
@@ -478,4 +492,6 @@ class TestDISchemaValidationBranches(unittest.TestCase):
                 strict_required=True,
             )
 
-        self.assertIn("Provider bootstrap failed (keyval_storage_gateway)", str(raised.exception))
+        self.assertIn(
+            "Provider bootstrap failed (keyval_storage_gateway)", str(raised.exception)
+        )
