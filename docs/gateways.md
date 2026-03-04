@@ -10,7 +10,7 @@ This document explains gateway contracts and currently supported completion,
 knowledge, and email gateway implementations in muGen.
 
 Runtime configuration uses strict provider tokens (for example `bedrock`,
-`openai`, `sambanova`, `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate`, `smtp`, `ses`), not
+`openai`, `sambanova`, `vertex`, `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate`, `smtp`, `ses`), not
 Python module paths.
 
 ## Completion Gateway Contract
@@ -334,6 +334,60 @@ SambaNova compatibility notes:
 - Fails readiness on auth errors (`401`/`403`), provider errors (`5xx`), or
   transport failures.
 
+### Vertex
+
+Module: `mugen.core.gateway.completion.vertex`
+
+Uses Vertex Gemini native `generateContent` (non-stream in current implementation).
+
+Supports normalized inference fields:
+
+- `max_completion_tokens`
+- `temperature`
+- `top_p`
+- `stop`
+
+Per-request stream behavior:
+
+- `inference.stream=true` is rejected with a deterministic `CompletionGatewayError`
+  because streaming is not yet implemented for the Vertex gateway.
+
+Vertex-specific optional keys are forwarded from
+`CompletionRequest.vendor_params`:
+
+- `safety_settings` -> `safetySettings`
+- `tools` -> `tools`
+- `tool_config` -> `toolConfig`
+- `cached_content` -> `cachedContent`
+- `response_mime_type` -> `generationConfig.responseMimeType`
+- `response_schema` -> `generationConfig.responseSchema`
+- `candidate_count` -> `generationConfig.candidateCount`
+
+Message serialization notes:
+
+- `system` messages are joined into `systemInstruction`.
+- `user` messages map to Vertex `contents[*].role=user`.
+- `assistant` messages map to Vertex `contents[*].role=model`.
+- Non-standard roles are coerced to `user` text with a role prefix.
+- Structured content (`dict`/`list`) is serialized to JSON text for MVP.
+
+Authentication and endpoint behavior:
+
+- Auth precedence:
+  - `[gcp.vertex] api.access_token` when configured.
+  - otherwise ADC (`google.auth.default` + token refresh).
+- The gateway targets:
+  - `projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent`
+  - and supports fully qualified `projects/...` model paths when supplied.
+
+#### Vertex Readiness Behavior
+
+- Validates both `classification` and `completion` operation configs.
+- Executes a bounded HTTP probe using the configured model.
+- Treats explicit validation-style probe responses (`400`/`422`) as reachable.
+- Fails readiness on auth errors (`401`/`403`), provider errors (`5xx`), or
+  transport failures.
+
 ## Email Provider Gateways
 
 ### SMTP
@@ -540,6 +594,7 @@ Behavior:
 ```toml
 [mugen.modules.core]
 gateway.completion = "bedrock"
+# gateway.completion = "vertex"
 # Optional knowledge gateway.
 # gateway.knowledge = "chromadb"
 # gateway.knowledge = "milvus"
@@ -559,6 +614,21 @@ api.completion.model = "amazon.nova-lite-v1:0"
 api.completion.max_tokens = 1024
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+
+[gcp.vertex]
+api.project = "my-gcp-project"
+api.location = "us-central1"
+api.access_token = ""
+api.classification.model = "gemini-2.0-flash-001"
+api.classification.temp = 0.0
+api.classification.top_p = 1.0
+api.classification.max_completion_tokens = 256
+api.completion.model = "gemini-2.0-flash-001"
+api.completion.temp = 0.2
+api.completion.top_p = 0.9
+api.completion.max_completion_tokens = 1024
+api.connect_timeout_seconds = 10.0
+api.read_timeout_seconds = 30.0
 
 [smtp]
 host = "smtp.example.com"

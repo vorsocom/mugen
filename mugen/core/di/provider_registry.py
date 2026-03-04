@@ -40,6 +40,10 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             module_path="mugen.core.gateway.completion.deterministic",
             class_name="DeterministicCompletionGateway",
         ),
+        "vertex": _ProviderTokenSpec(
+            module_path="mugen.core.gateway.completion.vertex",
+            class_name="VertexCompletionGateway",
+        ),
     },
     "email_gateway": {
         "smtp": _ProviderTokenSpec(
