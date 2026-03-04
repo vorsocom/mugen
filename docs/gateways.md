@@ -10,7 +10,7 @@ This document explains gateway contracts and currently supported completion,
 knowledge, and email gateway implementations in muGen.
 
 Runtime configuration uses strict provider tokens (for example `bedrock`,
-`openai`, `sambanova`, `vertex`, `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate`, `smtp`, `ses`), not
+`openai`, `azure_foundry`, `sambanova`, `vertex`, `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate`, `smtp`, `ses`), not
 Python module paths.
 
 ## Completion Gateway Contract
@@ -282,6 +282,41 @@ OpenAI compatibility notes:
   structured output blocks in normalized response fields.
 
 #### OpenAI Readiness Behavior
+
+- Validates both `classification` and `completion` operation configs.
+- Executes a bounded `models.list` probe at startup.
+- Supports SDK signature differences (`list(limit=1)` fallback to `list()`).
+- Fails readiness on missing probe hooks, timeouts, or provider/network errors.
+
+### Azure AI Foundry
+
+Module: `mugen.core.gateway.completion.azure_foundry`
+
+Azure AI Foundry surface routing:
+
+- Operation default:
+  - `[azure.foundry] api.<operation>.surface = "chat_completions" | "responses"`
+- Per-request override:
+  - `CompletionRequest.vendor_params["azure_foundry_api"]`
+  - allowed values: `chat_completions`, `responses`
+- Backward-compatible alias:
+  - `CompletionRequest.vendor_params["openai_api"]` is accepted and mapped.
+
+Supports the same normalized inference fields and vendor passthrough behavior as
+the OpenAI gateway.
+
+Azure AI Foundry compatibility notes:
+
+- Uses OpenAI-compatible request/response payloads.
+- API key and endpoint are config-only:
+  - `[azure.foundry] api.key`
+  - `[azure.foundry] api.base_url`
+- Sends `api-key` header on every request.
+- Optional API version query parameter can be configured via
+  `[azure.foundry] api.version` and is sent as `api-version=<value>`.
+- Optional timeout can be configured via `[azure.foundry] api.timeout_seconds`.
+
+#### Azure AI Foundry Readiness Behavior
 
 - Validates both `classification` and `completion` operation configs.
 - Executes a bounded `models.list` probe at startup.
@@ -594,6 +629,7 @@ Behavior:
 ```toml
 [mugen.modules.core]
 gateway.completion = "bedrock"
+# gateway.completion = "azure_foundry"
 # gateway.completion = "vertex"
 # Optional knowledge gateway.
 # gateway.knowledge = "chromadb"
@@ -614,6 +650,22 @@ api.completion.model = "amazon.nova-lite-v1:0"
 api.completion.max_tokens = 1024
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+
+[azure.foundry]
+api.key = "<azure-foundry-api-key>"
+api.base_url = "https://example.services.ai.azure.com/models"
+api.version = "2025-04-01-preview"
+api.classification.model = "gpt-4.1-mini"
+api.classification.surface = "chat_completions"
+api.classification.temp = 0.0
+api.classification.top_p = 1.0
+api.classification.max_completion_tokens = 256
+api.completion.model = "gpt-4.1-mini"
+api.completion.surface = "chat_completions"
+api.completion.temp = 0.2
+api.completion.top_p = 0.9
+api.completion.max_completion_tokens = 1024
+api.timeout_seconds = 30.0
 
 [gcp.vertex]
 api.project = "my-gcp-project"
