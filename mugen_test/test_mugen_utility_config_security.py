@@ -28,14 +28,21 @@ class TestMugenUtilityRdbmsSchema(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Invalid schema"):
             validate_sql_identifier("bad-schema", label="schema")
 
-    def test_resolve_core_rdbms_schema_defaults_and_resolves_dict(self) -> None:
-        self.assertEqual(resolve_core_rdbms_schema({}), "mugen")
-        self.assertEqual(
+    def test_resolve_core_rdbms_schema_requires_explicit_value(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "rdbms.migration_tracks.core.schema is required",
+        ):
+            resolve_core_rdbms_schema({})
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "rdbms.migration_tracks.core.schema is required",
+        ):
             resolve_core_rdbms_schema(
                 {"rdbms": {"migration_tracks": {"core": {"schema": ""}}}}
-            ),
-            "mugen",
-        )
+            )
+
+    def test_resolve_core_rdbms_schema_resolves_dict_value(self) -> None:
         self.assertEqual(
             resolve_core_rdbms_schema(
                 {"rdbms": {"migration_tracks": {"core": {"schema": "core_runtime"}}}}
@@ -52,10 +59,18 @@ class TestMugenUtilityRdbmsSchema(unittest.TestCase):
             )
         )
         self.assertEqual(resolve_core_rdbms_schema(config), "core_runtime")
-        self.assertEqual(
-            resolve_core_rdbms_schema(SimpleNamespace(rdbms=None)),
-            "mugen",
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "rdbms.migration_tracks.core.schema is required",
+        ):
+            resolve_core_rdbms_schema(SimpleNamespace(rdbms=None))
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "rdbms.migration_tracks.core.schema is required",
+        ):
+            resolve_core_rdbms_schema(
+                SimpleNamespace(rdbms=SimpleNamespace())
+            )
 
         with self.assertRaisesRegex(RuntimeError, "Invalid rdbms.migration_tracks.core.schema"):
             resolve_core_rdbms_schema(

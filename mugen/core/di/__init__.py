@@ -47,6 +47,7 @@ from mugen.core.utility.config_value import (
     parse_optional_positive_finite_float,
 )
 from mugen.core.utility.platforms import normalize_platforms, unknown_platforms
+from mugen.core.utility.rdbms_schema import resolve_core_rdbms_schema
 
 from .injector import DependencyInjector
 from .provider_registry import resolve_provider_class
@@ -221,6 +222,8 @@ def _validate_extension_entry_schema(
 
 
 def _validate_core_module_schema(config: dict) -> None:
+    resolve_core_rdbms_schema(config)
+
     mugen_cfg = config.get("mugen")
     if not isinstance(mugen_cfg, dict):
         raise RuntimeError("Invalid configuration: [mugen] section is required.")

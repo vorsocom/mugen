@@ -9,12 +9,17 @@ Create Date: 2025-12-16 09:49:42.773821
 from typing import Sequence, Union
 
 from alembic import op
+from migrations.schema_contract import rewrite_mugen_schema_sql
+from migrations.schema_contract import resolve_runtime_schema
 
 # revision identifiers, used by Alembic.
 revision: str = "ed33a7c861dd"
 down_revision: Union[str, Sequence[str], None] = "cd8d7bce9a46"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+
+_SCHEMA = resolve_runtime_schema()
 
 _TOUCH_TABLES = [
     "global_permission_entry",
@@ -36,10 +41,21 @@ _TOUCH_TABLES = [
 ]
 
 
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
+
+
 # pylint: disable=no-member
 def upgrade() -> None:
     """Upgrade schema."""
-    op.execute(
+    _execute(
         """
         CREATE SCHEMA IF NOT EXISTS util;
 
@@ -57,7 +73,7 @@ def upgrade() -> None:
     )
 
     for table in _TOUCH_TABLES:
-        op.execute(
+        _execute(
             f"""
             DROP TRIGGER IF EXISTS tr_touch_admin_{table}
             ON mugen.admin_{table};
@@ -73,8 +89,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema."""
     for table in _TOUCH_TABLES:
-        op.execute(
+        _execute(
             f"DROP TRIGGER IF EXISTS tr_touch_admin_{table} ON mugen.admin_{table};"
         )
-    op.execute("DROP FUNCTION IF EXISTS util.tg_touch_updated_at_row_version();")
-    op.execute("DROP SCHEMA IF EXISTS util;")
+    _execute("DROP FUNCTION IF EXISTS util.tg_touch_updated_at_row_version();")
+    _execute("DROP SCHEMA IF EXISTS util;")

@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -20,7 +21,7 @@ down_revision: Union[str, None] = "b2c4d6e8f0a1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -88,7 +89,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_sla_clock_definition__tenant_id__admin_tenant",
         ),
@@ -244,21 +245,21 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_sla_clock_event__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_sla_clock_event__actor_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "clock_id"),
             (
-                "mugen.ops_sla_clock.tenant_id",
-                "mugen.ops_sla_clock.id",
+                f"{_SCHEMA}.ops_sla_clock.tenant_id",
+                f"{_SCHEMA}.ops_sla_clock.id",
             ),
             ondelete="CASCADE",
             name="fkx_ops_sla_clock_event__tenant_clock",
@@ -266,8 +267,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "clock_definition_id"),
             (
-                "mugen.ops_sla_clock_definition.tenant_id",
-                "mugen.ops_sla_clock_definition.id",
+                f"{_SCHEMA}.ops_sla_clock_definition.tenant_id",
+                f"{_SCHEMA}.ops_sla_clock_definition.id",
             ),
             ondelete="SET NULL",
             name="fkx_ops_sla_clock_event__tenant_clock_definition",
@@ -389,7 +390,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_sla_escalation_policy__tenant_id__admin_tenant",
         ),
@@ -494,21 +495,21 @@ def upgrade() -> None:
         sa.Column("executed_by_user_id", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_sla_escalation_run__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["executed_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_sla_escalation_run__executed_by_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "escalation_policy_id"),
             (
-                "mugen.ops_sla_escalation_policy.tenant_id",
-                "mugen.ops_sla_escalation_policy.id",
+                f"{_SCHEMA}.ops_sla_escalation_policy.tenant_id",
+                f"{_SCHEMA}.ops_sla_escalation_policy.id",
             ),
             ondelete="CASCADE",
             name="fkx_ops_sla_escalation_run__tenant_policy",
@@ -516,8 +517,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "clock_id"),
             (
-                "mugen.ops_sla_clock.tenant_id",
-                "mugen.ops_sla_clock.id",
+                f"{_SCHEMA}.ops_sla_clock.tenant_id",
+                f"{_SCHEMA}.ops_sla_clock.id",
             ),
             ondelete="SET NULL",
             name="fkx_ops_sla_escalation_run__tenant_clock",
@@ -525,8 +526,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "clock_event_id"),
             (
-                "mugen.ops_sla_clock_event.tenant_id",
-                "mugen.ops_sla_clock_event.id",
+                f"{_SCHEMA}.ops_sla_clock_event.tenant_id",
+                f"{_SCHEMA}.ops_sla_clock_event.id",
             ),
             ondelete="SET NULL",
             name="fkx_ops_sla_escalation_run__tenant_clock_event",

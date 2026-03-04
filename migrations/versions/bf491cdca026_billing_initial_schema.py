@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -18,6 +19,9 @@ revision: str = "bf491cdca026"
 down_revision: Union[str, None] = "41dc50b08af1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -61,13 +65,13 @@ def upgrade() -> None:
 
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_account__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["deleted_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_billing_account__deleted_by_user_id__admin_user",
         ),
@@ -75,16 +79,16 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_billing_account"),
         sa.UniqueConstraint("tenant_id", "id", name="ux_billing_account__tenant_id_id"),
 
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.create_index(op.f("ix_mugen_billing_account_tenant_id"), "billing_account", ["tenant_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_account_code"), "billing_account", ["code"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_account_display_name"), "billing_account", ["display_name"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_account_email"), "billing_account", ["email"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_account_external_ref"), "billing_account", ["external_ref"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_account_deleted_at"), "billing_account", ["deleted_at"], unique=False, schema="mugen")
-    op.create_index("ix_billing_account__tenant_code", "billing_account", ["tenant_id", "code"], unique=False, schema="mugen")
-    op.create_index("ix_billing_account__tenant_external_ref", "billing_account", ["tenant_id", "external_ref"], unique=False, schema="mugen")
+    op.create_index(op.f("ix_mugen_billing_account_tenant_id"), "billing_account", ["tenant_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_account_code"), "billing_account", ["code"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_account_display_name"), "billing_account", ["display_name"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_account_email"), "billing_account", ["email"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_account_external_ref"), "billing_account", ["external_ref"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_account_deleted_at"), "billing_account", ["deleted_at"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_account__tenant_code", "billing_account", ["tenant_id", "code"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_account__tenant_external_ref", "billing_account", ["tenant_id", "external_ref"], unique=False, schema=_SCHEMA)
 
     # ------------------------------
     # billing_product
@@ -120,13 +124,13 @@ def upgrade() -> None:
 
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_product__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["deleted_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_billing_product__deleted_by_user_id__admin_user",
         ),
@@ -134,46 +138,46 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_billing_product"),
         sa.UniqueConstraint("tenant_id", "id", name="ux_billing_product__tenant_id_id"),
 
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.create_index(op.f("ix_mugen_billing_product_tenant_id"), "billing_product", ["tenant_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_product_code"), "billing_product", ["code"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_product_name"), "billing_product", ["name"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_product_deleted_at"), "billing_product", ["deleted_at"], unique=False, schema="mugen")
-    op.create_index("ix_billing_product__tenant_code", "billing_product", ["tenant_id", "code"], unique=False, schema="mugen")
+    op.create_index(op.f("ix_mugen_billing_product_tenant_id"), "billing_product", ["tenant_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_product_code"), "billing_product", ["code"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_product_name"), "billing_product", ["name"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_product_deleted_at"), "billing_product", ["deleted_at"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_product__tenant_code", "billing_product", ["tenant_id", "code"], unique=False, schema=_SCHEMA)
 
     # ------------------------------
     # Enum types
     # ------------------------------
     billing_price_type = postgresql.ENUM(
-        "one_time", "recurring", "metered", name="billing_price_type", schema="mugen", create_type=False
+        "one_time", "recurring", "metered", name="billing_price_type", schema=_SCHEMA, create_type=False
     )
     billing_interval_unit = postgresql.ENUM(
-        "day", "week", "month", "year", name="billing_interval_unit", schema="mugen", create_type=False
+        "day", "week", "month", "year", name="billing_interval_unit", schema=_SCHEMA, create_type=False
     )
     billing_subscription_status = postgresql.ENUM(
         "active", "trialing", "paused", "canceled", "ended",
         name="billing_subscription_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
     billing_usage_event_status = postgresql.ENUM(
-        "recorded", "void", name="billing_usage_event_status", schema="mugen", create_type=False
+        "recorded", "void", name="billing_usage_event_status", schema=_SCHEMA, create_type=False
     )
     billing_invoice_status = postgresql.ENUM(
         "draft", "issued", "paid", "void", "uncollectible",
         name="billing_invoice_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
     billing_payment_status = postgresql.ENUM(
         "pending", "succeeded", "failed", "canceled", "refunded",
         name="billing_payment_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
     billing_ledger_direction = postgresql.ENUM(
-        "debit", "credit", name="billing_ledger_direction", schema="mugen", create_type=False
+        "debit", "credit", name="billing_ledger_direction", schema=_SCHEMA, create_type=False
     )
 
     billing_price_type.create(op.get_bind(), checkfirst=True)
@@ -220,19 +224,19 @@ def upgrade() -> None:
 
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_price__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["deleted_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_billing_price__deleted_by_user_id__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "product_id"],
-            ["mugen.billing_product.tenant_id", "mugen.billing_product.id"],
+            [f"{_SCHEMA}.billing_product.tenant_id", f"{_SCHEMA}.billing_product.id"],
             ondelete="RESTRICT",
             name="fkx_billing_price__tenant_product",
         ),
@@ -251,17 +255,17 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_billing_price"),
         sa.UniqueConstraint("tenant_id", "id", name="ux_billing_price__tenant_id_id"),
 
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.create_index(op.f("ix_mugen_billing_price_tenant_id"), "billing_price", ["tenant_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_price_product_id"), "billing_price", ["product_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_price_code"), "billing_price", ["code"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_price_price_type"), "billing_price", ["price_type"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_price_currency"), "billing_price", ["currency"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_price_interval_unit"), "billing_price", ["interval_unit"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_price_deleted_at"), "billing_price", ["deleted_at"], unique=False, schema="mugen")
-    op.create_index("ix_billing_price__tenant_code", "billing_price", ["tenant_id", "code"], unique=False, schema="mugen")
-    op.create_index("ix_billing_price__tenant_product", "billing_price", ["tenant_id", "product_id"], unique=False, schema="mugen")
+    op.create_index(op.f("ix_mugen_billing_price_tenant_id"), "billing_price", ["tenant_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_price_product_id"), "billing_price", ["product_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_price_code"), "billing_price", ["code"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_price_price_type"), "billing_price", ["price_type"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_price_currency"), "billing_price", ["currency"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_price_interval_unit"), "billing_price", ["interval_unit"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_price_deleted_at"), "billing_price", ["deleted_at"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_price__tenant_code", "billing_price", ["tenant_id", "code"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_price__tenant_product", "billing_price", ["tenant_id", "product_id"], unique=False, schema=_SCHEMA)
 
     # ------------------------------
     # billing_subscription
@@ -301,25 +305,25 @@ def upgrade() -> None:
 
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_subscription__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["deleted_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_billing_subscription__deleted_by_user_id__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "account_id"],
-            ["mugen.billing_account.tenant_id", "mugen.billing_account.id"],
+            [f"{_SCHEMA}.billing_account.tenant_id", f"{_SCHEMA}.billing_account.id"],
             ondelete="RESTRICT",
             name="fkx_billing_subscription__tenant_account",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "price_id"],
-            ["mugen.billing_price.tenant_id", "mugen.billing_price.id"],
+            [f"{_SCHEMA}.billing_price.tenant_id", f"{_SCHEMA}.billing_price.id"],
             ondelete="RESTRICT",
             name="fkx_billing_subscription__tenant_price",
         ),
@@ -333,17 +337,17 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_billing_subscription"),
         sa.UniqueConstraint("tenant_id", "id", name="ux_billing_subscription__tenant_id_id"),
 
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.create_index(op.f("ix_mugen_billing_subscription_tenant_id"), "billing_subscription", ["tenant_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_subscription_account_id"), "billing_subscription", ["account_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_subscription_price_id"), "billing_subscription", ["price_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_subscription_status"), "billing_subscription", ["status"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_subscription_started_at"), "billing_subscription", ["started_at"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_subscription_external_ref"), "billing_subscription", ["external_ref"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_subscription_deleted_at"), "billing_subscription", ["deleted_at"], unique=False, schema="mugen")
-    op.create_index("ix_billing_subscription__tenant_account", "billing_subscription", ["tenant_id", "account_id"], unique=False, schema="mugen")
-    op.create_index("ix_billing_subscription__tenant_price", "billing_subscription", ["tenant_id", "price_id"], unique=False, schema="mugen")
+    op.create_index(op.f("ix_mugen_billing_subscription_tenant_id"), "billing_subscription", ["tenant_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_subscription_account_id"), "billing_subscription", ["account_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_subscription_price_id"), "billing_subscription", ["price_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_subscription_status"), "billing_subscription", ["status"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_subscription_started_at"), "billing_subscription", ["started_at"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_subscription_external_ref"), "billing_subscription", ["external_ref"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_subscription_deleted_at"), "billing_subscription", ["deleted_at"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_subscription__tenant_account", "billing_subscription", ["tenant_id", "account_id"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_subscription__tenant_price", "billing_subscription", ["tenant_id", "price_id"], unique=False, schema=_SCHEMA)
 
     # ------------------------------
     # billing_invoice
@@ -387,25 +391,25 @@ def upgrade() -> None:
 
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_invoice__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["deleted_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_billing_invoice__deleted_by_user_id__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "account_id"],
-            ["mugen.billing_account.tenant_id", "mugen.billing_account.id"],
+            [f"{_SCHEMA}.billing_account.tenant_id", f"{_SCHEMA}.billing_account.id"],
             ondelete="RESTRICT",
             name="fkx_billing_invoice__tenant_account",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "subscription_id"],
-            ["mugen.billing_subscription.tenant_id", "mugen.billing_subscription.id"],
+            [f"{_SCHEMA}.billing_subscription.tenant_id", f"{_SCHEMA}.billing_subscription.id"],
             ondelete="SET NULL",
             name="fkx_billing_invoice__tenant_subscription",
         ),
@@ -424,16 +428,16 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_billing_invoice"),
         sa.UniqueConstraint("tenant_id", "id", name="ux_billing_invoice__tenant_id_id"),
 
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.create_index(op.f("ix_mugen_billing_invoice_tenant_id"), "billing_invoice", ["tenant_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_invoice_account_id"), "billing_invoice", ["account_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_invoice_subscription_id"), "billing_invoice", ["subscription_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_invoice_status"), "billing_invoice", ["status"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_invoice_number"), "billing_invoice", ["number"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_invoice_currency"), "billing_invoice", ["currency"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_invoice_deleted_at"), "billing_invoice", ["deleted_at"], unique=False, schema="mugen")
-    op.create_index("ix_billing_invoice__tenant_account", "billing_invoice", ["tenant_id", "account_id"], unique=False, schema="mugen")
+    op.create_index(op.f("ix_mugen_billing_invoice_tenant_id"), "billing_invoice", ["tenant_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_invoice_account_id"), "billing_invoice", ["account_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_invoice_subscription_id"), "billing_invoice", ["subscription_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_invoice_status"), "billing_invoice", ["status"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_invoice_number"), "billing_invoice", ["number"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_invoice_currency"), "billing_invoice", ["currency"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_invoice_deleted_at"), "billing_invoice", ["deleted_at"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_invoice__tenant_account", "billing_invoice", ["tenant_id", "account_id"], unique=False, schema=_SCHEMA)
 
     # ------------------------------
     # billing_invoice_line
@@ -467,19 +471,19 @@ def upgrade() -> None:
 
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_invoice_line__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "invoice_id"],
-            ["mugen.billing_invoice.tenant_id", "mugen.billing_invoice.id"],
+            [f"{_SCHEMA}.billing_invoice.tenant_id", f"{_SCHEMA}.billing_invoice.id"],
             ondelete="CASCADE",
             name="fkx_billing_invoice_line__tenant_invoice",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "price_id"],
-            ["mugen.billing_price.tenant_id", "mugen.billing_price.id"],
+            [f"{_SCHEMA}.billing_price.tenant_id", f"{_SCHEMA}.billing_price.id"],
             ondelete="SET NULL",
             name="fkx_billing_invoice_line__tenant_price",
         ),
@@ -490,12 +494,12 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_billing_invoice_line"),
         sa.UniqueConstraint("tenant_id", "id", name="ux_billing_invoice_line__tenant_id_id"),
 
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.create_index(op.f("ix_mugen_billing_invoice_line_tenant_id"), "billing_invoice_line", ["tenant_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_invoice_line_invoice_id"), "billing_invoice_line", ["invoice_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_invoice_line_price_id"), "billing_invoice_line", ["price_id"], unique=False, schema="mugen")
-    op.create_index("ix_billing_invoice_line__tenant_invoice", "billing_invoice_line", ["tenant_id", "invoice_id"], unique=False, schema="mugen")
+    op.create_index(op.f("ix_mugen_billing_invoice_line_tenant_id"), "billing_invoice_line", ["tenant_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_invoice_line_invoice_id"), "billing_invoice_line", ["invoice_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_invoice_line_price_id"), "billing_invoice_line", ["price_id"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_invoice_line__tenant_invoice", "billing_invoice_line", ["tenant_id", "invoice_id"], unique=False, schema=_SCHEMA)
 
     # ------------------------------
     # billing_payment
@@ -532,19 +536,19 @@ def upgrade() -> None:
 
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_payment__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "account_id"],
-            ["mugen.billing_account.tenant_id", "mugen.billing_account.id"],
+            [f"{_SCHEMA}.billing_account.tenant_id", f"{_SCHEMA}.billing_account.id"],
             ondelete="RESTRICT",
             name="fkx_billing_payment__tenant_account",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "invoice_id"],
-            ["mugen.billing_invoice.tenant_id", "mugen.billing_invoice.id"],
+            [f"{_SCHEMA}.billing_invoice.tenant_id", f"{_SCHEMA}.billing_invoice.id"],
             ondelete="SET NULL",
             name="fkx_billing_payment__tenant_invoice",
         ),
@@ -557,16 +561,16 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_billing_payment"),
         sa.UniqueConstraint("tenant_id", "id", name="ux_billing_payment__tenant_id_id"),
 
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.create_index(op.f("ix_mugen_billing_payment_tenant_id"), "billing_payment", ["tenant_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_payment_account_id"), "billing_payment", ["account_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_payment_invoice_id"), "billing_payment", ["invoice_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_payment_status"), "billing_payment", ["status"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_payment_currency"), "billing_payment", ["currency"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_payment_provider"), "billing_payment", ["provider"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_payment_external_ref"), "billing_payment", ["external_ref"], unique=False, schema="mugen")
-    op.create_index("ix_billing_payment__tenant_account", "billing_payment", ["tenant_id", "account_id"], unique=False, schema="mugen")
+    op.create_index(op.f("ix_mugen_billing_payment_tenant_id"), "billing_payment", ["tenant_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_payment_account_id"), "billing_payment", ["account_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_payment_invoice_id"), "billing_payment", ["invoice_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_payment_status"), "billing_payment", ["status"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_payment_currency"), "billing_payment", ["currency"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_payment_provider"), "billing_payment", ["provider"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_payment_external_ref"), "billing_payment", ["external_ref"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_payment__tenant_account", "billing_payment", ["tenant_id", "account_id"], unique=False, schema=_SCHEMA)
 
     # ------------------------------
     # billing_usage_event
@@ -599,25 +603,25 @@ def upgrade() -> None:
 
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_usage_event__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "account_id"],
-            ["mugen.billing_account.tenant_id", "mugen.billing_account.id"],
+            [f"{_SCHEMA}.billing_account.tenant_id", f"{_SCHEMA}.billing_account.id"],
             ondelete="RESTRICT",
             name="fkx_billing_usage_event__tenant_account",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "subscription_id"],
-            ["mugen.billing_subscription.tenant_id", "mugen.billing_subscription.id"],
+            [f"{_SCHEMA}.billing_subscription.tenant_id", f"{_SCHEMA}.billing_subscription.id"],
             ondelete="SET NULL",
             name="fkx_billing_usage_event__tenant_subscription",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "price_id"],
-            ["mugen.billing_price.tenant_id", "mugen.billing_price.id"],
+            [f"{_SCHEMA}.billing_price.tenant_id", f"{_SCHEMA}.billing_price.id"],
             ondelete="SET NULL",
             name="fkx_billing_usage_event__tenant_price",
         ),
@@ -628,16 +632,16 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_billing_usage_event"),
         sa.UniqueConstraint("tenant_id", "id", name="ux_billing_usage_event__tenant_id_id"),
 
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.create_index(op.f("ix_mugen_billing_usage_event_tenant_id"), "billing_usage_event", ["tenant_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_usage_event_account_id"), "billing_usage_event", ["account_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_usage_event_subscription_id"), "billing_usage_event", ["subscription_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_usage_event_price_id"), "billing_usage_event", ["price_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_usage_event_occurred_at"), "billing_usage_event", ["occurred_at"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_usage_event_status"), "billing_usage_event", ["status"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_usage_event_external_ref"), "billing_usage_event", ["external_ref"], unique=False, schema="mugen")
-    op.create_index("ix_billing_usage_event__tenant_account_occurred", "billing_usage_event", ["tenant_id", "account_id", "occurred_at"], unique=False, schema="mugen")
+    op.create_index(op.f("ix_mugen_billing_usage_event_tenant_id"), "billing_usage_event", ["tenant_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_usage_event_account_id"), "billing_usage_event", ["account_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_usage_event_subscription_id"), "billing_usage_event", ["subscription_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_usage_event_price_id"), "billing_usage_event", ["price_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_usage_event_occurred_at"), "billing_usage_event", ["occurred_at"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_usage_event_status"), "billing_usage_event", ["status"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_usage_event_external_ref"), "billing_usage_event", ["external_ref"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_usage_event__tenant_account_occurred", "billing_usage_event", ["tenant_id", "account_id", "occurred_at"], unique=False, schema=_SCHEMA)
 
     # ------------------------------
     # billing_ledger_entry
@@ -673,25 +677,25 @@ def upgrade() -> None:
 
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_ledger_entry__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "account_id"],
-            ["mugen.billing_account.tenant_id", "mugen.billing_account.id"],
+            [f"{_SCHEMA}.billing_account.tenant_id", f"{_SCHEMA}.billing_account.id"],
             ondelete="RESTRICT",
             name="fkx_billing_ledger_entry__tenant_account",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "invoice_id"],
-            ["mugen.billing_invoice.tenant_id", "mugen.billing_invoice.id"],
+            [f"{_SCHEMA}.billing_invoice.tenant_id", f"{_SCHEMA}.billing_invoice.id"],
             ondelete="SET NULL",
             name="fkx_billing_ledger_entry__tenant_invoice",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "payment_id"],
-            ["mugen.billing_payment.tenant_id", "mugen.billing_payment.id"],
+            [f"{_SCHEMA}.billing_payment.tenant_id", f"{_SCHEMA}.billing_payment.id"],
             ondelete="SET NULL",
             name="fkx_billing_ledger_entry__tenant_payment",
         ),
@@ -703,30 +707,30 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_billing_ledger_entry"),
         sa.UniqueConstraint("tenant_id", "id", name="ux_billing_ledger_entry__tenant_id_id"),
 
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.create_index(op.f("ix_mugen_billing_ledger_entry_tenant_id"), "billing_ledger_entry", ["tenant_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_ledger_entry_account_id"), "billing_ledger_entry", ["account_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_ledger_entry_invoice_id"), "billing_ledger_entry", ["invoice_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_ledger_entry_payment_id"), "billing_ledger_entry", ["payment_id"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_ledger_entry_direction"), "billing_ledger_entry", ["direction"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_ledger_entry_currency"), "billing_ledger_entry", ["currency"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_ledger_entry_occurred_at"), "billing_ledger_entry", ["occurred_at"], unique=False, schema="mugen")
-    op.create_index(op.f("ix_mugen_billing_ledger_entry_external_ref"), "billing_ledger_entry", ["external_ref"], unique=False, schema="mugen")
-    op.create_index("ix_billing_ledger_entry__tenant_account_occurred", "billing_ledger_entry", ["tenant_id", "account_id", "occurred_at"], unique=False, schema="mugen")
+    op.create_index(op.f("ix_mugen_billing_ledger_entry_tenant_id"), "billing_ledger_entry", ["tenant_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_ledger_entry_account_id"), "billing_ledger_entry", ["account_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_ledger_entry_invoice_id"), "billing_ledger_entry", ["invoice_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_ledger_entry_payment_id"), "billing_ledger_entry", ["payment_id"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_ledger_entry_direction"), "billing_ledger_entry", ["direction"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_ledger_entry_currency"), "billing_ledger_entry", ["currency"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_ledger_entry_occurred_at"), "billing_ledger_entry", ["occurred_at"], unique=False, schema=_SCHEMA)
+    op.create_index(op.f("ix_mugen_billing_ledger_entry_external_ref"), "billing_ledger_entry", ["external_ref"], unique=False, schema=_SCHEMA)
+    op.create_index("ix_billing_ledger_entry__tenant_account_occurred", "billing_ledger_entry", ["tenant_id", "account_id", "occurred_at"], unique=False, schema=_SCHEMA)
 
 
 def downgrade() -> None:
     # Drop billing tables (reverse dependency order).
-    op.drop_table("billing_ledger_entry", schema="mugen")
-    op.drop_table("billing_usage_event", schema="mugen")
-    op.drop_table("billing_payment", schema="mugen")
-    op.drop_table("billing_invoice_line", schema="mugen")
-    op.drop_table("billing_invoice", schema="mugen")
-    op.drop_table("billing_subscription", schema="mugen")
-    op.drop_table("billing_price", schema="mugen")
-    op.drop_table("billing_product", schema="mugen")
-    op.drop_table("billing_account", schema="mugen")
+    op.drop_table("billing_ledger_entry", schema=_SCHEMA)
+    op.drop_table("billing_usage_event", schema=_SCHEMA)
+    op.drop_table("billing_payment", schema=_SCHEMA)
+    op.drop_table("billing_invoice_line", schema=_SCHEMA)
+    op.drop_table("billing_invoice", schema=_SCHEMA)
+    op.drop_table("billing_subscription", schema=_SCHEMA)
+    op.drop_table("billing_price", schema=_SCHEMA)
+    op.drop_table("billing_product", schema=_SCHEMA)
+    op.drop_table("billing_account", schema=_SCHEMA)
 
     # Drop enum types (if no longer referenced).
     bind = op.get_bind()
@@ -739,4 +743,4 @@ def downgrade() -> None:
         "billing_interval_unit",
         "billing_price_type",
     ):
-        postgresql.ENUM(name=enum_name, schema="mugen").drop(bind, checkfirst=True)
+        postgresql.ENUM(name=enum_name, schema=_SCHEMA).drop(bind, checkfirst=True)

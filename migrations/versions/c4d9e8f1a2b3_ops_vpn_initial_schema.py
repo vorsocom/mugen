@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -20,7 +21,7 @@ down_revision: Union[str, None] = "8f0c1d2e3a4b"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -97,7 +98,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_taxonomy_domain__tenant_id__admin_tenant",
         ),
@@ -184,13 +185,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_taxonomy_category__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "taxonomy_domain_id"),
-            ("mugen.ops_vpn_taxonomy_domain.tenant_id", "mugen.ops_vpn_taxonomy_domain.id"),
+            (f"{_SCHEMA}.ops_vpn_taxonomy_domain.tenant_id", f"{_SCHEMA}.ops_vpn_taxonomy_domain.id"),
             name="fkx_ops_vpn_taxonomy_category__tenant_domain",
             ondelete="CASCADE",
         ),
@@ -284,15 +285,15 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_taxonomy_subcategory__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "taxonomy_category_id"),
             (
-                "mugen.ops_vpn_taxonomy_category.tenant_id",
-                "mugen.ops_vpn_taxonomy_category.id",
+                f"{_SCHEMA}.ops_vpn_taxonomy_category.tenant_id",
+                f"{_SCHEMA}.ops_vpn_taxonomy_category.id",
             ),
             name="fkx_ops_vpn_taxonomy_subcategory__tenant_category",
             ondelete="CASCADE",
@@ -406,13 +407,13 @@ def upgrade() -> None:
         sa.Column("deleted_by_user_id", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_vendor__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["deleted_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_vpn_vendor__deleted_by_user_id__admin_user",
         ),
@@ -555,13 +556,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_vendor_category__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "vendor_id"),
-            ("mugen.ops_vpn_vendor.tenant_id", "mugen.ops_vpn_vendor.id"),
+            (f"{_SCHEMA}.ops_vpn_vendor.tenant_id", f"{_SCHEMA}.ops_vpn_vendor.id"),
             name="fkx_ops_vpn_vendor_category__tenant_vendor",
             ondelete="CASCADE",
         ),
@@ -651,13 +652,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_vendor_capability__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "vendor_id"),
-            ("mugen.ops_vpn_vendor.tenant_id", "mugen.ops_vpn_vendor.id"),
+            (f"{_SCHEMA}.ops_vpn_vendor.tenant_id", f"{_SCHEMA}.ops_vpn_vendor.id"),
             name="fkx_ops_vpn_vendor_capability__tenant_vendor",
             ondelete="CASCADE",
         ),
@@ -762,19 +763,19 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_vendor_verification__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["checked_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_vpn_vendor_verification__checked_by_user_id__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "vendor_id"),
-            ("mugen.ops_vpn_vendor.tenant_id", "mugen.ops_vpn_vendor.id"),
+            (f"{_SCHEMA}.ops_vpn_vendor.tenant_id", f"{_SCHEMA}.ops_vpn_vendor.id"),
             name="fkx_ops_vpn_vendor_verification__tenant_vendor",
             ondelete="CASCADE",
         ),
@@ -886,13 +887,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_vendor_performance_event__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "vendor_id"),
-            ("mugen.ops_vpn_vendor.tenant_id", "mugen.ops_vpn_vendor.id"),
+            (f"{_SCHEMA}.ops_vpn_vendor.tenant_id", f"{_SCHEMA}.ops_vpn_vendor.id"),
             name="fkx_ops_vpn_vendor_performance_event__tenant_vendor",
             ondelete="CASCADE",
         ),
@@ -1013,13 +1014,13 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_vpn_vendor_scorecard__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "vendor_id"),
-            ("mugen.ops_vpn_vendor.tenant_id", "mugen.ops_vpn_vendor.id"),
+            (f"{_SCHEMA}.ops_vpn_vendor.tenant_id", f"{_SCHEMA}.ops_vpn_vendor.id"),
             name="fkx_ops_vpn_vendor_scorecard__tenant_vendor",
             ondelete="CASCADE",
         ),

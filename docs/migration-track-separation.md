@@ -71,9 +71,9 @@ The config file used for track loading and Alembic env bootstrap resolves with:
 2. `MUGEN_CONFIG_FILE`
 3. `mugen.toml`
 
-Core runtime relational gateways also resolve their schema from
-`rdbms.migration_tracks.core.schema` (default `mugen` when omitted), so
-migration and runtime schema contracts stay aligned.
+Core runtime relational gateways resolve their schema from
+`rdbms.migration_tracks.core.schema` (required). This keeps migration and
+runtime schema contracts aligned and fail-fast when configuration is incomplete.
 
 ## Configuration Contract
 

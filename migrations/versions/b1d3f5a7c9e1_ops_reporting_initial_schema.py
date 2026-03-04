@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -20,7 +21,7 @@ down_revision: Union[str, None] = "e2a5c8d9f0b1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -114,7 +115,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_reporting_metric_definition__tenant_id__admin_tenant",
         ),
@@ -225,7 +226,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_reporting_report_definition__tenant_id__admin_tenant",
         ),
@@ -328,15 +329,15 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_reporting_metric_series__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "metric_definition_id"],
             [
-                "mugen.ops_reporting_metric_definition.tenant_id",
-                "mugen.ops_reporting_metric_definition.id",
+                f"{_SCHEMA}.ops_reporting_metric_definition.tenant_id",
+                f"{_SCHEMA}.ops_reporting_metric_definition.id",
             ],
             ondelete="CASCADE",
             name="fkx_ops_reporting_metric_series__tenant_metric_definition",
@@ -443,22 +444,22 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_reporting_aggregation_job__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "metric_definition_id"],
             [
-                "mugen.ops_reporting_metric_definition.tenant_id",
-                "mugen.ops_reporting_metric_definition.id",
+                f"{_SCHEMA}.ops_reporting_metric_definition.tenant_id",
+                f"{_SCHEMA}.ops_reporting_metric_definition.id",
             ],
             ondelete="CASCADE",
             name="fkx_ops_reporting_aggregation_job__tenant_metric_definition",
         ),
         sa.ForeignKeyConstraint(
             ["created_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_reporting_aggregation_job__created_by_uid__admin_user",
         ),
@@ -565,34 +566,34 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_reporting_report_snapshot__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "report_definition_id"],
             [
-                "mugen.ops_reporting_report_definition.tenant_id",
-                "mugen.ops_reporting_report_definition.id",
+                f"{_SCHEMA}.ops_reporting_report_definition.tenant_id",
+                f"{_SCHEMA}.ops_reporting_report_definition.id",
             ],
             ondelete="SET NULL",
             name="fkx_ops_reporting_report_snapshot__tenant_report_definition",
         ),
         sa.ForeignKeyConstraint(
             ["generated_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_reporting_report_snapshot__generated_by_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["published_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_reporting_report_snapshot__published_by_uid__admin_user",
         ),
         sa.ForeignKeyConstraint(
             ["archived_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_reporting_report_snapshot__archived_by_uid__admin_user",
         ),
@@ -688,15 +689,15 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_reporting_kpi_threshold__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "metric_definition_id"],
             [
-                "mugen.ops_reporting_metric_definition.tenant_id",
-                "mugen.ops_reporting_metric_definition.id",
+                f"{_SCHEMA}.ops_reporting_metric_definition.tenant_id",
+                f"{_SCHEMA}.ops_reporting_metric_definition.id",
             ],
             ondelete="CASCADE",
             name="fkx_ops_reporting_kpi_threshold__tenant_metric_definition",

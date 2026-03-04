@@ -10,7 +10,24 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import rewrite_mugen_schema_sql
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _sql_text(statement: str):
+    return sa.text(_sql(statement))
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
+
 
 # pylint: disable=no-member
 
@@ -21,6 +38,9 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+_SCHEMA = resolve_runtime_schema()
+
+
 def upgrade() -> None:
     billing_run_status = postgresql.ENUM(
         "pending",
@@ -29,7 +49,7 @@ def upgrade() -> None:
         "failed",
         "canceled",
         name="billing_run_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
     billing_credit_note_status = postgresql.ENUM(
@@ -37,14 +57,14 @@ def upgrade() -> None:
         "issued",
         "void",
         name="billing_credit_note_status",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
     billing_adjustment_kind = postgresql.ENUM(
         "credit",
         "debit",
         name="billing_adjustment_kind",
-        schema="mugen",
+        schema=_SCHEMA,
         create_type=False,
     )
     billing_run_status.create(op.get_bind(), checkfirst=True)
@@ -56,25 +76,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -86,7 +106,7 @@ def upgrade() -> None:
         sa.Column(
             "status",
             billing_run_status,
-            server_default=sa.text("'pending'"),
+            server_default=_sql_text("'pending'"),
             nullable=False,
         ),
         sa.Column("idempotency_key", postgresql.CITEXT(length=255), nullable=False),
@@ -97,19 +117,19 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_run__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "account_id"],
-            ["mugen.billing_account.tenant_id", "mugen.billing_account.id"],
+            [f"{_SCHEMA}.billing_account.tenant_id", f"{_SCHEMA}.billing_account.id"],
             ondelete="SET NULL",
             name="fkx_billing_run__tenant_account",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "subscription_id"],
-            ["mugen.billing_subscription.tenant_id", "mugen.billing_subscription.id"],
+            [f"{_SCHEMA}.billing_subscription.tenant_id", f"{_SCHEMA}.billing_subscription.id"],
             ondelete="SET NULL",
             name="fkx_billing_run__tenant_subscription",
         ),
@@ -131,92 +151,92 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name="pk_billing_run"),
         sa.UniqueConstraint("tenant_id", "id", name="ux_billing_run__tenant_id_id"),
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_run_tenant_id"),
         "billing_run",
         ["tenant_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_run_account_id"),
         "billing_run",
         ["account_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_run_subscription_id"),
         "billing_run",
         ["subscription_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_run_run_type"),
         "billing_run",
         ["run_type"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_run_period_start"),
         "billing_run",
         ["period_start"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_run_period_end"),
         "billing_run",
         ["period_end"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_run_status"),
         "billing_run",
         ["status"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_run_idempotency_key"),
         "billing_run",
         ["idempotency_key"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_run_external_ref"),
         "billing_run",
         ["external_ref"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ux_billing_run__tenant_idempotency_key",
         "billing_run",
         ["tenant_id", "idempotency_key"],
         unique=True,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_run__tenant_run_type_period",
         "billing_run",
         ["tenant_id", "run_type", "period_start"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ux_billing_run__tenant_external_ref",
         "billing_run",
         ["tenant_id", "external_ref"],
         unique=True,
-        schema="mugen",
-        postgresql_where=sa.text("external_ref IS NOT NULL"),
+        schema=_SCHEMA,
+        postgresql_where=_sql_text("external_ref IS NOT NULL"),
     )
 
     op.create_table(
@@ -224,25 +244,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -251,7 +271,7 @@ def upgrade() -> None:
         sa.Column(
             "status",
             billing_credit_note_status,
-            server_default=sa.text("'draft'"),
+            server_default=_sql_text("'draft'"),
             nullable=False,
         ),
         sa.Column("number", postgresql.CITEXT(length=64), nullable=True),
@@ -259,7 +279,7 @@ def upgrade() -> None:
         sa.Column(
             "total_amount",
             sa.BigInteger(),
-            server_default=sa.text("0"),
+            server_default=_sql_text("0"),
             nullable=False,
         ),
         sa.Column("issued_at", sa.DateTime(timezone=True), nullable=True),
@@ -268,19 +288,19 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_credit_note__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "account_id"],
-            ["mugen.billing_account.tenant_id", "mugen.billing_account.id"],
+            [f"{_SCHEMA}.billing_account.tenant_id", f"{_SCHEMA}.billing_account.id"],
             ondelete="RESTRICT",
             name="fkx_billing_credit_note__tenant_account",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "invoice_id"],
-            ["mugen.billing_invoice.tenant_id", "mugen.billing_invoice.id"],
+            [f"{_SCHEMA}.billing_invoice.tenant_id", f"{_SCHEMA}.billing_invoice.id"],
             ondelete="SET NULL",
             name="fkx_billing_credit_note__tenant_invoice",
         ),
@@ -306,86 +326,86 @@ def upgrade() -> None:
             "id",
             name="ux_billing_credit_note__tenant_id_id",
         ),
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_credit_note_tenant_id"),
         "billing_credit_note",
         ["tenant_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_credit_note_account_id"),
         "billing_credit_note",
         ["account_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_credit_note_invoice_id"),
         "billing_credit_note",
         ["invoice_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_credit_note_status"),
         "billing_credit_note",
         ["status"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_credit_note_number"),
         "billing_credit_note",
         ["number"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_credit_note_currency"),
         "billing_credit_note",
         ["currency"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_credit_note_external_ref"),
         "billing_credit_note",
         ["external_ref"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_credit_note__tenant_account",
         "billing_credit_note",
         ["tenant_id", "account_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_credit_note__tenant_invoice",
         "billing_credit_note",
         ["tenant_id", "invoice_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ux_billing_credit_note__tenant_number",
         "billing_credit_note",
         ["tenant_id", "number"],
         unique=True,
-        schema="mugen",
-        postgresql_where=sa.text("number IS NOT NULL"),
+        schema=_SCHEMA,
+        postgresql_where=_sql_text("number IS NOT NULL"),
     )
     op.create_index(
         "ux_billing_credit_note__tenant_external_ref",
         "billing_credit_note",
         ["tenant_id", "external_ref"],
         unique=True,
-        schema="mugen",
-        postgresql_where=sa.text("external_ref IS NOT NULL"),
+        schema=_SCHEMA,
+        postgresql_where=_sql_text("external_ref IS NOT NULL"),
     )
 
     op.create_table(
@@ -393,25 +413,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -421,7 +441,7 @@ def upgrade() -> None:
         sa.Column(
             "kind",
             billing_adjustment_kind,
-            server_default=sa.text("'credit'"),
+            server_default=_sql_text("'credit'"),
             nullable=False,
         ),
         sa.Column("currency", postgresql.CITEXT(length=3), nullable=False),
@@ -429,7 +449,7 @@ def upgrade() -> None:
         sa.Column(
             "occurred_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column("reason", sa.Text(), nullable=True),
@@ -437,25 +457,25 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_billing_adjustment__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "account_id"],
-            ["mugen.billing_account.tenant_id", "mugen.billing_account.id"],
+            [f"{_SCHEMA}.billing_account.tenant_id", f"{_SCHEMA}.billing_account.id"],
             ondelete="RESTRICT",
             name="fkx_billing_adjustment__tenant_account",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "invoice_id"],
-            ["mugen.billing_invoice.tenant_id", "mugen.billing_invoice.id"],
+            [f"{_SCHEMA}.billing_invoice.tenant_id", f"{_SCHEMA}.billing_invoice.id"],
             ondelete="SET NULL",
             name="fkx_billing_adjustment__tenant_invoice",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "credit_note_id"],
-            ["mugen.billing_credit_note.tenant_id", "mugen.billing_credit_note.id"],
+            [f"{_SCHEMA}.billing_credit_note.tenant_id", f"{_SCHEMA}.billing_credit_note.id"],
             ondelete="SET NULL",
             name="fkx_billing_adjustment__tenant_credit_note",
         ),
@@ -481,107 +501,107 @@ def upgrade() -> None:
             "id",
             name="ux_billing_adjustment__tenant_id_id",
         ),
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_adjustment_tenant_id"),
         "billing_adjustment",
         ["tenant_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_adjustment_account_id"),
         "billing_adjustment",
         ["account_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_adjustment_invoice_id"),
         "billing_adjustment",
         ["invoice_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_adjustment_credit_note_id"),
         "billing_adjustment",
         ["credit_note_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_adjustment_kind"),
         "billing_adjustment",
         ["kind"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_adjustment_currency"),
         "billing_adjustment",
         ["currency"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_adjustment_occurred_at"),
         "billing_adjustment",
         ["occurred_at"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_adjustment_external_ref"),
         "billing_adjustment",
         ["external_ref"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_adjustment__tenant_account_occurred",
         "billing_adjustment",
         ["tenant_id", "account_id", "occurred_at"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_adjustment__tenant_invoice",
         "billing_adjustment",
         ["tenant_id", "invoice_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_adjustment__tenant_credit_note",
         "billing_adjustment",
         ["tenant_id", "credit_note_id"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ux_billing_adjustment__tenant_external_ref",
         "billing_adjustment",
         ["tenant_id", "external_ref"],
         unique=True,
-        schema="mugen",
-        postgresql_where=sa.text("external_ref IS NOT NULL"),
+        schema=_SCHEMA,
+        postgresql_where=_sql_text("external_ref IS NOT NULL"),
     )
 
     op.add_column(
         "billing_price",
         sa.Column("meter_code", postgresql.CITEXT(length=64), nullable=True),
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_price_meter_code"),
         "billing_price",
         ["meter_code"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.execute(
+    _execute(
         """
         UPDATE mugen.billing_price
         SET meter_code = COALESCE(NULLIF(usage_unit, ''), code)
@@ -593,35 +613,35 @@ def upgrade() -> None:
         "meter_code",
         existing_type=postgresql.CITEXT(length=64),
         nullable=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_check_constraint(
         "ck_billing_price__meter_code_nonempty",
         "billing_price",
         "length(btrim(meter_code)) > 0",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_price__tenant_meter_code",
         "billing_price",
         ["tenant_id", "meter_code"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
 
     op.add_column(
         "billing_usage_event",
         sa.Column("meter_code", postgresql.CITEXT(length=64), nullable=True),
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         op.f("ix_mugen_billing_usage_event_meter_code"),
         "billing_usage_event",
         ["meter_code"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.execute(
+    _execute(
         """
         UPDATE mugen.billing_usage_event ue
         SET meter_code = COALESCE(
@@ -635,7 +655,7 @@ def upgrade() -> None:
           AND ue.meter_code IS NULL;
         """
     )
-    op.execute(
+    _execute(
         """
         UPDATE mugen.billing_usage_event
         SET meter_code = 'unmapped'
@@ -647,23 +667,23 @@ def upgrade() -> None:
         "meter_code",
         existing_type=postgresql.CITEXT(length=64),
         nullable=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_check_constraint(
         "ck_billing_usage_event__meter_code_nonempty",
         "billing_usage_event",
         "length(btrim(meter_code)) > 0",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.create_index(
         "ix_billing_usage_event__tenant_account_meter_occurred",
         "billing_usage_event",
         ["tenant_id", "account_id", "meter_code", "occurred_at"],
         unique=False,
-        schema="mugen",
+        schema=_SCHEMA,
     )
 
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE FUNCTION mugen.fn_billing_sync_invoice_from_allocations(
             p_tenant_id UUID,
@@ -735,7 +755,7 @@ def upgrade() -> None:
         $fn_billing_sync_invoice_from_allocations$;
         """
     )
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE FUNCTION mugen.tg_billing_payment_allocation_sync_invoice()
             RETURNS TRIGGER
@@ -780,14 +800,14 @@ def upgrade() -> None:
         $tg_billing_payment_allocation_sync_invoice$;
         """
     )
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE TRIGGER tr_billing_payment_allocation_sync_invoice
         AFTER INSERT OR UPDATE OR DELETE ON mugen.billing_payment_allocation
         FOR EACH ROW EXECUTE FUNCTION mugen.tg_billing_payment_allocation_sync_invoice();
         """
     )
-    op.execute(
+    _execute(
         """
         DO
         $do_billing_sync_existing_invoices$
@@ -808,21 +828,21 @@ def upgrade() -> None:
         """
     )
 
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE TRIGGER tr_touch_updated_at_row_version__billing_run
         BEFORE UPDATE ON mugen.billing_run
         FOR EACH ROW EXECUTE FUNCTION util.tg_touch_updated_at_row_version();
         """
     )
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE TRIGGER tr_touch_updated_at_row_version__billing_credit_note
         BEFORE UPDATE ON mugen.billing_credit_note
         FOR EACH ROW EXECUTE FUNCTION util.tg_touch_updated_at_row_version();
         """
     )
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE TRIGGER tr_touch_updated_at_row_version__billing_adjustment
         BEFORE UPDATE ON mugen.billing_adjustment
@@ -832,242 +852,242 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
+    _execute(
         "DROP TRIGGER IF EXISTS tr_billing_payment_allocation_sync_invoice ON mugen.billing_payment_allocation;"
     )
-    op.execute(
+    _execute(
         "DROP FUNCTION IF EXISTS mugen.tg_billing_payment_allocation_sync_invoice();"
     )
-    op.execute(
+    _execute(
         "DROP FUNCTION IF EXISTS mugen.fn_billing_sync_invoice_from_allocations(UUID, UUID);"
     )
 
-    op.execute(
+    _execute(
         "DROP TRIGGER IF EXISTS tr_touch_updated_at_row_version__billing_adjustment ON mugen.billing_adjustment;"
     )
-    op.execute(
+    _execute(
         "DROP TRIGGER IF EXISTS tr_touch_updated_at_row_version__billing_credit_note ON mugen.billing_credit_note;"
     )
-    op.execute(
+    _execute(
         "DROP TRIGGER IF EXISTS tr_touch_updated_at_row_version__billing_run ON mugen.billing_run;"
     )
 
     op.drop_index(
         "ix_billing_usage_event__tenant_account_meter_occurred",
         table_name="billing_usage_event",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_constraint(
         "ck_billing_usage_event__meter_code_nonempty",
         "billing_usage_event",
-        schema="mugen",
+        schema=_SCHEMA,
         type_="check",
     )
     op.drop_index(
         op.f("ix_mugen_billing_usage_event_meter_code"),
         table_name="billing_usage_event",
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.drop_column("billing_usage_event", "meter_code", schema="mugen")
+    op.drop_column("billing_usage_event", "meter_code", schema=_SCHEMA)
 
     op.drop_index(
         "ix_billing_price__tenant_meter_code",
         table_name="billing_price",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_constraint(
         "ck_billing_price__meter_code_nonempty",
         "billing_price",
-        schema="mugen",
+        schema=_SCHEMA,
         type_="check",
     )
     op.drop_index(
         op.f("ix_mugen_billing_price_meter_code"),
         table_name="billing_price",
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.drop_column("billing_price", "meter_code", schema="mugen")
+    op.drop_column("billing_price", "meter_code", schema=_SCHEMA)
 
     op.drop_index(
         "ux_billing_adjustment__tenant_external_ref",
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_billing_adjustment__tenant_credit_note",
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_billing_adjustment__tenant_invoice",
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_billing_adjustment__tenant_account_occurred",
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_adjustment_external_ref"),
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_adjustment_occurred_at"),
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_adjustment_currency"),
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_adjustment_kind"),
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_adjustment_credit_note_id"),
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_adjustment_invoice_id"),
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_adjustment_account_id"),
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_adjustment_tenant_id"),
         table_name="billing_adjustment",
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.drop_table("billing_adjustment", schema="mugen")
+    op.drop_table("billing_adjustment", schema=_SCHEMA)
 
     op.drop_index(
         "ux_billing_credit_note__tenant_external_ref",
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ux_billing_credit_note__tenant_number",
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_billing_credit_note__tenant_invoice",
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_billing_credit_note__tenant_account",
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_credit_note_external_ref"),
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_credit_note_currency"),
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_credit_note_number"),
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_credit_note_status"),
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_credit_note_invoice_id"),
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_credit_note_account_id"),
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_credit_note_tenant_id"),
         table_name="billing_credit_note",
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.drop_table("billing_credit_note", schema="mugen")
+    op.drop_table("billing_credit_note", schema=_SCHEMA)
 
     op.drop_index(
         "ux_billing_run__tenant_external_ref",
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_billing_run__tenant_run_type_period",
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ux_billing_run__tenant_idempotency_key",
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_run_external_ref"),
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_run_idempotency_key"),
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_run_status"),
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_run_period_end"),
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_run_period_start"),
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_run_run_type"),
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_run_subscription_id"),
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_run_account_id"),
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         op.f("ix_mugen_billing_run_tenant_id"),
         table_name="billing_run",
-        schema="mugen",
+        schema=_SCHEMA,
     )
-    op.drop_table("billing_run", schema="mugen")
+    op.drop_table("billing_run", schema=_SCHEMA)
 
     bind = op.get_bind()
     for enum_name in (
@@ -1075,4 +1095,4 @@ def downgrade() -> None:
         "billing_credit_note_status",
         "billing_run_status",
     ):
-        postgresql.ENUM(name=enum_name, schema="mugen").drop(bind, checkfirst=True)
+        postgresql.ENUM(name=enum_name, schema=_SCHEMA).drop(bind, checkfirst=True)

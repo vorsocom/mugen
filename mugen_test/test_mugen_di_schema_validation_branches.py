@@ -12,6 +12,13 @@ from mugen.core import di
 
 def _valid_core_config() -> dict:
     return {
+        "rdbms": {
+            "migration_tracks": {
+                "core": {
+                    "schema": "mugen",
+                }
+            }
+        },
         "mugen": {
             "runtime": {
                 "profile": "platform_full",
@@ -70,6 +77,10 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cfg = _valid_core_config()
         cfg["mugen"]["unexpected"] = True
         cases.append((cfg, "unknown key(s) at mugen"))
+
+        cfg = _valid_core_config()
+        del cfg["rdbms"]["migration_tracks"]["core"]["schema"]
+        cases.append((cfg, "rdbms.migration_tracks.core.schema is required"))
 
         cfg = _valid_core_config()
         cfg["mugen"] = None

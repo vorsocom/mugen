@@ -9,6 +9,13 @@ from mugen.core import di
 
 def _minimal_core_config() -> dict:
     return {
+        "rdbms": {
+            "migration_tracks": {
+                "core": {
+                    "schema": "mugen",
+                }
+            }
+        },
         "mugen": {
             "runtime": {
                 "profile": "platform_full",

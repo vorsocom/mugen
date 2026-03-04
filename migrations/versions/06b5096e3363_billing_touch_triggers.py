@@ -8,6 +8,19 @@ Create Date: 2026-01-14 16:13:11.150344
 from typing import Sequence, Union
 
 from alembic import op
+from migrations.schema_contract import rewrite_mugen_schema_sql
+from migrations.schema_contract import resolve_runtime_schema
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
+
 
 # pylint: disable=no-member
 
@@ -18,10 +31,13 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+_SCHEMA = resolve_runtime_schema()
+
+
 def upgrade() -> None:
     # Ensure the trigger function exists (shared utility).
-    op.execute("CREATE SCHEMA IF NOT EXISTS util;")
-    op.execute(
+    _execute("CREATE SCHEMA IF NOT EXISTS util;")
+    _execute(
         """
         CREATE OR REPLACE FUNCTION util.tg_touch_updated_at_row_version()
             RETURNS TRIGGER
@@ -49,7 +65,7 @@ def upgrade() -> None:
         "billing_usage_event",
         "billing_ledger_entry",
     ):
-        op.execute(
+        _execute(
             f"""
             CREATE OR REPLACE TRIGGER tr_touch_updated_at_row_version__{tbl}
             BEFORE UPDATE ON mugen.{tbl}
@@ -71,6 +87,6 @@ def downgrade() -> None:
         "billing_product",
         "billing_account",
     ):
-        op.execute(
+        _execute(
             f"DROP TRIGGER IF EXISTS tr_touch_updated_at_row_version__{tbl} ON mugen.{tbl};"
         )

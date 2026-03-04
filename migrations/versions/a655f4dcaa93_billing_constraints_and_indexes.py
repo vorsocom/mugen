@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 
 # pylint: disable=no-member
 
@@ -19,6 +20,9 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+_SCHEMA = resolve_runtime_schema()
+
+
 def upgrade() -> None:
     # Uniqueness for natural keys / external references, scoped by tenant.
     op.create_index(
@@ -26,7 +30,7 @@ def upgrade() -> None:
         "billing_account",
         ["tenant_id", "code"],
         unique=True,
-        schema="mugen",
+        schema=_SCHEMA,
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
 
@@ -35,7 +39,7 @@ def upgrade() -> None:
         "billing_product",
         ["tenant_id", "code"],
         unique=True,
-        schema="mugen",
+        schema=_SCHEMA,
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
 
@@ -44,7 +48,7 @@ def upgrade() -> None:
         "billing_price",
         ["tenant_id", "code"],
         unique=True,
-        schema="mugen",
+        schema=_SCHEMA,
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
 
@@ -53,7 +57,7 @@ def upgrade() -> None:
         "billing_subscription",
         ["tenant_id", "external_ref"],
         unique=True,
-        schema="mugen",
+        schema=_SCHEMA,
         postgresql_where=sa.text("external_ref IS NOT NULL AND deleted_at IS NULL"),
     )
 
@@ -62,7 +66,7 @@ def upgrade() -> None:
         "billing_invoice",
         ["tenant_id", "number"],
         unique=True,
-        schema="mugen",
+        schema=_SCHEMA,
         postgresql_where=sa.text("number IS NOT NULL AND deleted_at IS NULL"),
     )
 
@@ -71,7 +75,7 @@ def upgrade() -> None:
         "billing_payment",
         ["tenant_id", "provider", "external_ref"],
         unique=True,
-        schema="mugen",
+        schema=_SCHEMA,
         postgresql_where=sa.text("external_ref IS NOT NULL"),
     )
 
@@ -80,7 +84,7 @@ def upgrade() -> None:
         "billing_usage_event",
         ["tenant_id", "external_ref"],
         unique=True,
-        schema="mugen",
+        schema=_SCHEMA,
         postgresql_where=sa.text("external_ref IS NOT NULL"),
     )
 
@@ -89,17 +93,17 @@ def upgrade() -> None:
         "billing_ledger_entry",
         ["tenant_id", "external_ref"],
         unique=True,
-        schema="mugen",
+        schema=_SCHEMA,
         postgresql_where=sa.text("external_ref IS NOT NULL"),
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ux_billing_ledger_entry__tenant_external_ref", table_name="billing_ledger_entry", schema="mugen")
-    op.drop_index("ux_billing_usage_event__tenant_external_ref", table_name="billing_usage_event", schema="mugen")
-    op.drop_index("ux_billing_payment__tenant_external_ref", table_name="billing_payment", schema="mugen")
-    op.drop_index("ux_billing_invoice__tenant_number_active", table_name="billing_invoice", schema="mugen")
-    op.drop_index("ux_billing_subscription__tenant_external_ref_active", table_name="billing_subscription", schema="mugen")
-    op.drop_index("ux_billing_price__tenant_code_active", table_name="billing_price", schema="mugen")
-    op.drop_index("ux_billing_product__tenant_code_active", table_name="billing_product", schema="mugen")
-    op.drop_index("ux_billing_account__tenant_code_active", table_name="billing_account", schema="mugen")
+    op.drop_index("ux_billing_ledger_entry__tenant_external_ref", table_name="billing_ledger_entry", schema=_SCHEMA)
+    op.drop_index("ux_billing_usage_event__tenant_external_ref", table_name="billing_usage_event", schema=_SCHEMA)
+    op.drop_index("ux_billing_payment__tenant_external_ref", table_name="billing_payment", schema=_SCHEMA)
+    op.drop_index("ux_billing_invoice__tenant_number_active", table_name="billing_invoice", schema=_SCHEMA)
+    op.drop_index("ux_billing_subscription__tenant_external_ref_active", table_name="billing_subscription", schema=_SCHEMA)
+    op.drop_index("ux_billing_price__tenant_code_active", table_name="billing_price", schema=_SCHEMA)
+    op.drop_index("ux_billing_product__tenant_code_active", table_name="billing_product", schema=_SCHEMA)
+    op.drop_index("ux_billing_account__tenant_code_active", table_name="billing_account", schema=_SCHEMA)

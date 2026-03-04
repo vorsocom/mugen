@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -20,7 +21,7 @@ down_revision: Union[str, None] = "c8d9e0f1a2b3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -152,7 +153,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_gov_consent_record__tenant_id__admin_tenant",
         ),
@@ -288,7 +289,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_gov_delegation_grant__tenant_id__admin_tenant",
         ),
@@ -432,7 +433,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_gov_policy_definition__tenant_id__admin_tenant",
         ),
@@ -575,15 +576,15 @@ def upgrade() -> None:
         sa.Column("retention_until", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_gov_policy_decision_log__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "policy_definition_id"],
             [
-                "mugen.ops_governance_policy_definition.tenant_id",
-                "mugen.ops_governance_policy_definition.id",
+                f"{_SCHEMA}.ops_governance_policy_definition.tenant_id",
+                f"{_SCHEMA}.ops_governance_policy_definition.id",
             ],
             ondelete="CASCADE",
             name="fkx_ops_gov_policy_decision_log__tenant_policy_definition",
@@ -731,7 +732,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_gov_retention_policy__tenant_id__admin_tenant",
         ),
@@ -914,15 +915,15 @@ def upgrade() -> None:
         sa.Column("meta", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_gov_data_handling_record__tenant_id__admin_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "retention_policy_id"],
             [
-                "mugen.ops_governance_retention_policy.tenant_id",
-                "mugen.ops_governance_retention_policy.id",
+                f"{_SCHEMA}.ops_governance_retention_policy.tenant_id",
+                f"{_SCHEMA}.ops_governance_retention_policy.id",
             ],
             ondelete="SET NULL",
             name="fkx_ops_gov_data_handling_record__tenant_retention_policy",

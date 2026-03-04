@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # pylint: disable=no-member
@@ -20,7 +21,7 @@ down_revision: Union[str, None] = "a1c9d5e7f3b2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -124,13 +125,13 @@ def upgrade() -> None:
         sa.Column("deleted_by_user_id", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_wf_def_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["deleted_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             name="fk_ops_wf_def_deleted_by",
         ),
         sa.CheckConstraint(
@@ -240,21 +241,21 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_wf_ver_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["published_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_wf_ver_published_by",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_definition_id"),
             (
-                "mugen.ops_workflow_workflow_definition.tenant_id",
-                "mugen.ops_workflow_workflow_definition.id",
+                f"{_SCHEMA}.ops_workflow_workflow_definition.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_definition.id",
             ),
             name="fkx_ops_wf_ver_tenant_definition",
             ondelete="CASCADE",
@@ -365,15 +366,15 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_wf_state_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_version_id"),
             (
-                "mugen.ops_workflow_workflow_version.tenant_id",
-                "mugen.ops_workflow_workflow_version.id",
+                f"{_SCHEMA}.ops_workflow_workflow_version.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_version.id",
             ),
             name="fkx_ops_wf_state_tenant_version",
             ondelete="CASCADE",
@@ -491,21 +492,21 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_wf_transition_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["auto_assign_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_wf_transition_auto_assign_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_version_id"),
             (
-                "mugen.ops_workflow_workflow_version.tenant_id",
-                "mugen.ops_workflow_workflow_version.id",
+                f"{_SCHEMA}.ops_workflow_workflow_version.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_version.id",
             ),
             name="fkx_ops_wf_transition_tenant_version",
             ondelete="CASCADE",
@@ -513,8 +514,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "from_state_id"),
             (
-                "mugen.ops_workflow_workflow_state.tenant_id",
-                "mugen.ops_workflow_workflow_state.id",
+                f"{_SCHEMA}.ops_workflow_workflow_state.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_state.id",
             ),
             name="fkx_ops_wf_transition_tenant_from_state",
             ondelete="CASCADE",
@@ -522,8 +523,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "to_state_id"),
             (
-                "mugen.ops_workflow_workflow_state.tenant_id",
-                "mugen.ops_workflow_workflow_state.id",
+                f"{_SCHEMA}.ops_workflow_workflow_state.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_state.id",
             ),
             name="fkx_ops_wf_transition_tenant_to_state",
             ondelete="CASCADE",
@@ -676,21 +677,21 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_wf_instance_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["last_actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_wf_instance_last_actor",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_definition_id"),
             (
-                "mugen.ops_workflow_workflow_definition.tenant_id",
-                "mugen.ops_workflow_workflow_definition.id",
+                f"{_SCHEMA}.ops_workflow_workflow_definition.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_definition.id",
             ),
             name="fkx_ops_wf_instance_tenant_definition",
             ondelete="RESTRICT",
@@ -698,8 +699,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_version_id"),
             (
-                "mugen.ops_workflow_workflow_version.tenant_id",
-                "mugen.ops_workflow_workflow_version.id",
+                f"{_SCHEMA}.ops_workflow_workflow_version.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_version.id",
             ),
             name="fkx_ops_wf_instance_tenant_version",
             ondelete="RESTRICT",
@@ -707,8 +708,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "current_state_id"),
             (
-                "mugen.ops_workflow_workflow_state.tenant_id",
-                "mugen.ops_workflow_workflow_state.id",
+                f"{_SCHEMA}.ops_workflow_workflow_state.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_state.id",
             ),
             name="fkx_ops_wf_instance_tenant_current_state",
             ondelete="SET NULL",
@@ -716,8 +717,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "pending_transition_id"),
             (
-                "mugen.ops_workflow_workflow_transition.tenant_id",
-                "mugen.ops_workflow_workflow_transition.id",
+                f"{_SCHEMA}.ops_workflow_workflow_transition.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_transition.id",
             ),
             name="fkx_ops_wf_instance_tenant_pending_transition",
             ondelete="SET NULL",
@@ -913,33 +914,33 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_wf_task_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["assignee_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_wf_task_assignee",
         ),
         sa.ForeignKeyConstraint(
             ["assigned_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_wf_task_assigned_by",
         ),
         sa.ForeignKeyConstraint(
             ["completed_by_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_wf_task_completed_by",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_instance_id"),
             (
-                "mugen.ops_workflow_workflow_instance.tenant_id",
-                "mugen.ops_workflow_workflow_instance.id",
+                f"{_SCHEMA}.ops_workflow_workflow_instance.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_instance.id",
             ),
             name="fkx_ops_wf_task_tenant_instance",
             ondelete="CASCADE",
@@ -947,8 +948,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_transition_id"),
             (
-                "mugen.ops_workflow_workflow_transition.tenant_id",
-                "mugen.ops_workflow_workflow_transition.id",
+                f"{_SCHEMA}.ops_workflow_workflow_transition.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_transition.id",
             ),
             name="fkx_ops_wf_task_tenant_transition",
             ondelete="SET NULL",
@@ -1112,21 +1113,21 @@ def upgrade() -> None:
         sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_wf_event_tenant",
         ),
         sa.ForeignKeyConstraint(
             ["actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{_SCHEMA}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_wf_event_actor_user",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_instance_id"),
             (
-                "mugen.ops_workflow_workflow_instance.tenant_id",
-                "mugen.ops_workflow_workflow_instance.id",
+                f"{_SCHEMA}.ops_workflow_workflow_instance.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_instance.id",
             ),
             name="fkx_ops_wf_event_tenant_instance",
             ondelete="CASCADE",
@@ -1134,8 +1135,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_task_id"),
             (
-                "mugen.ops_workflow_workflow_task.tenant_id",
-                "mugen.ops_workflow_workflow_task.id",
+                f"{_SCHEMA}.ops_workflow_workflow_task.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_task.id",
             ),
             name="fkx_ops_wf_event_tenant_task",
             ondelete="SET NULL",

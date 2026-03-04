@@ -12,6 +12,8 @@ import logging
 from alembic import context
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
+from migrations.schema_contract import rewrite_mugen_schema_sql
 
 # revision identifiers, used by Alembic.
 revision: str = "c7d3e9f5a1b2"
@@ -19,8 +21,23 @@ down_revision: Union[str, Sequence[str], None] = "b8f2e6d4c1a9"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 _LOG = logging.getLogger(__name__)
+
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _sql_text(statement: str):
+    return sa.text(_sql(statement))
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
 
 
 def _reseed_acp_manifest() -> None:
@@ -52,7 +69,7 @@ def _reseed_acp_manifest() -> None:
 def upgrade() -> None:
     # Ensure at most one active schema version per (tenant_id, key)
     # before adding the partial unique index.
-    op.execute("""
+    _execute("""
         WITH ranked AS (
             SELECT
                 id,
@@ -74,7 +91,7 @@ def upgrade() -> None:
 
     # Ensure at most one active binding per target tuple
     # before adding the partial unique index.
-    op.execute("""
+    _execute("""
         WITH ranked AS (
             SELECT
                 id,
@@ -103,7 +120,7 @@ def upgrade() -> None:
         ["tenant_id", "key"],
         unique=True,
         schema=_SCHEMA,
-        postgresql_where=sa.text("status = 'active'"),
+        postgresql_where=_sql_text("status = 'active'"),
     )
     op.create_index(
         "ux_schema_binding__tenant_target_kind_active",
@@ -117,7 +134,7 @@ def upgrade() -> None:
         ],
         unique=True,
         schema=_SCHEMA,
-        postgresql_where=sa.text("is_active"),
+        postgresql_where=_sql_text("is_active"),
     )
 
     _reseed_acp_manifest()

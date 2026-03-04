@@ -11,6 +11,7 @@ import logging
 
 from alembic import context
 from alembic import op
+from migrations.schema_contract import resolve_runtime_schema
 
 # revision identifiers, used by Alembic.
 revision: str = "a8c3b1d4e5f6"
@@ -18,7 +19,7 @@ down_revision: Union[str, Sequence[str], None] = "f2d9c4b6a7e8"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 _LOG = logging.getLogger(__name__)
 
 

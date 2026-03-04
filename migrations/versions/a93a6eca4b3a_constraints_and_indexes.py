@@ -10,12 +10,16 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from migrations.schema_contract import resolve_runtime_schema
 
 # revision identifiers, used by Alembic.
 revision: str = "a93a6eca4b3a"
 down_revision: Union[str, Sequence[str], None] = "ed33a7c861dd"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+
+_SCHEMA = resolve_runtime_schema()
 
 
 # pylint: disable=no-member
@@ -27,7 +31,7 @@ def upgrade() -> None:
         "admin_global_permission_entry",
         ["global_role_id", "permission_object_id", "permission_type_id"],
         postgresql_where=sa.text("permitted IS TRUE"),
-        schema="mugen",
+        schema=_SCHEMA,
     )
 
     # GlobalRole.
@@ -40,7 +44,7 @@ def upgrade() -> None:
         "admin_permission_entry",
         ["tenant_id", "role_id", "permission_object_id", "permission_type_id"],
         postgresql_where=sa.text("permitted IS TRUE"),
-        schema="mugen",
+        schema=_SCHEMA,
     )
 
     # PermissionObject.
@@ -65,7 +69,7 @@ def upgrade() -> None:
         ["slug"],
         unique=True,
         postgresql_where=sa.text("deleted_at IS NULL"),
-        schema="mugen",
+        schema=_SCHEMA,
     )
 
     # TenantDomain.
@@ -76,7 +80,7 @@ def upgrade() -> None:
         ["tenant_id"],
         unique=True,
         postgresql_where=sa.text("is_primary IS TRUE"),
-        schema="mugen",
+        schema=_SCHEMA,
     )
 
     # TenantInvitation.
@@ -87,7 +91,7 @@ def upgrade() -> None:
         ["tenant_id", "email"],
         unique=True,
         postgresql_where=sa.text("status = 'invited' AND accepted_at IS NULL"),
-        schema="mugen",
+        schema=_SCHEMA,
     )
 
     # TenantMembership.
@@ -100,25 +104,25 @@ def downgrade() -> None:
     op.drop_index(
         "ix_global_permission_entry__object_type_role_permitted",
         table_name="admin_global_permission_entry",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ix_permission_entry__object_tenant_type_role_permitted",
         table_name="admin_permission_entry",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ux_tenant__slug_active",
         table_name="admin_tenant",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ux_tenant_domain__domain_primary",
         table_name="admin_tenant_domain",
-        schema="mugen",
+        schema=_SCHEMA,
     )
     op.drop_index(
         "ux_tenant_invitation__email_pending",
         table_name="admin_tenant_invitation",
-        schema="mugen",
+        schema=_SCHEMA,
     )

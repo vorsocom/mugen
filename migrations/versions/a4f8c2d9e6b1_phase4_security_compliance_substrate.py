@@ -10,7 +10,24 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import rewrite_mugen_schema_sql
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _sql_text(statement: str):
+    return sa.text(_sql(statement))
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
+
 
 # pylint: disable=no-member
 
@@ -20,7 +37,7 @@ down_revision: Union[str, None] = "d3f5a7b9c1e2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -39,25 +56,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -66,19 +83,19 @@ def upgrade() -> None:
         sa.Column(
             "provider",
             postgresql.CITEXT(length=64),
-            server_default=sa.text("'local'"),
+            server_default=_sql_text("'local'"),
             nullable=False,
         ),
         sa.Column(
             "status",
             key_ref_status,
-            server_default=sa.text("'active'"),
+            server_default=_sql_text("'active'"),
             nullable=False,
         ),
         sa.Column(
             "activated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column("retired_at", sa.DateTime(timezone=True), nullable=True),
@@ -90,7 +107,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_admin_key_ref_tenant",
         ),
@@ -197,7 +214,7 @@ def upgrade() -> None:
         ["tenant_id", "purpose"],
         unique=True,
         schema=_SCHEMA,
-        postgresql_where=sa.text("status = 'active'"),
+        postgresql_where=_sql_text("status = 'active'"),
     )
 
     op.create_table(
@@ -205,25 +222,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -231,13 +248,13 @@ def upgrade() -> None:
         sa.Column(
             "capabilities",
             postgresql.JSONB(astext_type=sa.Text()),
-            server_default=sa.text("'[]'::jsonb"),
+            server_default=_sql_text("'[]'::jsonb"),
             nullable=False,
         ),
         sa.Column(
             "granted_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column("granted_by_user_id", sa.Uuid(), nullable=True),
@@ -248,7 +265,7 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_admin_plugin_capability_grant_tenant",
         ),
@@ -341,7 +358,7 @@ def upgrade() -> None:
         ["tenant_id", "plugin_key"],
         unique=True,
         schema=_SCHEMA,
-        postgresql_where=sa.text("revoked_at IS NULL"),
+        postgresql_where=_sql_text("revoked_at IS NULL"),
     )
 
     op.create_table(
@@ -349,25 +366,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -380,20 +397,20 @@ def upgrade() -> None:
         sa.Column(
             "hash_alg",
             postgresql.CITEXT(length=32),
-            server_default=sa.text("'sha256'"),
+            server_default=_sql_text("'sha256'"),
             nullable=False,
         ),
         sa.Column("content_length", sa.BigInteger(), nullable=True),
         sa.Column(
             "immutability",
             postgresql.CITEXT(length=32),
-            server_default=sa.text("'immutable'"),
+            server_default=_sql_text("'immutable'"),
             nullable=False,
         ),
         sa.Column(
             "verification_status",
             postgresql.CITEXT(length=32),
-            server_default=sa.text("'pending'"),
+            server_default=_sql_text("'pending'"),
             nullable=False,
         ),
         sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
@@ -427,7 +444,7 @@ def upgrade() -> None:
         sa.Column("meta", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_audit_evidence_blob_tenant",
         ),
@@ -665,25 +682,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -693,33 +710,33 @@ def upgrade() -> None:
         sa.Column(
             "retention_days",
             sa.BigInteger(),
-            server_default=sa.text("0"),
+            server_default=_sql_text("0"),
             nullable=False,
         ),
         sa.Column("redaction_after_days", sa.BigInteger(), nullable=True),
         sa.Column(
             "purge_grace_days",
             sa.BigInteger(),
-            server_default=sa.text("30"),
+            server_default=_sql_text("30"),
             nullable=False,
         ),
         sa.Column(
             "legal_hold_allowed",
             sa.Boolean(),
-            server_default=sa.text("true"),
+            server_default=_sql_text("true"),
             nullable=False,
         ),
         sa.Column(
             "is_active",
             sa.Boolean(),
-            server_default=sa.text("true"),
+            server_default=_sql_text("true"),
             nullable=False,
         ),
         sa.Column("description", sa.String(length=2048), nullable=True),
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_gov_retention_class_tenant",
         ),
@@ -805,25 +822,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -835,13 +852,13 @@ def upgrade() -> None:
         sa.Column(
             "status",
             postgresql.CITEXT(length=32),
-            server_default=sa.text("'active'"),
+            server_default=_sql_text("'active'"),
             nullable=False,
         ),
         sa.Column(
             "placed_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column("placed_by_user_id", sa.Uuid(), nullable=True),
@@ -852,8 +869,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "retention_class_id"),
             (
-                "mugen.ops_governance_retention_class.tenant_id",
-                "mugen.ops_governance_retention_class.id",
+                f"{_SCHEMA}.ops_governance_retention_class.tenant_id",
+                f"{_SCHEMA}.ops_governance_retention_class.id",
             ),
             name="fkx_ops_gov_legal_hold__tenant_retention_class",
             ondelete="SET NULL",
@@ -958,7 +975,7 @@ def upgrade() -> None:
         ["tenant_id", "resource_type", "resource_id"],
         unique=True,
         schema=_SCHEMA,
-        postgresql_where=sa.text("status = 'active'"),
+        postgresql_where=_sql_text("status = 'active'"),
     )
 
     op.create_table(
@@ -966,25 +983,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -995,7 +1012,7 @@ def upgrade() -> None:
         sa.Column(
             "dry_run",
             sa.Boolean(),
-            server_default=sa.text("false"),
+            server_default=_sql_text("false"),
             nullable=False,
         ),
         sa.Column("actor_user_id", sa.Uuid(), nullable=True),
@@ -1003,7 +1020,7 @@ def upgrade() -> None:
         sa.Column("details", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_gov_lifecycle_action_log_tenant",
         ),
@@ -1116,7 +1133,7 @@ def upgrade() -> None:
         ondelete="SET NULL",
     )
 
-    op.execute("""
+    _execute("""
         CREATE OR REPLACE FUNCTION
             mugen.tg_guard_ops_gov_lifecycle_action_log_mutation()
         RETURNS trigger
@@ -1129,20 +1146,20 @@ def upgrade() -> None:
         END;
         $$;
         """)
-    op.execute("""
+    _execute("""
         CREATE TRIGGER tr_guard_ops_gov_lifecycle_action_log_update
         BEFORE UPDATE ON mugen.ops_governance_lifecycle_action_log
         FOR EACH ROW
         EXECUTE FUNCTION mugen.tg_guard_ops_gov_lifecycle_action_log_mutation();
         """)
-    op.execute("""
+    _execute("""
         CREATE TRIGGER tr_guard_ops_gov_lifecycle_action_log_delete
         BEFORE DELETE ON mugen.ops_governance_lifecycle_action_log
         FOR EACH ROW
         EXECUTE FUNCTION mugen.tg_guard_ops_gov_lifecycle_action_log_mutation();
         """)
 
-    op.execute("""
+    _execute("""
         CREATE OR REPLACE FUNCTION mugen.tg_guard_audit_evidence_blob_update()
         RETURNS trigger
         LANGUAGE plpgsql
@@ -1172,7 +1189,7 @@ def upgrade() -> None:
         END;
         $$;
         """)
-    op.execute("""
+    _execute("""
         CREATE TRIGGER tr_guard_audit_evidence_blob_update
         BEFORE UPDATE ON mugen.audit_evidence_blob
         FOR EACH ROW
@@ -1181,21 +1198,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
+    _execute(
         "DROP TRIGGER IF EXISTS tr_guard_audit_evidence_blob_update "
         "ON mugen.audit_evidence_blob;"
     )
-    op.execute("DROP FUNCTION IF EXISTS mugen.tg_guard_audit_evidence_blob_update();")
+    _execute("DROP FUNCTION IF EXISTS mugen.tg_guard_audit_evidence_blob_update();")
 
-    op.execute(
+    _execute(
         "DROP TRIGGER IF EXISTS tr_guard_ops_gov_lifecycle_action_log_delete "
         "ON mugen.ops_governance_lifecycle_action_log;"
     )
-    op.execute(
+    _execute(
         "DROP TRIGGER IF EXISTS tr_guard_ops_gov_lifecycle_action_log_update "
         "ON mugen.ops_governance_lifecycle_action_log;"
     )
-    op.execute(
+    _execute(
         "DROP FUNCTION IF EXISTS "
         "mugen.tg_guard_ops_gov_lifecycle_action_log_mutation();"
     )
@@ -1564,4 +1581,4 @@ def downgrade() -> None:
     )
     op.drop_table("admin_key_ref", schema=_SCHEMA)
 
-    op.execute("DROP TYPE IF EXISTS mugen.admin_key_ref_status;")
+    _execute("DROP TYPE IF EXISTS mugen.admin_key_ref_status;")

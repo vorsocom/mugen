@@ -10,7 +10,24 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import rewrite_mugen_schema_sql
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _sql_text(statement: str):
+    return sa.text(_sql(statement))
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
+
 
 # pylint: disable=no-member
 
@@ -20,7 +37,7 @@ down_revision: Union[str, None] = "df918b0b6284"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
@@ -49,7 +66,7 @@ def upgrade() -> None:
         sa.Column(
             "hash_alg",
             postgresql.CITEXT(length=64),
-            server_default=sa.text("'hmac-sha256'"),
+            server_default=_sql_text("'hmac-sha256'"),
             nullable=False,
         ),
         schema=_SCHEMA,
@@ -139,33 +156,33 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("scope_key", postgresql.CITEXT(length=256), nullable=False),
-        sa.Column("last_seq", sa.BigInteger(), server_default=sa.text("0"), nullable=False),
+        sa.Column("last_seq", sa.BigInteger(), server_default=_sql_text("0"), nullable=False),
         sa.Column(
             "last_entry_hash",
             postgresql.CITEXT(length=128),
-            server_default=sa.text("'0000000000000000000000000000000000000000000000000000000000000000'"),
+            server_default=_sql_text("'0000000000000000000000000000000000000000000000000000000000000000'"),
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("id", name="pk_audit_chain_head"),
@@ -173,7 +190,7 @@ def upgrade() -> None:
         schema=_SCHEMA,
     )
 
-    op.execute(
+    _execute(
         """
         UPDATE mugen.audit_event
            SET scope_key = COALESCE(tenant_id::text, 'global')
@@ -181,7 +198,7 @@ def upgrade() -> None:
          WHERE scope_key IS NULL;
         """
     )
-    op.execute(
+    _execute(
         """
         UPDATE mugen.audit_event
            SET before_snapshot_hash = encode(
@@ -191,7 +208,7 @@ def upgrade() -> None:
          WHERE before_snapshot_hash IS NULL;
         """
     )
-    op.execute(
+    _execute(
         """
         UPDATE mugen.audit_event
            SET after_snapshot_hash = encode(
@@ -272,7 +289,7 @@ def upgrade() -> None:
         ["redaction_due_at", "id"],
         unique=False,
         schema=_SCHEMA,
-        postgresql_where=sa.text(
+        postgresql_where=_sql_text(
             "redacted_at IS NULL AND legal_hold_at IS NULL AND redaction_due_at IS NOT NULL"
         ),
     )
@@ -282,7 +299,7 @@ def upgrade() -> None:
         ["retention_until", "id"],
         unique=False,
         schema=_SCHEMA,
-        postgresql_where=sa.text(
+        postgresql_where=_sql_text(
             "tombstoned_at IS NULL AND legal_hold_at IS NULL AND retention_until IS NOT NULL"
         ),
     )
@@ -292,12 +309,12 @@ def upgrade() -> None:
         ["purge_due_at", "id"],
         unique=False,
         schema=_SCHEMA,
-        postgresql_where=sa.text(
+        postgresql_where=_sql_text(
             "tombstoned_at IS NOT NULL AND legal_hold_at IS NULL AND purge_due_at IS NOT NULL"
         ),
     )
 
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE FUNCTION mugen.tg_guard_audit_event_update()
         RETURNS trigger
@@ -357,7 +374,7 @@ def upgrade() -> None:
         $$;
         """
     )
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE FUNCTION mugen.tg_guard_audit_event_delete()
         RETURNS trigger
@@ -390,7 +407,7 @@ def upgrade() -> None:
         """
     )
 
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE TRIGGER tr_guard_audit_event_update
         BEFORE UPDATE ON mugen.audit_event
@@ -398,7 +415,7 @@ def upgrade() -> None:
         EXECUTE FUNCTION mugen.tg_guard_audit_event_update();
         """
     )
-    op.execute(
+    _execute(
         """
         CREATE OR REPLACE TRIGGER tr_guard_audit_event_delete
         BEFORE DELETE ON mugen.audit_event
@@ -409,10 +426,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS tr_guard_audit_event_delete ON mugen.audit_event;")
-    op.execute("DROP TRIGGER IF EXISTS tr_guard_audit_event_update ON mugen.audit_event;")
-    op.execute("DROP FUNCTION IF EXISTS mugen.tg_guard_audit_event_delete();")
-    op.execute("DROP FUNCTION IF EXISTS mugen.tg_guard_audit_event_update();")
+    _execute("DROP TRIGGER IF EXISTS tr_guard_audit_event_delete ON mugen.audit_event;")
+    _execute("DROP TRIGGER IF EXISTS tr_guard_audit_event_update ON mugen.audit_event;")
+    _execute("DROP FUNCTION IF EXISTS mugen.tg_guard_audit_event_delete();")
+    _execute("DROP FUNCTION IF EXISTS mugen.tg_guard_audit_event_update();")
 
     op.drop_index("ix_audit_event__purge_due_work", table_name="audit_event", schema=_SCHEMA)
     op.drop_index("ix_audit_event__tombstone_due_work", table_name="audit_event", schema=_SCHEMA)

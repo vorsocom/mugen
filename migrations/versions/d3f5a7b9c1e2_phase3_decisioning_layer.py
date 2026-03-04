@@ -10,7 +10,24 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import rewrite_mugen_schema_sql
+from migrations.schema_contract import resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
+
+def _sql(statement: str) -> str:
+    return rewrite_mugen_schema_sql(statement, schema=_SCHEMA)
+
+
+def _sql_text(statement: str):
+    return sa.text(_sql(statement))
+
+
+def _execute(statement) -> None:
+    if isinstance(statement, str):
+        op.execute(_sql(statement))
+        return
+    op.execute(statement)
+
 
 # pylint: disable=no-member
 
@@ -20,23 +37,23 @@ down_revision: Union[str, None] = "c2d4e6f8a0b1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 
 
 def upgrade() -> None:
-    op.execute(
+    _execute(
         "ALTER TYPE mugen.ops_workflow_event_type "
         "ADD VALUE IF NOT EXISTS 'decision_opened';"
     )
-    op.execute(
+    _execute(
         "ALTER TYPE mugen.ops_workflow_event_type "
         "ADD VALUE IF NOT EXISTS 'decision_resolved';"
     )
-    op.execute(
+    _execute(
         "ALTER TYPE mugen.ops_workflow_event_type "
         "ADD VALUE IF NOT EXISTS 'decision_expired';"
     )
-    op.execute(
+    _execute(
         "ALTER TYPE mugen.ops_workflow_event_type "
         "ADD VALUE IF NOT EXISTS 'decision_cancelled';"
     )
@@ -46,7 +63,7 @@ def upgrade() -> None:
         sa.Column(
             "engine",
             postgresql.CITEXT(length=32),
-            server_default=sa.text("'dsl'"),
+            server_default=_sql_text("'dsl'"),
             nullable=False,
         ),
         schema=_SCHEMA,
@@ -56,7 +73,7 @@ def upgrade() -> None:
         sa.Column(
             "document_json",
             postgresql.JSONB(astext_type=sa.Text()),
-            server_default=sa.text("'{}'::jsonb"),
+            server_default=_sql_text("'{}'::jsonb"),
             nullable=False,
         ),
         schema=_SCHEMA,
@@ -85,7 +102,7 @@ def upgrade() -> None:
         ["tenant_id", "code"],
         unique=True,
         schema=_SCHEMA,
-        postgresql_where=sa.text("is_active = true"),
+        postgresql_where=_sql_text("is_active = true"),
     )
 
     op.add_column(
@@ -167,25 +184,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -195,7 +212,7 @@ def upgrade() -> None:
             "status",
             ops_wf_decision_request_status,
             nullable=False,
-            server_default=sa.text("'open'"),
+            server_default=_sql_text("'open'"),
         ),
         sa.Column(
             "requester_actor_json",
@@ -224,15 +241,15 @@ def upgrade() -> None:
         sa.Column("attributes", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_wf_decision_request_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_instance_id"),
             (
-                "mugen.ops_workflow_workflow_instance.tenant_id",
-                "mugen.ops_workflow_workflow_instance.id",
+                f"{_SCHEMA}.ops_workflow_workflow_instance.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_instance.id",
             ),
             name="fkx_ops_wf_decision_request_tenant_instance",
             ondelete="SET NULL",
@@ -240,8 +257,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ("tenant_id", "workflow_task_id"),
             (
-                "mugen.ops_workflow_workflow_task.tenant_id",
-                "mugen.ops_workflow_workflow_task.id",
+                f"{_SCHEMA}.ops_workflow_workflow_task.tenant_id",
+                f"{_SCHEMA}.ops_workflow_workflow_task.id",
             ),
             name="fkx_ops_wf_decision_request_tenant_task",
             ondelete="SET NULL",
@@ -338,25 +355,25 @@ def upgrade() -> None:
         sa.Column(
             "id",
             sa.UUID(),
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=_sql_text("gen_random_uuid()"),
             nullable=False,
         ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=_sql_text("now()"),
             nullable=False,
         ),
         sa.Column(
             "row_version",
             sa.BigInteger(),
-            server_default=sa.text("1"),
+            server_default=_sql_text("1"),
             nullable=False,
         ),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -378,15 +395,15 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{_SCHEMA}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_wf_decision_outcome_tenant",
         ),
         sa.ForeignKeyConstraint(
             ("tenant_id", "decision_request_id"),
             (
-                "mugen.ops_workflow_decision_request.tenant_id",
-                "mugen.ops_workflow_decision_request.id",
+                f"{_SCHEMA}.ops_workflow_decision_request.tenant_id",
+                f"{_SCHEMA}.ops_workflow_decision_request.id",
             ),
             name="fkx_ops_wf_decision_outcome_tenant_request",
             ondelete="CASCADE",

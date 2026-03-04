@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import context, op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_runtime_schema
 
 # revision identifiers, used by Alembic.
 revision: str = "f1a9b7c3d5e2"
@@ -17,7 +18,7 @@ down_revision: Union[str, Sequence[str], None] = "aa6d5f4c3b2e"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SCHEMA = "mugen"
+_SCHEMA = resolve_runtime_schema()
 _TABLE = "ops_governance_retention_class"
 _INDEX = "ux_ops_gov_retention_class__tenant_resource_active"
 
