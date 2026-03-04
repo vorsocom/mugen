@@ -10,7 +10,7 @@ This document explains gateway contracts and currently supported completion,
 knowledge, and email gateway implementations in muGen.
 
 Runtime configuration uses strict provider tokens (for example `bedrock`,
-`openai`, `sambanova`, `chromadb`, `pgvector`, `qdrant`, `smtp`, `ses`), not
+`openai`, `sambanova`, `chromadb`, `milvus`, `pgvector`, `qdrant`, `smtp`, `ses`), not
 Python module paths.
 
 ## Completion Gateway Contract
@@ -392,6 +392,29 @@ Behavior:
 - Applies retry/timeout controls from `[qdrant] api.*`.
 - Wraps provider transport/runtime failures as `KnowledgeGatewayRuntimeError`.
 
+### Milvus
+
+Module: `mugen.core.gateway.knowledge.milvus`
+
+Behavior:
+
+- Uses local sentence-transformer embeddings for semantic query vectors.
+- Queries a configured Milvus collection using tenant-scoped and optional scope
+  filters (`channel`, `locale`, `category`).
+- Requires strict payload projection keys per hit:
+  `tenant_id`, `knowledge_entry_revision_id`, `knowledge_pack_version_id`,
+  `channel`, `locale`, `category`, `title`, `body`.
+- Returns normalized items with revision/version IDs, scope values, title,
+  snippet, similarity, and distance.
+- Applies retry/timeout controls from `[milvus] api.*`.
+- Wraps provider transport/runtime failures as `KnowledgeGatewayRuntimeError`.
+
+Readiness requirements:
+
+- `milvus.api.uri` is configured
+- `milvus.search.collection` exists and is reachable
+- local sentence-transformer encoder initializes successfully
+
 ### pgvector
 
 Module: `mugen.core.gateway.knowledge.pgvector`
@@ -448,6 +471,7 @@ Behavior:
 gateway.completion = "bedrock"
 # Optional knowledge gateway.
 # gateway.knowledge = "chromadb"
+# gateway.knowledge = "milvus"
 # gateway.knowledge = "pgvector"
 # gateway.knowledge = "qdrant"
 # Optional outbound email gateway.
@@ -494,6 +518,20 @@ api.timeout_seconds = 10.0
 api.max_retries = 2
 api.retry_backoff_seconds = 0.5
 search.collection = "downstream_kp_search_doc"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
+
+[milvus]
+api.uri = "http://localhost:19530"
+api.token = ""
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.collection = "downstream_kp_search_doc"
+search.vector_field = "embedding"
 search.default_top_k = 10
 search.max_top_k = 50
 search.snippet_max_chars = 240

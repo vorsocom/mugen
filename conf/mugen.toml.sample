@@ -56,6 +56,7 @@ gateway.completion = "sambanova"
 # gateway.email = "smtp"
 # gateway.email = "ses"
 # gateway.knowledge = "chromadb"
+# gateway.knowledge = "milvus"
 # gateway.knowledge = "pgvector"
 # gateway.knowledge = "qdrant"
 gateway.logging = "standard"
@@ -292,6 +293,21 @@ api.timeout_seconds = 10.0
 api.max_retries = 2
 api.retry_backoff_seconds = 0.5
 search.collection = "downstream_kp_search_doc"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
+
+# === Milvus ===
+[milvus]
+api.uri = "http://localhost:19530"
+api.token = ""
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.collection = "downstream_kp_search_doc"
+search.vector_field = "embedding"
 search.default_top_k = 10
 search.max_top_k = 50
 search.snippet_max_chars = 240
