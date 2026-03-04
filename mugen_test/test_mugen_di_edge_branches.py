@@ -14,6 +14,25 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
     """Exercise remaining branch-heavy DI helpers."""
 
     @staticmethod
+    def _runtime_section(
+        *,
+        profile: object = "platform_full",
+        provider_readiness_timeout_seconds: object = 1.0,
+        provider_shutdown_timeout_seconds: object = 10.0,
+        shutdown_timeout_seconds: object = 60.0,
+        startup_timeout_seconds: object = 30.0,
+    ) -> dict:
+        return {
+            "profile": profile,
+            "provider_readiness_timeout_seconds": provider_readiness_timeout_seconds,
+            "provider_shutdown_timeout_seconds": provider_shutdown_timeout_seconds,
+            "shutdown_timeout_seconds": shutdown_timeout_seconds,
+            "phase_b": {
+                "startup_timeout_seconds": startup_timeout_seconds,
+            },
+        }
+
+    @staticmethod
     def _readiness_config(
         *,
         profile: str = "platform_full",
@@ -23,10 +42,9 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
     ) -> dict:
         config: dict = {
             "mugen": {
-                "runtime": {
-                    "profile": profile,
-                    "provider_readiness_timeout_seconds": 1.0,
-                },
+                "runtime": TestMugenDIEdgeBranches._runtime_section(
+                    profile=profile,
+                ),
                 "platforms": [] if platforms is None else platforms,
                 "modules": {
                     "core": {
@@ -73,34 +91,53 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
     def test_resolve_runtime_profile_override(self) -> None:
         self.assertEqual(
             di._resolve_runtime_profile_override(
-                {"mugen": {"runtime": {"profile": "platform_full"}}}
+                {"mugen": {"runtime": self._runtime_section()}}
             ),
             "platform_full",
         )
         self.assertEqual(
             di._resolve_runtime_profile_override(
-                {"mugen": {"runtime": {"profile": "platform_full"}, "platforms": ["matrix", "web"]}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(),
+                        "platforms": ["matrix", "web"],
+                    }
+                }
             ),
             "platform_full",
         )
         self.assertEqual(
             di._resolve_runtime_profile_override(
-                {"mugen": {"runtime": {"profile": "platform_full"}, "platforms": ["web"]}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(),
+                        "platforms": ["web"],
+                    }
+                }
             ),
             "platform_full",
         )
         self.assertEqual(
             di._resolve_runtime_profile_override(
-                {"mugen": {"runtime": {"profile": "platform_full"}, "platforms": []}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(),
+                        "platforms": [],
+                    }
+                }
             ),
             "platform_full",
         )
 
     def test_resolve_runtime_profile_override_rejects_invalid_override(self) -> None:
         with self.assertRaises(RuntimeError):
-            di._resolve_runtime_profile_override({"mugen": {"runtime": {"profile": "invalid"}}})
+            di._resolve_runtime_profile_override(
+                {"mugen": {"runtime": self._runtime_section(profile="invalid")}}
+            )
         with self.assertRaises(RuntimeError):
-            di._resolve_runtime_profile_override({"mugen": {"platforms": []}})
+            di._resolve_runtime_profile_override(
+                {"mugen": {"runtime": self._runtime_section(profile=""), "platforms": []}}
+            )
 
     def test_normalize_platforms_filters_empty_and_duplicates(self) -> None:
         self.assertEqual(di._normalize_platforms(None), [])
@@ -112,27 +149,27 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
     def test_runtime_profile_override_edge_cases(self) -> None:
         with self.assertRaises(RuntimeError):
             di._resolve_runtime_profile_override(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"profile": None}}}
+                {"mugen": {"runtime": self._runtime_section(profile=None)}}
             )
         with self.assertRaises(RuntimeError):
             di._resolve_runtime_profile_override(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"profile": "   "}}}
+                {"mugen": {"runtime": self._runtime_section(profile="   ")}}
             )
         with self.assertRaises(RuntimeError):
             di._resolve_runtime_profile_override(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"profile": "auto"}}}
+                {"mugen": {"runtime": self._runtime_section(profile="auto")}}
             )
         with self.assertRaises(RuntimeError):
             di._resolve_runtime_profile_override(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"profile": 1}}}
+                {"mugen": {"runtime": self._runtime_section(profile=1)}}
             )
         with self.assertRaises(RuntimeError):
             di._resolve_runtime_profile_override(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {}}}
+                {"mugen": {"runtime": self._runtime_section(profile=None)}}
             )
         with self.assertRaises(RuntimeError):
             di._resolve_runtime_profile_override(  # pylint: disable=protected-access
-                {"mugen": {}}
+                {"mugen": {"runtime": self._runtime_section(profile=None)}}
             )
 
     def test_validate_container_requires_relational_when_web_platform_is_enabled(self) -> None:
@@ -151,7 +188,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         config = {
             "mugen": {
-                "runtime": {"profile": "platform_full"},
+                "runtime": self._runtime_section(),
                 "platforms": ["web"],
             }
         }
@@ -181,7 +218,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
                         }
                     }
                 },
-                "runtime": {"profile": "platform_full"},
+                "runtime": self._runtime_section(),
                 "platforms": ["matrix", "whatsapp", "web"],
             }
         }
@@ -213,7 +250,12 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             user_service=object(),
             messaging_service=object(),
         )
-        config = {"mugen": {"runtime": {"profile": "platform_full"}, "platforms": ["matrix"]}}
+        config = {
+            "mugen": {
+                "runtime": self._runtime_section(),
+                "platforms": ["matrix"],
+            }
+        }
 
         with self.assertLogs("root", level="ERROR") as logs:
             with self.assertRaises(RuntimeError):
@@ -241,7 +283,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         config = {
             "mugen": {
                 "modules": {"core": {"gateway": {"knowledge": "knowledge.module"}}},
-                "runtime": {"profile": "platform_full"},
+                "runtime": self._runtime_section(),
                 "platforms": ["matrix"],
             }
         }
@@ -266,7 +308,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         config = {
             "mugen": {
                 "modules": {"core": {"gateway": {"email": "email.module"}}},
-                "runtime": {"profile": "platform_full"},
+                "runtime": self._runtime_section(),
                 "platforms": ["matrix"],
             }
         }
@@ -289,7 +331,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         config = {
             "mugen": {
-                "runtime": {"profile": "api_only"},
+                "runtime": self._runtime_section(profile="api_only"),
                 "platforms": [],
             }
         }
@@ -313,7 +355,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         config = {
             "mugen": {
-                "runtime": {"profile": "platform_full"},
+                "runtime": self._runtime_section(),
                 "platforms": ["matrix"],
             }
         }
@@ -340,7 +382,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         config = {
             "mugen": {
-                "runtime": {"profile": "web_only"},
+                "runtime": self._runtime_section(profile="web_only"),
                 "platforms": ["web"],
             }
         }
@@ -362,7 +404,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         config = {
             "mugen": {
-                "runtime": {"profile": "platform_full"},
+                "runtime": self._runtime_section(),
                 "platforms": [],
             }
         }
@@ -385,7 +427,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         config = {
             "mugen": {
-                "runtime": {"profile": "platform_full"},
+                "runtime": self._runtime_section(),
                 "platforms": ["whatsapp"],
             }
         }
@@ -408,7 +450,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         )
         config = {
             "mugen": {
-                "runtime": {"profile": "platform_full"},
+                "runtime": self._runtime_section(),
                 "platforms": [" web ", "unknown"],
             }
         }
@@ -1028,17 +1070,35 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._resolve_provider_readiness_timeout_seconds({})  # pylint: disable=protected-access
         self.assertEqual(
             di._resolve_provider_readiness_timeout_seconds(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"provider_readiness_timeout_seconds": "2.5"}}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(
+                            provider_readiness_timeout_seconds="2.5",
+                        )
+                    }
+                }
             ),
             2.5,
         )
         with self.assertRaises(RuntimeError):
             di._resolve_provider_readiness_timeout_seconds(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"provider_readiness_timeout_seconds": "bad"}}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(
+                            provider_readiness_timeout_seconds="bad",
+                        )
+                    }
+                }
             )
         with self.assertRaises(RuntimeError):
             di._resolve_provider_readiness_timeout_seconds(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"provider_readiness_timeout_seconds": 0}}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(
+                            provider_readiness_timeout_seconds=0,
+                        )
+                    }
+                }
             )
 
     def test_resolve_provider_shutdown_timeout_seconds_required_and_validation(
@@ -1048,17 +1108,35 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._resolve_provider_shutdown_timeout_seconds({})  # pylint: disable=protected-access
         self.assertEqual(
             di._resolve_provider_shutdown_timeout_seconds(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"provider_shutdown_timeout_seconds": "2.5"}}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(
+                            provider_shutdown_timeout_seconds="2.5",
+                        )
+                    }
+                }
             ),
             2.5,
         )
         with self.assertRaises(RuntimeError):
             di._resolve_provider_shutdown_timeout_seconds(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"provider_shutdown_timeout_seconds": "bad"}}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(
+                            provider_shutdown_timeout_seconds="bad",
+                        )
+                    }
+                }
             )
         with self.assertRaises(RuntimeError):
             di._resolve_provider_shutdown_timeout_seconds(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"provider_shutdown_timeout_seconds": 0}}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(
+                            provider_shutdown_timeout_seconds=0,
+                        )
+                    }
+                }
             )
 
     def test_resolve_shutdown_timeout_seconds_required_and_validation(self) -> None:
@@ -1066,13 +1144,25 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._resolve_shutdown_timeout_seconds({})  # pylint: disable=protected-access
         self.assertEqual(
             di._resolve_shutdown_timeout_seconds(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"shutdown_timeout_seconds": "5.0"}}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(
+                            shutdown_timeout_seconds="5.0",
+                        )
+                    }
+                }
             ),
             5.0,
         )
         with self.assertRaises(RuntimeError):
             di._resolve_shutdown_timeout_seconds(  # pylint: disable=protected-access
-                {"mugen": {"runtime": {"shutdown_timeout_seconds": 0}}}
+                {
+                    "mugen": {
+                        "runtime": self._runtime_section(
+                            shutdown_timeout_seconds=0,
+                        )
+                    }
+                }
             )
 
     def test_build_shared_relational_runtime_requires_valid_injector_and_config(self) -> None:
@@ -1163,6 +1253,24 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
         ):
             with self.assertRaises(di.ProviderBootstrapError):
                 asyncio.run(proxy.ensure_readiness())
+
+    def test_container_proxy_ensure_readiness_wraps_runtime_config_errors(self) -> None:
+        proxy = di._ContainerProxy()  # pylint: disable=protected-access
+        proxy._injector = di.injector.DependencyInjector(  # pylint: disable=protected-access
+            config=SimpleNamespace(dict={"mugen": {"runtime": {"profile": "platform_full"}}})
+        )
+
+        with patch(
+            "mugen.core.di._injector_config_dict",
+            side_effect=RuntimeError("missing runtime controls"),
+        ):
+            with self.assertRaises(di.ProviderBootstrapError) as raised:
+                asyncio.run(proxy.ensure_readiness())
+
+        self.assertIn(
+            "Provider readiness bootstrap configuration failed: missing runtime controls",
+            str(raised.exception),
+        )
 
     def test_container_proxy_get_readiness_report_returns_last_report(self) -> None:
         proxy = di._ContainerProxy()  # pylint: disable=protected-access

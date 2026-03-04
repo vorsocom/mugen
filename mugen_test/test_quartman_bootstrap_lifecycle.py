@@ -35,6 +35,8 @@ def _import_quartman_with_app(app: Quart):
 
 def _runtime_mock(*, startup_timeout_seconds: float) -> unittest.mock.Mock:
     return unittest.mock.Mock(
+        profile="platform_full",
+        provider_readiness_timeout_seconds=15.0,
         phase_b=unittest.mock.Mock(startup_timeout_seconds=startup_timeout_seconds),
         provider_shutdown_timeout_seconds=10.0,
         shutdown_timeout_seconds=60.0,
@@ -634,8 +636,50 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         app = Quart("quartman_test")
         quartman = _import_quartman_with_app(app)
         with unittest.mock.patch.object(quartman.di, "container", object()):
-            with self.assertRaisesRegex(RuntimeError, "Configuration unavailable"):
+            with self.assertRaisesRegex(BootstrapConfigError, "Configuration unavailable"):
                 quartman._resolve_shutdown_timeout_seconds()
+
+    async def test_resolve_shutdown_timeout_seconds_wraps_container_attribute_errors(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        class _RaisingContainer:  # pylint: disable=too-few-public-methods
+            @property
+            def config(self):
+                raise RuntimeError("container unavailable")
+
+        with unittest.mock.patch.object(quartman.di, "container", _RaisingContainer()):
+            with self.assertRaisesRegex(BootstrapConfigError, "Configuration unavailable"):
+                quartman._resolve_shutdown_timeout_seconds()
+
+    async def test_startup_wraps_container_attribute_errors_during_phase_b_resolution(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        class _RaisingContainer:  # pylint: disable=too-few-public-methods
+            @property
+            def config(self):
+                raise RuntimeError("container unavailable")
+
+        with (
+            unittest.mock.patch.object(quartman.di, "container", _RaisingContainer()),
+            unittest.mock.patch.object(
+                quartman,
+                "bootstrap_app",
+                new=unittest.mock.AsyncMock(return_value=None),
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "run_platform_clients",
+                new=unittest.mock.AsyncMock(),
+            ),
+            self.assertRaisesRegex(BootstrapConfigError, "Configuration unavailable"),
+        ):
+            await quartman.app.startup()
 
     async def test_startup_rejects_phase_b_plan_missing_timeout_value(self) -> None:
         app = Quart("quartman_test")
@@ -936,20 +980,20 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_runtime_controls_default_when_container_config_missing(self) -> None:
-        grace, critical, degrade_on_critical_exit = resolve_phase_b_runtime_controls(
-            object()
-        )
-
-        self.assertEqual(grace, 0.0)
-        self.assertEqual(critical, [])
-        self.assertTrue(degrade_on_critical_exit)
+        with self.assertRaisesRegex(RuntimeError, "mugen.runtime.profile"):
+            resolve_phase_b_runtime_controls(object())
 
     async def test_runtime_controls_reject_invalid_grace_values(self) -> None:
         container = unittest.mock.Mock()
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 runtime=unittest.mock.Mock(
+                    profile="platform_full",
+                    provider_readiness_timeout_seconds=15.0,
+                    provider_shutdown_timeout_seconds=10.0,
+                    shutdown_timeout_seconds=60.0,
                     phase_b=unittest.mock.Mock(
+                        startup_timeout_seconds=30.0,
                         readiness_grace_seconds="invalid",
                         critical_platforms=[" WEB ", "", "whatsapp"],
                         degrade_on_critical_exit="off",
@@ -998,7 +1042,12 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 runtime=unittest.mock.Mock(
+                    profile="platform_full",
+                    provider_readiness_timeout_seconds=15.0,
+                    provider_shutdown_timeout_seconds=10.0,
+                    shutdown_timeout_seconds=60.0,
                     phase_b=unittest.mock.Mock(
+                        startup_timeout_seconds=30.0,
                         readiness_grace_seconds=3,
                         critical_platforms=None,
                         degrade_on_critical_exit=True,
@@ -1020,7 +1069,12 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         container.config = unittest.mock.Mock(
             mugen=unittest.mock.Mock(
                 runtime=unittest.mock.Mock(
+                    profile="platform_full",
+                    provider_readiness_timeout_seconds=15.0,
+                    provider_shutdown_timeout_seconds=10.0,
+                    shutdown_timeout_seconds=60.0,
                     phase_b=unittest.mock.Mock(
+                        startup_timeout_seconds=30.0,
                         readiness_grace_seconds=1,
                         critical_platforms=["web"],
                         degrade_on_critical_exit="on",

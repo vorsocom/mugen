@@ -380,6 +380,9 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         _ = displayname
                         return None
 
+                    async def monitor_runtime_health(self):
+                        return None
+
                 DummyMatrixClientClass.__module__ = "valid_matrix_module"
 
 

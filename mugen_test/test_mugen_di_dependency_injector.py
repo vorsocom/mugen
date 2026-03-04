@@ -473,6 +473,9 @@ class TestDependencyInjector(unittest.TestCase):
                 _ = displayname
                 return None
 
+            async def monitor_runtime_health(self):
+                return None
+
         matrix_client = DummyMatrixClientClass(
             config=config,
             ipc_service=ipc_service,

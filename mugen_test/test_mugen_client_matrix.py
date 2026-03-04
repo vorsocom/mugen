@@ -14,7 +14,13 @@ from nio import LocalProtocolError
 
 from mugen.core.client import matrix as matrix_mod
 from mugen.core.client.matrix import DefaultMatrixClient
-from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
+from mugen.core.contract.service.ipc import (
+    IPCCommandRequest,
+    IPCHandlerResult,
+    IPCAggregateError,
+    IPCAggregateResult,
+    IPCCriticalDispatchError,
+)
 from mugen.core.service.ipc import DefaultIPCService
 
 
@@ -951,6 +957,88 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         await client._dispatch_matrix_ipc_request(payload)  # pylint: disable=protected-access
         non_awaitable_handler.assert_called_once_with(payload)
 
+    async def test_dispatch_matrix_ipc_request_logs_non_critical_errors(self) -> None:
+        client = self._client()
+        payload = IPCCommandRequest(
+            platform="matrix",
+            command="matrix_event",
+            data={"callback": "_cb_tag_event", "event_type": "TagEvent"},
+        )
+        client._ipc_service = SimpleNamespace(
+            handle_ipc_request=AsyncMock(
+                return_value=IPCAggregateResult(
+                    platform="matrix",
+                    command="matrix_event",
+                    expected_handlers=1,
+                    received=1,
+                    duration_ms=1,
+                    results=[],
+                    errors=[
+                        IPCAggregateError(
+                            code="handler_error",
+                            error="failed",
+                            handler="DummyHandler",
+                        )
+                    ],
+                )
+            )
+        )
+
+        await client._dispatch_matrix_ipc_request(payload)  # pylint: disable=protected-access
+        self.assertEqual(
+            client._matrix_metrics["matrix.ipc.dispatch.non_critical_failure"],  # pylint: disable=protected-access
+            1,
+        )
+        self.assertEqual(
+            client._matrix_metrics["matrix.ipc.dispatch.non_critical_failure.handler_error"],  # pylint: disable=protected-access
+            1,
+        )
+        self.assertTrue(client._logging_gateway.warning.called)
+
+    async def test_monitor_runtime_health_raises_signaled_error(self) -> None:
+        client = self._client()
+        error = IPCCriticalDispatchError(
+            platform="matrix",
+            command="matrix_event",
+            handler="CriticalHandler",
+            code="timeout",
+            error="timed out",
+        )
+        client._signal_runtime_health_failure(error)  # pylint: disable=protected-access
+
+        with self.assertRaises(IPCCriticalDispatchError):
+            await client.monitor_runtime_health()
+
+    async def test_monitor_runtime_health_raises_when_signal_has_no_error(self) -> None:
+        client = self._client()
+        client._ensure_runtime_health_state()  # pylint: disable=protected-access
+        client._matrix_runtime_health_error = None  # pylint: disable=protected-access
+        client._matrix_runtime_health_signal.set()  # pylint: disable=protected-access
+
+        with self.assertRaisesRegex(RuntimeError, "exited without an error"):
+            await client.monitor_runtime_health()
+
+    def test_signal_runtime_health_failure_is_idempotent(self) -> None:
+        client = self._client()
+        first_error = IPCCriticalDispatchError(
+            platform="matrix",
+            command="matrix_event",
+            handler="CriticalHandler",
+            code="handler_exception",
+            error="first",
+        )
+        second_error = IPCCriticalDispatchError(
+            platform="matrix",
+            command="matrix_event",
+            handler="CriticalHandler",
+            code="handler_exception",
+            error="second",
+        )
+
+        client._signal_runtime_health_failure(first_error)  # pylint: disable=protected-access
+        client._signal_runtime_health_failure(second_error)  # pylint: disable=protected-access
+        self.assertIs(client._matrix_runtime_health_error, first_error)  # pylint: disable=protected-access
+
     async def test_matrix_ipc_worker_loop_handles_empty_queue_and_errors(self) -> None:
         client = self._client()
 
@@ -990,6 +1078,37 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         ):
             await client._matrix_ipc_worker_loop()  # pylint: disable=protected-access
         self.assertTrue(client._logging_gateway.warning.called)
+
+    async def test_matrix_ipc_worker_loop_signals_runtime_health_on_critical_dispatch_failure(
+        self,
+    ) -> None:
+        client = self._client()
+        client._matrix_ipc_queue = asyncio.Queue()
+        await client._matrix_ipc_queue.put(
+            IPCCommandRequest(platform="matrix", command="matrix_event", data={})
+        )
+
+        async def _raise_critical(_payload):
+            raise IPCCriticalDispatchError(
+                platform="matrix",
+                command="matrix_event",
+                handler="CriticalHandler",
+                code="handler_exception",
+                error="boom",
+            )
+
+        with patch.object(
+            client,
+            "_dispatch_matrix_ipc_request",
+            new=_raise_critical,
+        ):
+            await client._matrix_ipc_worker_loop()  # pylint: disable=protected-access
+
+        self.assertTrue(client._matrix_ipc_worker_stop.is_set())  # pylint: disable=protected-access
+        self.assertEqual(
+            client._matrix_metrics["matrix.ipc.dispatch.critical_failure"],  # pylint: disable=protected-access
+            1,
+        )
 
     async def test_dispatch_matrix_event_hook_queue_full_drops_new(self) -> None:
         client = self._client()

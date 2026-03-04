@@ -31,6 +31,8 @@ def _test_config(*, platforms: list[str], mh_mode: str = "optional") -> SimpleNa
         platforms=list(platforms),
         messaging=SimpleNamespace(mh_mode=mh_mode),
         runtime=SimpleNamespace(
+            profile="platform_full",
+            provider_readiness_timeout_seconds=15.0,
             provider_shutdown_timeout_seconds=10.0,
             shutdown_timeout_seconds=60.0,
             phase_b=SimpleNamespace(
@@ -89,6 +91,8 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 runtime=SimpleNamespace(
+                    profile="platform_full",
+                    provider_readiness_timeout_seconds=15.0,
                     provider_shutdown_timeout_seconds=10.0,
                     shutdown_timeout_seconds=60.0,
                     phase_b=SimpleNamespace(startup_timeout_seconds=30.0),
@@ -104,6 +108,27 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 app,
                 config_provider=lambda: config,
                 logger_provider=lambda: app.logger,
+            )
+
+    async def test_run_platform_clients_wraps_config_provider_failure(self) -> None:
+        app = Quart("test_app")
+
+        with self.assertRaisesRegex(BootstrapConfigError, "Configuration unavailable"):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: (_ for _ in ()).throw(RuntimeError("bad config")),
+                logger_provider=lambda: app.logger,
+            )
+
+    async def test_run_platform_clients_wraps_logger_provider_failure(self) -> None:
+        app = Quart("test_app")
+        config = _test_config(platforms=[])
+
+        with self.assertRaisesRegex(BootstrapConfigError, "Logging provider unavailable"):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: (_ for _ in ()).throw(RuntimeError("bad logger")),
             )
 
     async def test_matrix_platform_enabled(self) -> None:
@@ -289,7 +314,18 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
     async def test_validate_phase_b_runtime_config_raises_without_logger_for_invalid_shape(
         self,
     ) -> None:
-        config = SimpleNamespace(mugen=SimpleNamespace(platforms="web"))
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                platforms="web",
+                runtime=SimpleNamespace(
+                    profile="platform_full",
+                    provider_readiness_timeout_seconds=15.0,
+                    provider_shutdown_timeout_seconds=10.0,
+                    shutdown_timeout_seconds=60.0,
+                    phase_b=SimpleNamespace(startup_timeout_seconds=30.0),
+                ),
+            )
+        )
         with self.assertRaises(BootstrapConfigError):
             mugen_mod.validate_phase_b_runtime_config(
                 config=config,
@@ -986,6 +1022,32 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertIn("api", app.blueprints)
         self.assertIs(app.blueprints["api"], mugen_mod.api)
 
+    async def test_bootstrap_app_marks_blocking_failure_when_config_unavailable(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+
+        with self.assertRaisesRegex(BootstrapConfigError, "Configuration unavailable"):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: (_ for _ in ()).throw(RuntimeError("cfg down")),
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
+        errors = state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY]
+        self.assertEqual(
+            statuses["container_configuration"],
+            PHASE_STATUS_DEGRADED,
+        )
+        self.assertEqual(errors["container_configuration"], "cfg down")
+        self.assertEqual(
+            state[mugen_mod.PHASE_A_BLOCKING_FAILURES_KEY],
+            ["container_configuration"],
+        )
+        self.assertEqual(state[mugen_mod.PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY], [])
+        self.assertEqual(state[mugen_mod.PHASE_A_ERROR_KEY], "Configuration unavailable.")
+
     async def test_bootstrap_app_fails_fast_when_provider_readiness_fails(
         self,
     ) -> None:
@@ -1550,7 +1612,14 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 runtime=SimpleNamespace(
-                    phase_b=SimpleNamespace(critical_platforms=[" web ", "", "matrix"])
+                    profile="platform_full",
+                    provider_readiness_timeout_seconds=15.0,
+                    provider_shutdown_timeout_seconds=10.0,
+                    shutdown_timeout_seconds=60.0,
+                    phase_b=SimpleNamespace(
+                        startup_timeout_seconds=30.0,
+                        critical_platforms=[" web ", "", "matrix"],
+                    ),
                 )
             )
         )

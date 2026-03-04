@@ -272,6 +272,44 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         ):
             di._validate_core_module_schema(cfg)
 
+    def test_core_schema_validates_required_runtime_profile_and_startup_controls(
+        self,
+    ) -> None:
+        cfg = _valid_core_config()
+        di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        del cfg["mugen"]["runtime"]["profile"]
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mugen.runtime.profile is required and must be platform_full",
+        ):
+            di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["runtime"]["profile"] = "legacy"
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mugen.runtime.profile must be platform_full",
+        ):
+            di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        del cfg["mugen"]["runtime"]["provider_readiness_timeout_seconds"]
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mugen.runtime.provider_readiness_timeout_seconds is required",
+        ):
+            di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        del cfg["mugen"]["runtime"]["phase_b"]["startup_timeout_seconds"]
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mugen.runtime.phase_b.startup_timeout_seconds is required",
+        ):
+            di._validate_core_module_schema(cfg)
+
     def test_core_schema_requires_matrix_encryption_key_when_matrix_enabled(self) -> None:
         for mutate in (
             lambda cfg: cfg.update({"security": "invalid-shape"}),

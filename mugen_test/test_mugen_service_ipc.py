@@ -10,6 +10,7 @@ from mugen.core.contract.service.ipc import (
     IPCHandlerResult,
     IPCAggregateError,
     IPCAggregateResult,
+    IPCCriticalDispatchError,
 )
 from mugen.core.service.ipc import DefaultIPCService
 
@@ -137,6 +138,55 @@ class TestMugenServiceIPC(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.errors[0].code, "handler_exception")
         self.assertIn("Unhandled exception: boom", response.errors[0].error)
 
+    async def test_critical_handler_exception_raises_fail_closed_error(self) -> None:
+        svc = self._new_service()
+
+        async def crash(_request):
+            raise RuntimeError("boom")
+
+        svc.bind_ipc_extension(
+            _DummyIpcExt(
+                platforms=["matrix"],
+                ipc_commands=["ping"],
+                processor=crash,
+            ),
+            critical=True,
+        )
+
+        with self.assertRaises(IPCCriticalDispatchError) as raised:
+            await svc.handle_ipc_request(
+                IPCCommandRequest(
+                    platform="matrix",
+                    command="ping",
+                )
+            )
+        self.assertIn("handler=_DummyIpcExt", str(raised.exception))
+        self.assertIn("code=handler_exception", str(raised.exception))
+
+    async def test_critical_handler_invalid_result_raises_fail_closed_error(self) -> None:
+        svc = self._new_service()
+
+        async def invalid_result(_request):
+            return {"invalid": True}
+
+        svc.bind_ipc_extension(
+            _DummyIpcExt(
+                platforms=["matrix"],
+                ipc_commands=["ping"],
+                processor=invalid_result,
+            ),
+            critical=True,
+        )
+
+        with self.assertRaises(IPCCriticalDispatchError) as raised:
+            await svc.handle_ipc_request(
+                IPCCommandRequest(
+                    platform="matrix",
+                    command="ping",
+                )
+            )
+        self.assertIn("code=invalid_handler_result", str(raised.exception))
+
     async def test_timeout_returns_error(self) -> None:
         svc = self._new_service()
 
@@ -170,6 +220,39 @@ class TestMugenServiceIPC(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.results, [])
         self.assertEqual(len(response.errors), 1)
         self.assertEqual(response.errors[0].code, "timeout")
+
+    async def test_critical_handler_timeout_raises_fail_closed_error(self) -> None:
+        svc = self._new_service()
+
+        async def never_responds(_request):
+            await asyncio.sleep(60)
+            return IPCHandlerResult(handler="unused", response={})
+
+        svc.bind_ipc_extension(
+            _DummyIpcExt(
+                platforms=["matrix"],
+                ipc_commands=["ping"],
+                processor=never_responds,
+            ),
+            critical=True,
+        )
+
+        async def _timeout_and_close(awaitable, timeout):
+            _ = timeout
+            awaitable.close()
+            raise asyncio.TimeoutError()
+
+        with (
+            patch("mugen.core.service.ipc.asyncio.wait_for", new=_timeout_and_close),
+            self.assertRaises(IPCCriticalDispatchError) as raised,
+        ):
+            await svc.handle_ipc_request(
+                IPCCommandRequest(
+                    platform="matrix",
+                    command="ping",
+                )
+            )
+        self.assertIn("code=timeout", str(raised.exception))
 
     async def test_duplicate_registration_is_rejected(self) -> None:
         svc = self._new_service()

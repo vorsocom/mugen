@@ -48,7 +48,7 @@ from mugen.core.runtime.phase_b_bootstrap import (
     PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY as _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY,
     PHASE_B_STARTUP_PLAN_KEY as _PHASE_B_STARTUP_PLAN_KEY,
 )
-from mugen.core.runtime.bootstrap_contract import parse_runtime_bootstrap_settings
+from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.runtime.phase_b_coordinator import start_phase_b_runtime
 from mugen.core.runtime.phase_b_controls import (
     parse_bool,
@@ -87,16 +87,13 @@ def _parse_bool(value: object, default: bool = False) -> bool:
 
 
 def _resolve_shutdown_timeout_seconds() -> float:
-    runtime_config = getattr(di.container, "config", None)
+    try:
+        runtime_config = getattr(di.container, "config", None)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise BootstrapConfigError("Configuration unavailable.") from exc
     if runtime_config is None:
-        raise RuntimeError("Configuration unavailable.")
-    settings = parse_runtime_bootstrap_settings(
-        runtime_config,
-        require_profile=False,
-        require_startup_timeout_seconds=False,
-        require_provider_readiness_timeout_seconds=False,
-        require_shutdown_timeout_seconds=True,
-    )
+        raise BootstrapConfigError("Configuration unavailable.")
+    settings = parse_runtime_bootstrap_settings(runtime_config)
     return float(settings.shutdown_timeout_seconds)
 
 
@@ -191,7 +188,10 @@ async def startup():
         app.logger.warning("Platform client runner task is already active.")
         return
 
-    runtime_config = getattr(di.container, "config", None)
+    try:
+        runtime_config = getattr(di.container, "config", None)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise BootstrapConfigError("Configuration unavailable.") from exc
     if runtime_config is None:
         raise BootstrapConfigError("Configuration unavailable.")
 

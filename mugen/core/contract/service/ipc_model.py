@@ -5,6 +5,7 @@ __all__ = [
     "IPCHandlerResult",
     "IPCAggregateError",
     "IPCAggregateResult",
+    "IPCCriticalDispatchError",
 ]
 
 from dataclasses import dataclass, field
@@ -83,3 +84,34 @@ class IPCAggregateResult:
             "results": [item.to_dict() for item in self.results],
             "errors": [item.to_dict() for item in self.errors],
         }
+
+
+class IPCCriticalDispatchError(RuntimeError):
+    """Raised when a critical IPC handler fails during dispatch."""
+
+    def __init__(
+        self,
+        *,
+        platform: str,
+        command: str,
+        handler: str | None,
+        code: str,
+        error: str,
+    ) -> None:
+        normalized_handler = (
+            handler.strip()
+            if isinstance(handler, str) and handler.strip() != ""
+            else "<unknown>"
+        )
+        normalized_error = error.strip() if isinstance(error, str) and error.strip() != "" else "unknown error"
+        normalized_code = code.strip() if isinstance(code, str) and code.strip() != "" else "unknown"
+        super().__init__(
+            "Critical IPC dispatch failed "
+            f"(platform={platform} command={command} handler={normalized_handler} "
+            f"code={normalized_code} error={normalized_error})."
+        )
+        self.platform = platform
+        self.command = command
+        self.handler = normalized_handler
+        self.code = normalized_code
+        self.error = normalized_error

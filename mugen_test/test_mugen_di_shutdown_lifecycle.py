@@ -62,8 +62,11 @@ class _ExtServicesBoom:
             dict={
                 "mugen": {
                     "runtime": {
+                        "profile": "platform_full",
+                        "provider_readiness_timeout_seconds": 15.0,
                         "provider_shutdown_timeout_seconds": 0.5,
                         "shutdown_timeout_seconds": 5.0,
+                        "phase_b": {"startup_timeout_seconds": 30.0},
                     }
                 }
             }
@@ -217,8 +220,11 @@ class TestMugenDIShutdownLifecycleAsync(unittest.IsolatedAsyncioTestCase):
                 dict={
                     "mugen": {
                         "runtime": {
+                            "profile": "platform_full",
+                            "provider_readiness_timeout_seconds": 15.0,
                             "provider_shutdown_timeout_seconds": 0.5,
                             "shutdown_timeout_seconds": 5.0,
+                            "phase_b": {"startup_timeout_seconds": 30.0},
                         }
                     }
                 }
@@ -267,8 +273,11 @@ class TestMugenDIShutdownLifecycleAsync(unittest.IsolatedAsyncioTestCase):
                 dict={
                     "mugen": {
                         "runtime": {
+                            "profile": "platform_full",
+                            "provider_readiness_timeout_seconds": 15.0,
                             "provider_shutdown_timeout_seconds": 0.5,
                             "shutdown_timeout_seconds": 5.0,
+                            "phase_b": {"startup_timeout_seconds": 30.0},
                         }
                     }
                 }
@@ -297,7 +306,11 @@ class TestMugenDIShutdownLifecycleAsync(unittest.IsolatedAsyncioTestCase):
                 dict={
                     "mugen": {
                         "runtime": {
+                            "profile": "platform_full",
+                            "provider_readiness_timeout_seconds": 15.0,
                             "provider_shutdown_timeout_seconds": "invalid",
+                            "shutdown_timeout_seconds": 5.0,
+                            "phase_b": {"startup_timeout_seconds": 30.0},
                         }
                     }
                 }
@@ -321,8 +334,11 @@ class TestMugenDIShutdownLifecycleAsync(unittest.IsolatedAsyncioTestCase):
                 dict={
                     "mugen": {
                         "runtime": {
+                            "profile": "platform_full",
+                            "provider_readiness_timeout_seconds": 15.0,
                             "provider_shutdown_timeout_seconds": 0.5,
                             "shutdown_timeout_seconds": 1.0,
+                            "phase_b": {"startup_timeout_seconds": 30.0},
                         }
                     }
                 }

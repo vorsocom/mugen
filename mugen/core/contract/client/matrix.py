@@ -61,6 +61,10 @@ class IMatrixClient(ABC):
         """Set profile display name."""
 
     @abstractmethod
+    async def monitor_runtime_health(self) -> None:
+        """Block until a runtime-health failure occurs, then raise it."""
+
+    @abstractmethod
     async def cleanup_known_user_devices_list(self) -> None:
         """Clean up known user devices list."""
 
