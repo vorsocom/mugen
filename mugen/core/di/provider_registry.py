@@ -155,6 +155,12 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             class_name="DefaultLineClient",
         ),
     },
+    "signal_client": {
+        "default": _ProviderTokenSpec(
+            module_path="mugen.core.client.signal",
+            class_name="DefaultSignalClient",
+        ),
+    },
     "telegram_client": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.client.telegram",

@@ -40,6 +40,7 @@ def _valid_core_config() -> dict:
                     "client": {
                         "line": "default",
                         "matrix": "default",
+                        "signal": "default",
                         "telegram": "default",
                         "wechat": "default",
                         "whatsapp": "default",
@@ -162,6 +163,32 @@ def _valid_core_config() -> dict:
                 "timeout_seconds": 10.0,
                 "max_api_retries": 2,
                 "retry_backoff_seconds": 0.5,
+            },
+            "media": {
+                "allowed_mimetypes": ["image/*"],
+                "max_download_bytes": 1024,
+            },
+            "typing": {
+                "enabled": True,
+            },
+        },
+        "signal": {
+            "account": {
+                "number": "+15550000001",
+            },
+            "api": {
+                "base_url": "http://127.0.0.1:8080",
+                "bearer_token": "token-1",
+                "timeout_seconds": 10.0,
+                "max_api_retries": 2,
+                "retry_backoff_seconds": 0.5,
+            },
+            "receive": {
+                "heartbeat_seconds": 30.0,
+                "reconnect_base_seconds": 1.0,
+                "reconnect_max_seconds": 30.0,
+                "reconnect_jitter_seconds": 0.25,
+                "dedupe_ttl_seconds": 86400,
             },
             "media": {
                 "allowed_mimetypes": ["image/*"],
@@ -299,6 +326,11 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cfg = _valid_core_config()
         cfg["mugen"]["modules"]["core"]["extensions"] = None
         cfg["mugen"]["modules"]["extensions"] = None
+        di._validate_core_module_schema(cfg)
+
+    def test_core_schema_validates_signal_runtime_contract_when_signal_active(self) -> None:
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["signal"]
         di._validate_core_module_schema(cfg)
 
     def test_core_schema_accepts_optional_gateway_tokens_and_extensions(self) -> None:

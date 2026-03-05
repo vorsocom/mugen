@@ -27,6 +27,7 @@ import tomlkit
 
 from mugen.core.contract.client.line import ILineClient
 from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.signal import ISignalClient
 from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
@@ -36,6 +37,9 @@ from mugen.core.contract.line_runtime_config import (
 )
 from mugen.core.contract.matrix_runtime_config import (
     validate_matrix_enabled_runtime_config,
+)
+from mugen.core.contract.signal_runtime_config import (
+    validate_signal_enabled_runtime_config,
 )
 from mugen.core.contract.telegram_runtime_config import (
     validate_telegram_enabled_runtime_config,
@@ -420,7 +424,10 @@ def _validate_core_module_schema(config: dict) -> None:
     )
 
     for section_name, allowed_keys in (
-        ("client", {"line", "matrix", "telegram", "wechat", "whatsapp", "web"}),
+        (
+            "client",
+            {"line", "matrix", "signal", "telegram", "wechat", "whatsapp", "web"},
+        ),
         ("service", {"ipc", "messaging", "nlp", "platform", "user"}),
     ):
         section = core_cfg.get(section_name)
@@ -540,6 +547,8 @@ def _validate_core_module_schema(config: dict) -> None:
         validate_line_enabled_runtime_config(config)
     if "matrix" in active_platforms:
         validate_matrix_enabled_runtime_config(config)
+    if "signal" in active_platforms:
+        validate_signal_enabled_runtime_config(config)
     if "telegram" in active_platforms:
         validate_telegram_enabled_runtime_config(config)
     if "wechat" in active_platforms:
@@ -588,7 +597,7 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         raise RuntimeError(
             "Unsupported platform configuration: "
             f"{unsupported_platforms_text}. "
-            "Allowed values are line, matrix, telegram, wechat, web, whatsapp."
+            "Allowed values are line, matrix, signal, telegram, wechat, web, whatsapp."
         )
 
     if profile != "platform_full":
@@ -641,6 +650,8 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         missing.append("matrix_client")
     if "line" in active_platform_set and injector.line_client is None:
         missing.append("line_client")
+    if "signal" in active_platform_set and injector.signal_client is None:
+        missing.append("signal_client")
     if "telegram" in active_platform_set and injector.telegram_client is None:
         missing.append("telegram_client")
     if "wechat" in active_platform_set and injector.wechat_client is None:
@@ -891,6 +902,23 @@ _PROVIDER_SPECS = {
         required_platform="line",
         inactive_platform_warning="LINE platform not active. Client not loaded.",
     ),
+    "signal_client": _ProviderSpec(
+        provider_name="signal_client",
+        injector_attr="signal_client",
+        interface=ISignalClient,
+        module_path=("mugen", "modules", "core", "client", "signal"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("ipc_service", "ipc_service"),
+            ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("logging_gateway", "logging_gateway"),
+            ("messaging_service", "messaging_service"),
+            ("user_service", "user_service"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required_platform="signal",
+        inactive_platform_warning="Signal platform not active. Client not loaded.",
+    ),
     "telegram_client": _ProviderSpec(
         provider_name="telegram_client",
         injector_attr="telegram_client",
@@ -977,6 +1005,7 @@ _PROVIDER_BUILD_ORDER = (
     "knowledge_gateway",
     "matrix_client",
     "line_client",
+    "signal_client",
     "telegram_client",
     "wechat_client",
     "whatsapp_client",

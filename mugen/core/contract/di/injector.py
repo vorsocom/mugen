@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from mugen.core.contract.client.line import ILineClient
 from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.signal import ISignalClient
 from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
@@ -114,6 +115,11 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def line_client(self) -> ILineClient:
         """Get the global LINE client."""
+
+    @property
+    @abstractmethod
+    def signal_client(self) -> ISignalClient:
+        """Get the global Signal client."""
 
     @property
     @abstractmethod

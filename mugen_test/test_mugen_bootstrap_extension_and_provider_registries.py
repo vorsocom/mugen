@@ -11,6 +11,7 @@ from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.fw import IFWExtension
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.client.line import ILineClient
+from mugen.core.contract.client.signal import ISignalClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
@@ -291,6 +292,77 @@ class _DummyLineClient(ILineClient):
         return True
 
 
+class _DummySignalClient(ISignalClient):
+    async def init(self) -> None:
+        return None
+
+    async def verify_startup(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        return None
+
+    async def receive_events(self):
+        if False:
+            yield {}
+        return
+
+    async def send_text_message(
+        self,
+        *,
+        recipient: str,
+        text: str,
+    ) -> dict | None:
+        _ = (recipient, text)
+        return None
+
+    async def send_media_message(
+        self,
+        *,
+        recipient: str,
+        message: str | None = None,
+        base64_attachments: list[str] | None = None,
+    ) -> dict | None:
+        _ = (recipient, message, base64_attachments)
+        return None
+
+    async def send_reaction(
+        self,
+        *,
+        recipient: str,
+        reaction: str,
+        target_author: str,
+        timestamp: int,
+        remove: bool = False,
+    ) -> dict | None:
+        _ = (recipient, reaction, target_author, timestamp, remove)
+        return None
+
+    async def send_receipt(
+        self,
+        *,
+        recipient: str,
+        receipt_type: str,
+        timestamp: int,
+    ) -> dict | None:
+        _ = (recipient, receipt_type, timestamp)
+        return None
+
+    async def emit_processing_signal(
+        self,
+        recipient: str,
+        *,
+        state: str,
+        message_id: str | None = None,
+    ) -> bool | None:
+        _ = (recipient, state, message_id)
+        return True
+
+    async def download_attachment(self, attachment_id: str) -> dict | None:
+        _ = attachment_id
+        return None
+
+
 class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
     def test_plugin_token_registry_contains_wechat_extensions(self) -> None:
         token_registry = get_plugin_extension_token_registry()
@@ -298,6 +370,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         self.assertIn("core.ipc.wechat", token_registry)
         self.assertIn("core.fw.line_messagingapi", token_registry)
         self.assertIn("core.ipc.line_messagingapi", token_registry)
+        self.assertIn("core.ipc.signal_restapi", token_registry)
 
     def test_parse_bool_default_paths(self) -> None:
         self.assertTrue(ext_mod.parse_bool(object(), default=True))
@@ -856,6 +929,18 @@ class TestProviderRegistryResolution(unittest.TestCase):
                 interface=ILineClient,
             )
         self.assertIs(resolved, _DummyLineClient)
+
+    def test_signal_client_provider_token_resolves(self) -> None:
+        with patch(
+            "mugen.core.di.provider_registry.importlib.import_module",
+            return_value=SimpleNamespace(DefaultSignalClient=_DummySignalClient),
+        ):
+            resolved = provider_registry.resolve_provider_class(
+                provider_name="signal_client",
+                token="default",
+                interface=ISignalClient,
+            )
+        self.assertIs(resolved, _DummySignalClient)
 
     def test_pinecone_knowledge_provider_token_resolves(self) -> None:
         with patch(
