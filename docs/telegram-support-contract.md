@@ -45,6 +45,37 @@ Webhook ingress is guarded by all of:
 
 Any verification failure is rejected before IPC dispatch.
 
+## Webhook Registration (Telegram-Side)
+
+muGen does not automatically call Telegram `setWebhook`. Register the webhook explicitly.
+
+`url` must use one of Telegram's allowed ports: `80`, `88`, `443`, or `8443`.
+
+```bash
+curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "url=https://<your-domain>:8443/api/telegram/botapi/webhook/<path_token>" \
+  --data-urlencode "secret_token=<secret_token>" \
+  --data-urlencode "drop_pending_updates=false"
+```
+
+The `<path_token>` and `<secret_token>` values must match:
+
+- `telegram.webhook.path_token`
+- `telegram.webhook.secret_token`
+
+Validate registration and delivery status:
+
+```bash
+curl "https://api.telegram.org/bot<BOT_TOKEN>/getWebhookInfo"
+```
+
+Remove webhook (for recovery/switching):
+
+```bash
+curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/deleteWebhook"
+```
+
 ## Reliability Contract
 
 - Durable dedupe table: `telegram_botapi_event_dedup`.
