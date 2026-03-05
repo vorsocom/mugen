@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import unittest
 
 from mugen.core import di
+from mugen.core.contract.client.line import ILineClient
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
@@ -44,6 +45,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.messaging_service)
         self.assertIsNone(injector.knowledge_gateway)
         self.assertIsNone(injector.matrix_client)
+        self.assertIsNone(injector.line_client)
         self.assertIsNone(injector.telegram_client)
         self.assertIsNone(injector.wechat_client)
         self.assertIsNone(injector.whatsapp_client)
@@ -481,6 +483,158 @@ class TestDependencyInjector(unittest.TestCase):
                 return None
 
         matrix_client = DummyMatrixClientClass(
+            config=config,
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+
+        # Line Client
+        class DummyLineClientClass(ILineClient):
+            """Dummy LINE client class."""
+
+            def __init__(  # pylint: disable=too-many-arguments
+                self,
+                config,
+                ipc_service,
+                keyval_storage_gateway,
+                logging_gateway,
+                messaging_service,
+                user_service,
+            ):
+                _ = (
+                    config,
+                    ipc_service,
+                    keyval_storage_gateway,
+                    logging_gateway,
+                    messaging_service,
+                    user_service,
+                )
+
+            async def init(self) -> None:
+                return None
+
+            async def verify_startup(self) -> bool:
+                return True
+
+            async def close(self) -> None:
+                return None
+
+            async def reply_messages(
+                self,
+                *,
+                reply_token: str,
+                messages: list[dict],
+            ) -> dict | None:
+                _ = (reply_token, messages)
+                return None
+
+            async def push_messages(
+                self,
+                *,
+                to: str,
+                messages: list[dict],
+            ) -> dict | None:
+                _ = (to, messages)
+                return None
+
+            async def multicast_messages(
+                self,
+                *,
+                to: list[str],
+                messages: list[dict],
+            ) -> dict | None:
+                _ = (to, messages)
+                return None
+
+            async def send_text_message(
+                self,
+                *,
+                recipient: str,
+                text: str,
+                reply_token: str | None = None,
+            ) -> dict | None:
+                _ = (recipient, text, reply_token)
+                return None
+
+            async def send_image_message(
+                self,
+                *,
+                recipient: str,
+                image: dict,
+                reply_token: str | None = None,
+            ) -> dict | None:
+                _ = (recipient, image, reply_token)
+                return None
+
+            async def send_audio_message(
+                self,
+                *,
+                recipient: str,
+                audio: dict,
+                reply_token: str | None = None,
+            ) -> dict | None:
+                _ = (recipient, audio, reply_token)
+                return None
+
+            async def send_video_message(
+                self,
+                *,
+                recipient: str,
+                video: dict,
+                reply_token: str | None = None,
+            ) -> dict | None:
+                _ = (recipient, video, reply_token)
+                return None
+
+            async def send_file_message(
+                self,
+                *,
+                recipient: str,
+                file: dict,
+                reply_token: str | None = None,
+            ) -> dict | None:
+                _ = (recipient, file, reply_token)
+                return None
+
+            async def send_raw_message(
+                self,
+                *,
+                op: str,
+                payload: dict,
+            ) -> dict | None:
+                _ = (op, payload)
+                return None
+
+            async def download_media(
+                self,
+                *,
+                message_id: str,
+            ) -> dict | None:
+                _ = message_id
+                return None
+
+            async def get_profile(
+                self,
+                *,
+                user_id: str,
+            ) -> dict | None:
+                _ = user_id
+                return None
+
+            async def emit_processing_signal(
+                self,
+                recipient: str,
+                *,
+                state: str,
+                message_id: str | None = None,
+            ) -> bool | None:
+                _ = (recipient, state, message_id)
+                return True
+
+        line_client = DummyLineClientClass(
             config=config,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
@@ -962,6 +1116,7 @@ class TestDependencyInjector(unittest.TestCase):
             messaging_service=messaging_service,
             knowledge_gateway=knowledge_gateway,
             matrix_client=matrix_client,
+            line_client=line_client,
             telegram_client=telegram_client,
             wechat_client=wechat_client,
             whatsapp_client=whatsapp_client,
@@ -984,6 +1139,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.messaging_service, messaging_service)
         self.assertEqual(injector.knowledge_gateway, knowledge_gateway)
         self.assertEqual(injector.matrix_client, matrix_client)
+        self.assertEqual(injector.line_client, line_client)
         self.assertEqual(injector.telegram_client, telegram_client)
         self.assertEqual(injector.wechat_client, wechat_client)
         self.assertEqual(injector.whatsapp_client, whatsapp_client)
@@ -997,6 +1153,15 @@ class TestDependencyInjector(unittest.TestCase):
         injector.register_ext_service("demo", service)
 
         self.assertIs(injector.get_ext_service("demo"), service)
+
+    def test_line_client_property_round_trip(self):
+        """Test line_client property getter/setter."""
+        injector = di.injector.DependencyInjector()
+        line_client = object()
+
+        injector.line_client = line_client
+
+        self.assertIs(injector.line_client, line_client)
 
     def test_register_ext_service_duplicate_without_override(self):
         """Test duplicate extension registration without override."""

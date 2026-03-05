@@ -8,7 +8,13 @@ from typing import Iterable
 PHASE_STATUS_HEALTHY = "healthy"
 PHASE_STATUS_DEGRADED = "degraded"
 
-_MESSAGING_PLATFORMS = {"matrix", "telegram", "wechat", "web", "whatsapp"}
+_MESSAGING_PLATFORMS = {"line", "matrix", "telegram", "wechat", "web", "whatsapp"}
+_REQUIRED_LINE_FW_EXTENSION_TOKENS = (
+    "core.fw.line_messagingapi",
+)
+_REQUIRED_LINE_IPC_EXTENSION_TOKENS = (
+    "core.ipc.line_messagingapi",
+)
 _REQUIRED_WEB_FW_EXTENSION_TOKENS = (
     "core.fw.acp",
     "core.fw.web",
@@ -35,6 +41,7 @@ class RuntimeCapabilityInput:
     messaging_handler_platforms: list[object]
     mh_mode: str
     has_web_client_runtime_path: bool
+    has_line_client_runtime_path: bool = False
     has_telegram_client_runtime_path: bool = False
     has_wechat_client_runtime_path: bool = False
     registered_fw_extension_tokens: list[object] | None = None
@@ -176,6 +183,44 @@ def evaluate_runtime_capabilities(
             error=(
                 "Web platform requires registered FW extension token(s): "
                 + ", ".join(missing_tokens)
+                + "."
+            ),
+        )
+
+    if "line" in active_platforms:
+        _record(
+            "line.client_runtime_path",
+            healthy=capability.has_line_client_runtime_path,
+            error=(
+                "LINE platform requires configured runtime client path at "
+                "mugen.modules.core.client.line."
+            ),
+        )
+        missing_fw_tokens = [
+            token
+            for token in _REQUIRED_LINE_FW_EXTENSION_TOKENS
+            if token not in registered_fw_extension_tokens
+        ]
+        _record(
+            "line.fw.extension_contract",
+            healthy=not missing_fw_tokens,
+            error=(
+                "LINE platform requires registered FW extension token(s): "
+                + ", ".join(missing_fw_tokens)
+                + "."
+            ),
+        )
+        missing_ipc_tokens = [
+            token
+            for token in _REQUIRED_LINE_IPC_EXTENSION_TOKENS
+            if token not in registered_ipc_extension_tokens
+        ]
+        _record(
+            "line.ipc.extension_contract",
+            healthy=not missing_ipc_tokens,
+            error=(
+                "LINE platform requires registered IPC extension token(s): "
+                + ", ".join(missing_ipc_tokens)
                 + "."
             ),
         )

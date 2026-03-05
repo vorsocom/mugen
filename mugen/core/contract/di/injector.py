@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from types import SimpleNamespace
 from typing import Any, Mapping
 
+from mugen.core.contract.client.line import ILineClient
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
@@ -108,6 +109,11 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def matrix_client(self) -> IMatrixClient:
         """Get the global Matrix client."""
+
+    @property
+    @abstractmethod
+    def line_client(self) -> ILineClient:
+        """Get the global LINE client."""
 
     @property
     @abstractmethod

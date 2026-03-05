@@ -38,6 +38,7 @@ def _valid_core_config() -> dict:
             "modules": {
                 "core": {
                     "client": {
+                        "line": "default",
                         "matrix": "default",
                         "telegram": "default",
                         "wechat": "default",
@@ -146,6 +147,29 @@ def _valid_core_config() -> dict:
             "secrets": {
                 "encryption_key": "0123456789abcdef0123456789abcdef",
             }
+        },
+        "line": {
+            "channel": {
+                "access_token": "line-token",
+                "secret": "line-secret",
+            },
+            "webhook": {
+                "path_token": "line-path-token",
+                "dedupe_ttl_seconds": 86400,
+            },
+            "api": {
+                "base_url": "https://api.line.me",
+                "timeout_seconds": 10.0,
+                "max_api_retries": 2,
+                "retry_backoff_seconds": 0.5,
+            },
+            "media": {
+                "allowed_mimetypes": ["image/*"],
+                "max_download_bytes": 1024,
+            },
+            "typing": {
+                "enabled": True,
+            },
         },
     }
 
@@ -519,6 +543,40 @@ class TestDISchemaValidationBranches(unittest.TestCase):
                 "device_ids": ["DEV-1"],
             }
         ]
+        di._validate_core_module_schema(cfg)
+
+    def test_core_schema_requires_strict_line_runtime_contract_when_enabled(
+        self,
+    ) -> None:
+        cases: list[tuple[dict, str]] = []
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["line"]
+        cfg["line"]["channel"]["access_token"] = ""
+        cases.append((cfg, "line.channel.access_token"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["line"]
+        cfg["line"]["channel"]["secret"] = ""
+        cases.append((cfg, "line.channel.secret"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["line"]
+        cfg["line"]["webhook"]["path_token"] = ""
+        cases.append((cfg, "line.webhook.path_token"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["line"]
+        cfg["line"]["typing"]["enabled"] = "true"
+        cases.append((cfg, "line.typing.enabled"))
+
+        for candidate, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(RuntimeError, re.escape(message)):
+                    di._validate_core_module_schema(candidate)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["line"]
         di._validate_core_module_schema(cfg)
 
     def test_core_schema_requires_strict_wechat_runtime_contract_when_enabled(

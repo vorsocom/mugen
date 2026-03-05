@@ -4,6 +4,7 @@ from __future__ import annotations
 
 SUPPORTED_CORE_PLATFORMS = frozenset(
     {
+        "line",
         "matrix",
         "telegram",
         "wechat",

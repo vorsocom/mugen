@@ -26,6 +26,7 @@ __all__ = [
     "bootstrap_app",
     "create_quart_app",
     "get_bootstrap_state",
+    "run_line_client",
     "run_telegram_client",
     "run_wechat_client",
     "run_web_client",
@@ -76,6 +77,7 @@ from mugen.core.bootstrap.extensions import (
 from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.line import ILineClient
 from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
@@ -116,6 +118,7 @@ from mugen.core.utility.platforms import (
 )
 
 _WHATSAPP_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
+_LINE_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
 _TELEGRAM_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
 _WECHAT_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
 
@@ -142,6 +145,10 @@ def _logger_provider():
 
 def _whatsapp_provider():
     return di.container.whatsapp_client
+
+
+def _line_provider():
+    return di.container.line_client
 
 
 def _telegram_provider():
@@ -708,6 +715,10 @@ async def bootstrap_app(
         _config_path_exists(config, "mugen", "modules", "core", "client", "web")
         and _web_provider() is not None
     )
+    has_line_client_runtime_path = (
+        _config_path_exists(config, "mugen", "modules", "core", "client", "line")
+        and _line_provider() is not None
+    )
     has_telegram_client_runtime_path = (
         _config_path_exists(config, "mugen", "modules", "core", "client", "telegram")
         and _telegram_provider() is not None
@@ -723,6 +734,7 @@ async def bootstrap_app(
             messaging_handler_platforms=mh_extension_platforms,
             mh_mode=mh_mode,
             has_web_client_runtime_path=has_web_client_runtime_path,
+            has_line_client_runtime_path=has_line_client_runtime_path,
             has_telegram_client_runtime_path=has_telegram_client_runtime_path,
             has_wechat_client_runtime_path=has_wechat_client_runtime_path,
             registered_fw_extension_tokens=registered_fw_extension_tokens,
@@ -1087,6 +1099,24 @@ async def run_platform_clients(
             register_phase_b_platform_task(
                 bootstrap_state,
                 platform_name="telegram",
+                task=task,
+            )
+
+        if "line" in active_platforms:
+            logger.debug("Running line client.")
+            task = asyncio.create_task(
+                _supervise_platform_runner("line", run_line_client),
+                name="mugen.platform.line",
+            )
+            task.add_done_callback(
+                lambda done_task, platform_name="line": _on_platform_task_done(
+                    platform_name, done_task
+                )
+            )
+            tasks["line"] = task
+            register_phase_b_platform_task(
+                bootstrap_state,
+                platform_name="line",
                 task=task,
             )
 
@@ -1538,6 +1568,81 @@ async def run_whatsapp_client(
             if isinstance(runtime_error, asyncio.exceptions.CancelledError):
                 raise RuntimeError(
                     "WhatsApp client shutdown failed during cancellation: "
+                    f"{type(close_exc).__name__}: {close_exc}"
+                ) from close_exc
+            if runtime_error is None:
+                raise
+
+
+async def run_line_client(
+    logger_provider=_logger_provider,
+    line_provider=_line_provider,
+    started_callback=None,
+    degraded_callback=None,
+    healthy_callback=None,
+) -> None:
+    """Run assistant for the LINE platform."""
+    logger: ILoggingGateway = logger_provider()
+    line_client: ILineClient = line_provider()
+    runtime_error: BaseException | None = None
+
+    try:
+        await line_client.init()
+        startup_verified = await line_client.verify_startup()
+        if startup_verified is not True:
+            raise RuntimeError("LINE startup probe failed.")
+        if callable(started_callback):
+            started_callback()
+        if callable(healthy_callback):
+            healthy_callback()
+        logger.debug("LINE client started.")
+        runtime_degraded = False
+        while True:
+            await asyncio.sleep(_LINE_RUNTIME_PROBE_INTERVAL_SECONDS)
+            try:
+                runtime_probe_ok = await line_client.verify_startup()
+            except asyncio.exceptions.CancelledError:
+                raise
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning(
+                    "LINE runtime probe failed "
+                    f"(error_type={type(exc).__name__} error={exc})."
+                )
+                if runtime_degraded is not True and callable(degraded_callback):
+                    degraded_callback(f"{type(exc).__name__}: {exc}")
+                runtime_degraded = True
+                continue
+
+            if runtime_probe_ok is True:
+                if runtime_degraded is True and callable(healthy_callback):
+                    healthy_callback()
+                runtime_degraded = False
+                continue
+
+            logger.warning("LINE runtime probe returned unhealthy status.")
+            if runtime_degraded is not True and callable(degraded_callback):
+                degraded_callback("LINE runtime startup probe failed.")
+            runtime_degraded = True
+    except asyncio.exceptions.CancelledError as exc:
+        runtime_error = exc
+        logger.debug("LINE client shutting down.")
+        raise
+    except Exception as exc:
+        runtime_error = exc
+        if callable(degraded_callback):
+            degraded_callback(f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        try:
+            await line_client.close()
+        except Exception as close_exc:  # pylint: disable=broad-exception-caught
+            logger.error(
+                "LINE client shutdown failed "
+                f"error_type={type(close_exc).__name__} error={close_exc}"
+            )
+            if isinstance(runtime_error, asyncio.exceptions.CancelledError):
+                raise RuntimeError(
+                    "LINE client shutdown failed during cancellation: "
                     f"{type(close_exc).__name__}: {close_exc}"
                 ) from close_exc
             if runtime_error is None:
