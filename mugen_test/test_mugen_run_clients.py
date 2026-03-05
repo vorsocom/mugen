@@ -43,12 +43,14 @@ def _test_config(*, platforms: list[str], mh_mode: str = "optional") -> SimpleNa
             )
         ),
     )
-    if "web" in platforms or "telegram" in platforms:
+    if "web" in platforms or "telegram" in platforms or "wechat" in platforms:
         client_cfg = {}
         if "web" in platforms:
             client_cfg["web"] = "default"
         if "telegram" in platforms:
             client_cfg["telegram"] = "default"
+        if "wechat" in platforms:
+            client_cfg["wechat"] = "default"
         mugen_cfg.modules = SimpleNamespace(
             core=SimpleNamespace(
                 client=SimpleNamespace(**client_cfg),
@@ -78,6 +80,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(
                 messaging_service=None,
                 telegram_client=None,
+                wechat_client=None,
                 whatsapp_client=None,
                 web_client=object(),
                 relational_storage_gateway=_ReadyProvider(),
@@ -222,6 +225,29 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 logger.output[0],
                 "DEBUG:test_app:Running telegram client.",
+            )
+
+    async def test_wechat_platform_enabled(self) -> None:
+        """Test running wechat platform."""
+        app = Quart("test_app")
+        config = _test_config(platforms=["wechat"])
+
+        _run_wechat_client = unittest.mock.AsyncMock()
+
+        with (
+            self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            unittest.mock.patch(
+                target="mugen.run_wechat_client", new=_run_wechat_client
+            ),
+        ):
+            await run_platform_clients(
+                app,
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+            )
+            self.assertEqual(
+                logger.output[0],
+                "DEBUG:test_app:Running wechat client.",
             )
 
     async def test_web_platform_enabled(self) -> None:
@@ -1047,6 +1073,18 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 sentinel_client,
             )
 
+    def test_wechat_provider_reads_di_container(self) -> None:
+        sentinel_client = object()
+        with unittest.mock.patch.object(
+            mugen_mod.di,
+            "container",
+            SimpleNamespace(wechat_client=sentinel_client),
+        ):
+            self.assertIs(
+                mugen_mod._wechat_provider(),  # pylint: disable=protected-access
+                sentinel_client,
+            )
+
     def test_runtime_provider_helpers_read_di_container(self) -> None:
         sentinel_logger = object()
         sentinel_ipc = object()
@@ -1371,6 +1409,93 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(statuses["telegram.client_runtime_path"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["telegram.fw.extension_contract"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["telegram.ipc.extension_contract"], PHASE_STATUS_HEALTHY)
+
+    async def test_bootstrap_app_fails_when_wechat_extension_contract_tokens_missing(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=["wechat"], mh_mode="optional")
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=unittest.mock.AsyncMock(return_value={"fw": [], "ipc": []}),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_messaging_provider",
+                return_value=SimpleNamespace(mh_extensions=[]),
+            ),
+            unittest.mock.patch.object(mugen_mod, "_wechat_provider", return_value=object()),
+            self.assertRaisesRegex(
+                BootstrapConfigError,
+                "wechat.fw.extension_contract",
+            ),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
+        self.assertEqual(
+            statuses["wechat.fw.extension_contract"],
+            PHASE_STATUS_DEGRADED,
+        )
+        self.assertEqual(
+            statuses["wechat.ipc.extension_contract"],
+            PHASE_STATUS_DEGRADED,
+        )
+
+    async def test_bootstrap_app_marks_wechat_capabilities_healthy_when_satisfied(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=["wechat"], mh_mode="required")
+        register_extensions_mock = unittest.mock.AsyncMock(
+            return_value={
+                "fw": ["core.fw.wechat"],
+                "ipc": ["core.ipc.wechat"],
+            }
+        )
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=register_extensions_mock,
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_messaging_provider",
+                return_value=SimpleNamespace(
+                    mh_extensions=[SimpleNamespace(platforms=["wechat"])]
+                ),
+            ),
+            unittest.mock.patch.object(mugen_mod, "_wechat_provider", return_value=object()),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        state = app.extensions["mugen"]["bootstrap"]
+        statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
+        self.assertEqual(statuses["wechat.client_runtime_path"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["wechat.fw.extension_contract"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(statuses["wechat.ipc.extension_contract"], PHASE_STATUS_HEALTHY)
 
     async def test_bootstrap_app_marks_required_capabilities_healthy_when_satisfied(
         self,

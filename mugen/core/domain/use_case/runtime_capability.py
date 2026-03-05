@@ -8,7 +8,7 @@ from typing import Iterable
 PHASE_STATUS_HEALTHY = "healthy"
 PHASE_STATUS_DEGRADED = "degraded"
 
-_MESSAGING_PLATFORMS = {"matrix", "telegram", "web", "whatsapp"}
+_MESSAGING_PLATFORMS = {"matrix", "telegram", "wechat", "web", "whatsapp"}
 _REQUIRED_WEB_FW_EXTENSION_TOKENS = (
     "core.fw.acp",
     "core.fw.web",
@@ -18,6 +18,12 @@ _REQUIRED_TELEGRAM_FW_EXTENSION_TOKENS = (
 )
 _REQUIRED_TELEGRAM_IPC_EXTENSION_TOKENS = (
     "core.ipc.telegram_botapi",
+)
+_REQUIRED_WECHAT_FW_EXTENSION_TOKENS = (
+    "core.fw.wechat",
+)
+_REQUIRED_WECHAT_IPC_EXTENSION_TOKENS = (
+    "core.ipc.wechat",
 )
 
 
@@ -30,6 +36,7 @@ class RuntimeCapabilityInput:
     mh_mode: str
     has_web_client_runtime_path: bool
     has_telegram_client_runtime_path: bool = False
+    has_wechat_client_runtime_path: bool = False
     registered_fw_extension_tokens: list[object] | None = None
     registered_ipc_extension_tokens: list[object] | None = None
     container_ready: bool = True
@@ -206,6 +213,44 @@ def evaluate_runtime_capabilities(
             healthy=not missing_ipc_tokens,
             error=(
                 "Telegram platform requires registered IPC extension token(s): "
+                + ", ".join(missing_ipc_tokens)
+                + "."
+            ),
+        )
+
+    if "wechat" in active_platforms:
+        _record(
+            "wechat.client_runtime_path",
+            healthy=capability.has_wechat_client_runtime_path,
+            error=(
+                "WeChat platform requires configured runtime client path at "
+                "mugen.modules.core.client.wechat."
+            ),
+        )
+        missing_fw_tokens = [
+            token
+            for token in _REQUIRED_WECHAT_FW_EXTENSION_TOKENS
+            if token not in registered_fw_extension_tokens
+        ]
+        _record(
+            "wechat.fw.extension_contract",
+            healthy=not missing_fw_tokens,
+            error=(
+                "WeChat platform requires registered FW extension token(s): "
+                + ", ".join(missing_fw_tokens)
+                + "."
+            ),
+        )
+        missing_ipc_tokens = [
+            token
+            for token in _REQUIRED_WECHAT_IPC_EXTENSION_TOKENS
+            if token not in registered_ipc_extension_tokens
+        ]
+        _record(
+            "wechat.ipc.extension_contract",
+            healthy=not missing_ipc_tokens,
+            error=(
+                "WeChat platform requires registered IPC extension token(s): "
                 + ", ".join(missing_ipc_tokens)
                 + "."
             ),

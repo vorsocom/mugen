@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telegram import ITelegramClient
+from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -112,6 +113,11 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def telegram_client(self) -> ITelegramClient:
         """Get the global Telegram client."""
+
+    @property
+    @abstractmethod
+    def wechat_client(self) -> IWeChatClient:
+        """Get the global WeChat client."""
 
     @property
     @abstractmethod

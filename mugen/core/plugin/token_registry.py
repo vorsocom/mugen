@@ -99,6 +99,12 @@ def get_plugin_extension_token_registry() -> dict[str, tuple[str, type, str, str
             "mugen.core.plugin.telegram.botapi.fw_ext",
             "TelegramBotAPIFWExtension",
         ),
+        "core.fw.wechat": (
+            "fw",
+            IFWExtension,
+            "mugen.core.plugin.wechat.fw_ext",
+            "WeChatFWExtension",
+        ),
         "core.fw.web": (
             "fw",
             IFWExtension,
@@ -116,6 +122,12 @@ def get_plugin_extension_token_registry() -> dict[str, tuple[str, type, str, str
             IIPCExtension,
             "mugen.core.plugin.telegram.botapi.ipc_ext",
             "TelegramBotAPIIPCExtension",
+        ),
+        "core.ipc.wechat": (
+            "ipc",
+            IIPCExtension,
+            "mugen.core.plugin.wechat.ipc_ext",
+            "WeChatIPCExtension",
         ),
         "core.ipc.matrix_room_management": (
             "ipc",

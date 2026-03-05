@@ -148,7 +148,7 @@ class TestCoreDomainArchitecture(unittest.TestCase):
     def test_core_platform_allow_list_excludes_telnet(self) -> None:
         self.assertEqual(
             set(SUPPORTED_CORE_PLATFORMS),
-            {"matrix", "telegram", "web", "whatsapp"},
+            {"matrix", "telegram", "wechat", "web", "whatsapp"},
         )
         self.assertNotIn("telnet", SUPPORTED_CORE_PLATFORMS)
 

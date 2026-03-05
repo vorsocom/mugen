@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telegram import ITelegramClient
+from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.di.injector import IDependencyInjector
@@ -52,6 +53,7 @@ class DependencyInjector(IDependencyInjector):
         knowledge_gateway: IKnowledgeGateway = None,
         matrix_client: IMatrixClient = None,
         telegram_client: ITelegramClient = None,
+        wechat_client: IWeChatClient = None,
         whatsapp_client: IWhatsAppClient = None,
         web_client: IWebClient = None,
     ):
@@ -72,6 +74,7 @@ class DependencyInjector(IDependencyInjector):
         self.__knowledge_gateway = knowledge_gateway
         self.__matrix_client = matrix_client
         self.__telegram_client = telegram_client
+        self.__wechat_client = wechat_client
         self.__whatsapp_client = whatsapp_client
         self.__web_client = web_client
 
@@ -212,6 +215,14 @@ class DependencyInjector(IDependencyInjector):
     @telegram_client.setter
     def telegram_client(self, value: ITelegramClient) -> None:
         self.__telegram_client = value
+
+    @property
+    def wechat_client(self) -> IWeChatClient:
+        return self.__wechat_client
+
+    @wechat_client.setter
+    def wechat_client(self, value: IWeChatClient) -> None:
+        self.__wechat_client = value
 
     @property
     def whatsapp_client(self) -> IWhatsAppClient:

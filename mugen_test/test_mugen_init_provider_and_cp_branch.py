@@ -40,12 +40,14 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
             config="cfg",
             matrix_client="matrix-client",
             telegram_client="telegram-client",
+            wechat_client="wechat-client",
             web_client="web-client",
         )
         with patch.object(mugen_mod.di, "container", fake_container):
             self.assertEqual(mugen_mod._config_provider(), "cfg")  # pylint: disable=protected-access
             self.assertEqual(mugen_mod._matrix_provider(), "matrix-client")  # pylint: disable=protected-access
             self.assertEqual(mugen_mod._telegram_provider(), "telegram-client")  # pylint: disable=protected-access
+            self.assertEqual(mugen_mod._wechat_provider(), "wechat-client")  # pylint: disable=protected-access
             self.assertEqual(mugen_mod._web_provider(), "web-client")  # pylint: disable=protected-access
 
     async def test_register_extensions_registers_cp_extension_when_supported(
