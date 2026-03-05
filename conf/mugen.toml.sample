@@ -10,6 +10,7 @@ platforms = [
   "web",
   # "matrix",
   # "line",
+  # "signal",
   # "telegram",
   # "wechat",
   # "whatsapp",
@@ -54,6 +55,7 @@ max_timeout_seconds = 30.0
 # not Python module paths.
 client.matrix = "default"
 client.line = "default"
+client.signal = "default"
 client.telegram = "default"
 client.wechat = "default"
 client.whatsapp = "default"
@@ -118,6 +120,11 @@ token = "core.fw.web"
 # [[mugen.modules.core.extensions]]
 # type = "ipc"
 # token = "core.ipc.line_messagingapi"
+
+# Signal platform IPC contract (required when `signal` is active).
+# [[mugen.modules.core.extensions]]
+# type = "ipc"
+# token = "core.ipc.signal_restapi"
 
 # WeChat platform FW/IPC contract (required when `wechat` is active).
 # [[mugen.modules.core.extensions]]
@@ -416,6 +423,34 @@ api.base_url = "https://api.telegram.org"
 api.timeout_seconds = 10.0
 api.max_api_retries = 2
 api.retry_backoff_seconds = 0.5
+media.allowed_mimetypes = [
+  "audio/*",
+  "image/*",
+  "video/*",
+  "application/*",
+  "text/*",
+]
+media.max_download_bytes = 20_971_520   # 20 MiB
+# Enables best-effort typing indicators for processing messages.
+typing.enabled = true
+
+# === Signal ===
+[signal]
+# Phone number for the linked signal-cli account.
+account.number = "+15550000001"
+# Authenticated signal-cli-rest-api base URL.
+api.base_url = "http://127.0.0.1:8080"
+# Bearer token expected by the gateway/proxy.
+api.bearer_token = "<signal-rest-api-bearer-token>"
+api.timeout_seconds = 10.0
+api.max_api_retries = 2
+api.retry_backoff_seconds = 0.5
+# Receive websocket controls.
+receive.heartbeat_seconds = 30.0
+receive.reconnect_base_seconds = 1.0
+receive.reconnect_max_seconds = 30.0
+receive.reconnect_jitter_seconds = 0.25
+receive.dedupe_ttl_seconds = 86400
 media.allowed_mimetypes = [
   "audio/*",
   "image/*",

@@ -129,6 +129,12 @@ def get_plugin_extension_token_registry() -> dict[str, tuple[str, type, str, str
             "mugen.core.plugin.line.messagingapi.ipc_ext",
             "LineMessagingAPIIPCExtension",
         ),
+        "core.ipc.signal_restapi": (
+            "ipc",
+            IIPCExtension,
+            "mugen.core.plugin.signal.restapi.ipc_ext",
+            "SignalRestAPIIPCExtension",
+        ),
         "core.ipc.telegram_botapi": (
             "ipc",
             IIPCExtension,

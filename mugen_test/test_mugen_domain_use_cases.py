@@ -530,6 +530,44 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
         )
         self.assertTrue(healthy_wechat_contract.healthy)
 
+        missing_signal_contract = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["signal"],
+                messaging_handler_platforms=[["signal"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                has_signal_client_runtime_path=False,
+                registered_fw_extension_tokens=[],
+                registered_ipc_extension_tokens=[],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertFalse(missing_signal_contract.healthy)
+        self.assertIn(
+            "signal.client_runtime_path",
+            missing_signal_contract.failed_capabilities,
+        )
+        self.assertIn(
+            "signal.ipc.extension_contract",
+            missing_signal_contract.failed_capabilities,
+        )
+
+        healthy_signal_contract = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["signal"],
+                messaging_handler_platforms=[["signal"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                has_signal_client_runtime_path=True,
+                registered_fw_extension_tokens=[],
+                registered_ipc_extension_tokens=["core.ipc.signal_restapi"],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertTrue(healthy_signal_contract.healthy)
+
     def test_web_stream_continuity_use_case(self) -> None:
         generation_changed = evaluate_web_stream_continuity(
             WebStreamContinuityInput(

@@ -27,6 +27,7 @@ __all__ = [
     "create_quart_app",
     "get_bootstrap_state",
     "run_line_client",
+    "run_signal_client",
     "run_telegram_client",
     "run_wechat_client",
     "run_web_client",
@@ -78,6 +79,7 @@ from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.line import ILineClient
+from mugen.core.contract.client.signal import ISignalClient
 from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
@@ -85,7 +87,11 @@ from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.extension.registry import IExtensionRegistry
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
-from mugen.core.contract.service.ipc import IIPCService, IPCCriticalDispatchError
+from mugen.core.contract.service.ipc import (
+    IPCCommandRequest,
+    IIPCService,
+    IPCCriticalDispatchError,
+)
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.domain.use_case import (
@@ -119,6 +125,7 @@ from mugen.core.utility.platforms import (
 
 _WHATSAPP_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
 _LINE_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
+_SIGNAL_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
 _TELEGRAM_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
 _WECHAT_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
 
@@ -149,6 +156,10 @@ def _whatsapp_provider():
 
 def _line_provider():
     return di.container.line_client
+
+
+def _signal_provider():
+    return di.container.signal_client
 
 
 def _telegram_provider():
@@ -719,6 +730,10 @@ async def bootstrap_app(
         _config_path_exists(config, "mugen", "modules", "core", "client", "line")
         and _line_provider() is not None
     )
+    has_signal_client_runtime_path = (
+        _config_path_exists(config, "mugen", "modules", "core", "client", "signal")
+        and _signal_provider() is not None
+    )
     has_telegram_client_runtime_path = (
         _config_path_exists(config, "mugen", "modules", "core", "client", "telegram")
         and _telegram_provider() is not None
@@ -735,6 +750,7 @@ async def bootstrap_app(
             mh_mode=mh_mode,
             has_web_client_runtime_path=has_web_client_runtime_path,
             has_line_client_runtime_path=has_line_client_runtime_path,
+            has_signal_client_runtime_path=has_signal_client_runtime_path,
             has_telegram_client_runtime_path=has_telegram_client_runtime_path,
             has_wechat_client_runtime_path=has_wechat_client_runtime_path,
             registered_fw_extension_tokens=registered_fw_extension_tokens,
@@ -1117,6 +1133,24 @@ async def run_platform_clients(
             register_phase_b_platform_task(
                 bootstrap_state,
                 platform_name="line",
+                task=task,
+            )
+
+        if "signal" in active_platforms:
+            logger.debug("Running signal client.")
+            task = asyncio.create_task(
+                _supervise_platform_runner("signal", run_signal_client),
+                name="mugen.platform.signal",
+            )
+            task.add_done_callback(
+                lambda done_task, platform_name="signal": _on_platform_task_done(
+                    platform_name, done_task
+                )
+            )
+            tasks["signal"] = task
+            register_phase_b_platform_task(
+                bootstrap_state,
+                platform_name="signal",
                 task=task,
             )
 
@@ -1643,6 +1677,148 @@ async def run_line_client(
             if isinstance(runtime_error, asyncio.exceptions.CancelledError):
                 raise RuntimeError(
                     "LINE client shutdown failed during cancellation: "
+                    f"{type(close_exc).__name__}: {close_exc}"
+                ) from close_exc
+            if runtime_error is None:
+                raise
+
+
+def _resolve_signal_reconnect_controls(
+    config: SimpleNamespace,
+) -> tuple[float, float, float]:
+    receive_cfg = getattr(getattr(config, "signal", SimpleNamespace()), "receive", None)
+
+    def _as_nonnegative(value: object, default: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if parsed < 0:
+            return default
+        return parsed
+
+    base = _as_nonnegative(
+        getattr(receive_cfg, "reconnect_base_seconds", 1.0),
+        default=1.0,
+    )
+    max_seconds = _as_nonnegative(
+        getattr(receive_cfg, "reconnect_max_seconds", 30.0),
+        default=30.0,
+    )
+    jitter = _as_nonnegative(
+        getattr(receive_cfg, "reconnect_jitter_seconds", 0.25),
+        default=0.25,
+    )
+
+    if base <= 0:
+        base = 1.0
+    if max_seconds <= 0:
+        max_seconds = 30.0
+    if max_seconds < base:
+        max_seconds = base
+
+    return base, max_seconds, jitter
+
+
+async def run_signal_client(
+    config_provider=_config_provider,
+    logger_provider=_logger_provider,
+    signal_provider=_signal_provider,
+    ipc_provider=_ipc_provider,
+    started_callback=None,
+    degraded_callback=None,
+    healthy_callback=None,
+) -> None:
+    """Run assistant for the Signal platform."""
+    config: SimpleNamespace = config_provider()
+    logger: ILoggingGateway = logger_provider()
+    signal_client: ISignalClient = signal_provider()
+    ipc_svc: IIPCService = ipc_provider()
+    runtime_error: BaseException | None = None
+
+    (
+        reconnect_base_seconds,
+        reconnect_max_seconds,
+        reconnect_jitter_seconds,
+    ) = _resolve_signal_reconnect_controls(config)
+    reconnect_delay_seconds = reconnect_base_seconds
+
+    try:
+        await signal_client.init()
+        startup_verified = await signal_client.verify_startup()
+        if startup_verified is not True:
+            raise RuntimeError("Signal startup probe failed.")
+        if callable(started_callback):
+            started_callback()
+        if callable(healthy_callback):
+            healthy_callback()
+        logger.debug("Signal client started.")
+        runtime_degraded = False
+
+        while True:
+            try:
+                async for event in signal_client.receive_events():
+                    if runtime_degraded is True:
+                        if callable(healthy_callback):
+                            healthy_callback()
+                        runtime_degraded = False
+                    reconnect_delay_seconds = reconnect_base_seconds
+
+                    response = await ipc_svc.handle_ipc_request(
+                        IPCCommandRequest(
+                            platform="signal",
+                            command="signal_restapi_event",
+                            data=event,
+                        )
+                    )
+                    if response.errors:
+                        logger.warning(
+                            "Signal receive event processed with IPC errors"
+                            " command=signal_restapi_event"
+                            f" error_count={len(response.errors)}"
+                        )
+            except asyncio.exceptions.CancelledError:
+                raise
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning(
+                    "Signal receive loop failed "
+                    f"(error_type={type(exc).__name__} error={exc})."
+                )
+                if runtime_degraded is not True and callable(degraded_callback):
+                    degraded_callback(f"{type(exc).__name__}: {exc}")
+                runtime_degraded = True
+
+            await asyncio.sleep(
+                min(
+                    reconnect_max_seconds,
+                    reconnect_delay_seconds
+                    + random.uniform(0, reconnect_jitter_seconds),
+                )
+            )
+            reconnect_delay_seconds = min(
+                reconnect_max_seconds,
+                reconnect_delay_seconds * 2,
+            )
+    except asyncio.exceptions.CancelledError as exc:
+        runtime_error = exc
+        logger.debug("Signal client shutting down.")
+        raise
+    except Exception as exc:
+        runtime_error = exc
+        if callable(degraded_callback):
+            degraded_callback(f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        try:
+            await signal_client.close()
+        except Exception as close_exc:  # pylint: disable=broad-exception-caught
+            logger.error(
+                "Signal client shutdown failed "
+                f"error_type={type(close_exc).__name__} error={close_exc}"
+            )
+            if isinstance(runtime_error, asyncio.exceptions.CancelledError):
+                raise RuntimeError(
+                    "Signal client shutdown failed during cancellation: "
                     f"{type(close_exc).__name__}: {close_exc}"
                 ) from close_exc
             if runtime_error is None:

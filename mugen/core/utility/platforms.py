@@ -6,6 +6,7 @@ SUPPORTED_CORE_PLATFORMS = frozenset(
     {
         "line",
         "matrix",
+        "signal",
         "telegram",
         "wechat",
         "web",

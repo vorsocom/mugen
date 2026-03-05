@@ -8,7 +8,15 @@ from typing import Iterable
 PHASE_STATUS_HEALTHY = "healthy"
 PHASE_STATUS_DEGRADED = "degraded"
 
-_MESSAGING_PLATFORMS = {"line", "matrix", "telegram", "wechat", "web", "whatsapp"}
+_MESSAGING_PLATFORMS = {
+    "line",
+    "matrix",
+    "signal",
+    "telegram",
+    "wechat",
+    "web",
+    "whatsapp",
+}
 _REQUIRED_LINE_FW_EXTENSION_TOKENS = (
     "core.fw.line_messagingapi",
 )
@@ -31,6 +39,9 @@ _REQUIRED_WECHAT_FW_EXTENSION_TOKENS = (
 _REQUIRED_WECHAT_IPC_EXTENSION_TOKENS = (
     "core.ipc.wechat",
 )
+_REQUIRED_SIGNAL_IPC_EXTENSION_TOKENS = (
+    "core.ipc.signal_restapi",
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -44,6 +55,7 @@ class RuntimeCapabilityInput:
     has_line_client_runtime_path: bool = False
     has_telegram_client_runtime_path: bool = False
     has_wechat_client_runtime_path: bool = False
+    has_signal_client_runtime_path: bool = False
     registered_fw_extension_tokens: list[object] | None = None
     registered_ipc_extension_tokens: list[object] | None = None
     container_ready: bool = True
@@ -296,6 +308,30 @@ def evaluate_runtime_capabilities(
             healthy=not missing_ipc_tokens,
             error=(
                 "WeChat platform requires registered IPC extension token(s): "
+                + ", ".join(missing_ipc_tokens)
+                + "."
+            ),
+        )
+
+    if "signal" in active_platforms:
+        _record(
+            "signal.client_runtime_path",
+            healthy=capability.has_signal_client_runtime_path,
+            error=(
+                "Signal platform requires configured runtime client path at "
+                "mugen.modules.core.client.signal."
+            ),
+        )
+        missing_ipc_tokens = [
+            token
+            for token in _REQUIRED_SIGNAL_IPC_EXTENSION_TOKENS
+            if token not in registered_ipc_extension_tokens
+        ]
+        _record(
+            "signal.ipc.extension_contract",
+            healthy=not missing_ipc_tokens,
+            error=(
+                "Signal platform requires registered IPC extension token(s): "
                 + ", ".join(missing_ipc_tokens)
                 + "."
             ),

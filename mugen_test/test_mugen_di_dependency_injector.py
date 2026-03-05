@@ -6,6 +6,7 @@ import unittest
 from mugen.core import di
 from mugen.core.contract.client.line import ILineClient
 from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.signal import ISignalClient
 from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
@@ -46,6 +47,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.knowledge_gateway)
         self.assertIsNone(injector.matrix_client)
         self.assertIsNone(injector.line_client)
+        self.assertIsNone(injector.signal_client)
         self.assertIsNone(injector.telegram_client)
         self.assertIsNone(injector.wechat_client)
         self.assertIsNone(injector.whatsapp_client)
@@ -643,6 +645,106 @@ class TestDependencyInjector(unittest.TestCase):
             user_service=user_service,
         )
 
+        # Signal Client
+        class DummySignalClientClass(ISignalClient):
+            """Dummy Signal client class."""
+
+            def __init__(  # pylint: disable=too-many-arguments
+                self,
+                config,
+                ipc_service,
+                keyval_storage_gateway,
+                logging_gateway,
+                messaging_service,
+                user_service,
+            ):
+                _ = (
+                    config,
+                    ipc_service,
+                    keyval_storage_gateway,
+                    logging_gateway,
+                    messaging_service,
+                    user_service,
+                )
+
+            async def init(self) -> None:
+                return None
+
+            async def verify_startup(self) -> bool:
+                return True
+
+            async def close(self) -> None:
+                return None
+
+            async def receive_events(self):
+                if False:
+                    yield {}
+                return
+
+            async def send_text_message(
+                self,
+                *,
+                recipient: str,
+                text: str,
+            ) -> dict | None:
+                _ = (recipient, text)
+                return None
+
+            async def send_media_message(
+                self,
+                *,
+                recipient: str,
+                message: str | None = None,
+                base64_attachments: list[str] | None = None,
+            ) -> dict | None:
+                _ = (recipient, message, base64_attachments)
+                return None
+
+            async def send_reaction(
+                self,
+                *,
+                recipient: str,
+                reaction: str,
+                target_author: str,
+                timestamp: int,
+                remove: bool = False,
+            ) -> dict | None:
+                _ = (recipient, reaction, target_author, timestamp, remove)
+                return None
+
+            async def send_receipt(
+                self,
+                *,
+                recipient: str,
+                receipt_type: str,
+                timestamp: int,
+            ) -> dict | None:
+                _ = (recipient, receipt_type, timestamp)
+                return None
+
+            async def emit_processing_signal(
+                self,
+                recipient: str,
+                *,
+                state: str,
+                message_id: str | None = None,
+            ) -> bool | None:
+                _ = (recipient, state, message_id)
+                return True
+
+            async def download_attachment(self, attachment_id: str) -> dict | None:
+                _ = attachment_id
+                return None
+
+        signal_client = DummySignalClientClass(
+            config=config,
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+
         # Telegram Client
         class DummyTelegramClientClass(ITelegramClient):
             """Dummy Telegram client class."""
@@ -1117,6 +1219,7 @@ class TestDependencyInjector(unittest.TestCase):
             knowledge_gateway=knowledge_gateway,
             matrix_client=matrix_client,
             line_client=line_client,
+            signal_client=signal_client,
             telegram_client=telegram_client,
             wechat_client=wechat_client,
             whatsapp_client=whatsapp_client,
@@ -1140,6 +1243,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.knowledge_gateway, knowledge_gateway)
         self.assertEqual(injector.matrix_client, matrix_client)
         self.assertEqual(injector.line_client, line_client)
+        self.assertEqual(injector.signal_client, signal_client)
         self.assertEqual(injector.telegram_client, telegram_client)
         self.assertEqual(injector.wechat_client, wechat_client)
         self.assertEqual(injector.whatsapp_client, whatsapp_client)
@@ -1162,6 +1266,15 @@ class TestDependencyInjector(unittest.TestCase):
         injector.line_client = line_client
 
         self.assertIs(injector.line_client, line_client)
+
+    def test_signal_client_property_round_trip(self):
+        """Test signal_client property getter/setter."""
+        injector = di.injector.DependencyInjector()
+        signal_client = object()
+
+        injector.signal_client = signal_client
+
+        self.assertIs(injector.signal_client, signal_client)
 
     def test_register_ext_service_duplicate_without_override(self):
         """Test duplicate extension registration without override."""
