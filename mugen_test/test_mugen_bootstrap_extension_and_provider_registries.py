@@ -10,6 +10,7 @@ from mugen.core.bootstrap import extensions as ext_mod
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.fw import IFWExtension
 from mugen.core.contract.extension.ipc import IIPCExtension
+from mugen.core.contract.client.line import ILineClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
@@ -167,11 +168,136 @@ class _DummyWeChatClient(IWeChatClient):
         return True
 
 
+class _DummyLineClient(ILineClient):
+    async def init(self) -> None:
+        return None
+
+    async def verify_startup(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        return None
+
+    async def reply_messages(
+        self,
+        *,
+        reply_token: str,
+        messages: list[dict],
+    ) -> dict | None:
+        _ = (reply_token, messages)
+        return None
+
+    async def push_messages(
+        self,
+        *,
+        to: str,
+        messages: list[dict],
+    ) -> dict | None:
+        _ = (to, messages)
+        return None
+
+    async def multicast_messages(
+        self,
+        *,
+        to: list[str],
+        messages: list[dict],
+    ) -> dict | None:
+        _ = (to, messages)
+        return None
+
+    async def send_text_message(
+        self,
+        *,
+        recipient: str,
+        text: str,
+        reply_token: str | None = None,
+    ) -> dict | None:
+        _ = (recipient, text, reply_token)
+        return None
+
+    async def send_image_message(
+        self,
+        *,
+        recipient: str,
+        image: dict,
+        reply_token: str | None = None,
+    ) -> dict | None:
+        _ = (recipient, image, reply_token)
+        return None
+
+    async def send_audio_message(
+        self,
+        *,
+        recipient: str,
+        audio: dict,
+        reply_token: str | None = None,
+    ) -> dict | None:
+        _ = (recipient, audio, reply_token)
+        return None
+
+    async def send_video_message(
+        self,
+        *,
+        recipient: str,
+        video: dict,
+        reply_token: str | None = None,
+    ) -> dict | None:
+        _ = (recipient, video, reply_token)
+        return None
+
+    async def send_file_message(
+        self,
+        *,
+        recipient: str,
+        file: dict,
+        reply_token: str | None = None,
+    ) -> dict | None:
+        _ = (recipient, file, reply_token)
+        return None
+
+    async def send_raw_message(
+        self,
+        *,
+        op: str,
+        payload: dict,
+    ) -> dict | None:
+        _ = (op, payload)
+        return None
+
+    async def download_media(
+        self,
+        *,
+        message_id: str,
+    ) -> dict | None:
+        _ = message_id
+        return None
+
+    async def get_profile(
+        self,
+        *,
+        user_id: str,
+    ) -> dict | None:
+        _ = user_id
+        return None
+
+    async def emit_processing_signal(
+        self,
+        recipient: str,
+        *,
+        state: str,
+        message_id: str | None = None,
+    ) -> bool | None:
+        _ = (recipient, state, message_id)
+        return True
+
+
 class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
     def test_plugin_token_registry_contains_wechat_extensions(self) -> None:
         token_registry = get_plugin_extension_token_registry()
         self.assertIn("core.fw.wechat", token_registry)
         self.assertIn("core.ipc.wechat", token_registry)
+        self.assertIn("core.fw.line_messagingapi", token_registry)
+        self.assertIn("core.ipc.line_messagingapi", token_registry)
 
     def test_parse_bool_default_paths(self) -> None:
         self.assertTrue(ext_mod.parse_bool(object(), default=True))
@@ -718,6 +844,18 @@ class TestProviderRegistryResolution(unittest.TestCase):
                 interface=IWeChatClient,
             )
         self.assertIs(resolved, _DummyWeChatClient)
+
+    def test_line_client_provider_token_resolves(self) -> None:
+        with patch(
+            "mugen.core.di.provider_registry.importlib.import_module",
+            return_value=SimpleNamespace(DefaultLineClient=_DummyLineClient),
+        ):
+            resolved = provider_registry.resolve_provider_class(
+                provider_name="line_client",
+                token="default",
+                interface=ILineClient,
+            )
+        self.assertIs(resolved, _DummyLineClient)
 
     def test_pinecone_knowledge_provider_token_resolves(self) -> None:
         with patch(

@@ -93,6 +93,12 @@ def get_plugin_extension_token_registry() -> dict[str, tuple[str, type, str, str
             "mugen.core.plugin.whatsapp.wacapi.fw_ext",
             "WACAPIFWExtension",
         ),
+        "core.fw.line_messagingapi": (
+            "fw",
+            IFWExtension,
+            "mugen.core.plugin.line.messagingapi.fw_ext",
+            "LineMessagingAPIFWExtension",
+        ),
         "core.fw.telegram_botapi": (
             "fw",
             IFWExtension,
@@ -116,6 +122,12 @@ def get_plugin_extension_token_registry() -> dict[str, tuple[str, type, str, str
             IIPCExtension,
             "mugen.core.plugin.whatsapp.wacapi.ipc_ext",
             "WhatsAppWACAPIIPCExtension",
+        ),
+        "core.ipc.line_messagingapi": (
+            "ipc",
+            IIPCExtension,
+            "mugen.core.plugin.line.messagingapi.ipc_ext",
+            "LineMessagingAPIIPCExtension",
         ),
         "core.ipc.telegram_botapi": (
             "ipc",

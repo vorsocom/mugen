@@ -260,6 +260,31 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
 
         injector.logging_gateway.error.assert_any_call("Missing provider (telegram_client).")
 
+    def test_validate_container_requires_line_client_when_platform_active(self) -> None:
+        injector = di.injector.DependencyInjector(
+            config=object(),
+            logging_gateway=Mock(),
+            completion_gateway=object(),
+            ipc_service=object(),
+            keyval_storage_gateway=object(),
+            relational_storage_gateway=object(),
+            nlp_service=object(),
+            platform_service=object(),
+            user_service=object(),
+            messaging_service=object(),
+        )
+        config = {
+            "mugen": {
+                "runtime": self._runtime_section(),
+                "platforms": ["line"],
+            }
+        }
+
+        with self.assertRaises(RuntimeError):
+            di._validate_container(config, injector)
+
+        injector.logging_gateway.error.assert_any_call("Missing provider (line_client).")
+
     def test_validate_container_requires_wechat_client_when_platform_active(self) -> None:
         injector = di.injector.DependencyInjector(
             config=object(),

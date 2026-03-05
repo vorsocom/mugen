@@ -404,6 +404,48 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
             "Web platform requires registered FW extension token(s): core.fw.acp.",
         )
 
+        missing_line_contract = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["line"],
+                messaging_handler_platforms=[["line"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                has_line_client_runtime_path=False,
+                registered_fw_extension_tokens=[],
+                registered_ipc_extension_tokens=[],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertFalse(missing_line_contract.healthy)
+        self.assertIn(
+            "line.client_runtime_path",
+            missing_line_contract.failed_capabilities,
+        )
+        self.assertIn(
+            "line.fw.extension_contract",
+            missing_line_contract.failed_capabilities,
+        )
+        self.assertIn(
+            "line.ipc.extension_contract",
+            missing_line_contract.failed_capabilities,
+        )
+
+        healthy_line_contract = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["line"],
+                messaging_handler_platforms=[["line"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                has_line_client_runtime_path=True,
+                registered_fw_extension_tokens=["core.fw.line_messagingapi"],
+                registered_ipc_extension_tokens=["core.ipc.line_messagingapi"],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertTrue(healthy_line_contract.healthy)
+
         missing_telegram_contract = evaluate_runtime_capabilities(
             RuntimeCapabilityInput(
                 active_platforms=["telegram"],
