@@ -446,6 +446,48 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
         )
         self.assertTrue(healthy_telegram_contract.healthy)
 
+        missing_wechat_contract = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["wechat"],
+                messaging_handler_platforms=[["wechat"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                has_wechat_client_runtime_path=False,
+                registered_fw_extension_tokens=[],
+                registered_ipc_extension_tokens=[],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertFalse(missing_wechat_contract.healthy)
+        self.assertIn(
+            "wechat.client_runtime_path",
+            missing_wechat_contract.failed_capabilities,
+        )
+        self.assertIn(
+            "wechat.fw.extension_contract",
+            missing_wechat_contract.failed_capabilities,
+        )
+        self.assertIn(
+            "wechat.ipc.extension_contract",
+            missing_wechat_contract.failed_capabilities,
+        )
+
+        healthy_wechat_contract = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["wechat"],
+                messaging_handler_platforms=[["wechat"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                has_wechat_client_runtime_path=True,
+                registered_fw_extension_tokens=["core.fw.wechat"],
+                registered_ipc_extension_tokens=["core.ipc.wechat"],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertTrue(healthy_wechat_contract.healthy)
+
     def test_web_stream_continuity_use_case(self) -> None:
         generation_changed = evaluate_web_stream_continuity(
             WebStreamContinuityInput(

@@ -159,6 +159,14 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
             "validate_telegram_enabled_runtime_config(config)",
             di_source,
         )
+        self.assertIn(
+            "from mugen.core.contract.wechat_runtime_config import",
+            di_source,
+        )
+        self.assertIn(
+            "validate_wechat_enabled_runtime_config(config)",
+            di_source,
+        )
 
     def test_runtime_bootstrap_parser_is_contract_owned(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -235,11 +243,35 @@ class TestCoreArchitectureBoundaries(unittest.TestCase):
         )
         self.assertEqual(violations, [])
 
+    def test_wechat_runtime_contract_module_stays_infrastructure_free(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        contract_module = (
+            repo_root / "mugen" / "core" / "contract" / "wechat_runtime_config.py"
+        )
+        violations = _find_import_violations(
+            python_files=[contract_module],
+            forbidden_prefixes=(
+                "quart",
+                "mugen.core.api",
+                "mugen.core.bootstrap",
+                "mugen.core.client",
+                "mugen.core.di",
+                "mugen.core.gateway",
+                "mugen.core.plugin",
+                "mugen.core.runtime",
+                "mugen.core.service",
+                "sqlalchemy",
+                "nio",
+            ),
+        )
+        self.assertEqual(violations, [])
+
     def test_client_shutdown_timeout_resolution_uses_contract_parser(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         for client_module_path in (
             repo_root / "mugen" / "core" / "client" / "matrix.py",
             repo_root / "mugen" / "core" / "client" / "telegram.py",
+            repo_root / "mugen" / "core" / "client" / "wechat.py",
             repo_root / "mugen" / "core" / "client" / "whatsapp.py",
         ):
             source = client_module_path.read_text(encoding="utf-8")

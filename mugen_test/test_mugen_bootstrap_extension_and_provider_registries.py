@@ -10,9 +10,11 @@ from mugen.core.bootstrap import extensions as ext_mod
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.fw import IFWExtension
 from mugen.core.contract.extension.ipc import IIPCExtension
+from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.di import provider_registry
+from mugen.core.plugin.token_registry import get_plugin_extension_token_registry
 
 
 class _DummyCPExt(ICPExtension):
@@ -72,7 +74,105 @@ class _DummyKnowledge(IKnowledgeGateway):
         return None
 
 
+class _DummyWeChatClient(IWeChatClient):
+    async def init(self) -> None:
+        return None
+
+    async def verify_startup(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        return None
+
+    async def send_text_message(
+        self,
+        *,
+        recipient: str,
+        text: str,
+        reply_to: str | None = None,
+    ) -> dict | None:
+        _ = (recipient, text, reply_to)
+        return None
+
+    async def send_audio_message(
+        self,
+        *,
+        recipient: str,
+        audio: dict,
+        reply_to: str | None = None,
+    ) -> dict | None:
+        _ = (recipient, audio, reply_to)
+        return None
+
+    async def send_file_message(
+        self,
+        *,
+        recipient: str,
+        file: dict,
+        reply_to: str | None = None,
+    ) -> dict | None:
+        _ = (recipient, file, reply_to)
+        return None
+
+    async def send_image_message(
+        self,
+        *,
+        recipient: str,
+        image: dict,
+        reply_to: str | None = None,
+    ) -> dict | None:
+        _ = (recipient, image, reply_to)
+        return None
+
+    async def send_video_message(
+        self,
+        *,
+        recipient: str,
+        video: dict,
+        reply_to: str | None = None,
+    ) -> dict | None:
+        _ = (recipient, video, reply_to)
+        return None
+
+    async def send_raw_message(self, *, payload: dict) -> dict | None:
+        _ = payload
+        return None
+
+    async def upload_media(
+        self,
+        *,
+        file_path: str,
+        media_type: str,
+    ) -> dict | None:
+        _ = (file_path, media_type)
+        return None
+
+    async def download_media(
+        self,
+        *,
+        media_id: str,
+        mime_type: str | None = None,
+    ) -> dict | None:
+        _ = (media_id, mime_type)
+        return None
+
+    async def emit_processing_signal(
+        self,
+        recipient: str,
+        *,
+        state: str,
+        message_id: str | None = None,
+    ) -> bool | None:
+        _ = (recipient, state, message_id)
+        return True
+
+
 class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
+    def test_plugin_token_registry_contains_wechat_extensions(self) -> None:
+        token_registry = get_plugin_extension_token_registry()
+        self.assertIn("core.fw.wechat", token_registry)
+        self.assertIn("core.ipc.wechat", token_registry)
+
     def test_parse_bool_default_paths(self) -> None:
         self.assertTrue(ext_mod.parse_bool(object(), default=True))
         self.assertFalse(ext_mod.parse_bool("not-bool", default=False))
@@ -606,6 +706,18 @@ class TestProviderRegistryResolution(unittest.TestCase):
                 interface=IKnowledgeGateway,
             )
         self.assertIs(resolved, _DummyKnowledge)
+
+    def test_wechat_client_provider_token_resolves(self) -> None:
+        with patch(
+            "mugen.core.di.provider_registry.importlib.import_module",
+            return_value=SimpleNamespace(DefaultWeChatClient=_DummyWeChatClient),
+        ):
+            resolved = provider_registry.resolve_provider_class(
+                provider_name="wechat_client",
+                token="default",
+                interface=IWeChatClient,
+            )
+        self.assertIs(resolved, _DummyWeChatClient)
 
     def test_pinecone_knowledge_provider_token_resolves(self) -> None:
         with patch(

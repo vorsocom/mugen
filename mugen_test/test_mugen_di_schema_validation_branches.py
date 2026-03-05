@@ -39,6 +39,8 @@ def _valid_core_config() -> dict:
                 "core": {
                     "client": {
                         "matrix": "default",
+                        "telegram": "default",
+                        "wechat": "default",
                         "whatsapp": "default",
                         "web": "default",
                     },
@@ -110,6 +112,34 @@ def _valid_core_config() -> dict:
             },
             "typing": {
                 "enabled": True,
+            },
+        },
+        "wechat": {
+            "provider": "official_account",
+            "webhook": {
+                "path_token": "wechat-path-token",
+                "signature_token": "wechat-signature-token",
+                "aes_enabled": False,
+                "aes_key": "0123456789abcdef0123456789abcdef0123456789A",
+                "dedupe_ttl_seconds": 86400,
+            },
+            "api": {
+                "timeout_seconds": 10.0,
+                "max_api_retries": 2,
+                "retry_backoff_seconds": 0.5,
+                "max_download_bytes": 1024,
+            },
+            "typing": {
+                "enabled": True,
+            },
+            "official_account": {
+                "app_id": "wx-app-id",
+                "app_secret": "wx-app-secret",
+            },
+            "wecom": {
+                "corp_id": "corp-id",
+                "corp_secret": "corp-secret",
+                "agent_id": 1000002,
             },
         },
         "security": {
@@ -489,6 +519,52 @@ class TestDISchemaValidationBranches(unittest.TestCase):
                 "device_ids": ["DEV-1"],
             }
         ]
+        di._validate_core_module_schema(cfg)
+
+    def test_core_schema_requires_strict_wechat_runtime_contract_when_enabled(
+        self,
+    ) -> None:
+        cases: list[tuple[dict, str]] = []
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["wechat"]
+        cfg["wechat"]["provider"] = "invalid"
+        cases.append((cfg, "wechat.provider"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["wechat"]
+        cfg["wechat"]["webhook"]["path_token"] = ""
+        cases.append((cfg, "wechat.webhook.path_token"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["wechat"]
+        cfg["wechat"]["webhook"]["aes_enabled"] = True
+        cfg["wechat"]["webhook"]["aes_key"] = ""
+        cases.append((cfg, "wechat.webhook.aes_key"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["wechat"]
+        cfg["wechat"]["official_account"]["app_id"] = ""
+        cases.append((cfg, "wechat.official_account.app_id"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["wechat"]
+        cfg["wechat"]["provider"] = "wecom"
+        cfg["wechat"]["wecom"]["agent_id"] = 0
+        cases.append((cfg, "wechat.wecom.agent_id"))
+
+        for candidate, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(RuntimeError, re.escape(message)):
+                    di._validate_core_module_schema(candidate)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["wechat"]
+        di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["wechat"]
+        cfg["wechat"]["provider"] = "wecom"
         di._validate_core_module_schema(cfg)
 
     def test_build_provider_logs_relational_runtime_bootstrap_failure(self) -> None:

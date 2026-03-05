@@ -155,6 +155,12 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             class_name="DefaultTelegramClient",
         ),
     },
+    "wechat_client": {
+        "default": _ProviderTokenSpec(
+            module_path="mugen.core.client.wechat",
+            class_name="DefaultWeChatClient",
+        ),
+    },
     "whatsapp_client": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.client.whatsapp",

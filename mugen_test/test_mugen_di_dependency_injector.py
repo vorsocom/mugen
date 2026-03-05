@@ -6,6 +6,7 @@ import unittest
 from mugen.core import di
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.telegram import ITelegramClient
+from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -44,6 +45,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.knowledge_gateway)
         self.assertIsNone(injector.matrix_client)
         self.assertIsNone(injector.telegram_client)
+        self.assertIsNone(injector.wechat_client)
         self.assertIsNone(injector.whatsapp_client)
         self.assertIsNone(injector.web_client)
 
@@ -602,6 +604,128 @@ class TestDependencyInjector(unittest.TestCase):
             user_service=user_service,
         )
 
+        # WeChat Client
+        class DummyWeChatClientClass(IWeChatClient):
+            """Dummy WeChat client class."""
+
+            def __init__(  # pylint: disable=too-many-arguments
+                self,
+                config,
+                ipc_service,
+                keyval_storage_gateway,
+                logging_gateway,
+                messaging_service,
+                user_service,
+            ):
+                _ = (
+                    config,
+                    ipc_service,
+                    keyval_storage_gateway,
+                    logging_gateway,
+                    messaging_service,
+                    user_service,
+                )
+
+            async def init(self) -> None:
+                return None
+
+            async def verify_startup(self) -> bool:
+                return True
+
+            async def close(self) -> None:
+                return None
+
+            async def send_text_message(
+                self,
+                *,
+                recipient: str,
+                text: str,
+                reply_to: str | None = None,
+            ) -> dict | None:
+                _ = (recipient, text, reply_to)
+                return None
+
+            async def send_audio_message(
+                self,
+                *,
+                recipient: str,
+                audio: dict,
+                reply_to: str | None = None,
+            ) -> dict | None:
+                _ = (recipient, audio, reply_to)
+                return None
+
+            async def send_file_message(
+                self,
+                *,
+                recipient: str,
+                file: dict,
+                reply_to: str | None = None,
+            ) -> dict | None:
+                _ = (recipient, file, reply_to)
+                return None
+
+            async def send_image_message(
+                self,
+                *,
+                recipient: str,
+                image: dict,
+                reply_to: str | None = None,
+            ) -> dict | None:
+                _ = (recipient, image, reply_to)
+                return None
+
+            async def send_video_message(
+                self,
+                *,
+                recipient: str,
+                video: dict,
+                reply_to: str | None = None,
+            ) -> dict | None:
+                _ = (recipient, video, reply_to)
+                return None
+
+            async def send_raw_message(self, *, payload: dict) -> dict | None:
+                _ = payload
+                return None
+
+            async def upload_media(
+                self,
+                *,
+                file_path: str,
+                media_type: str,
+            ) -> dict | None:
+                _ = (file_path, media_type)
+                return None
+
+            async def download_media(
+                self,
+                *,
+                media_id: str,
+                mime_type: str | None = None,
+            ) -> dict | None:
+                _ = (media_id, mime_type)
+                return None
+
+            async def emit_processing_signal(
+                self,
+                recipient: str,
+                *,
+                state: str,
+                message_id: str | None = None,
+            ) -> bool | None:
+                _ = (recipient, state, message_id)
+                return True
+
+        wechat_client = DummyWeChatClientClass(
+            config=config,
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+
         # WhatsApp Client
         class DummyWhatsAppClientClass(IWhatsAppClient):
             """Dummy WhatsApp class."""
@@ -839,6 +963,7 @@ class TestDependencyInjector(unittest.TestCase):
             knowledge_gateway=knowledge_gateway,
             matrix_client=matrix_client,
             telegram_client=telegram_client,
+            wechat_client=wechat_client,
             whatsapp_client=whatsapp_client,
             web_client=web_client,
         )
@@ -860,6 +985,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.knowledge_gateway, knowledge_gateway)
         self.assertEqual(injector.matrix_client, matrix_client)
         self.assertEqual(injector.telegram_client, telegram_client)
+        self.assertEqual(injector.wechat_client, wechat_client)
         self.assertEqual(injector.whatsapp_client, whatsapp_client)
         self.assertEqual(injector.web_client, web_client)
 
