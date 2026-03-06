@@ -6,6 +6,8 @@ This document defines the v1 LINE Messaging API platform contract in muGen.
 
 - Ingress mode: webhook only.
 - Webhook path: `POST /api/line/messagingapi/webhook/<path_token>`.
+- Tenant-aware ingress route resolution:
+  [`channel-orchestration` downstream note](./downstream-notes/channel-orchestration.md#tenant-aware-ingress-routing).
 - Chat scope: user 1:1 events only (`source.type == "user"`).
 - Supported inbound event families:
   - Direct AI routing: `message`, `postback`

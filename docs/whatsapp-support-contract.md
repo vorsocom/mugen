@@ -8,6 +8,8 @@ This document defines the v1 WhatsApp Cloud API platform contract in muGen.
 - Webhook routes:
   - Subscription verification: `GET /api/whatsapp/wacapi/webhook`
   - Event delivery: `POST /api/whatsapp/wacapi/webhook`
+- Tenant-aware ingress route resolution:
+  [`channel-orchestration` downstream note](./downstream-notes/channel-orchestration.md#tenant-aware-ingress-routing).
 - Supported inbound event families:
   - `messages` (`entry[].changes[].value.messages[]`)
   - `statuses` (`entry[].changes[].value.statuses[]`)

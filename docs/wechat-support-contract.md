@@ -6,6 +6,8 @@ This document defines the v1 WeChat platform contract in muGen.
 
 - Ingress mode: webhook only.
 - Platform token: `wechat`.
+- Tenant-aware ingress route resolution:
+  [`channel-orchestration` downstream note](./downstream-notes/channel-orchestration.md#tenant-aware-ingress-routing).
 - Providers in scope:
   - `official_account`
   - `wecom` (app messaging surface)
@@ -77,4 +79,3 @@ Any verification failure is rejected before IPC dispatch.
 - WeCom customer-contact surfaces.
 - Unofficial personal-account APIs.
 - Curated first-class advanced provider message families beyond generic + raw passthrough.
-

@@ -5,6 +5,8 @@ The core `web` platform client provides asynchronous chat transport over:
 - `POST` for message submission
 - `GET` SSE stream for acknowledgements and assistant responses
 - `GET` tokenized media download endpoint
+- Tenant-aware ingress route resolution:
+  [`channel-orchestration` downstream note](./downstream-notes/channel-orchestration.md#tenant-aware-ingress-routing)
 
 Inbound events are routed through `IMessagingService` as:
 - `platform="web"`

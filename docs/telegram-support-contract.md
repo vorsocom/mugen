@@ -6,6 +6,8 @@ This document defines the v1 Telegram platform contract in muGen.
 
 - Ingress mode: webhook only.
 - Webhook path: `POST /api/telegram/botapi/webhook/<path_token>`.
+- Tenant-aware ingress route resolution:
+  [`channel-orchestration` downstream note](./downstream-notes/channel-orchestration.md#tenant-aware-ingress-routing).
 - Chat scope: private chats only (`chat.type == "private"`).
 - Supported inbound update types:
   - `message`
