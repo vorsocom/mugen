@@ -83,9 +83,23 @@ class PluginSpec:
         Example: "myapp.plugins.billing.contrib"
     """
 
+    token: str
     namespace: str
     name: str
     contrib: str  # "module.contrib_path"
+
+
+def _plugin_identity(entry: dict) -> str:
+    """Return the stable identity key used to collapse duplicate FW plugin specs."""
+    token = str(entry.get("token", "")).strip()
+    if token != "":
+        return token
+
+    name = str(entry.get("name", "")).strip()
+    if name != "":
+        return name
+
+    raise KeyError("token")
 
 
 def _import_callable(path: str) -> Contributor:
@@ -146,21 +160,29 @@ def _load_enabled_framework_plugins(mugen_cfg: dict) -> list[PluginSpec]:
     KeyError:
         If required config keys are missing.
     """
-    out: list[PluginSpec] = []
+    out_by_token: dict[str, PluginSpec] = {}
     plugins = mugen_cfg["mugen"]["modules"]["core"].get("extensions", []) + mugen_cfg[
         "mugen"
     ]["modules"].get("extensions", [])
     for p in plugins:
         if not p.get("enabled", False) or p.get("type", "") != "fw":
             continue
-        out.append(
-            PluginSpec(
-                namespace=p["namespace"],
-                name=p["name"],
-                contrib=p["contrib"],
-            )
+        spec = PluginSpec(
+            token=_plugin_identity(p),
+            namespace=p["namespace"],
+            name=p["name"],
+            contrib=p["contrib"],
         )
-    return out
+        existing = out_by_token.get(spec.token)
+        if existing is None:
+            out_by_token[spec.token] = spec
+            continue
+        if existing != spec:
+            raise RuntimeError(
+                "Conflicting framework plugin configuration for token: "
+                f"{spec.token!r}."
+            )
+    return list(out_by_token.values())
 
 
 def contribute_all(registry: IAdminRegistry, *, mugen_cfg: dict) -> None:
