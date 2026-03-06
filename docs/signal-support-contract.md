@@ -6,6 +6,8 @@ This document defines the v1 Signal platform contract in muGen.
 
 - Transport: `signal-cli-rest-api` HTTP gateway.
 - Ingress mode: websocket receive stream from `GET /v1/receive/{number}`.
+- Tenant-aware ingress route resolution:
+  [`channel-orchestration` downstream note](./downstream-notes/channel-orchestration.md#tenant-aware-ingress-routing).
 - Account model: one Signal account per deployment.
 - Supported inbound envelope types:
   - text messages
