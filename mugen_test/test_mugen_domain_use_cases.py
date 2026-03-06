@@ -355,21 +355,40 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 provider_ready=True,
                 optional_provider_failures={
                     "email_gateway": "smtp unavailable",
+                    "sms_gateway": "twilio unavailable",
                     "knowledge_gateway": "   ",
                 },
             )
         )
         self.assertTrue(optional_provider_degraded.healthy)
         self.assertEqual(
-            optional_provider_degraded.statuses["provider_readiness.optional.email_gateway"],
+            optional_provider_degraded.statuses[
+                "provider_readiness.optional.email_gateway"
+            ],
             "degraded",
         )
         self.assertEqual(
-            optional_provider_degraded.errors["provider_readiness.optional.email_gateway"],
+            optional_provider_degraded.errors[
+                "provider_readiness.optional.email_gateway"
+            ],
             "smtp unavailable",
         )
         self.assertEqual(
-            optional_provider_degraded.errors["provider_readiness.optional.knowledge_gateway"],
+            optional_provider_degraded.statuses[
+                "provider_readiness.optional.sms_gateway"
+            ],
+            "degraded",
+        )
+        self.assertEqual(
+            optional_provider_degraded.errors[
+                "provider_readiness.optional.sms_gateway"
+            ],
+            "twilio unavailable",
+        )
+        self.assertEqual(
+            optional_provider_degraded.errors[
+                "provider_readiness.optional.knowledge_gateway"
+            ],
             "Optional provider readiness check failed.",
         )
         self.assertEqual(
@@ -377,6 +396,7 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
             [
                 "provider_readiness.optional.email_gateway",
                 "provider_readiness.optional.knowledge_gateway",
+                "provider_readiness.optional.sms_gateway",
             ],
         )
         self.assertEqual(

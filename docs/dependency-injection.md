@@ -20,6 +20,7 @@ from `mugen/core/di/provider_registry.py` (never module paths):
 | `mugen.modules.core.gateway.logging` | `standard` |
 | `mugen.modules.core.gateway.completion` | `azure_foundry`, `bedrock`, `cerebras`, `deterministic`, `groq`, `openai`, `sambanova`, `vertex` |
 | `mugen.modules.core.gateway.email` | `ses`, `smtp` |
+| `mugen.modules.core.gateway.sms` | `twilio` |
 | `mugen.modules.core.gateway.knowledge` | `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate` |
 | `mugen.modules.core.gateway.storage.keyval` | `relational` |
 | `mugen.modules.core.gateway.storage.media` | `default` |

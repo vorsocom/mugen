@@ -66,6 +66,7 @@ gateway.completion = "sambanova"
 # gateway.completion = "azure_foundry"
 # gateway.email = "smtp"
 # gateway.email = "ses"
+# gateway.sms = "twilio"
 # gateway.knowledge = "chromadb"
 # gateway.knowledge = "milvus"
 # gateway.knowledge = "pinecone"
@@ -662,6 +663,21 @@ timeout_seconds = 30.0
 use_ssl = false
 starttls = true
 starttls_required = true
+
+# === Twilio SMS (optional outbound SMS gateway) ===
+[twilio]
+api.account_sid = "<twilio-account-sid>"
+# Choose exactly one auth mode:
+# 1) auth_token, or
+# 2) api_key_sid + api_key_secret
+api.auth_token = "<twilio-auth-token>"
+api.api_key_sid = ""
+api.api_key_secret = ""
+api.base_url = "https://api.twilio.com"
+api.timeout_seconds = 10.0
+# Choose exactly one sender default:
+messaging.default_from = ""
+messaging.messaging_service_sid = ""
 
 # === Telnet (dev/test harness only) ===
 [telnet]

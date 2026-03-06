@@ -52,6 +52,7 @@ from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.sms import ISMSGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
@@ -119,8 +120,7 @@ class ContainerShutdownError(RuntimeError):
             message = "Container shutdown failed."
         else:
             message = "Container shutdown failed: " + "; ".join(
-                _format_provider_shutdown_failure(failure)
-                for failure in failures
+                _format_provider_shutdown_failure(failure) for failure in failures
             )
         super().__init__(message)
 
@@ -218,9 +218,7 @@ def _validate_required_positive_timeout(
     path: str,
 ) -> None:
     if value is None or value == "":
-        raise RuntimeError(
-            f"Invalid configuration: {path} is required."
-        )
+        raise RuntimeError(f"Invalid configuration: {path} is required.")
     _validate_optional_positive_timeout(value, path=path)
 
 
@@ -235,9 +233,7 @@ def _validate_required_runtime_profile(
         )
     normalized = value.strip().lower()
     if normalized != "platform_full":
-        raise RuntimeError(
-            f"Invalid configuration: {path} must be platform_full."
-        )
+        raise RuntimeError(f"Invalid configuration: {path} must be platform_full.")
 
 
 def _validate_optional_nonnegative_timeout_like_value(
@@ -347,7 +343,9 @@ def _validate_core_module_schema(config: dict) -> None:
 
     phase_b_cfg = runtime_cfg.get("phase_b")
     if not isinstance(phase_b_cfg, dict):
-        raise RuntimeError("Invalid configuration: mugen.runtime.phase_b must be a table.")
+        raise RuntimeError(
+            "Invalid configuration: mugen.runtime.phase_b must be a table."
+        )
     _ensure_only_known_keys(
         phase_b_cfg,
         path="mugen.runtime.phase_b",
@@ -455,7 +453,9 @@ def _validate_core_module_schema(config: dict) -> None:
 
     gateway_cfg = core_cfg.get("gateway")
     if not isinstance(gateway_cfg, dict):
-        raise RuntimeError("Invalid configuration: mugen.modules.core.gateway must be a table.")
+        raise RuntimeError(
+            "Invalid configuration: mugen.modules.core.gateway must be a table."
+        )
     _ensure_only_known_keys(
         gateway_cfg,
         path="mugen.modules.core.gateway",
@@ -601,12 +601,8 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         )
 
     if profile != "platform_full":
-        logger.error(
-            "Runtime profile platform_full is required."
-        )
-        raise RuntimeError(
-            "Runtime profile platform_full is required."
-        )
+        logger.error("Runtime profile platform_full is required.")
+        raise RuntimeError("Runtime profile platform_full is required.")
 
     if not active_platforms:
         logger.error(
@@ -641,6 +637,10 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
     if _config_path_exists(config, "mugen", "modules", "core", "gateway", "email"):
         if injector.email_gateway is None:
             missing.append("email_gateway")
+
+    if _config_path_exists(config, "mugen", "modules", "core", "gateway", "sms"):
+        if injector.sms_gateway is None:
+            missing.append("sms_gateway")
 
     if "web" in active_platform_set:
         if injector.web_client is None:
@@ -747,6 +747,19 @@ _PROVIDER_SPECS = {
         injector_attr="email_gateway",
         interface=IEmailGateway,
         module_path=("mugen", "modules", "core", "gateway", "email"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required=False,
+        readiness_required=False,
+    ),
+    "sms_gateway": _ProviderSpec(
+        provider_name="sms_gateway",
+        injector_attr="sms_gateway",
+        interface=ISMSGateway,
+        module_path=("mugen", "modules", "core", "gateway", "sms"),
         constructor_bindings=(
             ("config", "config"),
             ("logging_gateway", "logging_gateway"),
@@ -993,6 +1006,7 @@ _PROVIDER_SPECS = {
 _PROVIDER_BUILD_ORDER = (
     "completion_gateway",
     "email_gateway",
+    "sms_gateway",
     "ipc_service",
     "keyval_storage_gateway",
     "media_storage_gateway",
@@ -1049,10 +1063,7 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
         "storage",
         "relational",
     )
-    relational_required = (
-        relational_configured is True
-        or web_active
-    )
+    relational_required = relational_configured is True or web_active
     if relational_required:
         readiness_provider_names.append("relational_storage_gateway")
 
@@ -1061,6 +1072,9 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
 
     if _config_path_exists(config, "mugen", "modules", "core", "gateway", "email"):
         readiness_provider_names.append("email_gateway")
+
+    if _config_path_exists(config, "mugen", "modules", "core", "gateway", "sms"):
+        readiness_provider_names.append("sms_gateway")
 
     if _config_path_exists(
         config,
@@ -1272,7 +1286,10 @@ def _build_provider_from_spec(
         injector_attr == "relational_runtime"
         for _arg_name, injector_attr in spec.constructor_bindings
     )
-    if requires_relational_runtime and getattr(injector, "relational_runtime", None) is None:
+    if (
+        requires_relational_runtime
+        and getattr(injector, "relational_runtime", None) is None
+    ):
         try:
             _build_shared_relational_runtime(injector)
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -1420,7 +1437,9 @@ def _shutdown_provider(
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        failures = asyncio.run(_shutdown_provider_async(provider_name, provider, logger))
+        failures = asyncio.run(
+            _shutdown_provider_async(provider_name, provider, logger)
+        )
         if failures:
             raise ContainerShutdownError(failures)
         return

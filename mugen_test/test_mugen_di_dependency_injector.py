@@ -15,6 +15,7 @@ from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.sms import ISMSGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
@@ -35,6 +36,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.logging_gateway)
         self.assertIsNone(injector.completion_gateway)
         self.assertIsNone(injector.email_gateway)
+        self.assertIsNone(injector.sms_gateway)
         self.assertIsNone(injector.ipc_service)
         self.assertIsNone(injector.keyval_storage_gateway)
         self.assertIsNone(injector.media_storage_gateway)
@@ -120,6 +122,25 @@ class TestDependencyInjector(unittest.TestCase):
                 pass
 
         email_gateway = DummyEmailGatewayClass(
+            config=config,
+            logging_gateway=logging_gateway,
+        )
+
+        # SMS Gateway
+        # pylint: disable=too-few-public-methods
+        class DummySMSGatewayClass(ISMSGateway):
+            """Dummy SMS class."""
+
+            def __init__(self, config, logging_gateway):
+                pass
+
+            async def check_readiness(self):
+                pass
+
+            async def send_sms(self, request):
+                pass
+
+        sms_gateway = DummySMSGatewayClass(
             config=config,
             logging_gateway=logging_gateway,
         )
@@ -1207,6 +1228,7 @@ class TestDependencyInjector(unittest.TestCase):
             logging_gateway=logging_gateway,
             completion_gateway=completion_gateway,
             email_gateway=email_gateway,
+            sms_gateway=sms_gateway,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
             media_storage_gateway=media_storage_gateway,
@@ -1231,10 +1253,13 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.logging_gateway, logging_gateway)
         self.assertEqual(injector.completion_gateway, completion_gateway)
         self.assertEqual(injector.email_gateway, email_gateway)
+        self.assertEqual(injector.sms_gateway, sms_gateway)
         self.assertEqual(injector.ipc_service, ipc_service)
         self.assertEqual(injector.keyval_storage_gateway, keyval_storage_gateway)
         self.assertEqual(injector.media_storage_gateway, media_storage_gateway)
-        self.assertEqual(injector.relational_storage_gateway, relational_storage_gateway)
+        self.assertEqual(
+            injector.relational_storage_gateway, relational_storage_gateway
+        )
         self.assertEqual(injector.web_runtime_store, web_runtime_store)
         self.assertEqual(injector.nlp_service, nlp_service)
         self.assertEqual(injector.platform_service, platform_service)
@@ -1461,3 +1486,12 @@ class TestDependencyInjector(unittest.TestCase):
         injector.knowledge_gateway = gateway
 
         self.assertIs(injector.knowledge_gateway, gateway)
+
+    def test_sms_gateway_setter_assignment(self):
+        """Test sms_gateway setter path after initialization."""
+        injector = di.injector.DependencyInjector()
+        gateway = object()
+
+        injector.sms_gateway = gateway
+
+        self.assertIs(injector.sms_gateway, gateway)

@@ -113,6 +113,7 @@ The following is a listing of available clients, gateways, and services.
     * [Email](/mugen/core/contract/gateway/email.py) (di.container.email_gateway)
     * [Knowledge](/mugen/core/contract/gateway/knowledge.py) (di.container.knowledge_gateway)
     * [Logging](/mugen/core/contract/gateway/logging.py) (di.container.logging_gateway)
+    * [SMS](/mugen/core/contract/gateway/sms.py) (di.container.sms_gateway)
     * Storage:
         * [key-val](/mugen/core/contract/gateway/storage/keyval.py) (di.container.keyval_storage_gateway)
 * Services:

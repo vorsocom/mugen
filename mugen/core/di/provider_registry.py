@@ -63,6 +63,12 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             class_name="SESEmailGateway",
         ),
     },
+    "sms_gateway": {
+        "twilio": _ProviderTokenSpec(
+            module_path="mugen.core.gateway.sms.twilio",
+            class_name="TwilioSMSGateway",
+        ),
+    },
     "ipc_service": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.service.ipc",

@@ -40,7 +40,7 @@ def _test_config(*, platforms: list[str], mh_mode: str = "optional") -> SimpleNa
                 readiness_grace_seconds=0.0,
                 critical_platforms=list(platforms),
                 degrade_on_critical_exit=True,
-            )
+            ),
         ),
     )
     if (
@@ -69,7 +69,7 @@ def _test_config(*, platforms: list[str], mh_mode: str = "optional") -> SimpleNa
                         relational="configured",
                         web_runtime="configured",
                     ),
-                )
+                ),
             )
         )
     return SimpleNamespace(mugen=mugen_cfg)
@@ -137,7 +137,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(BootstrapConfigError, "Configuration unavailable"):
             await run_platform_clients(
                 app,
-                config_provider=lambda: (_ for _ in ()).throw(RuntimeError("bad config")),
+                config_provider=lambda: (_ for _ in ()).throw(
+                    RuntimeError("bad config")
+                ),
                 logger_provider=lambda: app.logger,
             )
 
@@ -145,11 +147,15 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
         config = _test_config(platforms=[])
 
-        with self.assertRaisesRegex(BootstrapConfigError, "Logging provider unavailable"):
+        with self.assertRaisesRegex(
+            BootstrapConfigError, "Logging provider unavailable"
+        ):
             await run_platform_clients(
                 app,
                 config_provider=lambda: config,
-                logger_provider=lambda: (_ for _ in ()).throw(RuntimeError("bad logger")),
+                logger_provider=lambda: (_ for _ in ()).throw(
+                    RuntimeError("bad logger")
+                ),
             )
 
     async def test_matrix_platform_enabled(self) -> None:
@@ -248,9 +254,7 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
         with (
             self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch(
-                target="mugen.run_line_client", new=_run_line_client
-            ),
+            unittest.mock.patch(target="mugen.run_line_client", new=_run_line_client),
         ):
             await run_platform_clients(
                 app,
@@ -402,7 +406,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 "DEBUG:test_app:Running whatsapp client.",
             )
 
-    async def test_run_platform_clients_marks_phase_b_degraded_on_critical_exit(self) -> None:
+    async def test_run_platform_clients_marks_phase_b_degraded_on_critical_exit(
+        self,
+    ) -> None:
         app = Quart("test_app")
         config = _test_config(platforms=["matrix"])
         _run_matrix_client = unittest.mock.AsyncMock()
@@ -421,7 +427,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         state = app.extensions["mugen"]["bootstrap"]
         self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
         self.assertIn("matrix", str(state[PHASE_B_ERROR_KEY]))
-        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["matrix"], PHASE_STATUS_DEGRADED)
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["matrix"], PHASE_STATUS_DEGRADED
+        )
         self.assertIsNotNone(state[PHASE_B_PLATFORM_ERRORS_KEY]["matrix"])
 
     async def test_validate_phase_b_runtime_config_raises_without_logger_for_invalid_shape(
@@ -446,7 +454,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 logger=None,
             )
 
-    async def test_run_platform_clients_keeps_platform_starting_until_started_callback(self) -> None:
+    async def test_run_platform_clients_keeps_platform_starting_until_started_callback(
+        self,
+    ) -> None:
         app = Quart("test_app")
         config = _test_config(platforms=["web"])
         allow_start = asyncio.Event()
@@ -565,7 +575,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             str(state[PHASE_B_PLATFORM_ERRORS_KEY]["web"]),
         )
 
-    async def test_run_platform_clients_handles_partial_timeout_membership(self) -> None:
+    async def test_run_platform_clients_handles_partial_timeout_membership(
+        self,
+    ) -> None:
         app = Quart("test_app")
         config = _test_config(platforms=["matrix", "web"])
         started = asyncio.Event()
@@ -598,7 +610,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             platform_errors = bootstrap_state.get(PHASE_B_PLATFORM_ERRORS_KEY, {})
             if not isinstance(platform_errors, dict):
                 platform_errors = {}
-            platform_errors["matrix"] = f"shutdown timed out after {timeout_seconds:.2f}s"
+            platform_errors["matrix"] = (
+                f"shutdown timed out after {timeout_seconds:.2f}s"
+            )
             platform_errors["web"] = None
             bootstrap_state[PHASE_B_PLATFORM_ERRORS_KEY] = platform_errors
 
@@ -637,7 +651,11 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
         state = app.extensions["mugen"]["bootstrap"]
         errors = state[PHASE_B_PLATFORM_ERRORS_KEY]
-        timeout_errors = [value for value in errors.values() if "shutdown timed out after" in str(value)]
+        timeout_errors = [
+            value
+            for value in errors.values()
+            if "shutdown timed out after" in str(value)
+        ]
         self.assertEqual(len(timeout_errors), 1)
 
     async def test_run_platform_clients_started_callback_ignored_when_shutdown_requested(
@@ -674,7 +692,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             await runner
 
         state = app.extensions["mugen"]["bootstrap"]
-        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED)
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED
+        )
 
     async def test_run_platform_clients_ignores_started_and_degraded_callbacks_after_shutdown(
         self,
@@ -712,7 +732,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             await runner
 
         state = app.extensions["mugen"]["bootstrap"]
-        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED)
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED
+        )
 
     async def test_run_platform_clients_marks_task_clean_exit_without_shutdown_as_degraded(
         self,
@@ -992,7 +1014,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             await runner
 
         state = app.extensions["mugen"]["bootstrap"]
-        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED)
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_STOPPED
+        )
 
     async def test_run_platform_clients_surfaces_runner_error_when_shutdown_requested(
         self,
@@ -1205,14 +1229,17 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         register_extensions_mock = unittest.mock.AsyncMock()
         readiness_mock = unittest.mock.AsyncMock()
 
-        with unittest.mock.patch.object(
-            mugen_mod,
-            "register_extensions",
-            new=register_extensions_mock,
-        ), unittest.mock.patch.object(
-            mugen_mod.di,
-            "ensure_container_readiness_async",
-            new=readiness_mock,
+        with (
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=register_extensions_mock,
+            ),
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=readiness_mock,
+            ),
         ):
             await bootstrap_app(
                 app,
@@ -1248,7 +1275,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             ["container_configuration"],
         )
         self.assertEqual(state[mugen_mod.PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY], [])
-        self.assertEqual(state[mugen_mod.PHASE_A_ERROR_KEY], "Configuration unavailable.")
+        self.assertEqual(
+            state[mugen_mod.PHASE_A_ERROR_KEY], "Configuration unavailable."
+        )
 
     async def test_bootstrap_app_fails_fast_when_provider_readiness_fails(
         self,
@@ -1352,7 +1381,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                     mh_extensions=[],
                 ),
             ),
-            unittest.mock.patch.object(mugen_mod, "_web_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_web_provider", return_value=object()
+            ),
         ):
             await bootstrap_app(
                 app,
@@ -1388,7 +1419,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 "_messaging_provider",
                 return_value=SimpleNamespace(mh_extensions=[]),
             ),
-            unittest.mock.patch.object(mugen_mod, "_web_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_web_provider", return_value=object()
+            ),
             self.assertRaisesRegex(
                 BootstrapConfigError,
                 "web.fw.extension_contract",
@@ -1427,7 +1460,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 "_messaging_provider",
                 return_value=SimpleNamespace(mh_extensions=[]),
             ),
-            unittest.mock.patch.object(mugen_mod, "_line_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_line_provider", return_value=object()
+            ),
             self.assertRaisesRegex(
                 BootstrapConfigError,
                 "line.fw.extension_contract",
@@ -1479,7 +1514,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                     mh_extensions=[SimpleNamespace(platforms=["line"])]
                 ),
             ),
-            unittest.mock.patch.object(mugen_mod, "_line_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_line_provider", return_value=object()
+            ),
         ):
             await bootstrap_app(
                 app,
@@ -1514,7 +1551,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 "_messaging_provider",
                 return_value=SimpleNamespace(mh_extensions=[]),
             ),
-            unittest.mock.patch.object(mugen_mod, "_signal_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_signal_provider", return_value=object()
+            ),
             self.assertRaisesRegex(
                 BootstrapConfigError,
                 "signal.ipc.extension_contract",
@@ -1562,7 +1601,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                     mh_extensions=[SimpleNamespace(platforms=["signal"])]
                 ),
             ),
-            unittest.mock.patch.object(mugen_mod, "_signal_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_signal_provider", return_value=object()
+            ),
         ):
             await bootstrap_app(
                 app,
@@ -1572,7 +1613,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         state = app.extensions["mugen"]["bootstrap"]
         statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
         self.assertEqual(statuses["signal.client_runtime_path"], PHASE_STATUS_HEALTHY)
-        self.assertEqual(statuses["signal.ipc.extension_contract"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(
+            statuses["signal.ipc.extension_contract"], PHASE_STATUS_HEALTHY
+        )
 
     async def test_bootstrap_app_fails_when_telegram_extension_contract_tokens_missing(
         self,
@@ -1596,7 +1639,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 "_messaging_provider",
                 return_value=SimpleNamespace(mh_extensions=[]),
             ),
-            unittest.mock.patch.object(mugen_mod, "_telegram_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_telegram_provider", return_value=object()
+            ),
             self.assertRaisesRegex(
                 BootstrapConfigError,
                 "telegram.fw.extension_contract",
@@ -1648,7 +1693,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                     mh_extensions=[SimpleNamespace(platforms=["telegram"])]
                 ),
             ),
-            unittest.mock.patch.object(mugen_mod, "_telegram_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_telegram_provider", return_value=object()
+            ),
         ):
             await bootstrap_app(
                 app,
@@ -1658,8 +1705,12 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         state = app.extensions["mugen"]["bootstrap"]
         statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
         self.assertEqual(statuses["telegram.client_runtime_path"], PHASE_STATUS_HEALTHY)
-        self.assertEqual(statuses["telegram.fw.extension_contract"], PHASE_STATUS_HEALTHY)
-        self.assertEqual(statuses["telegram.ipc.extension_contract"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(
+            statuses["telegram.fw.extension_contract"], PHASE_STATUS_HEALTHY
+        )
+        self.assertEqual(
+            statuses["telegram.ipc.extension_contract"], PHASE_STATUS_HEALTHY
+        )
 
     async def test_bootstrap_app_fails_when_wechat_extension_contract_tokens_missing(
         self,
@@ -1683,7 +1734,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 "_messaging_provider",
                 return_value=SimpleNamespace(mh_extensions=[]),
             ),
-            unittest.mock.patch.object(mugen_mod, "_wechat_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_wechat_provider", return_value=object()
+            ),
             self.assertRaisesRegex(
                 BootstrapConfigError,
                 "wechat.fw.extension_contract",
@@ -1735,7 +1788,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                     mh_extensions=[SimpleNamespace(platforms=["wechat"])]
                 ),
             ),
-            unittest.mock.patch.object(mugen_mod, "_wechat_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_wechat_provider", return_value=object()
+            ),
         ):
             await bootstrap_app(
                 app,
@@ -1746,7 +1801,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         statuses = state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY]
         self.assertEqual(statuses["wechat.client_runtime_path"], PHASE_STATUS_HEALTHY)
         self.assertEqual(statuses["wechat.fw.extension_contract"], PHASE_STATUS_HEALTHY)
-        self.assertEqual(statuses["wechat.ipc.extension_contract"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(
+            statuses["wechat.ipc.extension_contract"], PHASE_STATUS_HEALTHY
+        )
 
     async def test_bootstrap_app_marks_required_capabilities_healthy_when_satisfied(
         self,
@@ -1775,7 +1832,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                     mh_extensions=[SimpleNamespace(platforms=[])]
                 ),
             ),
-            unittest.mock.patch.object(mugen_mod, "_web_provider", return_value=object()),
+            unittest.mock.patch.object(
+                mugen_mod, "_web_provider", return_value=object()
+            ),
         ):
             await bootstrap_app(
                 app,
@@ -1811,7 +1870,10 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         readiness_report = mugen_mod.di.ProviderReadinessReport(
             successful_providers=("completion_gateway",),
             required_failures={},
-            optional_failures={"email_gateway": "smtp unavailable"},
+            optional_failures={
+                "email_gateway": "smtp unavailable",
+                "sms_gateway": "twilio unavailable",
+            },
         )
 
         with (
@@ -1844,12 +1906,17 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         runtime_input = captured_input["value"]
         self.assertEqual(
             runtime_input.optional_provider_failures,
-            {"email_gateway": "smtp unavailable"},
+            {
+                "email_gateway": "smtp unavailable",
+                "sms_gateway": "twilio unavailable",
+            },
         )
         self.assertEqual(runtime_input.registered_fw_extension_tokens, [])
         self.assertEqual(runtime_input.registered_ipc_extension_tokens, [])
 
-    async def test_bootstrap_app_normalizes_non_dict_phase_a_capability_state(self) -> None:
+    async def test_bootstrap_app_normalizes_non_dict_phase_a_capability_state(
+        self,
+    ) -> None:
         app = Quart("test_app")
         state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
         state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY] = "invalid"
@@ -1867,7 +1934,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 "register_extensions",
                 new=unittest.mock.AsyncMock(return_value={}),
             ),
-            unittest.mock.patch.object(mugen_mod, "_messaging_provider", return_value=None),
+            unittest.mock.patch.object(
+                mugen_mod, "_messaging_provider", return_value=None
+            ),
         ):
             await bootstrap_app(
                 app,
@@ -1877,7 +1946,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY], dict)
         self.assertIsInstance(state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY], dict)
 
-    async def test_bootstrap_app_reuses_existing_phase_a_capability_dict_state(self) -> None:
+    async def test_bootstrap_app_reuses_existing_phase_a_capability_dict_state(
+        self,
+    ) -> None:
         app = Quart("test_app")
         state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
         existing_statuses = {"seed": PHASE_STATUS_HEALTHY}
@@ -1897,14 +1968,18 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 "register_extensions",
                 new=unittest.mock.AsyncMock(return_value={}),
             ),
-            unittest.mock.patch.object(mugen_mod, "_messaging_provider", return_value=None),
+            unittest.mock.patch.object(
+                mugen_mod, "_messaging_provider", return_value=None
+            ),
         ):
             await bootstrap_app(
                 app,
                 config_provider=lambda: cfg,
             )
 
-        self.assertIs(state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY], existing_statuses)
+        self.assertIs(
+            state[mugen_mod.PHASE_A_CAPABILITY_STATUSES_KEY], existing_statuses
+        )
         self.assertIs(state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY], existing_errors)
         self.assertEqual(existing_statuses["container_readiness"], PHASE_STATUS_HEALTHY)
 
@@ -2002,13 +2077,19 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
 
     def test_platform_state_helpers_cover_edge_branches(self) -> None:
         self.assertTrue(
-            mugen_mod._parse_bool("yes", default=False)  # pylint: disable=protected-access
+            mugen_mod._parse_bool(
+                "yes", default=False
+            )  # pylint: disable=protected-access
         )
         self.assertFalse(
-            mugen_mod._parse_bool("OFF", default=True)  # pylint: disable=protected-access
+            mugen_mod._parse_bool(
+                "OFF", default=True
+            )  # pylint: disable=protected-access
         )
         self.assertTrue(
-            mugen_mod._parse_bool("maybe", default=True)  # pylint: disable=protected-access
+            mugen_mod._parse_bool(
+                "maybe", default=True
+            )  # pylint: disable=protected-access
         )
         self.assertEqual(
             mugen_mod._normalize_extension_token_list(  # pylint: disable=protected-access
@@ -2024,12 +2105,21 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             mugen_mod._resolve_registered_ipc_extension_tokens(  # pylint: disable=protected-access
-                {"ipc": ["core.ipc.telegram_botapi", "", " CORE.IPC.TELEGRAM_BOTAPI ", 1]}
+                {
+                    "ipc": [
+                        "core.ipc.telegram_botapi",
+                        "",
+                        " CORE.IPC.TELEGRAM_BOTAPI ",
+                        1,
+                    ]
+                }
             ),
             ["core.ipc.telegram_botapi"],
         )
         self.assertEqual(
-            mugen_mod._normalize_platform_list([" web ", "", "web", "matrix"]),  # pylint: disable=protected-access
+            mugen_mod._normalize_platform_list(
+                [" web ", "", "web", "matrix"]
+            ),  # pylint: disable=protected-access
             ["web", "matrix"],
         )
         self.assertEqual(  # pylint: disable=protected-access
@@ -2084,14 +2174,20 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         slot_root.child = slot_child
         slot_child.child = None
         self.assertTrue(
-            mugen_mod._config_path_exists(slot_root, "child")  # pylint: disable=protected-access
+            mugen_mod._config_path_exists(
+                slot_root, "child"
+            )  # pylint: disable=protected-access
         )
         self.assertFalse(
-            mugen_mod._config_path_exists(slot_root, "missing")  # pylint: disable=protected-access
+            mugen_mod._config_path_exists(
+                slot_root, "missing"
+            )  # pylint: disable=protected-access
         )
         dict_backed = SimpleNamespace(existing=SimpleNamespace())
         self.assertFalse(
-            mugen_mod._config_path_exists(dict_backed, "missing")  # pylint: disable=protected-access
+            mugen_mod._config_path_exists(
+                dict_backed, "missing"
+            )  # pylint: disable=protected-access
         )
 
         relational_config = {
@@ -2204,7 +2300,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             status=PHASE_STATUS_HEALTHY,
             error=None,
         )
-        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_HEALTHY)
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_HEALTHY
+        )
         self.assertIsNone(state[PHASE_B_PLATFORM_ERRORS_KEY]["web"])
 
         # Empty/non-dict state normalizes to healthy when no platforms are active.
@@ -2229,8 +2327,10 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-        max_restarts, base_backoff, max_backoff = mugen_mod._resolve_phase_b_supervision_controls(  # pylint: disable=protected-access
-            controls_cfg
+        max_restarts, base_backoff, max_backoff = (
+            mugen_mod._resolve_phase_b_supervision_controls(  # pylint: disable=protected-access
+                controls_cfg
+            )
         )
         self.assertEqual(max_restarts, 3)
         self.assertEqual(base_backoff, 5.0)
@@ -2306,10 +2406,14 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             await runner
 
         state = app.extensions["mugen"]["bootstrap"]
-        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["matrix"], PHASE_STATUS_STOPPED)
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["matrix"], PHASE_STATUS_STOPPED
+        )
         self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_STOPPED)
 
-    async def test_run_platform_clients_marks_noncritical_clean_exit_as_stopped(self) -> None:
+    async def test_run_platform_clients_marks_noncritical_clean_exit_as_stopped(
+        self,
+    ) -> None:
         app = Quart("test_app")
         state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
         state["phase_b_critical_platforms"] = ["web"]
@@ -2327,10 +2431,14 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             )
 
         state = app.extensions["mugen"]["bootstrap"]
-        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_DEGRADED)
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_DEGRADED
+        )
         self.assertEqual(state[PHASE_B_STATUS_KEY], PHASE_STATUS_DEGRADED)
 
-    async def test_run_platform_clients_raises_on_invalid_critical_platform(self) -> None:
+    async def test_run_platform_clients_raises_on_invalid_critical_platform(
+        self,
+    ) -> None:
         app = Quart("test_app")
         state = app.extensions.setdefault("mugen", {}).setdefault("bootstrap", {})
         state["phase_b_critical_platforms"] = ["not-enabled"]
@@ -2388,7 +2496,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
                 relational_storage_gateway_provider=lambda: object(),
             )
 
-    async def test_run_platform_clients_marks_platform_degraded_on_exception(self) -> None:
+    async def test_run_platform_clients_marks_platform_degraded_on_exception(
+        self,
+    ) -> None:
         app = Quart("test_app")
         config = _test_config(platforms=["web"])
 
@@ -2411,8 +2521,12 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             )
 
         state = app.extensions["mugen"]["bootstrap"]
-        self.assertEqual(state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_DEGRADED)
-        self.assertIn("RuntimeError: worker failure", state[PHASE_B_PLATFORM_ERRORS_KEY]["web"])
+        self.assertEqual(
+            state[PHASE_B_PLATFORM_STATUSES_KEY]["web"], PHASE_STATUS_DEGRADED
+        )
+        self.assertIn(
+            "RuntimeError: worker failure", state[PHASE_B_PLATFORM_ERRORS_KEY]["web"]
+        )
 
     async def test_run_platform_clients_marks_whatsapp_degraded_when_startup_probe_fails(
         self,
@@ -2673,7 +2787,9 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.exceptions.CancelledError):
                 await runner
 
-    async def test_run_platform_clients_marks_web_degraded_on_bind_failure(self) -> None:
+    async def test_run_platform_clients_marks_web_degraded_on_bind_failure(
+        self,
+    ) -> None:
         app = Quart("test_app")
         config = _test_config(platforms=["web"])
 
