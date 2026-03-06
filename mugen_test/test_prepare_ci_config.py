@@ -105,6 +105,26 @@ class TestPrepareCiConfig(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["contrib"], "mugen.core.plugin.context_engine.contrib")
         self.assertNotIn("models", matches[0])
+        self.assertEqual(
+            len(
+                [
+                    plugin
+                    for plugin in doc["mugen"]["modules"]["core"]["extensions"]
+                    if plugin.get("token") == "core.fw.context_engine"
+                ]
+            ),
+            0,
+        )
+        self.assertEqual(
+            len(
+                [
+                    plugin
+                    for plugin in doc["mugen"]["modules"]["extensions"]
+                    if plugin.get("token") == "core.fw.context_engine"
+                ]
+            ),
+            1,
+        )
 
     def test_ensure_framework_extension_prunes_duplicate_matches_across_sections(
         self,
@@ -141,6 +161,68 @@ class TestPrepareCiConfig(unittest.TestCase):
             len([plugin for plugin in plugins if plugin.get("token") == "core.fw.acp"]),
             1,
         )
+        self.assertEqual(
+            len(
+                [
+                    plugin
+                    for plugin in doc["mugen"]["modules"]["core"].get("extensions", [])
+                    if plugin.get("token") == "core.fw.acp"
+                ]
+            ),
+            0,
+        )
+        self.assertEqual(
+            len(
+                [
+                    plugin
+                    for plugin in doc["mugen"]["modules"].get("extensions", [])
+                    if plugin.get("token") == "core.fw.acp"
+                ]
+            ),
+            1,
+        )
+
+    def test_ensure_framework_extension_moves_core_only_fw_entry_to_plugin_section(
+        self,
+    ) -> None:
+        doc = tomlkit.parse(
+            """
+[mugen]
+[mugen.modules]
+[mugen.modules.core]
+[[mugen.modules.core.extensions]]
+type = "fw"
+token = "core.fw.web"
+enabled = true
+name = "legacy.web"
+namespace = "legacy.web"
+contrib = "legacy.web.contrib"
+"""
+        )
+
+        prepare_ci_config._ensure_framework_extension(  # pylint: disable=protected-access
+            doc,
+            token="core.fw.web",
+            name="com.vorsocomputing.mugen.web",
+            namespace="com.vorsocomputing.mugen.web",
+            models="mugen.core.plugin.web.model",
+            contrib="mugen.core.plugin.web.contrib",
+        )
+
+        self.assertEqual(
+            len(doc["mugen"]["modules"]["core"].get("extensions", [])),
+            0,
+        )
+        self.assertEqual(
+            len(doc["mugen"]["modules"].get("extensions", [])),
+            1,
+        )
+        plugin_entry = doc["mugen"]["modules"]["extensions"][0]
+        self.assertEqual(plugin_entry["token"], "core.fw.web")
+        self.assertEqual(plugin_entry["name"], "com.vorsocomputing.mugen.web")
+        self.assertEqual(plugin_entry["namespace"], "com.vorsocomputing.mugen.web")
+        self.assertEqual(plugin_entry["models"], "mugen.core.plugin.web.model")
+        self.assertEqual(plugin_entry["contrib"], "mugen.core.plugin.web.contrib")
 
     def test_ensure_framework_extension_appends_without_models_when_missing(self) -> None:
         doc = tomlkit.parse("[mugen]\n[mugen.modules]\n[mugen.modules.core]\n")
@@ -214,6 +296,16 @@ class TestPrepareCiConfig(unittest.TestCase):
             ),
             1,
         )
+        self.assertEqual(
+            len(
+                [
+                    plugin
+                    for plugin in doc["mugen"]["modules"]["core"].get("extensions", [])
+                    if str(plugin.get("type", "")).strip().lower() == "fw"
+                ]
+            ),
+            0,
+        )
 
     def test_main_writes_ci_config_without_web_platform_when_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -256,6 +348,16 @@ class TestPrepareCiConfig(unittest.TestCase):
                 [str(item) for item in original["mugen"]["platforms"]],
             )
             self.assertEqual(rendered["acp"]["jwt"]["keys"][0]["pem"], "PEM")
+            self.assertEqual(
+                len(
+                    [
+                        plugin
+                        for plugin in rendered["mugen"]["modules"]["core"]["extensions"]
+                        if str(plugin.get("type", "")).strip().lower() == "fw"
+                    ]
+                ),
+                0,
+            )
 
     def test_main_writes_ci_config_with_web_platform_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -295,6 +397,36 @@ class TestPrepareCiConfig(unittest.TestCase):
             self.assertEqual(
                 rendered["web"]["media"]["object"]["cache_path"],
                 ".tmp/ci/web_media_object_cache",
+            )
+            self.assertEqual(
+                len(
+                    [
+                        plugin
+                        for plugin in rendered["mugen"]["modules"]["core"]["extensions"]
+                        if str(plugin.get("type", "")).strip().lower() == "fw"
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                len(
+                    [
+                        plugin
+                        for plugin in rendered["mugen"]["modules"]["extensions"]
+                        if plugin.get("token") == "core.fw.acp"
+                    ]
+                ),
+                1,
+            )
+            self.assertEqual(
+                len(
+                    [
+                        plugin
+                        for plugin in rendered["mugen"]["modules"]["extensions"]
+                        if plugin.get("token") == "core.fw.web"
+                    ]
+                ),
+                1,
             )
 
     def test_module_entrypoint_runs_main(self) -> None:

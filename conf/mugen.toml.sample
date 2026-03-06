@@ -87,6 +87,7 @@ service.user = "default"
 type = "cp"
 token = "core.cp.clear_history"
 
+# Plugin-owned FW/IPC entries belong under `mugen.modules.extensions`.
 # Framework entries may optionally declare:
 # enabled = true
 # name = "com.vorsocomputing.mugen.plugin_name"
@@ -95,7 +96,7 @@ token = "core.cp.clear_history"
 # models = ["mugen.core.plugin.plugin_name.model"]
 #
 # Web platform FW contract (required when `web` is active).
-[[mugen.modules.core.extensions]]
+[[mugen.modules.extensions]]
 type = "fw"
 token = "core.fw.acp"
 enabled = true
@@ -103,7 +104,7 @@ name = "com.vorsocomputing.mugen.acp"
 namespace = "com.vorsocomputing.mugen.acp"
 contrib = "mugen.core.plugin.acp.contrib"
 
-[[mugen.modules.core.extensions]]
+[[mugen.modules.extensions]]
 type = "fw"
 token = "core.fw.web"
 enabled = true
@@ -111,7 +112,7 @@ name = "com.vorsocomputing.mugen.web"
 namespace = "com.vorsocomputing.mugen.web"
 contrib = "mugen.core.plugin.web.contrib"
 
-[[mugen.modules.core.extensions]]
+[[mugen.modules.extensions]]
 type = "fw"
 token = "core.fw.context_engine"
 enabled = true
@@ -120,7 +121,7 @@ namespace = "com.vorsocomputing.mugen.context_engine"
 contrib = "mugen.core.plugin.context_engine.contrib"
 
 # Telegram platform FW/IPC contract (required when `telegram` is active).
-# [[mugen.modules.core.extensions]]
+# [[mugen.modules.extensions]]
 # type = "fw"
 # token = "core.fw.telegram_botapi"
 # enabled = true
@@ -128,12 +129,12 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 # namespace = "com.vorsocomputing.mugen.telegram"
 # contrib = "mugen.core.plugin.telegram.botapi.contrib"
 #
-# [[mugen.modules.core.extensions]]
+# [[mugen.modules.extensions]]
 # type = "ipc"
 # token = "core.ipc.telegram_botapi"
 
 # LINE platform FW/IPC contract (required when `line` is active).
-# [[mugen.modules.core.extensions]]
+# [[mugen.modules.extensions]]
 # type = "fw"
 # token = "core.fw.line_messagingapi"
 # enabled = true
@@ -141,17 +142,17 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 # namespace = "com.vorsocomputing.mugen.line"
 # contrib = "mugen.core.plugin.line.messagingapi.contrib"
 #
-# [[mugen.modules.core.extensions]]
+# [[mugen.modules.extensions]]
 # type = "ipc"
 # token = "core.ipc.line_messagingapi"
 
 # Signal platform IPC contract (required when `signal` is active).
-# [[mugen.modules.core.extensions]]
+# [[mugen.modules.extensions]]
 # type = "ipc"
 # token = "core.ipc.signal_restapi"
 
 # WeChat platform FW/IPC contract (required when `wechat` is active).
-# [[mugen.modules.core.extensions]]
+# [[mugen.modules.extensions]]
 # type = "fw"
 # token = "core.fw.wechat"
 # enabled = true
@@ -159,12 +160,12 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 # namespace = "com.vorsocomputing.mugen.wechat"
 # contrib = "mugen.core.plugin.wechat.contrib"
 #
-# [[mugen.modules.core.extensions]]
+# [[mugen.modules.extensions]]
 # type = "ipc"
 # token = "core.ipc.wechat"
 
 # WhatsApp platform FW/IPC contract (required when `whatsapp` is active).
-# [[mugen.modules.core.extensions]]
+# [[mugen.modules.extensions]]
 # type = "fw"
 # token = "core.fw.whatsapp_wacapi"
 # enabled = true
@@ -172,7 +173,7 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 # namespace = "com.vorsocomputing.mugen.whatsapp"
 # contrib = "mugen.core.plugin.whatsapp.wacapi.contrib"
 #
-# [[mugen.modules.core.extensions]]
+# [[mugen.modules.extensions]]
 # type = "ipc"
 # token = "core.ipc.whatsapp_wacapi"
 

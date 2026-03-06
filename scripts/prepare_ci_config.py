@@ -240,6 +240,8 @@ def _ensure_framework_extension(
         modules["extensions"] = tomlkit.aot()
 
     matches: list[tuple[object, int, object]] = []
+    core_matches: list[tuple[object, int, object]] = []
+    plugin_matches: list[tuple[object, int, object]] = []
     sections = [core_modules["extensions"], modules["extensions"]]
     for section in sections:
         for index, extension in enumerate(section):
@@ -247,10 +249,19 @@ def _ensure_framework_extension(
                 str(extension.get("type", "")).strip().lower() == "fw"
                 and str(extension.get("token", "")).strip().lower() == normalized_token
             ):
-                matches.append((section, index, extension))
+                match = (section, index, extension)
+                matches.append(match)
+                if section is modules["extensions"]:
+                    plugin_matches.append(match)
+                else:
+                    core_matches.append(match)
 
     if matches:
-        _, _, extension = matches[0]
+        if plugin_matches:
+            _, _, extension = plugin_matches[0]
+        else:
+            extension = tomlkit.table()
+            modules["extensions"].append(extension)
         extension["type"] = "fw"
         extension["token"] = token
         extension["enabled"] = True
@@ -262,7 +273,8 @@ def _ensure_framework_extension(
             del extension["models"]
         extension["contrib"] = contrib
 
-        for section, index, _ in reversed(matches[1:]):
+        duplicate_matches = [match for match in matches if match[2] is not extension]
+        for section, index, _ in reversed(duplicate_matches):
             del section[index]
         return
 
