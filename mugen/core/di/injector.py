@@ -17,6 +17,7 @@ from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.sms import ISMSGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
@@ -42,6 +43,7 @@ class DependencyInjector(IDependencyInjector):
         logging_gateway: ILoggingGateway = None,
         completion_gateway: ICompletionGateway = None,
         email_gateway: IEmailGateway = None,
+        sms_gateway: ISMSGateway = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
         media_storage_gateway: IMediaStorageGateway = None,
@@ -65,6 +67,7 @@ class DependencyInjector(IDependencyInjector):
         self.__logging_gateway = logging_gateway
         self.__completion_gateway = completion_gateway
         self.__email_gateway = email_gateway
+        self.__sms_gateway = sms_gateway
         self.__ipc_service = ipc_service
         self.__keyval_storage_gateway = keyval_storage_gateway
         self.__media_storage_gateway = media_storage_gateway
@@ -117,6 +120,14 @@ class DependencyInjector(IDependencyInjector):
     @email_gateway.setter
     def email_gateway(self, value: IEmailGateway) -> None:
         self.__email_gateway = value
+
+    @property
+    def sms_gateway(self) -> ISMSGateway:
+        return self.__sms_gateway
+
+    @sms_gateway.setter
+    def sms_gateway(self, value: ISMSGateway) -> None:
+        self.__sms_gateway = value
 
     @property
     def ipc_service(self) -> IIPCService:

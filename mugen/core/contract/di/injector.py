@@ -17,6 +17,7 @@ from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.sms import ISMSGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
@@ -50,6 +51,11 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def email_gateway(self) -> IEmailGateway:
         """Get the global email gateway."""
+
+    @property
+    @abstractmethod
+    def sms_gateway(self) -> ISMSGateway:
+        """Get the global SMS gateway."""
 
     @property
     @abstractmethod

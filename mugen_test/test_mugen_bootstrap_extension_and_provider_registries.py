@@ -15,6 +15,7 @@ from mugen.core.contract.client.signal import ISignalClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
+from mugen.core.contract.gateway.sms import ISMSGateway
 from mugen.core.di import provider_registry
 from mugen.core.plugin.token_registry import get_plugin_extension_token_registry
 
@@ -73,6 +74,14 @@ class _DummyKnowledge(IKnowledgeGateway):
         return None
 
     async def search(self, params):  # noqa: ANN001
+        return None
+
+
+class _DummySMS(ISMSGateway):
+    async def check_readiness(self) -> None:
+        return None
+
+    async def send_sms(self, request):  # noqa: ANN001
         return None
 
 
@@ -838,7 +847,9 @@ class TestProviderRegistryResolution(unittest.TestCase):
     def test_azure_foundry_completion_provider_token_resolves(self) -> None:
         with patch(
             "mugen.core.di.provider_registry.importlib.import_module",
-            return_value=SimpleNamespace(AzureFoundryCompletionGateway=_DummyCompletion),
+            return_value=SimpleNamespace(
+                AzureFoundryCompletionGateway=_DummyCompletion
+            ),
         ):
             resolved = provider_registry.resolve_provider_class(
                 provider_name="completion_gateway",
@@ -965,3 +976,15 @@ class TestProviderRegistryResolution(unittest.TestCase):
                 interface=IKnowledgeGateway,
             )
         self.assertIs(resolved, _DummyKnowledge)
+
+    def test_twilio_sms_provider_token_resolves(self) -> None:
+        with patch(
+            "mugen.core.di.provider_registry.importlib.import_module",
+            return_value=SimpleNamespace(TwilioSMSGateway=_DummySMS),
+        ):
+            resolved = provider_registry.resolve_provider_class(
+                provider_name="sms_gateway",
+                token="twilio",
+                interface=ISMSGateway,
+            )
+        self.assertIs(resolved, _DummySMS)

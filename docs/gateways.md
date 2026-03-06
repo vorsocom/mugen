@@ -7,12 +7,12 @@ Audience: Core and downstream plugin teams
 ## Purpose
 
 This document explains gateway contracts and currently supported completion,
-knowledge, and email gateway implementations in muGen.
+knowledge, email, and SMS gateway implementations in muGen.
 
 Runtime configuration uses strict provider tokens (for example `bedrock`,
 `cerebras`, `groq`, `openai`, `azure_foundry`, `sambanova`, `vertex`,
 `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate`, `smtp`,
-`ses`), not
+`ses`, `twilio`), not
 Python module paths.
 
 ## Completion Gateway Contract
@@ -54,6 +54,21 @@ Request and response payloads are normalized by
   - Optional strings are normalized and defaults are materialized.
 - `EmailSendResult(message_id, accepted_recipients, rejected_recipients)`
 - `EmailGatewayError(provider, operation, message, cause)`
+
+## SMS Gateway Contract
+
+Outbound SMS gateways implement:
+
+- `ISMSGateway.send_sms(request)`
+
+Request and response payloads are normalized by
+`mugen/core/contract/gateway/sms.py`:
+
+- `SMSSendRequest(to, body, from_number)`
+  - `to` and `body` are required non-empty strings.
+  - `from_number` is optional and normalized when provided.
+- `SMSSendResult(message_id, recipient, provider_status)`
+- `SMSGatewayError(provider, operation, message, cause)`
 
 ## Knowledge Gateway Contract
 
@@ -677,8 +692,33 @@ Behavior:
   - static credentials are optional; when set, access key and secret key must
     be provided together
   - optional session token and endpoint URL are supported
-  - optional `configuration_set_name` is forwarded to SES.
+- optional `configuration_set_name` is forwarded to SES.
 - Transport/config/attachment failures raise `EmailGatewayError`.
+
+## SMS Provider Gateways
+
+### Twilio
+
+Module: `mugen.core.gateway.sms.twilio`
+
+Behavior:
+
+- Outbound-only sending (`send_sms`) via Twilio Programmable Messaging REST API.
+- Readiness probe calls `GET /2010-04-01/Accounts/{AccountSid}.json`.
+- Sends messages with `POST /2010-04-01/Accounts/{AccountSid}/Messages.json`
+  using form-encoded payloads.
+- Sender policy:
+  - request-level `from_number` overrides config.
+  - fallback is `[twilio].messaging.default_from`.
+  - fallback after that is `[twilio].messaging.messaging_service_sid`.
+  - configured `default_from` and `messaging_service_sid` are mutually
+    exclusive.
+- Twilio auth/config:
+  - `account_sid` is required.
+  - exactly one auth mode is allowed:
+    - `api.auth_token`, or
+    - `api.api_key_sid` + `api.api_key_secret`.
+- Transport/config/provider failures raise `SMSGatewayError`.
 
 ## Configuration Example
 
@@ -698,6 +738,8 @@ gateway.completion = "bedrock"
 # Optional outbound email gateway.
 # gateway.email = "smtp"
 # gateway.email = "ses"
+# Optional outbound SMS gateway.
+# gateway.sms = "twilio"
 
 [aws.bedrock]
 api.region = "us-east-1"
@@ -707,6 +749,16 @@ api.completion.model = "amazon.nova-lite-v1:0"
 api.completion.max_tokens = 1024
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+
+[twilio]
+api.account_sid = "<twilio-account-sid>"
+api.auth_token = "<twilio-auth-token>"
+api.api_key_sid = ""
+api.api_key_secret = ""
+api.base_url = "https://api.twilio.com"
+api.timeout_seconds = 10.0
+messaging.default_from = "+15550000001"
+messaging.messaging_service_sid = ""
 
 [cerebras]
 api.key = "<cerebras-api-key>"
