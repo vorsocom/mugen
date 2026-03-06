@@ -268,7 +268,13 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 messaging_handler_platforms=[["web"]],
                 mh_mode="required",
                 has_web_client_runtime_path=False,
-                registered_fw_extension_tokens=["core.fw.acp", "core.fw.web"],
+                has_whatsapp_client_runtime_path=True,
+                registered_fw_extension_tokens=[
+                    "core.fw.acp",
+                    "core.fw.web",
+                    "core.fw.whatsapp_wacapi",
+                ],
+                registered_ipc_extension_tokens=["core.ipc.whatsapp_wacapi"],
                 container_ready=True,
                 provider_ready=False,
             )
@@ -284,7 +290,13 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 messaging_handler_platforms=[],
                 mh_mode="optional",
                 has_web_client_runtime_path=True,
-                registered_fw_extension_tokens=["core.fw.acp", "core.fw.web"],
+                has_whatsapp_client_runtime_path=True,
+                registered_fw_extension_tokens=[
+                    "core.fw.acp",
+                    "core.fw.web",
+                    "core.fw.whatsapp_wacapi",
+                ],
+                registered_ipc_extension_tokens=["core.ipc.whatsapp_wacapi"],
                 container_ready=True,
                 provider_ready=True,
             )
@@ -325,6 +337,9 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
                 messaging_handler_platforms=[None, object(), ["whatsapp"]],
                 mh_mode="optional",
                 has_web_client_runtime_path=True,
+                has_whatsapp_client_runtime_path=True,
+                registered_fw_extension_tokens=["core.fw.whatsapp_wacapi"],
+                registered_ipc_extension_tokens=["core.ipc.whatsapp_wacapi"],
             )
         )
         self.assertTrue(mixed_scopes.healthy)
@@ -549,6 +564,48 @@ class TestDomainEntitiesAndUseCases(unittest.TestCase):
             )
         )
         self.assertTrue(healthy_wechat_contract.healthy)
+
+        missing_whatsapp_contract = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["whatsapp"],
+                messaging_handler_platforms=[["whatsapp"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                has_whatsapp_client_runtime_path=False,
+                registered_fw_extension_tokens=[],
+                registered_ipc_extension_tokens=[],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertFalse(missing_whatsapp_contract.healthy)
+        self.assertIn(
+            "whatsapp.client_runtime_path",
+            missing_whatsapp_contract.failed_capabilities,
+        )
+        self.assertIn(
+            "whatsapp.fw.extension_contract",
+            missing_whatsapp_contract.failed_capabilities,
+        )
+        self.assertIn(
+            "whatsapp.ipc.extension_contract",
+            missing_whatsapp_contract.failed_capabilities,
+        )
+
+        healthy_whatsapp_contract = evaluate_runtime_capabilities(
+            RuntimeCapabilityInput(
+                active_platforms=["whatsapp"],
+                messaging_handler_platforms=[["whatsapp"]],
+                mh_mode="required",
+                has_web_client_runtime_path=True,
+                has_whatsapp_client_runtime_path=True,
+                registered_fw_extension_tokens=["core.fw.whatsapp_wacapi"],
+                registered_ipc_extension_tokens=["core.ipc.whatsapp_wacapi"],
+                container_ready=True,
+                provider_ready=True,
+            )
+        )
+        self.assertTrue(healthy_whatsapp_contract.healthy)
 
         missing_signal_contract = evaluate_runtime_capabilities(
             RuntimeCapabilityInput(

@@ -136,6 +136,15 @@ token = "core.fw.web"
 # type = "ipc"
 # token = "core.ipc.wechat"
 
+# WhatsApp platform FW/IPC contract (required when `whatsapp` is active).
+# [[mugen.modules.core.extensions]]
+# type = "fw"
+# token = "core.fw.whatsapp_wacapi"
+#
+# [[mugen.modules.core.extensions]]
+# type = "ipc"
+# token = "core.ipc.whatsapp_wacapi"
+
 # Plugin and downstream extensions (opt-in).
 # [[mugen.modules.extensions]]
 # type = "ctx"
@@ -707,6 +716,10 @@ graphapi.timeout_seconds = 10.0
 graphapi.max_download_bytes = 20971520
 # Enables best-effort typing indicators for processing messages.
 graphapi.typing_indicator_enabled = true
+# Optional retry count for Graph API requests.
+graphapi.max_api_retries = 2
+# Optional retry backoff in seconds for Graph API requests.
+graphapi.retry_backoff_seconds = 0.5
 servers.allowed = ""
 servers.verify_ip = false
 # Trust `X-Forwarded-For` only when running behind trusted reverse proxies.
