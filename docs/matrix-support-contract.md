@@ -27,6 +27,7 @@ muGen core keeps Matrix support intentionally lean:
 - Domain allow/deny checks for incoming invites.
 - Optional beta-user gating.
 - Direct-message invite gating (`matrix.invites.direct_only`).
+- Invite acceptance is not gated by ingress-route bindings.
 - Room direct-flag check before processing inbound user messages.
 
 ### Runtime Configuration Contract (Matrix Enabled)
@@ -60,6 +61,17 @@ supported.
 
 ### Message Handling
 
+- Tenant-aware ingress routing for inbound room messages using
+  `IngressBindings` with:
+  - `channel_key = "matrix"`
+  - `identifier_type = "room_id"`
+  - `identifier_value = <Matrix room_id>`
+- Resolved bindings provide tenant-aware `ContextScope` and ingress metadata to
+  the messaging runtime.
+- Missing binding or missing room identifier falls back to the global tenant.
+- Inactive, ambiguous, invalid, unauthorized, and resolver-error outcomes fail
+  closed and drop inbound Matrix message processing before messaging handlers
+  run.
 - Text messages (`m.text`) routed into messaging service handlers.
 - Encrypted media handling for audio/file/image/video:
   - MIME allowlist enforcement,

@@ -9,11 +9,18 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 from nio import LocalProtocolError
 
 from mugen.core.client import matrix as matrix_mod
 from mugen.core.client.matrix import DefaultMatrixClient
+from mugen.core.constants import GLOBAL_TENANT_ID
+from mugen.core.contract.service.ingress_routing import (
+    IngressRouteReason,
+    IngressRouteResolution,
+    IngressRouteResult,
+)
 from mugen.core.contract.service.ipc import (
     IPCCommandRequest,
     IPCHandlerResult,
@@ -190,6 +197,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
         ipc_service = Mock()
         keyval_storage_gateway = Mock()
+        relational_storage_gateway = Mock()
         logging_gateway = Mock()
         messaging_service = Mock()
         user_service = Mock()
@@ -212,6 +220,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 config=config,
                 ipc_service=ipc_service,
                 keyval_storage_gateway=keyval_storage_gateway,
+                relational_storage_gateway=relational_storage_gateway,
                 logging_gateway=logging_gateway,
                 messaging_service=messaging_service,
                 user_service=user_service,
@@ -235,6 +244,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )  # pylint: disable=protected-access
         self.assertIs(  # pylint: disable=protected-access
             client._keyval_storage_gateway, keyval_storage_gateway
+        )
+        self.assertIs(  # pylint: disable=protected-access
+            client._relational_storage_gateway, relational_storage_gateway
         )
         self.assertIs(  # pylint: disable=protected-access
             client._logging_gateway, logging_gateway
@@ -330,6 +342,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 config=config,
                 ipc_service=Mock(),
                 keyval_storage_gateway=Mock(),
+                relational_storage_gateway=Mock(),
                 logging_gateway=Mock(),
                 messaging_service=Mock(),
                 user_service=Mock(),
@@ -377,6 +390,15 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
         client._logging_gateway = Mock()
         client._keyval_storage_gateway = Mock()
+        client._relational_storage_gateway = Mock()
+        client._ingress_routing_service = SimpleNamespace(
+            resolve=AsyncMock(
+                return_value=IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                )
+            )
+        )
         client._vendor_client = SimpleNamespace(
             synced=asyncio.Event(),
             sync_forever=AsyncMock(),
@@ -481,8 +503,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             displayname="Assistant",
             avatar_url="mxc://example/avatar",
         )
-        client._vendor_client.get_profile = AsyncMock(return_value=response)  # pylint: disable=protected-access
-        profile = await DefaultMatrixClient.get_profile(client, user_id="@u:example.com")
+        client._vendor_client.get_profile = AsyncMock(
+            return_value=response
+        )  # pylint: disable=protected-access
+        profile = await DefaultMatrixClient.get_profile(
+            client, user_id="@u:example.com"
+        )
 
         client._vendor_client.get_profile.assert_awaited_once_with(  # pylint: disable=protected-access
             user_id="@u:example.com"
@@ -497,7 +523,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     async def test_set_displayname_delegates_to_asyncclient(self) -> None:
         client = self._client()
-        client._vendor_client.set_displayname = AsyncMock(return_value=object())  # pylint: disable=protected-access
+        client._vendor_client.set_displayname = AsyncMock(
+            return_value=object()
+        )  # pylint: disable=protected-access
         await DefaultMatrixClient.set_displayname(client, "New Name")
 
         client._vendor_client.set_displayname.assert_awaited_once_with(  # pylint: disable=protected-access
@@ -506,7 +534,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_forever_delegates_to_vendor_client(self) -> None:
         client = self._client()
-        client._vendor_client.sync_forever = AsyncMock(return_value=None)  # pylint: disable=protected-access
+        client._vendor_client.sync_forever = AsyncMock(
+            return_value=None
+        )  # pylint: disable=protected-access
 
         await DefaultMatrixClient.sync_forever(
             client,
@@ -523,7 +553,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             set_presence="offline",
         )
 
-    async def test_callback_registration_wrappers_delegate_to_vendor_client(self) -> None:
+    async def test_callback_registration_wrappers_delegate_to_vendor_client(
+        self,
+    ) -> None:
         client = self._client()
         callback = Mock()
         event_type = object()
@@ -543,7 +575,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             callback, response_type
         )
 
-    async def test_vendor_property_and_method_wrappers_delegate_explicitly(self) -> None:
+    async def test_vendor_property_and_method_wrappers_delegate_explicitly(
+        self,
+    ) -> None:
         client = self._client()
         client._vendor_client = SimpleNamespace(  # pylint: disable=protected-access
             access_token="tok-1",
@@ -579,7 +613,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.olm = SimpleNamespace(account=SimpleNamespace(identity_keys={}))
         self.assertIsNotNone(client.olm)
         DefaultMatrixClient.verify_device(client, "dev")
-        client._vendor_client.verify_device.assert_called_once_with("dev")  # pylint: disable=protected-access
+        client._vendor_client.verify_device.assert_called_once_with(
+            "dev"
+        )  # pylint: disable=protected-access
 
         self.assertEqual(
             await DefaultMatrixClient.login(client, "pw", "device"),
@@ -587,7 +623,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
         DefaultMatrixClient.load_store(client)
         client._vendor_client.load_store.assert_called_once_with()  # pylint: disable=protected-access
-        self.assertEqual(await DefaultMatrixClient.join(client, "!room:test"), {"joined": True})
+        self.assertEqual(
+            await DefaultMatrixClient.join(client, "!room:test"), {"joined": True}
+        )
         self.assertEqual(
             await DefaultMatrixClient.list_direct_rooms(client),
             {"rooms": {}},
@@ -631,13 +669,17 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             ),
             {"markers": True},
         )
-        self.assertEqual(await DefaultMatrixClient.upload(client, b"bin"), {"uploaded": True})
+        self.assertEqual(
+            await DefaultMatrixClient.upload(client, b"bin"), {"uploaded": True}
+        )
         self.assertEqual(
             await DefaultMatrixClient.download(client, "mxc://example/file"),
             {"downloaded": True},
         )
         self.assertEqual(
-            await DefaultMatrixClient._send(client, "GET", "/path"),  # pylint: disable=protected-access
+            await DefaultMatrixClient._send(
+                client, "GET", "/path"
+            ),  # pylint: disable=protected-access
             {"raw": True},
         )
 
@@ -646,34 +688,45 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     async def test_matrix_admin_helpers_normalize_vendor_payloads(self) -> None:
         client = self._client()
-        client._vendor_client.joined_rooms = AsyncMock(  # pylint: disable=protected-access
-            side_effect=[
-                SimpleNamespace(rooms=["!a:test", "", None, 1]),
-                SimpleNamespace(rooms=None),
-            ]
+        client._vendor_client.joined_rooms = (
+            AsyncMock(  # pylint: disable=protected-access
+                side_effect=[
+                    SimpleNamespace(rooms=["!a:test", "", None, 1]),
+                    SimpleNamespace(rooms=None),
+                ]
+            )
         )
-        client._vendor_client.joined_members = AsyncMock(  # pylint: disable=protected-access
-            side_effect=[
-                SimpleNamespace(
-                    members=[
-                        SimpleNamespace(user_id="@u1:test"),
-                        SimpleNamespace(user_id=""),
-                        SimpleNamespace(),
-                    ]
-                ),
-                SimpleNamespace(members=None),
-            ]
+        client._vendor_client.joined_members = (
+            AsyncMock(  # pylint: disable=protected-access
+                side_effect=[
+                    SimpleNamespace(
+                        members=[
+                            SimpleNamespace(user_id="@u1:test"),
+                            SimpleNamespace(user_id=""),
+                            SimpleNamespace(),
+                        ]
+                    ),
+                    SimpleNamespace(members=None),
+                ]
+            )
         )
-        client._vendor_client.room_get_state = AsyncMock(  # pylint: disable=protected-access
-            side_effect=[
-                SimpleNamespace(
-                    events=[
-                        {"type": "m.room.create", "content": {"creator": "@u:test"}},
-                        SimpleNamespace(type="m.room.name", content={"name": "Demo"}),
-                    ]
-                ),
-                SimpleNamespace(events=None),
-            ]
+        client._vendor_client.room_get_state = (
+            AsyncMock(  # pylint: disable=protected-access
+                side_effect=[
+                    SimpleNamespace(
+                        events=[
+                            {
+                                "type": "m.room.create",
+                                "content": {"creator": "@u:test"},
+                            },
+                            SimpleNamespace(
+                                type="m.room.name", content={"name": "Demo"}
+                            ),
+                        ]
+                    ),
+                    SimpleNamespace(events=None),
+                ]
+            )
         )
         client.room_get_state = AsyncMock(
             side_effect=[
@@ -714,9 +767,13 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await client.direct_room_ids(), {"!a:test", "!b:test"})
         self.assertEqual(await client.direct_room_ids(), set())
 
-        client.olm = SimpleNamespace(account=SimpleNamespace(identity_keys={"ed25519": "k1"}))
+        client.olm = SimpleNamespace(
+            account=SimpleNamespace(identity_keys={"ed25519": "k1"})
+        )
         self.assertEqual(client.device_ed25519_key(), "k1")
-        client.olm = SimpleNamespace(account=SimpleNamespace(identity_keys={"ed25519": ""}))
+        client.olm = SimpleNamespace(
+            account=SimpleNamespace(identity_keys={"ed25519": ""})
+        )
         self.assertEqual(client.device_ed25519_key(), "")
         client.olm = SimpleNamespace(account=SimpleNamespace(identity_keys=None))
         self.assertEqual(client.device_ed25519_key(), "")
@@ -725,7 +782,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client = self._client()
         client._vendor_client = SimpleNamespace()  # pylint: disable=protected-access
         with self.assertRaisesRegex(RuntimeError, "does not expose _send"):
-            await DefaultMatrixClient._send(client, "GET", "/path")  # pylint: disable=protected-access
+            await DefaultMatrixClient._send(
+                client, "GET", "/path"
+            )  # pylint: disable=protected-access
 
     def test_device_store_property_uses_vendor_store_on_base_client(self) -> None:
         client = object.__new__(DefaultMatrixClient)
@@ -736,7 +795,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         DefaultMatrixClient.device_store.fset(client, {"@u:test": {"DEV": object()}})
         self.assertIn("@u:test", DefaultMatrixClient.device_store.fget(client))
 
-    async def test_build_matrix_event_hook_payload_serializes_and_sanitizes(self) -> None:
+    async def test_build_matrix_event_hook_payload_serializes_and_sanitizes(
+        self,
+    ) -> None:
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
         event = SimpleNamespace(
@@ -748,11 +809,13 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             origin_server_ts="bad",
         )
 
-        payload = client._build_matrix_event_hook_payload(  # pylint: disable=protected-access
-            callback_name="_cb_tag_event",
-            event=event,
-            room=room,
-            reason="unit-test",
+        payload = (
+            client._build_matrix_event_hook_payload(  # pylint: disable=protected-access
+                callback_name="_cb_tag_event",
+                event=event,
+                room=room,
+                reason="unit-test",
+            )
         )
 
         self.assertEqual(payload["callback"], "_cb_tag_event")
@@ -769,7 +832,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client = self._client()
         with patch("mugen.core.client.matrix.json.loads", return_value=[]):
             self.assertIsNone(
-                client._normalize_event_dict({"safe": "value"})  # pylint: disable=protected-access
+                client._normalize_event_dict(
+                    {"safe": "value"}
+                )  # pylint: disable=protected-access
             )
 
     async def test_coerce_optional_int_accepts_valid_values(self) -> None:
@@ -807,6 +872,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 config=config,
                 ipc_service=Mock(),
                 keyval_storage_gateway=Mock(),
+                relational_storage_gateway=Mock(),
                 logging_gateway=Mock(),
                 messaging_service=Mock(),
                 user_service=Mock(),
@@ -822,23 +888,33 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._config.security = SimpleNamespace(
             secrets=SimpleNamespace(encryption_key="0123456789abcdef0123456789abcdef")
         )
-        client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
+        client._secret_cipher = (
+            client._build_secret_cipher()
+        )  # pylint: disable=protected-access
 
         encoded = client._encode_secret_value(  # pylint: disable=protected-access
             "access-token",
             field_name="token",
         )
-        self.assertTrue(encoded.startswith(client._encrypted_secret_prefix))  # pylint: disable=protected-access
+        self.assertTrue(
+            encoded.startswith(client._encrypted_secret_prefix)
+        )  # pylint: disable=protected-access
         self.assertEqual(
-            client._decode_secret_value(encoded, field_name="token"),  # pylint: disable=protected-access
+            client._decode_secret_value(
+                encoded, field_name="token"
+            ),  # pylint: disable=protected-access
             "access-token",
         )
 
         with self.assertRaises(RuntimeError):
-            client._encode_secret_value(1, field_name="token")  # pylint: disable=protected-access
+            client._encode_secret_value(
+                1, field_name="token"
+            )  # pylint: disable=protected-access
 
         self.assertIsNone(
-            client._decode_secret_value(1, field_name="token")  # pylint: disable=protected-access
+            client._decode_secret_value(
+                1, field_name="token"
+            )  # pylint: disable=protected-access
         )
 
         with self.assertRaisesRegex(RuntimeError, "must be encrypted"):
@@ -871,7 +947,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._config.security = SimpleNamespace(
             secrets=SimpleNamespace(encryption_key="0123456789abcdef0123456789abcdef")
         )
-        client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
+        client._secret_cipher = (
+            client._build_secret_cipher()
+        )  # pylint: disable=protected-access
         with self.assertRaises(RuntimeError):
             client._decode_secret_value(  # pylint: disable=protected-access
                 encrypted_value,
@@ -926,7 +1004,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(client._matrix_ipc_queue)
         self.assertIsNone(client._matrix_ipc_worker_task)
 
-    async def test_stop_matrix_ipc_worker_handles_wait_for_cancelled_error(self) -> None:
+    async def test_stop_matrix_ipc_worker_handles_wait_for_cancelled_error(
+        self,
+    ) -> None:
         client = self._client()
         client._matrix_ipc_queue = asyncio.Queue()
 
@@ -966,7 +1046,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 "mugen.core.client.matrix.asyncio.wait_for",
                 side_effect=_raise_timeout,
             ),
-            self.assertRaisesRegex(RuntimeError, "Matrix IPC worker shutdown timed out"),
+            self.assertRaisesRegex(
+                RuntimeError, "Matrix IPC worker shutdown timed out"
+            ),
         ):
             await client._stop_matrix_ipc_worker()  # pylint: disable=protected-access
 
@@ -984,14 +1066,20 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         payload = IPCCommandRequest(platform="matrix", command="matrix_event", data={})
 
         client._ipc_service = None
-        await client._dispatch_matrix_ipc_request(payload)  # pylint: disable=protected-access
+        await client._dispatch_matrix_ipc_request(
+            payload
+        )  # pylint: disable=protected-access
 
         client._ipc_service = SimpleNamespace(handle_ipc_request=None)
-        await client._dispatch_matrix_ipc_request(payload)  # pylint: disable=protected-access
+        await client._dispatch_matrix_ipc_request(
+            payload
+        )  # pylint: disable=protected-access
 
         non_awaitable_handler = Mock(return_value=None)
         client._ipc_service = SimpleNamespace(handle_ipc_request=non_awaitable_handler)
-        await client._dispatch_matrix_ipc_request(payload)  # pylint: disable=protected-access
+        await client._dispatch_matrix_ipc_request(
+            payload
+        )  # pylint: disable=protected-access
         non_awaitable_handler.assert_called_once_with(payload)
 
     async def test_dispatch_matrix_ipc_request_logs_non_critical_errors(self) -> None:
@@ -1021,13 +1109,19 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        await client._dispatch_matrix_ipc_request(payload)  # pylint: disable=protected-access
+        await client._dispatch_matrix_ipc_request(
+            payload
+        )  # pylint: disable=protected-access
         self.assertEqual(
-            client._matrix_metrics["matrix.ipc.dispatch.non_critical_failure"],  # pylint: disable=protected-access
+            client._matrix_metrics[
+                "matrix.ipc.dispatch.non_critical_failure"
+            ],  # pylint: disable=protected-access
             1,
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.ipc.dispatch.non_critical_failure.handler_error"],  # pylint: disable=protected-access
+            client._matrix_metrics[
+                "matrix.ipc.dispatch.non_critical_failure.handler_error"
+            ],  # pylint: disable=protected-access
             1,
         )
         self.assertTrue(client._logging_gateway.warning.called)
@@ -1072,9 +1166,15 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             error="second",
         )
 
-        client._signal_runtime_health_failure(first_error)  # pylint: disable=protected-access
-        client._signal_runtime_health_failure(second_error)  # pylint: disable=protected-access
-        self.assertIs(client._matrix_runtime_health_error, first_error)  # pylint: disable=protected-access
+        client._signal_runtime_health_failure(
+            first_error
+        )  # pylint: disable=protected-access
+        client._signal_runtime_health_failure(
+            second_error
+        )  # pylint: disable=protected-access
+        self.assertIs(
+            client._matrix_runtime_health_error, first_error
+        )  # pylint: disable=protected-access
 
     async def test_matrix_ipc_worker_loop_handles_empty_queue_and_errors(self) -> None:
         client = self._client()
@@ -1141,9 +1241,13 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         ):
             await client._matrix_ipc_worker_loop()  # pylint: disable=protected-access
 
-        self.assertTrue(client._matrix_ipc_worker_stop.is_set())  # pylint: disable=protected-access
+        self.assertTrue(
+            client._matrix_ipc_worker_stop.is_set()
+        )  # pylint: disable=protected-access
         self.assertEqual(
-            client._matrix_metrics["matrix.ipc.dispatch.critical_failure"],  # pylint: disable=protected-access
+            client._matrix_metrics[
+                "matrix.ipc.dispatch.critical_failure"
+            ],  # pylint: disable=protected-access
             1,
         )
 
@@ -1154,14 +1258,18 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._matrix_ipc_queue.put_nowait(
             IPCCommandRequest(platform="matrix", command="matrix_event", data={})
         )
-        client._dispatch_matrix_ipc_request = AsyncMock()  # pylint: disable=protected-access
+        client._dispatch_matrix_ipc_request = (
+            AsyncMock()
+        )  # pylint: disable=protected-access
 
         await client._dispatch_matrix_event_hook(  # pylint: disable=protected-access
             callback_name="_cb_tag_event",
             event=SimpleNamespace(),
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.ipc.dispatch.queue_full_drop_new"],  # pylint: disable=protected-access
+            client._matrix_metrics[
+                "matrix.ipc.dispatch.queue_full_drop_new"
+            ],  # pylint: disable=protected-access
             1,
         )
         client._dispatch_matrix_ipc_request.assert_not_awaited()  # pylint: disable=protected-access
@@ -1171,14 +1279,18 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client = self._client()
         client._start_matrix_ipc_worker = Mock()
         client._matrix_ipc_queue = None
-        client._dispatch_matrix_ipc_request = AsyncMock()  # pylint: disable=protected-access
+        client._dispatch_matrix_ipc_request = (
+            AsyncMock()
+        )  # pylint: disable=protected-access
         await client._dispatch_matrix_event_hook(  # pylint: disable=protected-access
             callback_name="_cb_tag_event",
             event=SimpleNamespace(),
         )
 
         self.assertEqual(
-            client._matrix_metrics["matrix.ipc.dispatch.queue_unavailable_drop_new"],  # pylint: disable=protected-access
+            client._matrix_metrics[
+                "matrix.ipc.dispatch.queue_unavailable_drop_new"
+            ],  # pylint: disable=protected-access
             1,
         )
         client._dispatch_matrix_ipc_request.assert_not_awaited()  # pylint: disable=protected-access
@@ -1189,7 +1301,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._config.security = SimpleNamespace(
             secrets=SimpleNamespace(encryption_key="0123456789abcdef0123456789abcdef")
         )
-        client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
+        client._secret_cipher = (
+            client._build_secret_cipher()
+        )  # pylint: disable=protected-access
 
         values = {
             client._client_access_token_key: client._encode_secret_value(  # pylint: disable=protected-access
@@ -1222,7 +1336,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._config.security = SimpleNamespace(
             secrets=SimpleNamespace(encryption_key="0123456789abcdef0123456789abcdef")
         )
-        client._secret_cipher = client._build_secret_cipher()  # pylint: disable=protected-access
+        client._secret_cipher = (
+            client._build_secret_cipher()
+        )  # pylint: disable=protected-access
         client._keyval_storage_gateway.get_text = AsyncMock(return_value=None)
         client.login = AsyncMock(
             return_value=_FakeLoginResponse("access", "device-1", "@user:example.com")
@@ -1263,13 +1379,17 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     async def test_aenter_failure_triggers_close_cleanup(self) -> None:
         client = self._client()
-        client._keyval_storage_gateway.get_text = AsyncMock(return_value="plaintext-token")
+        client._keyval_storage_gateway.get_text = AsyncMock(
+            return_value="plaintext-token"
+        )
 
         with self.assertRaisesRegex(RuntimeError, "must be encrypted"):
             await client.__aenter__()
 
         client.client_session.close.assert_awaited_once_with()
-        self.assertIsNone(client._matrix_ipc_worker_task)  # pylint: disable=protected-access
+        self.assertIsNone(
+            client._matrix_ipc_worker_task
+        )  # pylint: disable=protected-access
 
     async def test_aexit_closes_client_session_and_handles_missing_session(
         self,
@@ -1329,7 +1449,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 "mugen.core.client.matrix.asyncio.wait_for",
                 side_effect=_raise_timeout,
             ),
-            self.assertRaisesRegex(RuntimeError, "Matrix client session close timed out"),
+            self.assertRaisesRegex(
+                RuntimeError, "Matrix client session close timed out"
+            ),
         ):
             await client.close()
 
@@ -1342,16 +1464,16 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
     def test_resolve_shutdown_timeout_seconds_rejects_invalid_values(self) -> None:
         client = self._client()
-        client._config.mugen.runtime = _runtime_settings(
-            shutdown_timeout_seconds="bad"
-        )
+        client._config.mugen.runtime = _runtime_settings(shutdown_timeout_seconds="bad")
         with self.assertRaisesRegex(RuntimeError, "shutdown_timeout_seconds"):
             client._resolve_shutdown_timeout_seconds()  # pylint: disable=protected-access
         client._config.mugen.runtime = _runtime_settings(shutdown_timeout_seconds=0)
         with self.assertRaisesRegex(RuntimeError, "shutdown_timeout_seconds"):
             client._resolve_shutdown_timeout_seconds()  # pylint: disable=protected-access
 
-    def test_effective_shutdown_timeout_seconds_refreshes_non_positive_cache(self) -> None:
+    def test_effective_shutdown_timeout_seconds_refreshes_non_positive_cache(
+        self,
+    ) -> None:
         client = self._client()
         client._shutdown_timeout_seconds = 0  # pylint: disable=protected-access
         client._config.mugen.runtime = _runtime_settings(shutdown_timeout_seconds=12.5)
@@ -1359,9 +1481,13 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._effective_shutdown_timeout_seconds(),  # pylint: disable=protected-access
             12.5,
         )
-        self.assertEqual(client._shutdown_timeout_seconds, 12.5)  # pylint: disable=protected-access
+        self.assertEqual(
+            client._shutdown_timeout_seconds, 12.5
+        )  # pylint: disable=protected-access
 
-    def test_effective_shutdown_timeout_seconds_keeps_positive_cached_value(self) -> None:
+    def test_effective_shutdown_timeout_seconds_keeps_positive_cached_value(
+        self,
+    ) -> None:
         client = self._client()
         client._shutdown_timeout_seconds = 7.0  # pylint: disable=protected-access
         with patch.object(
@@ -1471,7 +1597,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         known = {"@user:example.com": ["DEV-1", "DEV-2"]}
         client.verify_device.reset_mock()
         client._keyval_storage_gateway.put_json.reset_mock()
-        client._keyval_storage_gateway.get_text = AsyncMock(return_value=json.dumps(known))
+        client._keyval_storage_gateway.get_text = AsyncMock(
+            return_value=json.dumps(known)
+        )
 
         await client.verify_user_devices("@user:example.com")
 
@@ -1684,16 +1812,20 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._logging_gateway.warning.call_args.args[0],
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.messages.ignored.self_message"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.messages.ignored.self_message"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.messages.ignored.room_not_direct"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.messages.ignored.room_not_direct"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.messages.accepted.validated"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.messages.accepted.validated"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.messages.rejected.malformed_sender"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.messages.rejected.malformed_sender"],
+            1,  # pylint: disable=protected-access
         )
 
     async def test_is_direct_message_handles_direct_rooms_without_legacy_fallback(
@@ -1701,7 +1833,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         client = self._client()
 
-        client.list_direct_rooms = AsyncMock(return_value=SimpleNamespace(rooms="invalid"))
+        client.list_direct_rooms = AsyncMock(
+            return_value=SimpleNamespace(rooms="invalid")
+        )
         self.assertFalse(await client._is_direct_message("!room:test"))
 
         client.list_direct_rooms = AsyncMock(
@@ -1760,7 +1894,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
 
         client._logging_gateway.debug.reset_mock()
-        client.list_direct_rooms = AsyncMock(return_value=matrix_mod.DirectRoomsResponse({}))
+        client.list_direct_rooms = AsyncMock(
+            return_value=matrix_mod.DirectRoomsResponse({})
+        )
         self.assertEqual(
             await client._load_direct_rooms(),  # pylint: disable=protected-access
             {},
@@ -1788,7 +1924,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._logging_gateway.warning.call_args.args[0],
         )
 
-    async def test_persist_direct_rooms_handles_success_failure_and_exception(self) -> None:
+    async def test_persist_direct_rooms_handles_success_failure_and_exception(
+        self,
+    ) -> None:
         client = self._client()
 
         with patch.object(matrix_mod.Api, "_build_path", return_value="/m.direct"):
@@ -1842,7 +1980,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._persist_direct_rooms.assert_awaited_once_with(  # pylint: disable=protected-access
             {"@u:example.com": ["!old:test", "!room:test"]}
         )
-        self.assertIn("!room:test", client._direct_room_ids)  # pylint: disable=protected-access
+        self.assertIn(
+            "!room:test", client._direct_room_ids
+        )  # pylint: disable=protected-access
 
         client._persist_direct_rooms.reset_mock()  # pylint: disable=protected-access
         await client._mark_room_as_direct(  # pylint: disable=protected-access
@@ -1858,7 +1998,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._direct_room_ids,
         )
 
-        client._load_direct_rooms = AsyncMock(return_value={})  # pylint: disable=protected-access
+        client._load_direct_rooms = AsyncMock(
+            return_value={}
+        )  # pylint: disable=protected-access
         client._persist_direct_rooms = AsyncMock(  # pylint: disable=protected-access
             return_value=False
         )
@@ -1871,12 +2013,16 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._logging_gateway.warning.call_args.args[0],
         )
 
-        direct_room_ids_before = set(client._direct_room_ids)  # pylint: disable=protected-access
+        direct_room_ids_before = set(
+            client._direct_room_ids
+        )  # pylint: disable=protected-access
         await client._mark_room_as_direct(  # pylint: disable=protected-access
             "@u:example.com",
             " ",
         )
-        self.assertEqual(client._direct_room_ids, direct_room_ids_before)  # pylint: disable=protected-access
+        self.assertEqual(
+            client._direct_room_ids, direct_room_ids_before
+        )  # pylint: disable=protected-access
 
     async def test_cb_invite_member_event_reject_and_accept_paths(self) -> None:
         client = self._client()
@@ -1932,19 +2078,24 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             "!room:test",
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.invites.ignored.membership_not_invite"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.invites.ignored.membership_not_invite"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.invites.rejected.domain_not_allowed"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.invites.rejected.domain_not_allowed"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.invites.rejected.non_beta_user"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.invites.rejected.non_beta_user"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.invites.rejected.not_direct_message"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.invites.rejected.not_direct_message"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.invites.accepted.joined"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.invites.accepted.joined"],
+            1,  # pylint: disable=protected-access
         )
 
     async def test_cb_invite_member_event_rejects_malformed_sender(self) -> None:
@@ -1963,14 +2114,18 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._logging_gateway.warning.call_args.args[0],
         )
 
-    async def test_cb_invite_member_event_accepts_non_direct_when_configured(self) -> None:
+    async def test_cb_invite_member_event_accepts_non_direct_when_configured(
+        self,
+    ) -> None:
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
         client._config.matrix.invites.direct_only = False
         client.verify_user_devices = AsyncMock()
         client._mark_room_as_direct = AsyncMock()
         client.get_profile = AsyncMock(return_value=_FakeProfileGetResponse("User"))
-        event = SimpleNamespace(content={"membership": "invite"}, sender="@u:example.com")
+        event = SimpleNamespace(
+            content={"membership": "invite"}, sender="@u:example.com"
+        )
 
         await client._cb_invite_member_event(room, event)
 
@@ -1983,18 +2138,24 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
     async def test_parse_sender_domain(self) -> None:
         client = self._client()
         self.assertEqual(
-            client._parse_sender_domain("@user:example.com"),  # pylint: disable=protected-access
+            client._parse_sender_domain(
+                "@user:example.com"
+            ),  # pylint: disable=protected-access
             "example.com",
         )
         self.assertEqual(
-            client._parse_sender_domain("@user:example.com:8448"),  # pylint: disable=protected-access
+            client._parse_sender_domain(
+                "@user:example.com:8448"
+            ),  # pylint: disable=protected-access
             "example.com:8448",
         )
         self.assertIsNone(
             client._parse_sender_domain("@user"),  # pylint: disable=protected-access
         )
         self.assertIsNone(
-            client._parse_sender_domain("user:example.com"),  # pylint: disable=protected-access
+            client._parse_sender_domain(
+                "user:example.com"
+            ),  # pylint: disable=protected-access
         )
         self.assertIsNone(
             client._parse_sender_domain(123),  # pylint: disable=protected-access
@@ -2066,7 +2227,8 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(
-            client._matrix_metrics["matrix.messages.ignored.room_not_direct"], 2  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.messages.ignored.room_not_direct"],
+            2,  # pylint: disable=protected-access
         )
         log_message = client._logging_gateway.debug.call_args.args[0]
         self.assertIn("Matrix decision domain=messages action=ignored", log_message)
@@ -2086,11 +2248,17 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 (room, SimpleNamespace(content={"alias": "#room:example.com"})),
             ),
             ("_cb_invite_name_event", (room, SimpleNamespace(content={"name": "x"}))),
-            ("_cb_room_create_event", (room, SimpleNamespace(content={"creator": "x"}))),
+            (
+                "_cb_room_create_event",
+                (room, SimpleNamespace(content={"creator": "x"})),
+            ),
             ("_cb_key_verification_event", (SimpleNamespace(sender="@u:example.com"),)),
             ("_cb_room_key_event", (SimpleNamespace(source={"content": {"a": 1}}),)),
             ("_cb_room_key_request", (SimpleNamespace(sender="@u:example.com"),)),
-            ("_cb_room_member_event", (room, SimpleNamespace(content={"membership": "leave"}))),
+            (
+                "_cb_room_member_event",
+                (room, SimpleNamespace(content={"membership": "leave"})),
+            ),
             ("_cb_tag_event", (SimpleNamespace(content={"tags": {}}),)),
         ]
 
@@ -2136,7 +2304,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
         non_awaitable_handler.assert_not_called()
         self.assertEqual(
-            client._matrix_metrics["matrix.ipc.dispatch.queue_unavailable_drop_new"],  # pylint: disable=protected-access
+            client._matrix_metrics[
+                "matrix.ipc.dispatch.queue_unavailable_drop_new"
+            ],  # pylint: disable=protected-access
             1,
         )
 
@@ -2187,12 +2357,72 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(extension.events[0]["room_id"], "!room:test")
 
+    async def test_ingress_router_builds_default_service(self) -> None:
+        client = self._client()
+        client._ingress_routing_service = None
+
+        router = client._ingress_router()  # pylint: disable=protected-access
+
+        self.assertIsInstance(router, matrix_mod.DefaultIngressRoutingService)
+        self.assertIs(
+            client._ingress_routing_service, router
+        )  # pylint: disable=protected-access
+
+    async def test_resolve_message_ingress_handles_router_exception(self) -> None:
+        client = self._client()
+        client._ingress_routing_service = None
+        client._relational_storage_gateway = None
+
+        resolved = (
+            await client._resolve_message_ingress(  # pylint: disable=protected-access
+                room=SimpleNamespace(room_id="!room:test"),
+                message=_FakeTextMessage(body="hello"),
+            )
+        )
+
+        self.assertIsNone(resolved)
+        self.assertEqual(
+            client._matrix_metrics[
+                "matrix.routing.dropped.resolution_error"
+            ],  # pylint: disable=protected-access
+            1,
+        )
+        warning_messages = [
+            call.args[0] for call in client._logging_gateway.warning.call_args_list
+        ]
+        self.assertTrue(
+            any(
+                "reason_code=resolution_error" in message
+                for message in warning_messages
+            )
+        )
+
     async def test_cb_room_message_dispatches_text_and_media_handlers(self) -> None:
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
         client._validate_message = AsyncMock(return_value=True)
         client._download_file = AsyncMock(return_value="/tmp/file")
         client._process_message_responses = AsyncMock(return_value=None)
+        tenant_id = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        client._ingress_routing_service = SimpleNamespace(
+            resolve=AsyncMock(
+                return_value=IngressRouteResolution(
+                    ok=True,
+                    result=IngressRouteResult(
+                        tenant_id=tenant_id,
+                        tenant_slug="tenant-a",
+                        platform="matrix",
+                        channel_key="matrix",
+                        identifier_claims={
+                            "room_id": room.room_id,
+                            "sender_mxid": "@user:example.com",
+                        },
+                        route_key="queue.matrix",
+                        binding_id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+                    ),
+                )
+            )
+        )
         client._messaging_service.handle_audio_message = AsyncMock(
             return_value=[{"type": "text", "content": "audio"}]
         )
@@ -2220,6 +2450,18 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._messaging_service.handle_image_message.assert_awaited()
         client._messaging_service.handle_text_message.assert_awaited()
         client._messaging_service.handle_video_message.assert_awaited()
+        audio_kwargs = client._messaging_service.handle_audio_message.await_args.kwargs
+        self.assertEqual(audio_kwargs["scope"].tenant_id, str(tenant_id))
+        self.assertEqual(
+            audio_kwargs["ingress_metadata"]["ingress_route"]["route_key"],
+            "queue.matrix",
+        )
+        text_kwargs = client._messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(text_kwargs["scope"].conversation_id, room.room_id)
+        self.assertEqual(
+            text_kwargs["ingress_metadata"]["tenant_resolution"]["mode"],
+            "resolved",
+        )
         self.assertEqual(client._process_message_responses.await_count, 5)
         self.assertEqual(client.room_typing.await_count, 10)
 
@@ -2234,6 +2476,100 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         client._process_message_responses.assert_not_called()
         client.room_typing.assert_not_awaited()
+
+    async def test_cb_room_message_falls_back_to_global_when_binding_missing(
+        self,
+    ) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        client._validate_message = AsyncMock(return_value=True)
+        client._process_message_responses = AsyncMock(return_value=None)
+        client._messaging_service.handle_text_message = AsyncMock(return_value=[])
+        client._ingress_routing_service = SimpleNamespace(
+            resolve=AsyncMock(
+                return_value=IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                )
+            )
+        )
+
+        with patch.object(matrix_mod, "RoomMessageText", _FakeTextMessage):
+            await client._cb_room_message(room, _FakeTextMessage(body="hello"))
+
+        kwargs = client._messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["scope"].tenant_id, str(GLOBAL_TENANT_ID))
+        self.assertEqual(
+            kwargs["ingress_metadata"]["tenant_resolution"]["mode"],
+            "fallback_global",
+        )
+        self.assertEqual(
+            kwargs["ingress_metadata"]["tenant_resolution"]["reason_code"],
+            IngressRouteReason.MISSING_BINDING.value,
+        )
+        self.assertEqual(
+            client._matrix_metrics[
+                "matrix.routing.fallback_global.missing_binding"
+            ],  # pylint: disable=protected-access
+            1,
+        )
+
+    async def test_cb_room_message_drops_on_fail_closed_route_reason(self) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        client._validate_message = AsyncMock(return_value=True)
+        client._process_message_responses = AsyncMock(return_value=None)
+        client._messaging_service.handle_text_message = AsyncMock(return_value=[])
+        client._ingress_routing_service = SimpleNamespace(
+            resolve=AsyncMock(
+                return_value=IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.AMBIGUOUS_BINDING.value,
+                    reason_detail="duplicate bindings",
+                )
+            )
+        )
+
+        with patch.object(matrix_mod, "RoomMessageText", _FakeTextMessage):
+            await client._cb_room_message(room, _FakeTextMessage(body="hello"))
+
+        client._messaging_service.handle_text_message.assert_not_awaited()
+        client._process_message_responses.assert_not_awaited()
+        client.room_typing.assert_not_awaited()
+        self.assertEqual(
+            client._matrix_metrics[
+                "matrix.routing.dropped.ambiguous_binding"
+            ],  # pylint: disable=protected-access
+            1,
+        )
+        warning_messages = [
+            call.args[0] for call in client._logging_gateway.warning.call_args_list
+        ]
+        self.assertTrue(
+            any(
+                "Dropped Matrix ingress due to unresolved route" in message
+                for message in warning_messages
+            )
+        )
+
+    async def test_cb_room_message_blank_room_id_falls_back_to_global(self) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id=" ")
+        client._validate_message = AsyncMock(return_value=True)
+        client._process_message_responses = AsyncMock(return_value=None)
+        client._messaging_service.handle_text_message = AsyncMock(return_value=[])
+        client._ingress_routing_service = SimpleNamespace(resolve=AsyncMock())
+
+        with patch.object(matrix_mod, "RoomMessageText", _FakeTextMessage):
+            await client._cb_room_message(room, _FakeTextMessage(body="hello"))
+
+        client._ingress_routing_service.resolve.assert_not_awaited()
+        kwargs = client._messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["scope"].tenant_id, str(GLOBAL_TENANT_ID))
+        self.assertEqual(
+            kwargs["ingress_metadata"]["tenant_resolution"]["reason_code"],
+            IngressRouteReason.MISSING_IDENTIFIER.value,
+        )
 
     async def test_cb_room_message_media_without_download_and_unknown_type(
         self,
@@ -2292,8 +2628,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._cleanup_temp_file.assert_called_once_with("/tmp/file")
         client._process_message_responses.assert_not_awaited()
         self.assertEqual(client.room_typing.await_count, 2)
-        self.assertEqual(client.room_typing.await_args_list[0].args, ("!room:test", True))
-        self.assertEqual(client.room_typing.await_args_list[1].args, ("!room:test", False))
+        self.assertEqual(
+            client.room_typing.await_args_list[0].args, ("!room:test", True)
+        )
+        self.assertEqual(
+            client.room_typing.await_args_list[1].args, ("!room:test", False)
+        )
 
     async def test_cb_room_message_ignores_typing_signal_errors(self) -> None:
         client = self._client()
@@ -2584,7 +2924,8 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 )
             )
         self.assertEqual(
-            client._matrix_metrics["matrix.media.rejected.extension_unknown"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.media.rejected.extension_unknown"],
+            1,  # pylint: disable=protected-access
         )
 
         async def _fake_download(url: str, save_to: str):
@@ -2612,7 +2953,8 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(f.read(), b"decrypted")
         os.unlink(output_path)
         self.assertEqual(
-            client._matrix_metrics["matrix.media.accepted.downloaded"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.media.accepted.downloaded"],
+            1,  # pylint: disable=protected-access
         )
 
     async def test_download_file_returns_none_for_unexpected_download_response(
@@ -2635,7 +2977,10 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(output_path)
         self.assertEqual(
-            client._matrix_metrics["matrix.media.rejected.download_response_unexpected"], 1  # pylint: disable=protected-access
+            client._matrix_metrics[
+                "matrix.media.rejected.download_response_unexpected"
+            ],
+            1,  # pylint: disable=protected-access
         )
 
     async def test_media_config_resolution_and_mimetype_matching(self) -> None:
@@ -2728,7 +3073,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             patch.object(matrix_mod.os.path, "isfile", return_value=True),
             patch.object(matrix_mod.os, "unlink", side_effect=OSError("denied")),
         ):
-            client._cleanup_temp_file("/tmp/blocked")  # pylint: disable=protected-access
+            client._cleanup_temp_file(
+                "/tmp/blocked"
+            )  # pylint: disable=protected-access
 
         self.assertGreaterEqual(client._logging_gateway.warning.call_count, 1)
 
@@ -2748,10 +3095,14 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         }
 
         self.assertIsNone(
-            await client._download_file(file=file_meta, info=["invalid"])  # pylint: disable=protected-access
+            await client._download_file(
+                file=file_meta, info=["invalid"]
+            )  # pylint: disable=protected-access
         )
         self.assertIsNone(
-            await client._download_file(file=file_meta, info={})  # pylint: disable=protected-access
+            await client._download_file(
+                file=file_meta, info={}
+            )  # pylint: disable=protected-access
         )
 
         client._config.matrix.media.allowed_mimetypes = ["image/*"]
@@ -2787,19 +3138,24 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 )
             )
         self.assertEqual(
-            client._matrix_metrics["matrix.media.rejected.invalid_metadata"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.media.rejected.invalid_metadata"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.media.rejected.missing_mimetype"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.media.rejected.missing_mimetype"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.media.rejected.mimetype_not_allowed"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.media.rejected.mimetype_not_allowed"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.media.rejected.declared_size_exceeded"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.media.rejected.declared_size_exceeded"],
+            1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.media.rejected.downloaded_size_exceeded"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.media.rejected.downloaded_size_exceeded"],
+            1,  # pylint: disable=protected-access
         )
 
     async def test_download_file_returns_none_when_decryption_fails(self) -> None:
@@ -2840,7 +3196,8 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreaterEqual(client._logging_gateway.warning.call_count, 1)
         self.assertEqual(
-            client._matrix_metrics["matrix.media.rejected.decrypt_failed"], 1  # pylint: disable=protected-access
+            client._matrix_metrics["matrix.media.rejected.decrypt_failed"],
+            1,  # pylint: disable=protected-access
         )
 
     async def test_cb_sync_response_persists_next_batch_token(self) -> None:

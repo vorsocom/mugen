@@ -65,6 +65,13 @@ from mugen.core.contract.client.matrix_types import (
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
+from mugen.core.contract.service.ingress_routing import (
+    IIngressRoutingService,
+    IngressRouteReason,
+    IngressRouteRequest,
+    IngressRouteResolution,
+)
 from mugen.core.contract.service.ipc import (
     IIPCService,
     IPCCommandRequest,
@@ -74,6 +81,11 @@ from mugen.core.contract.service.ipc import (
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
+from mugen.core.service.context_scope_resolution import (
+    ContextScopeResolutionError,
+    resolve_context_ingress,
+)
+from mugen.core.service.ingress_routing import DefaultIngressRoutingService
 from mugen.core.utility.platforms import normalize_platforms
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
@@ -117,6 +129,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
@@ -133,9 +146,11 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self.synced = getattr(self._vendor_client, "synced", asyncio.Event())
         self._ipc_service = ipc_service
         self._keyval_storage_gateway = keyval_storage_gateway
+        self._relational_storage_gateway = relational_storage_gateway
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._user_service = user_service
+        self._ingress_routing_service: IIngressRoutingService | None = None
         self._direct_room_ids: set[str] = set()
         self._matrix_ipc_queue_size = self._resolve_matrix_ipc_queue_size()
         self._matrix_ipc_queue: asyncio.Queue | None = None
@@ -360,7 +375,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 await self._keyval_storage_gateway.get_text(self._client_user_id_key),
                 field_name="client_user_id",
             )
-            self._sync_token = await self._keyval_storage_gateway.get_text(self._sync_key)
+            self._sync_token = await self._keyval_storage_gateway.get_text(
+                self._sync_key
+            )
             self.load_store()
             return self
         except Exception:
@@ -536,7 +553,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         return "matrix" in platforms
 
     def _build_secret_cipher(self) -> Fernet | None:
-        security_cfg = getattr(getattr(self._config, "security", SimpleNamespace()), "secrets", None)
+        security_cfg = getattr(
+            getattr(self._config, "security", SimpleNamespace()), "secrets", None
+        )
         raw_key = getattr(security_cfg, "encryption_key", None)
         if not isinstance(raw_key, str) or raw_key.strip() == "":
             return None
@@ -655,11 +674,25 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         return payload.to_dict()
 
     def _resolve_credentials_key_prefix(self) -> str:
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-        ).strip().lower()
-        homeserver = str(getattr(getattr(self._config, "matrix", SimpleNamespace()), "homeserver", ""))
-        client_cfg = getattr(getattr(self._config, "matrix", SimpleNamespace()), "client", SimpleNamespace())
+        environment = (
+            str(
+                getattr(
+                    getattr(self._config, "mugen", SimpleNamespace()), "environment", ""
+                )
+            )
+            .strip()
+            .lower()
+        )
+        homeserver = str(
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()), "homeserver", ""
+            )
+        )
+        client_cfg = getattr(
+            getattr(self._config, "matrix", SimpleNamespace()),
+            "client",
+            SimpleNamespace(),
+        )
         client_user = str(getattr(client_cfg, "user", ""))
         identity_material = "|".join(
             [
@@ -741,7 +774,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     def _start_matrix_ipc_worker(self) -> None:
         if self._ipc_service is None:
             return
-        if self._matrix_ipc_worker_task is not None and not self._matrix_ipc_worker_task.done():
+        if (
+            self._matrix_ipc_worker_task is not None
+            and not self._matrix_ipc_worker_task.done()
+        ):
             return
         self._matrix_ipc_worker_stop.clear()
         self._matrix_ipc_queue = asyncio.Queue(maxsize=self._matrix_ipc_queue_size)
@@ -802,9 +838,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             return
 
         payload_data = (
-            request_payload.data
-            if isinstance(request_payload.data, dict)
-            else {}
+            request_payload.data if isinstance(request_payload.data, dict) else {}
         )
         callback = str(payload_data.get("callback", "unknown_callback"))
         event_type = str(payload_data.get("event_type", "UnknownEvent"))
@@ -858,7 +892,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     async def _load_known_devices(self) -> dict[str, list[str]]:
         self._ensure_credential_keys_initialized()
-        payload = await self._keyval_storage_gateway.get_text(self._known_devices_list_key)
+        payload = await self._keyval_storage_gateway.get_text(
+            self._known_devices_list_key
+        )
         if payload is None:
             return {}
 
@@ -1041,14 +1077,20 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             return None
 
         local_part, separator, domain_part = sender_id.partition(":")
-        if separator == "" or not local_part.startswith("@") or domain_part.strip() == "":
+        if (
+            separator == ""
+            or not local_part.startswith("@")
+            or domain_part.strip() == ""
+        ):
             return None
 
         return domain_part
 
     def _direct_invites_only(self) -> bool:
         direct_only = getattr(
-            getattr(getattr(self._config, "matrix", SimpleNamespace()), "invites", None),
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()), "invites", None
+            ),
             "direct_only",
             None,
         )
@@ -1064,7 +1106,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             "max_download_bytes",
             None,
         )
-        if isinstance(max_download_bytes, bool) or not isinstance(max_download_bytes, int):
+        if isinstance(max_download_bytes, bool) or not isinstance(
+            max_download_bytes, int
+        ):
             raise RuntimeError(
                 "Invalid configuration: matrix.media.max_download_bytes "
                 "must be a positive integer."
@@ -1220,6 +1264,113 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             f" {structured_fields}"
         )
 
+    def _ingress_router(self) -> IIngressRoutingService:
+        if self._ingress_routing_service is not None:
+            return self._ingress_routing_service
+        if self._relational_storage_gateway is None:
+            raise RuntimeError(
+                "Relational storage gateway is required for Matrix ingress routing."
+            )
+        self._ingress_routing_service = DefaultIngressRoutingService(
+            relational_storage_gateway=self._relational_storage_gateway,
+            logging_gateway=self._logging_gateway,
+        )
+        return self._ingress_routing_service
+
+    async def _resolve_message_ingress(
+        self,
+        *,
+        room: MatrixRoom,
+        message: RoomMessage,
+    ) -> tuple[object, dict[str, object]] | None:
+        room_id = self._coerce_optional_string(getattr(room, "room_id", None))
+        sender_id = self._coerce_optional_string(getattr(message, "sender", None)) or ""
+        claims = {"sender_mxid": sender_id}
+        if room_id is not None:
+            claims["room_id"] = room_id
+
+        if room_id is None:
+            resolution = IngressRouteResolution(
+                ok=False,
+                reason_code=IngressRouteReason.MISSING_IDENTIFIER.value,
+            )
+        else:
+            try:
+                resolution = await self._ingress_router().resolve(
+                    IngressRouteRequest(
+                        platform="matrix",
+                        channel_key="matrix",
+                        identifier_type="room_id",
+                        identifier_value=room_id,
+                        claims=claims,
+                    )
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                resolution = IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.RESOLUTION_ERROR.value,
+                    reason_detail=f"{type(exc).__name__}: {exc}",
+                )
+
+        try:
+            resolved = resolve_context_ingress(
+                platform="matrix",
+                channel_key="matrix",
+                room_id=room_id or "",
+                sender_id=sender_id,
+                conversation_id=room_id or sender_id,
+                routing=resolution,
+                source="matrix.ingress_routing",
+                identifier_claims=claims,
+            )
+        except ContextScopeResolutionError as exc:
+            reason_code = str(exc.reason_code or "route_unresolved")
+            self._track_matrix_decision(
+                domain="routing",
+                action="dropped",
+                reason=reason_code,
+                room_id=room_id,
+                sender=sender_id,
+            )
+            self._logging_gateway.warning(
+                "Dropped Matrix ingress due to unresolved route "
+                f"reason_code={reason_code}"
+                f" room_id={room_id!r}"
+                f" sender={sender_id!r}"
+                f" detail={exc.detail!r}"
+            )
+            return None
+
+        if resolution.ok is not True:
+            reason_code = str(resolution.reason_code or "route_unresolved")
+            self._track_matrix_decision(
+                domain="routing",
+                action="fallback_global",
+                reason=reason_code,
+                room_id=room_id,
+                sender=sender_id,
+            )
+            self._logging_gateway.warning(
+                "Using global tenant fallback for Matrix ingress "
+                f"reason_code={reason_code}"
+                f" room_id={room_id!r}"
+                f" sender={sender_id!r}."
+            )
+        else:
+            self._track_matrix_decision(
+                domain="routing",
+                action="resolved",
+                reason="binding_resolved",
+                room_id=room_id,
+                sender=sender_id,
+                tenant_id=resolved.scope.tenant_id,
+            )
+
+        return resolved.scope, {
+            "ingress_route": dict(resolved.ingress_route),
+            "tenant_resolution": dict(resolved.tenant_resolution),
+        }
+
     async def _dispatch_matrix_event_hook(
         self,
         callback_name: str,
@@ -1252,7 +1403,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 f" callback={callback_name}"
                 f" event={event_type}"
             )
-            self._increment_matrix_metric("matrix.ipc.dispatch.queue_unavailable_drop_new")
+            self._increment_matrix_metric(
+                "matrix.ipc.dispatch.queue_unavailable_drop_new"
+            )
             return
 
         try:
@@ -1528,6 +1681,14 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if not await self._validate_message(room, message):
             return
 
+        resolved_ingress = await self._resolve_message_ingress(
+            room=room,
+            message=message,
+        )
+        if resolved_ingress is None:
+            return
+        scope, ingress_metadata = resolved_ingress
+
         await self._emit_room_processing_signal(
             room_id=room.room_id,
             state=PROCESSING_STATE_START,
@@ -1552,6 +1713,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                                     "message": message,
                                     "file": get_media,
                                 },
+                                ingress_metadata=ingress_metadata,
+                                scope=scope,
                             )
                         )
                     finally:
@@ -1573,6 +1736,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                                     "message": message,
                                     "file": get_media,
                                 },
+                                ingress_metadata=ingress_metadata,
+                                scope=scope,
                             )
                         )
                     finally:
@@ -1594,6 +1759,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                                     "message": message,
                                     "file": get_media,
                                 },
+                                ingress_metadata=ingress_metadata,
+                                scope=scope,
                             )
                         )
                     finally:
@@ -1605,6 +1772,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                     room_id=room.room_id,
                     sender=message.sender,
                     message=message.body,
+                    ingress_metadata=ingress_metadata,
+                    scope=scope,
                 )
             # Handle video messages.
             elif isinstance(message, RoomEncryptedVideo):
@@ -1623,6 +1792,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                                     "message": message,
                                     "file": get_media,
                                 },
+                                ingress_metadata=ingress_metadata,
+                                scope=scope,
                             )
                         )
                     finally:
@@ -2108,7 +2279,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                                     mimetype=mimetype,
                                 )
                                 return df.name
-                        except Exception as exc:  # pylint: disable=broad-exception-caught
+                        except (
+                            Exception
+                        ) as exc:  # pylint: disable=broad-exception-caught
                             self._track_matrix_decision(
                                 domain="media",
                                 action="rejected",
