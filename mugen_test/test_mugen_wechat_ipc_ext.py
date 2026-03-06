@@ -5,9 +5,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from mugen.core.contract.service.ingress_routing import (
+    IngressRouteReason,
+    IngressRouteResolution,
+    IngressRouteResult,
+)
 from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.wechat import ipc_ext
 from mugen.core.plugin.wechat.ipc_ext import WeChatIPCExtension
@@ -22,11 +28,17 @@ def _make_config(*, typing_enabled: bool = True, dedupe_ttl: int = 86400) -> Sim
     )
 
 
-def _make_request(data: dict, command: str = "wechat_official_account_event") -> IPCCommandRequest:
+def _make_request(
+    data: dict,
+    command: str = "wechat_official_account_event",
+    path_token: str = "wechat-path-token",
+) -> IPCCommandRequest:
+    payload = dict(data)
+    payload.setdefault("path_token", path_token)
     return IPCCommandRequest(
         platform="wechat",
         command=command,
-        data=data,
+        data=payload,
     )
 
 
@@ -96,6 +108,26 @@ class _MemoryRelational:
         return dict(existing)
 
 
+class _IngressRoutingStub:
+    async def resolve(self, request) -> IngressRouteResolution:
+        identifier_value = request.identifier_value
+        if not isinstance(identifier_value, str) or identifier_value.strip() == "":
+            identifier_value = "wechat-path-token"
+        return IngressRouteResolution(
+            ok=True,
+            result=IngressRouteResult(
+                tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                tenant_slug="tenant-a",
+                platform="wechat",
+                channel_key="wechat",
+                identifier_claims={
+                    "identifier_type": "path_token",
+                    "identifier_value": str(identifier_value),
+                },
+            ),
+        )
+
+
 def _new_extension(
     *,
     config,
@@ -104,6 +136,7 @@ def _new_extension(
     messaging_service=None,
     user_service=None,
     logging_gateway=None,
+    ingress_routing_service=None,
 ) -> WeChatIPCExtension:
     return WeChatIPCExtension(
         config=config,
@@ -114,6 +147,7 @@ def _new_extension(
         messaging_service=messaging_service or _make_messaging_service(),
         user_service=user_service or _make_user_service(),
         wechat_client=client or _make_client(),
+        ingress_routing_service=ingress_routing_service or _IngressRoutingStub(),
     )
 
 
@@ -209,12 +243,13 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
             payload=_make_text_payload(),
         )
 
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "wechat",
-            room_id="user-1",
-            sender="user-1",
-            message="hello",
-        )
+        messaging_service.handle_text_message.assert_awaited_once()
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "user-1")
+        self.assertEqual(kwargs["sender"], "user-1")
+        self.assertEqual(kwargs["message"], "hello")
+        self.assertIsInstance(kwargs.get("message_context"), list)
+        self.assertEqual(kwargs["message_context"][-1]["type"], "ingress_route")
         user_service.add_known_user.assert_awaited_once_with("user-1", "user-1", "user-1")
         client.send_text_message.assert_awaited_once_with(
             recipient="user-1",
@@ -701,3 +736,99 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(relational.dead_letters), 2)
         self.assertEqual(relational.dead_letters[0]["reason_code"], "malformed_payload")
         self.assertEqual(relational.dead_letters[1]["reason_code"], "processing_exception")
+
+    async def test_ingress_router_default_and_helper_fallback_branches(self) -> None:
+        ext = WeChatIPCExtension(
+            config=_make_config(),
+            logging_gateway=Mock(),
+            relational_storage_gateway=_MemoryRelational(),
+            messaging_service=_make_messaging_service(),
+            user_service=_make_user_service(),
+            wechat_client=_make_client(),
+            ingress_routing_service=None,
+        )
+        sentinel_router = object()
+        with patch.object(
+            ipc_ext,
+            "DefaultIngressRoutingService",
+            return_value=sentinel_router,
+        ) as router_ctor:
+            self.assertIs(ext._ingress_router(), sentinel_router)  # pylint: disable=protected-access
+            self.assertIs(ext._ingress_router(), sentinel_router)  # pylint: disable=protected-access
+            router_ctor.assert_called_once()
+
+        self.assertEqual(  # pylint: disable=protected-access
+            ext._compose_message_context(
+                ingress_route={"tenant_slug": "tenant-a"},
+                extra_context=["bad"],
+            ),
+            [
+                {
+                    "type": "ingress_route",
+                    "content": {"tenant_slug": "tenant-a"},
+                }
+            ],
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            ext._normalize_ingress_route(None)["platform"],
+            "wechat",
+        )
+        merged = ext._merge_ingress_metadata(  # pylint: disable=protected-access
+            payload={"metadata": []},
+            ingress_route={"tenant_slug": "tenant-a"},
+        )
+        self.assertEqual(merged["metadata"]["ingress_route"]["tenant_slug"], "tenant-a")
+
+    async def test_unresolved_ingress_route_is_dead_lettered_and_dropped(self) -> None:
+        class _UnresolvedRouter:
+            async def resolve(self, request):  # noqa: ARG002
+                return IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                    reason_detail=None,
+                )
+
+        logger = Mock()
+        relational = _MemoryRelational()
+        messaging = _make_messaging_service()
+        ext = _new_extension(
+            config=_make_config(),
+            logging_gateway=logger,
+            relational_storage_gateway=relational,
+            messaging_service=messaging,
+            ingress_routing_service=_UnresolvedRouter(),
+        )
+
+        await ext._wechat_event(  # pylint: disable=protected-access
+            _make_request(
+                {"provider": "official_account", "payload": _make_text_payload()},
+                command="wechat_official_account_event",
+            ),
+            expected_provider="official_account",
+        )
+        messaging.handle_text_message.assert_not_awaited()
+        self.assertEqual(relational.dead_letters[0]["reason_code"], "route_unresolved")
+        logger.warning.assert_called()
+
+        class _UnresolvedWithDetailRouter:
+            async def resolve(self, request):  # noqa: ARG002
+                return IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                    reason_detail="detail",
+                )
+
+        ext_with_detail = _new_extension(
+            config=_make_config(),
+            logging_gateway=Mock(),
+            relational_storage_gateway=_MemoryRelational(),
+            ingress_routing_service=_UnresolvedWithDetailRouter(),
+        )
+        await ext_with_detail._resolve_ingress_route(  # pylint: disable=protected-access
+            path_token="wechat-path-token",
+            webhook_payload={"event": "x"},
+        )
+        self.assertIn(
+            "detail",
+            str(ext_with_detail._relational_storage_gateway.dead_letters[0]["error_message"]),  # pylint: disable=protected-access
+        )

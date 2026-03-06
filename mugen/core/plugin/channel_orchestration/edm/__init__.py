@@ -1,6 +1,7 @@
 """Public API for channel_orchestration.edm."""
 
 __all__ = [
+    "ingress_binding_type",
     "channel_profile_type",
     "intake_rule_type",
     "routing_rule_type",
@@ -12,6 +13,9 @@ __all__ = [
     "work_item_type",
 ]
 
+from mugen.core.plugin.channel_orchestration.edm.ingress_binding import (
+    ingress_binding_type,
+)
 from mugen.core.plugin.channel_orchestration.edm.channel_profile import (
     channel_profile_type,
 )

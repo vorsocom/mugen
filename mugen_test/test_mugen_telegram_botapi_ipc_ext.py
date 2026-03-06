@@ -5,9 +5,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from mugen.core.contract.service.ingress_routing import (
+    IngressRouteReason,
+    IngressRouteResolution,
+    IngressRouteResult,
+)
 from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.telegram.botapi import ipc_ext
 from mugen.core.plugin.telegram.botapi.ipc_ext import TelegramBotAPIIPCExtension
@@ -25,11 +31,18 @@ def _make_config(*, typing_enabled: bool = True) -> SimpleNamespace:
 def _make_request(
     data: dict,
     command: str = "telegram_botapi_update",
+    path_token: str = "telegram-path-token",
 ) -> IPCCommandRequest:
+    payload = data
+    if command == "telegram_botapi_update":
+        payload = {
+            "path_token": path_token,
+            "payload": data,
+        }
     return IPCCommandRequest(
         platform="telegram",
         command=command,
-        data=data,
+        data=payload,
     )
 
 
@@ -97,6 +110,26 @@ class _MemoryRelational:
         return dict(existing)
 
 
+class _IngressRoutingStub:
+    async def resolve(self, request) -> IngressRouteResolution:
+        identifier_value = request.identifier_value
+        if not isinstance(identifier_value, str) or identifier_value.strip() == "":
+            identifier_value = "telegram-path-token"
+        return IngressRouteResolution(
+            ok=True,
+            result=IngressRouteResult(
+                tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                tenant_slug="tenant-a",
+                platform="telegram",
+                channel_key="telegram",
+                identifier_claims={
+                    "identifier_type": "path_token",
+                    "identifier_value": str(identifier_value),
+                },
+            ),
+        )
+
+
 def _new_extension(
     *,
     config,
@@ -105,6 +138,7 @@ def _new_extension(
     messaging_service=None,
     user_service=None,
     logging_gateway=None,
+    ingress_routing_service=None,
 ) -> TelegramBotAPIIPCExtension:
     return TelegramBotAPIIPCExtension(
         config=config,
@@ -115,6 +149,7 @@ def _new_extension(
         messaging_service=messaging_service or _make_messaging_service(),
         user_service=user_service or _make_user_service(),
         telegram_client=client or _make_client(),
+        ingress_routing_service=ingress_routing_service or _IngressRoutingStub(),
     )
 
 
@@ -223,13 +258,13 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
             _make_request(_make_private_text_message_update())
         )
 
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "telegram",
-            room_id="2001",
-            sender="3001",
-            message="hello",
-            message_context=None,
-        )
+        messaging_service.handle_text_message.assert_awaited_once()
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "2001")
+        self.assertEqual(kwargs["sender"], "3001")
+        self.assertEqual(kwargs["message"], "hello")
+        self.assertIsInstance(kwargs.get("message_context"), list)
+        self.assertEqual(kwargs["message_context"][-1]["type"], "ingress_route")
         user_service.add_known_user.assert_awaited_once_with("3001", "Alice", "2001")
         client.send_text_message.assert_awaited_once()
         client.emit_processing_signal.assert_any_await(
@@ -288,21 +323,15 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
 
         client.answer_callback_query.assert_any_await(callback_query_id="cq-1")
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "telegram",
-            room_id="2001",
-            sender="3001",
-            message="btn-data",
-            message_context=[
-                {
-                    "type": "telegram_callback",
-                    "content": {
-                        "callback_query_id": "cq-1",
-                        "callback_data": "btn-data",
-                    },
-                }
-            ],
-        )
+        messaging_service.handle_text_message.assert_awaited_once()
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "2001")
+        self.assertEqual(kwargs["sender"], "3001")
+        self.assertEqual(kwargs["message"], "btn-data")
+        context = kwargs.get("message_context")
+        self.assertIsInstance(context, list)
+        self.assertEqual(context[0]["type"], "telegram_callback")
+        self.assertEqual(context[-1]["type"], "ingress_route")
 
     async def test_callback_missing_data_is_logged(self) -> None:
         logger = Mock()
@@ -799,3 +828,96 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
             _make_request({"update_id": 100})
         )
         logger.debug.assert_any_call("Unsupported Telegram update payload.")
+
+    async def test_ingress_router_default_and_helper_fallback_branches(self) -> None:
+        ext = TelegramBotAPIIPCExtension(
+            config=_make_config(),
+            logging_gateway=Mock(),
+            relational_storage_gateway=_MemoryRelational(),
+            messaging_service=_make_messaging_service(),
+            user_service=_make_user_service(),
+            telegram_client=_make_client(),
+            ingress_routing_service=None,
+        )
+        sentinel_router = object()
+        with patch.object(
+            ipc_ext,
+            "DefaultIngressRoutingService",
+            return_value=sentinel_router,
+        ) as router_ctor:
+            self.assertIs(ext._ingress_router(), sentinel_router)  # pylint: disable=protected-access
+            self.assertIs(ext._ingress_router(), sentinel_router)  # pylint: disable=protected-access
+            router_ctor.assert_called_once()
+
+        self.assertIsNone(ext._coerce_nonempty_string(123))  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            ext._normalize_ingress_route(None)["platform"],
+            "telegram",
+        )
+        merged = ext._merge_ingress_metadata(  # pylint: disable=protected-access
+            payload={"metadata": []},
+            ingress_route={"tenant_slug": "tenant-a"},
+        )
+        self.assertEqual(merged["metadata"]["ingress_route"]["tenant_slug"], "tenant-a")
+
+    async def test_wrapped_update_unresolved_route_is_dropped(self) -> None:
+        class _UnresolvedRouter:
+            async def resolve(self, request):  # noqa: ARG002
+                return IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                    reason_detail=None,
+                )
+
+        logger = Mock()
+        relational = _MemoryRelational()
+        messaging = _make_messaging_service()
+        ext = _new_extension(
+            config=_make_config(),
+            logging_gateway=logger,
+            relational_storage_gateway=relational,
+            messaging_service=messaging,
+            ingress_routing_service=_UnresolvedRouter(),
+        )
+
+        await ext._telegram_botapi_update(  # pylint: disable=protected-access
+            _make_request(_make_private_text_message_update())
+        )
+        await ext._telegram_botapi_update(  # pylint: disable=protected-access
+            IPCCommandRequest(
+                platform="telegram",
+                command="telegram_botapi_update",
+                data={
+                    **_make_private_text_message_update(),
+                    "path_token": "telegram-path-token",
+                    "payload": "not-a-dict",
+                },
+            )
+        )
+
+        messaging.handle_text_message.assert_not_awaited()
+        self.assertEqual(relational.dead_letters[0]["reason_code"], "route_unresolved")
+        logger.warning.assert_called()
+
+        class _UnresolvedWithDetailRouter:
+            async def resolve(self, request):  # noqa: ARG002
+                return IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                    reason_detail="detail",
+                )
+
+        ext_with_detail = _new_extension(
+            config=_make_config(),
+            logging_gateway=Mock(),
+            relational_storage_gateway=_MemoryRelational(),
+            ingress_routing_service=_UnresolvedWithDetailRouter(),
+        )
+        await ext_with_detail._resolve_ingress_route(  # pylint: disable=protected-access
+            path_token="telegram-path-token",
+            webhook_payload={"update_id": 1},
+        )
+        self.assertIn(
+            "detail",
+            str(ext_with_detail._relational_storage_gateway.dead_letters[0]["error_message"]),  # pylint: disable=protected-access
+        )

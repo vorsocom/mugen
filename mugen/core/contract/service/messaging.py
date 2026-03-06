@@ -99,6 +99,7 @@ class IMessagingService(ABC):
         room_id: str,
         sender: str,
         message: dict,
+        message_context: list[dict] | None = None,
     ) -> list[dict] | None:
         """Handle a composed message from a chat."""
 

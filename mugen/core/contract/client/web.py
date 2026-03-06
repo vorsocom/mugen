@@ -1,10 +1,14 @@
 """Provides an abstract base class for Web platform clients."""
 
-__all__ = ["IWebClient"]
+__all__ = ["IWebClient", "WebConversationTenantConflictError"]
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
+
+
+class WebConversationTenantConflictError(RuntimeError):
+    """Raised when an existing conversation is used with a different tenant."""
 
 
 class IWebClient(ABC):
@@ -28,6 +32,7 @@ class IWebClient(ABC):
         *,
         auth_user: str,
         conversation_id: str,
+        tenant_slug: str | None = None,
         message_type: str,
         text: str | None = None,
         metadata: dict[str, Any] | None = None,

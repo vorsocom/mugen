@@ -298,6 +298,7 @@ class DefaultMessagingService(IMessagingService):
         room_id: str,
         sender: str,
         message: dict,
+        message_context: list[dict] | None = None,
     ) -> list[dict] | None:
         normalized_message = self._normalize_composed_message(message)
         parts = list(normalized_message["parts"])
@@ -320,6 +321,10 @@ class DefaultMessagingService(IMessagingService):
         )
 
         combined_context: list[dict] = []
+        if isinstance(message_context, list):
+            combined_context.extend(
+                [item for item in message_context if isinstance(item, dict)]
+            )
         if attachment_context is not None:
             combined_context += attachment_context
         combined_context += media_context

@@ -1,6 +1,7 @@
 """Public API for channel_orchestration.service."""
 
 __all__ = [
+    "IngressBindingService",
     "ChannelProfileService",
     "IntakeRuleService",
     "RoutingRuleService",
@@ -12,6 +13,7 @@ __all__ = [
     "WorkItemService",
 ]
 
+from .ingress_binding import IngressBindingService
 from .blocklist_entry import BlocklistEntryService
 from .channel_profile import ChannelProfileService
 from .conversation_state import ConversationStateService

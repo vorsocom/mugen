@@ -8,6 +8,7 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
@@ -16,10 +17,18 @@ from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.rdbms import IRelationalStorageGateway
+from mugen.core.contract.service.ingress_routing import (
+    IIngressRoutingService,
+    IngressRouteRequest,
+)
 from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core import di
+from mugen.core.service.ingress_routing import (
+    DefaultIngressRoutingService,
+    build_ingress_route_context,
+)
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
     PROCESSING_STATE_STOP,
@@ -68,6 +77,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         messaging_service: IMessagingService | None = None,
         user_service: IUserService | None = None,
         whatsapp_client: IWhatsAppClient | None = None,
+        ingress_routing_service: IIngressRoutingService | None = None,
     ) -> None:
         self._client = (
             whatsapp_client
@@ -93,6 +103,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         self._user_service = (
             user_service if user_service is not None else _user_service_provider()
         )
+        self._ingress_routing_service = ingress_routing_service
         self._event_dedup_ttl_seconds = self._resolve_event_dedup_ttl_seconds()
         self._metrics: dict[str, int] = {}
 
@@ -106,6 +117,15 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
     def platforms(self) -> list[str]:
         """Get the platform that the extension is targeting."""
         return ["whatsapp"]
+
+    def _ingress_router(self) -> IIngressRoutingService:
+        if self._ingress_routing_service is not None:
+            return self._ingress_routing_service
+        self._ingress_routing_service = DefaultIngressRoutingService(
+            relational_storage_gateway=self._relational_storage_gateway,
+            logging_gateway=self._logging_gateway,
+        )
+        return self._ingress_routing_service
 
     def _extract_api_data(self, payload: dict | None, context: str) -> dict | None:
         if payload is None:
@@ -196,6 +216,118 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         if ttl_seconds <= 0:
             return self._default_event_dedup_ttl_seconds
         return ttl_seconds
+
+    @staticmethod
+    def _coerce_nonempty_string(value: object) -> str | None:
+        if isinstance(value, str) and value.strip() != "":
+            return value.strip()
+        return None
+
+    @staticmethod
+    def _compose_message_context(
+        *,
+        ingress_route: dict,
+        extra_context: list[dict] | None = None,
+    ) -> list[dict]:
+        combined: list[dict] = []
+        if isinstance(extra_context, list):
+            combined.extend([item for item in extra_context if isinstance(item, dict)])
+        combined.append(
+            {
+                "type": "ingress_route",
+                "content": dict(ingress_route),
+            }
+        )
+        return combined
+
+    @staticmethod
+    def _normalize_ingress_route(
+        ingress_route: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if isinstance(ingress_route, dict):
+            return dict(ingress_route)
+        return {
+            "platform": "whatsapp",
+            "channel_key": "whatsapp",
+            "identifier_claims": {},
+        }
+
+    @staticmethod
+    def _merge_ingress_metadata(
+        *,
+        payload: dict[str, Any],
+        ingress_route: dict,
+    ) -> dict[str, Any]:
+        merged = dict(payload)
+        metadata = merged.get("metadata")
+        if isinstance(metadata, dict):
+            normalized_metadata = dict(metadata)
+        else:
+            normalized_metadata = {}
+        normalized_metadata["ingress_route"] = dict(ingress_route)
+        merged["metadata"] = normalized_metadata
+        return merged
+
+    def _resolve_default_phone_number_id(self) -> str | None:
+        return self._coerce_nonempty_string(
+            getattr(
+                getattr(
+                    getattr(self._config, "whatsapp", SimpleNamespace()),
+                    "business",
+                    SimpleNamespace(),
+                ),
+                "phone_number_id",
+                None,
+            )
+        )
+
+    def _extract_phone_number_id(self, event_value: dict[str, Any]) -> str | None:
+        metadata = event_value.get("metadata")
+        if isinstance(metadata, dict):
+            configured = self._coerce_nonempty_string(metadata.get("phone_number_id"))
+            if configured is not None:
+                return configured
+        return self._resolve_default_phone_number_id()
+
+    async def _resolve_ingress_route(
+        self,
+        *,
+        phone_number_id: str | None,
+        webhook_payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        resolution = await self._ingress_router().resolve(
+            IngressRouteRequest(
+                platform="whatsapp",
+                channel_key="whatsapp",
+                identifier_type="phone_number_id",
+                identifier_value=phone_number_id,
+                claims=(
+                    {"phone_number_id": phone_number_id}
+                    if phone_number_id is not None
+                    else {}
+                ),
+            )
+        )
+        if resolution.ok and resolution.result is not None:
+            return build_ingress_route_context(resolution.result)
+
+        self._increment_metric("whatsapp.ipc.route.unresolved")
+        reason_code = str(resolution.reason_code or "route_unresolved")
+        reason_detail = str(resolution.reason_detail or "").strip()
+        error_message = reason_code
+        if reason_detail != "":
+            error_message = f"{reason_code}: {reason_detail}"
+        await self._record_dead_letter(
+            event_type="webhook",
+            event_payload=webhook_payload,
+            reason_code="route_unresolved",
+            error_message=error_message,
+        )
+        self._logging_gateway.warning(
+            "Dropped WhatsApp ingress due to unresolved route "
+            f"reason_code={reason_code} phone_number_id={phone_number_id!r}."
+        )
+        return None
 
     @staticmethod
     def _now_utc() -> datetime:
@@ -334,7 +466,18 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 f"(sender={sender} state={state}): {exc}"
             )
 
-    async def _process_message_event(self, event_value: dict, message: dict) -> None:
+    async def _process_message_event(
+        self,
+        event_value: dict,
+        message: dict,
+        ingress_route: dict[str, Any] | None = None,
+    ) -> None:
+        if ingress_route is None:
+            ingress_route = self._normalize_ingress_route(
+                getattr(self, "_active_ingress_route", None)
+            )
+        else:
+            ingress_route = self._normalize_ingress_route(ingress_route)
         started = time.perf_counter()
         correlation_id = message.get("id")
         self._logging_gateway.debug(
@@ -413,10 +556,13 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                         "whatsapp",
                                         room_id=sender,
                                         sender=sender,
-                                        message={
-                                            "message": message,
-                                            "file": get_media,
-                                        },
+                                        message=self._merge_ingress_metadata(
+                                            payload={
+                                                "message": message,
+                                                "file": get_media,
+                                            },
+                                            ingress_route=ingress_route,
+                                        ),
                                     )
                                 )
                     case "document":
@@ -438,10 +584,13 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                         "whatsapp",
                                         room_id=sender,
                                         sender=sender,
-                                        message={
-                                            "message": message,
-                                            "file": get_media,
-                                        },
+                                        message=self._merge_ingress_metadata(
+                                            payload={
+                                                "message": message,
+                                                "file": get_media,
+                                            },
+                                            ingress_route=ingress_route,
+                                        ),
                                     )
                                 )
                     case "image":
@@ -463,10 +612,13 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                         "whatsapp",
                                         room_id=sender,
                                         sender=sender,
-                                        message={
-                                            "message": message,
-                                            "file": get_media,
-                                        },
+                                        message=self._merge_ingress_metadata(
+                                            payload={
+                                                "message": message,
+                                                "file": get_media,
+                                            },
+                                            ingress_route=ingress_route,
+                                        ),
                                     )
                                 )
                     case "text" | "interactive" | "button":
@@ -484,6 +636,9 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                     room_id=sender,
                                     sender=sender,
                                     message=text_message,
+                                    message_context=self._compose_message_context(
+                                        ingress_route=ingress_route,
+                                    ),
                                 )
                             )
                     case "video":
@@ -505,10 +660,13 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                         "whatsapp",
                                         room_id=sender,
                                         sender=sender,
-                                        message={
-                                            "message": message,
-                                            "file": get_media,
-                                        },
+                                        message=self._merge_ingress_metadata(
+                                            payload={
+                                                "message": message,
+                                                "file": get_media,
+                                            },
+                                            ingress_route=ingress_route,
+                                        ),
                                     )
                                 )
                     case _:
@@ -536,7 +694,17 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 state=PROCESSING_STATE_STOP,
             )
 
-    async def _process_status_event(self, status: dict) -> None:
+    async def _process_status_event(
+        self,
+        status: dict,
+        ingress_route: dict[str, Any] | None = None,
+    ) -> None:
+        if ingress_route is None:
+            ingress_route = self._normalize_ingress_route(
+                getattr(self, "_active_ingress_route", None)
+            )
+        else:
+            ingress_route = self._normalize_ingress_route(ingress_route)
         started = time.perf_counter()
         correlation_id = status.get("id")
         self._logging_gateway.debug(
@@ -765,6 +933,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             event = request.data
             if not isinstance(event, dict):
                 raise TypeError
+            self._active_ingress_route = None
             entries = event["entry"]
             if not isinstance(entries, list):
                 raise TypeError
@@ -786,6 +955,14 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                         continue
 
                     found_event_payload = True
+                    phone_number_id = self._extract_phone_number_id(event_value)
+                    ingress_route = await self._resolve_ingress_route(
+                        phone_number_id=phone_number_id,
+                        webhook_payload=event_value,
+                    )
+                    if ingress_route is None:
+                        continue
+                    self._active_ingress_route = ingress_route
 
                     messages = event_value.get("messages")
                     if isinstance(messages, list):
@@ -806,6 +983,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                 )
                                 continue
                             await self._process_status_event(status)
+                    self._active_ingress_route = None
 
             if not found_event_payload:
                 raise TypeError
@@ -843,6 +1021,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         message: dict,
         message_type: str,
         sender: str = None,
+        message_context: list[dict] | None = None,
     ) -> None:
         hits: int = 0
         message_handlers: list[IMHExtension] = self._messaging_service.mh_extensions
@@ -853,9 +1032,11 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 await asyncio.gather(
                     asyncio.create_task(
                         handler.handle_message(
+                            platform="whatsapp",
                             room_id=sender,
                             sender=sender,
                             message=message,
+                            message_context=message_context,
                         )
                     )
                 )

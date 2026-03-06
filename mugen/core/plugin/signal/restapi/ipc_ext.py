@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
@@ -15,10 +16,18 @@ from mugen.core.contract.client.signal import ISignalClient
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.rdbms import IRelationalStorageGateway
+from mugen.core.contract.service.ingress_routing import (
+    IIngressRoutingService,
+    IngressRouteRequest,
+)
 from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core import di
+from mugen.core.service.ingress_routing import (
+    DefaultIngressRoutingService,
+    build_ingress_route_context,
+)
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
     PROCESSING_STATE_STOP,
@@ -66,6 +75,7 @@ class SignalRestAPIIPCExtension(IIPCExtension):
         messaging_service: IMessagingService | None = None,
         user_service: IUserService | None = None,
         signal_client: ISignalClient | None = None,
+        ingress_routing_service: IIngressRoutingService | None = None,
     ) -> None:
         self._client = signal_client if signal_client is not None else _signal_client_provider()
         self._config = config if config is not None else _config_provider()
@@ -87,6 +97,7 @@ class SignalRestAPIIPCExtension(IIPCExtension):
         self._user_service = (
             user_service if user_service is not None else _user_service_provider()
         )
+        self._ingress_routing_service = ingress_routing_service
         self._event_dedup_ttl_seconds = self._resolve_event_dedup_ttl_seconds()
         self._metrics: dict[str, int] = {}
 
@@ -100,6 +111,15 @@ class SignalRestAPIIPCExtension(IIPCExtension):
     def platforms(self) -> list[str]:
         """Get the platform that the extension is targeting."""
         return ["signal"]
+
+    def _ingress_router(self) -> IIngressRoutingService:
+        if self._ingress_routing_service is not None:
+            return self._ingress_routing_service
+        self._ingress_routing_service = DefaultIngressRoutingService(
+            relational_storage_gateway=self._relational_storage_gateway,
+            logging_gateway=self._logging_gateway,
+        )
+        return self._ingress_routing_service
 
     def _resolve_event_dedup_ttl_seconds(self) -> int:
         raw_value = getattr(
@@ -241,6 +261,102 @@ class SignalRestAPIIPCExtension(IIPCExtension):
         source = envelope.get("source")
         if isinstance(source, str) and source.strip() != "":
             return source.strip()
+        return None
+
+    @staticmethod
+    def _coerce_nonempty_string(value: object) -> str | None:
+        if isinstance(value, str) and value.strip() != "":
+            return value.strip()
+        return None
+
+    def _signal_account_number(self) -> str | None:
+        signal_cfg = getattr(self._config, "signal", SimpleNamespace())
+        account_cfg = getattr(signal_cfg, "account", SimpleNamespace())
+        return self._coerce_nonempty_string(getattr(account_cfg, "number", None))
+
+    @staticmethod
+    def _compose_message_context(
+        *,
+        ingress_route: dict,
+        extra_context: list[dict] | None = None,
+    ) -> list[dict]:
+        combined: list[dict] = []
+        if isinstance(extra_context, list):
+            combined.extend([item for item in extra_context if isinstance(item, dict)])
+        combined.append(
+            {
+                "type": "ingress_route",
+                "content": dict(ingress_route),
+            }
+        )
+        return combined
+
+    @staticmethod
+    def _normalize_ingress_route(
+        ingress_route: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if isinstance(ingress_route, dict):
+            return dict(ingress_route)
+        return {
+            "platform": "signal",
+            "channel_key": "signal",
+            "identifier_claims": {},
+        }
+
+    @staticmethod
+    def _merge_ingress_metadata(
+        *,
+        payload: dict[str, Any],
+        ingress_route: dict,
+    ) -> dict[str, Any]:
+        merged = dict(payload)
+        metadata = merged.get("metadata")
+        if isinstance(metadata, dict):
+            normalized_metadata = dict(metadata)
+        else:
+            normalized_metadata = {}
+        normalized_metadata["ingress_route"] = dict(ingress_route)
+        merged["metadata"] = normalized_metadata
+        return merged
+
+    async def _resolve_ingress_route(
+        self,
+        *,
+        account_number: str | None,
+        webhook_payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        resolution = await self._ingress_router().resolve(
+            IngressRouteRequest(
+                platform="signal",
+                channel_key="signal",
+                identifier_type="account_number",
+                identifier_value=account_number,
+                claims=(
+                    {"account_number": account_number}
+                    if account_number is not None
+                    else {}
+                ),
+            )
+        )
+        if resolution.ok and resolution.result is not None:
+            return build_ingress_route_context(resolution.result)
+
+        self._increment_metric("signal.ipc.route.unresolved")
+        reason_code = str(resolution.reason_code or "route_unresolved")
+        reason_detail = str(resolution.reason_detail or "").strip()
+        error_message = reason_code
+        if reason_detail != "":
+            error_message = f"{reason_code}: {reason_detail}"
+        await self._record_dead_letter(
+            event_type="webhook",
+            event_payload=webhook_payload,
+            reason_code="route_unresolved",
+            error_message=error_message,
+        )
+        self._logging_gateway.warning(
+            "Dropped Signal ingress due to unresolved route "
+            f"reason_code={reason_code} account_number={account_number!r}."
+        )
         return None
 
     @staticmethod
@@ -464,7 +580,9 @@ class SignalRestAPIIPCExtension(IIPCExtension):
         sender: str,
         room_id: str,
         attachments: list[dict],
+        ingress_route: dict[str, Any] | None = None,
     ) -> list[dict]:
+        ingress_route = self._normalize_ingress_route(ingress_route)
         responses: list[dict] = []
         for attachment in attachments:
             attachment_id = attachment.get("id")
@@ -484,39 +602,52 @@ class SignalRestAPIIPCExtension(IIPCExtension):
                     "signal",
                     room_id=room_id,
                     sender=sender,
-                    audio=downloaded,
-                    message_context=None,
+                    message=self._merge_ingress_metadata(
+                        payload={"file": downloaded},
+                        ingress_route=ingress_route,
+                    ),
                 )
             elif mime_type.startswith("image/"):
                 next_responses = await self._messaging_service.handle_image_message(
                     "signal",
                     room_id=room_id,
                     sender=sender,
-                    image=downloaded,
-                    message_context=None,
+                    message=self._merge_ingress_metadata(
+                        payload={"file": downloaded},
+                        ingress_route=ingress_route,
+                    ),
                 )
             elif mime_type.startswith("video/"):
                 next_responses = await self._messaging_service.handle_video_message(
                     "signal",
                     room_id=room_id,
                     sender=sender,
-                    video=downloaded,
-                    message_context=None,
+                    message=self._merge_ingress_metadata(
+                        payload={"file": downloaded},
+                        ingress_route=ingress_route,
+                    ),
                 )
             else:
                 next_responses = await self._messaging_service.handle_file_message(
                     "signal",
                     room_id=room_id,
                     sender=sender,
-                    file=downloaded,
-                    message_context=None,
+                    message=self._merge_ingress_metadata(
+                        payload={"file": downloaded},
+                        ingress_route=ingress_route,
+                    ),
                 )
 
             if isinstance(next_responses, list):
                 responses.extend([item for item in next_responses if isinstance(item, dict)])
         return responses
 
-    async def _handle_message_event(self, envelope: dict) -> None:
+    async def _handle_message_event(
+        self,
+        envelope: dict,
+        ingress_route: dict[str, Any] | None = None,
+    ) -> None:
+        ingress_route = self._normalize_ingress_route(ingress_route)
         sender = self._extract_sender(envelope)
         if sender is None:
             self._logging_gateway.error("Signal event missing sender identity.")
@@ -541,7 +672,9 @@ class SignalRestAPIIPCExtension(IIPCExtension):
                     room_id=room_id,
                     sender=sender,
                     message=text,
-                    message_context=None,
+                    message_context=self._compose_message_context(
+                        ingress_route=ingress_route,
+                    ),
                 )
                 if isinstance(next_responses, list):
                     responses.extend([item for item in next_responses if isinstance(item, dict)])
@@ -554,12 +687,15 @@ class SignalRestAPIIPCExtension(IIPCExtension):
                         room_id=room_id,
                         sender=sender,
                         message=emoji,
-                        message_context=[
-                            {
-                                "type": "signal_reaction",
-                                "content": reaction,
-                            }
-                        ],
+                        message_context=self._compose_message_context(
+                            ingress_route=ingress_route,
+                            extra_context=[
+                                {
+                                    "type": "signal_reaction",
+                                    "content": reaction,
+                                }
+                            ],
+                        ),
                     )
                     if isinstance(next_responses, list):
                         responses.extend(
@@ -572,6 +708,7 @@ class SignalRestAPIIPCExtension(IIPCExtension):
                         sender=sender,
                         room_id=room_id,
                         attachments=attachments,
+                        ingress_route=ingress_route,
                     )
                 )
 
@@ -605,6 +742,13 @@ class SignalRestAPIIPCExtension(IIPCExtension):
             )
             return
 
+        ingress_route = await self._resolve_ingress_route(
+            account_number=self._signal_account_number(),
+            webhook_payload=payload,
+        )
+        if ingress_route is None:
+            return
+
         event_type = self._classify_event_type(envelope)
         if await self._is_duplicate_event(event_type, envelope):
             self._increment_metric("signal.ipc.event.duplicate")
@@ -612,7 +756,10 @@ class SignalRestAPIIPCExtension(IIPCExtension):
 
         try:
             if event_type in {"message", "reaction"}:
-                await self._handle_message_event(envelope)
+                await self._handle_message_event(
+                    envelope,
+                    ingress_route,
+                )
             elif event_type == "receipt":
                 self._logging_gateway.debug("Signal receipt event observed.")
             else:

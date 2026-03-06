@@ -15,13 +15,23 @@ from types import SimpleNamespace
 from typing import Any
 import uuid
 
+from mugen.core import di
 from mugen.core.contract.client.web import IWebClient
+from mugen.core.contract.client.web import WebConversationTenantConflictError
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
+from mugen.core.contract.service.ingress_routing import (
+    IIngressRoutingService,
+    IngressRouteReason,
+    IngressRouteRequest,
+    IngressRouteResult,
+)
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.constants import GLOBAL_TENANT_ID
 from mugen.core.domain.use_case.enqueue_web_message import BuildQueuedMessageJobUseCase
 from mugen.core.domain.use_case.normalize_composed_message import (
     NormalizeComposedMessageUseCase,
@@ -30,6 +40,10 @@ from mugen.core.domain.use_case.web_stream_continuity import (
     WebStreamContinuityInput,
     evaluate_web_stream_continuity,
 )
+from mugen.core.service.ingress_routing import (
+    DefaultIngressRoutingService,
+    build_ingress_route_context,
+)
 from mugen.core.utility.config_value import parse_optional_positive_finite_float
 from mugen.core.utility.processing_signal import (
     PROCESSING_SIGNAL_THINKING,
@@ -37,6 +51,10 @@ from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_STOP,
     build_thinking_signal_payload,
 )
+
+
+def _relational_storage_gateway_provider():
+    return di.container.relational_storage_gateway
 
 
 class _SSEFanoutDispatcher:
@@ -168,6 +186,8 @@ class DefaultWebClient(IWebClient):
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
+        relational_storage_gateway: IRelationalStorageGateway = None,
+        ingress_routing_service: IIngressRoutingService | None = None,
     ) -> None:
         self._config = config
         self._ipc_service = ipc_service
@@ -176,6 +196,8 @@ class DefaultWebClient(IWebClient):
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._user_service = user_service
+        self._relational_storage_gateway = relational_storage_gateway
+        self._ingress_routing_service = ingress_routing_service
         if self._web_runtime_store is None:
             raise ValueError("web_runtime_store is required.")
         if self._media_storage_gateway is None:
@@ -366,6 +388,86 @@ class DefaultWebClient(IWebClient):
     def _increment_web_metric(self, metric_name: str, amount: int = 1) -> None:
         self._web_metrics[metric_name] = self._web_metrics.get(metric_name, 0) + amount
 
+    def _ingress_router(self) -> IIngressRoutingService:
+        if self._ingress_routing_service is not None:
+            return self._ingress_routing_service
+
+        if self._relational_storage_gateway is None:
+            try:
+                self._relational_storage_gateway = _relational_storage_gateway_provider()
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                raise RuntimeError(
+                    "Relational storage gateway is required for web tenant routing."
+                ) from exc
+
+        self._ingress_routing_service = DefaultIngressRoutingService(
+            relational_storage_gateway=self._relational_storage_gateway,
+            logging_gateway=self._logging_gateway,
+        )
+        return self._ingress_routing_service
+
+    @staticmethod
+    def _parse_auth_user_uuid(value: str) -> uuid.UUID:
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("auth_user is not a valid UUID") from exc
+
+    @staticmethod
+    def _global_ingress_route() -> IngressRouteResult:
+        return IngressRouteResult(
+            tenant_id=GLOBAL_TENANT_ID,
+            tenant_slug="global",
+            platform="web",
+            channel_key="web",
+            identifier_claims={
+                "identifier_type": "tenant_slug",
+                "identifier_value": "global",
+                "tenant_slug": "global",
+            },
+        )
+
+    async def _resolve_web_ingress_route(
+        self,
+        *,
+        auth_user: str,
+        tenant_slug: str | None,
+    ) -> IngressRouteResult:
+        normalized_slug = None
+        if isinstance(tenant_slug, str):
+            normalized_slug = tenant_slug.strip()
+            if normalized_slug == "":
+                normalized_slug = None
+
+        if normalized_slug is None:
+            return self._global_ingress_route()
+
+        auth_user_id = self._parse_auth_user_uuid(auth_user)
+
+        route_service = self._ingress_router()
+        resolved = await route_service.resolve(
+            IngressRouteRequest(
+                platform="web",
+                channel_key="web",
+                identifier_type="tenant_slug",
+                identifier_value=normalized_slug,
+                tenant_slug=normalized_slug,
+                auth_user_id=auth_user_id,
+                require_active_binding=False,
+                claims={
+                    "tenant_slug": normalized_slug,
+                },
+            )
+        )
+        if resolved.ok and resolved.result is not None:
+            return resolved.result
+
+        reason_code = str(resolved.reason_code or "").strip()
+        if reason_code == IngressRouteReason.UNAUTHORIZED_TENANT.value:
+            raise PermissionError("unauthorized tenant")
+
+        raise ValueError("invalid tenant_slug")
+
     @staticmethod
     def _to_utc_datetime(epoch_seconds: float) -> datetime:
         return datetime.fromtimestamp(float(epoch_seconds), tz=timezone.utc)
@@ -400,6 +502,7 @@ class DefaultWebClient(IWebClient):
         *,
         auth_user: str,
         conversation_id: str,
+        tenant_slug: str | None = None,
         message_type: str,
         text: str | None = None,
         metadata: dict[str, Any] | None = None,
@@ -409,6 +512,10 @@ class DefaultWebClient(IWebClient):
         client_message_id: str | None = None,
     ) -> dict[str, Any]:
         """Persist and enqueue a user message for async processing."""
+        ingress_route = await self._resolve_web_ingress_route(
+            auth_user=auth_user,
+            tenant_slug=tenant_slug,
+        )
         normalized_type = self._normalize_message_type(message_type)
         payload_metadata = metadata
         if normalized_type == "composed":
@@ -453,6 +560,7 @@ class DefaultWebClient(IWebClient):
             await self._ensure_conversation_owner_unlocked(
                 conversation_id=conversation,
                 auth_user=auth_user_id,
+                tenant_id=ingress_route.tenant_id,
                 create_if_missing=True,
             )
             pending_count = await self._runtime_store().count_pending_jobs()
@@ -465,6 +573,7 @@ class DefaultWebClient(IWebClient):
                 "file_path": job["file_path"],
                 "mime_type": job["mime_type"],
                 "original_filename": job["original_filename"],
+                "ingress_route": build_ingress_route_context(ingress_route),
             }
             await self._runtime_store().insert_pending_job(
                 job_id=job_id,
@@ -509,6 +618,7 @@ class DefaultWebClient(IWebClient):
             await self._ensure_conversation_owner_unlocked(
                 conversation_id=conversation,
                 auth_user=auth_user_id,
+                tenant_id=None,
                 create_if_missing=False,
             )
             log = await self._read_event_log_unlocked(conversation)
@@ -1346,6 +1456,15 @@ class DefaultWebClient(IWebClient):
         self, job: dict[str, Any]
     ) -> list[dict] | None:
         message_type = str(job.get("message_type", "")).strip().lower()
+        ingress_route = job.get("ingress_route")
+        ingress_message_context = None
+        if isinstance(ingress_route, dict):
+            ingress_message_context = [
+                {
+                    "type": "ingress_route",
+                    "content": dict(ingress_route),
+                }
+            ]
 
         platform = "web"
         room_id = str(job.get("conversation_id"))
@@ -1357,6 +1476,7 @@ class DefaultWebClient(IWebClient):
                 room_id=room_id,
                 sender=sender,
                 message=str(job.get("text", "")),
+                message_context=ingress_message_context,
             )
 
         if message_type == "composed":
@@ -1370,6 +1490,7 @@ class DefaultWebClient(IWebClient):
                 room_id=room_id,
                 sender=sender,
                 message=composed_message_payload,
+                message_context=ingress_message_context,
             )
 
         materialized_file_path = await self._materialize_media_reference(
@@ -1378,11 +1499,19 @@ class DefaultWebClient(IWebClient):
         if materialized_file_path is None:
             raise ValueError("Media file no longer exists.")
 
+        payload_metadata = job.get("metadata")
+        if isinstance(payload_metadata, dict):
+            payload_metadata = dict(payload_metadata)
+        else:
+            payload_metadata = {}
+        if isinstance(ingress_route, dict):
+            payload_metadata["ingress_route"] = dict(ingress_route)
+
         message_payload = {
             "file_path": materialized_file_path,
             "mime_type": job.get("mime_type"),
             "filename": job.get("original_filename"),
-            "metadata": job.get("metadata") or {},
+            "metadata": payload_metadata,
             "client_message_id": job.get("client_message_id"),
         }
 
@@ -2111,15 +2240,24 @@ class DefaultWebClient(IWebClient):
         *,
         conversation_id: str,
         auth_user: str,
+        tenant_id: uuid.UUID | None = None,
         create_if_missing: bool,
     ) -> None:
-        await self._runtime_store().ensure_conversation_owner(
-            conversation_id=conversation_id,
-            auth_user=auth_user,
-            create_if_missing=create_if_missing,
-            stream_generation=self._new_stream_generation(),
-            stream_version=self._event_log_version,
-        )
+        try:
+            await self._runtime_store().ensure_conversation_owner(
+                conversation_id=conversation_id,
+                auth_user=auth_user,
+                tenant_id=tenant_id,
+                create_if_missing=create_if_missing,
+                stream_generation=self._new_stream_generation(),
+                stream_version=self._event_log_version,
+            )
+        except ValueError as exc:
+            if str(exc).strip() == "conversation tenant mismatch":
+                raise WebConversationTenantConflictError(
+                    "conversation tenant mismatch"
+                ) from exc
+            raise
 
     async def _read_replay_events_unlocked(
         self,

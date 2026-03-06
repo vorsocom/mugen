@@ -1,6 +1,7 @@
 """Public API for channel_orchestration.domain."""
 
 __all__ = [
+    "IngressBindingDE",
     "ChannelProfileDE",
     "IntakeRuleDE",
     "RoutingRuleDE",
@@ -12,6 +13,9 @@ __all__ = [
     "WorkItemDE",
 ]
 
+from mugen.core.plugin.channel_orchestration.domain.ingress_binding import (
+    IngressBindingDE,
+)
 from mugen.core.plugin.channel_orchestration.domain.channel_profile import (
     ChannelProfileDE,
 )

@@ -35,7 +35,6 @@ async def telegram_botapi_webhook_event(
     logger_provider=_logger_provider,
 ):
     """Respond to Telegram Bot API webhook events."""
-    _ = path_token
 
     ipc_svc: IIPCService = ipc_provider()
     logger: ILoggingGateway = logger_provider()
@@ -49,7 +48,10 @@ async def telegram_botapi_webhook_event(
         IPCCommandRequest(
             platform="telegram",
             command="telegram_botapi_update",
-            data=data,
+            data={
+                "path_token": path_token,
+                "payload": data,
+            },
         )
     )
     if response.errors:

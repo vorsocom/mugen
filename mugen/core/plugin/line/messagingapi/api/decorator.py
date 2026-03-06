@@ -65,23 +65,12 @@ def line_webhook_path_token_required(
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
 
             path_token = kwargs.get("path_token")
             if not isinstance(path_token, str) or path_token.strip() == "":
                 logger.error("LINE webhook path token missing.")
                 abort(400)
-
-            try:
-                expected_token = str(config.line.webhook.path_token)
-            except (AttributeError, KeyError):
-                logger.error("LINE webhook path token configuration missing.")
-                abort(500)
-
-            if hmac.compare_digest(path_token.strip(), expected_token.strip()) is not True:
-                logger.error("LINE webhook path token verification failed.")
-                abort(401)
 
             return await func(*args, **kwargs)
 

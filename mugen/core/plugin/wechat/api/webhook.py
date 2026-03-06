@@ -284,6 +284,7 @@ async def _handle_get_verification(
 
 async def _handle_post_event(
     *,
+    path_token: str,
     provider: str,
     command: str,
     config_provider,
@@ -304,6 +305,7 @@ async def _handle_post_event(
             platform="wechat",
             command=command,
             data={
+                "path_token": path_token,
                 "provider": provider,
                 "payload": payload,
             },
@@ -347,6 +349,7 @@ async def wechat_official_account_event(
     """Official Account webhook event endpoint."""
     _ = path_token
     return await _handle_post_event(
+        path_token=path_token,
         provider="official_account",
         command="wechat_official_account_event",
         config_provider=config_provider,
@@ -385,6 +388,7 @@ async def wechat_wecom_event(
     """WeCom callback event endpoint."""
     _ = path_token
     return await _handle_post_event(
+        path_token=path_token,
         provider="wecom",
         command="wechat_wecom_event",
         config_provider=config_provider,

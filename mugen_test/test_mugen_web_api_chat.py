@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from mugen.core.contract.client.web import WebConversationTenantConflictError
 from mugen.core.plugin.web.api import chat
 
 
@@ -349,9 +350,183 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
         kwargs = web_client.enqueue_message.await_args.kwargs
         self.assertEqual(kwargs["auth_user"], "user-1")
         self.assertEqual(kwargs["conversation_id"], "conv-1")
+        self.assertIsNone(kwargs["tenant_slug"])
         self.assertEqual(kwargs["message_type"], "text")
         self.assertEqual(kwargs["metadata"], {"k": "v"})
         self.assertEqual(response.status_code, 200)
+
+    async def test_messages_create_tenant_slug_paths(self) -> None:
+        endpoint = unwrap(chat.web_messages_create)
+        logger = Mock()
+        base_form = {
+            "conversation_id": "conv-tenant",
+            "message_type": "text",
+            "text": "hello",
+            "client_message_id": "c-tenant",
+        }
+
+        web_client = SimpleNamespace(enqueue_message=AsyncMock(return_value={"job_id": "j1"}))
+        with (
+            patch.object(
+                chat,
+                "request",
+                new=SimpleNamespace(
+                    form=_AwaitableValue(
+                        {
+                            **base_form,
+                            "tenant_slug": "tenant-a",
+                        }
+                    ),
+                    files=_AwaitableValue({}),
+                ),
+            ),
+            patch.object(chat, "jsonify", return_value=SimpleNamespace(status_code=200)),
+        ):
+            _response, status = await endpoint(
+                auth_user="user-1",
+                config_provider=lambda: _make_config(basedir=tempfile.gettempdir()),
+                logger_provider=lambda: logger,
+                web_client_provider=lambda: web_client,
+            )
+        self.assertEqual(status, 202)
+        self.assertEqual(
+            web_client.enqueue_message.await_args.kwargs["tenant_slug"],
+            "tenant-a",
+        )
+
+        for bad_value in ["", "  "]:
+            with self.subTest(bad_value=bad_value):
+                with (
+                    patch.object(chat, "abort", side_effect=_abort_raiser),
+                    patch.object(
+                        chat,
+                        "request",
+                        new=SimpleNamespace(
+                            form=_AwaitableValue(
+                                {
+                                    **base_form,
+                                    "tenant_slug": bad_value,
+                                }
+                            ),
+                            files=_AwaitableValue({}),
+                        ),
+                    ),
+                ):
+                    with self.assertRaises(_AbortCalled) as ex:
+                        await endpoint(
+                            auth_user="user-1",
+                            config_provider=lambda: _make_config(
+                                basedir=tempfile.gettempdir()
+                            ),
+                            logger_provider=lambda: logger,
+                            web_client_provider=lambda: web_client,
+                        )
+                    self.assertEqual(ex.exception.code, 400)
+
+        with (
+            patch.object(chat, "abort", side_effect=_abort_raiser),
+            patch.object(
+                chat,
+                "request",
+                new=SimpleNamespace(
+                    form=_AwaitableValue(
+                        {
+                            **base_form,
+                            "tenant_slug": 123,
+                        }
+                    ),
+                    files=_AwaitableValue({}),
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    auth_user="user-1",
+                    config_provider=lambda: _make_config(basedir=tempfile.gettempdir()),
+                    logger_provider=lambda: logger,
+                    web_client_provider=lambda: web_client,
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+        web_client.enqueue_message = AsyncMock(side_effect=ValueError("invalid tenant_slug"))
+        with (
+            patch.object(chat, "abort", side_effect=_abort_raiser),
+            patch.object(
+                chat,
+                "request",
+                new=SimpleNamespace(
+                    form=_AwaitableValue(
+                        {
+                            **base_form,
+                            "tenant_slug": "bad-tenant",
+                        }
+                    ),
+                    files=_AwaitableValue({}),
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    auth_user="user-1",
+                    config_provider=lambda: _make_config(basedir=tempfile.gettempdir()),
+                    logger_provider=lambda: logger,
+                    web_client_provider=lambda: web_client,
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+        web_client.enqueue_message = AsyncMock(side_effect=PermissionError())
+        with (
+            patch.object(chat, "abort", side_effect=_abort_raiser),
+            patch.object(
+                chat,
+                "request",
+                new=SimpleNamespace(
+                    form=_AwaitableValue(
+                        {
+                            **base_form,
+                            "tenant_slug": "tenant-a",
+                        }
+                    ),
+                    files=_AwaitableValue({}),
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    auth_user="user-1",
+                    config_provider=lambda: _make_config(basedir=tempfile.gettempdir()),
+                    logger_provider=lambda: logger,
+                    web_client_provider=lambda: web_client,
+                )
+            self.assertEqual(ex.exception.code, 403)
+
+        web_client.enqueue_message = AsyncMock(
+            side_effect=WebConversationTenantConflictError("conversation tenant mismatch")
+        )
+        with (
+            patch.object(chat, "abort", side_effect=_abort_raiser),
+            patch.object(
+                chat,
+                "request",
+                new=SimpleNamespace(
+                    form=_AwaitableValue(
+                        {
+                            **base_form,
+                            "tenant_slug": "tenant-a",
+                        }
+                    ),
+                    files=_AwaitableValue({}),
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    auth_user="user-1",
+                    config_provider=lambda: _make_config(basedir=tempfile.gettempdir()),
+                    logger_provider=lambda: logger,
+                    web_client_provider=lambda: web_client,
+                )
+            self.assertEqual(ex.exception.code, 409)
 
     async def test_structured_upload_helper_error_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1424,6 +1599,7 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
 
             for expected_code, side_effect in (
                 (403, PermissionError()),
+                (409, WebConversationTenantConflictError("conversation tenant mismatch")),
                 (400, ValueError("bad structured enqueue")),
                 (500, RuntimeError("boom")),
             ):

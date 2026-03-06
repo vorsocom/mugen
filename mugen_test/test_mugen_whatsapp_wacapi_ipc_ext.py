@@ -3,11 +3,18 @@
 import asyncio
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
+import uuid
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from mugen.core.contract.service.ingress_routing import (
+    IngressRouteReason,
+    IngressRouteResolution,
+    IngressRouteResult,
+)
 from mugen.core.contract.service.ipc import IPCCommandRequest
+from mugen.core.plugin.whatsapp.wacapi import ipc_ext
 from mugen.core.plugin.whatsapp.wacapi.ipc_ext import WhatsAppWACAPIIPCExtension
 
 
@@ -24,7 +31,8 @@ def _make_config(
         whatsapp=SimpleNamespace(
             beta=SimpleNamespace(
                 users=list(beta_users or []),
-            )
+            ),
+            business=SimpleNamespace(phone_number_id="pnid-1"),
         ),
     )
 
@@ -168,6 +176,26 @@ class _MemoryRelational:
         return dict(existing)
 
 
+class _IngressRoutingStub:
+    async def resolve(self, request) -> IngressRouteResolution:
+        identifier_value = request.identifier_value
+        if not isinstance(identifier_value, str) or identifier_value.strip() == "":
+            identifier_value = "pnid-1"
+        return IngressRouteResolution(
+            ok=True,
+            result=IngressRouteResult(
+                tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                tenant_slug="tenant-a",
+                platform="whatsapp",
+                channel_key="whatsapp",
+                identifier_claims={
+                    "identifier_type": "phone_number_id",
+                    "identifier_value": str(identifier_value),
+                },
+            ),
+        )
+
+
 def _new_extension(
     *,
     config,
@@ -176,6 +204,7 @@ def _new_extension(
     messaging_service=None,
     user_service=None,
     logging_gateway=None,
+    ingress_routing_service=None,
 ) -> WhatsAppWACAPIIPCExtension:
     return WhatsAppWACAPIIPCExtension(
         config=config,
@@ -186,6 +215,7 @@ def _new_extension(
         messaging_service=messaging_service or _make_messaging_service(),
         user_service=user_service or _make_user_service(),
         whatsapp_client=client or _make_client(),
+        ingress_routing_service=ingress_routing_service or _IngressRoutingStub(),
     )
 
 
@@ -448,6 +478,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             room_id="15550003",
             sender="15550003",
             message="incoming",
+            message_context=ANY,
         )
         user_service.add_known_user.assert_awaited_once_with(
             "15550003",
@@ -501,6 +532,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             room_id="15550001",
             sender="15550001",
             message="hello",
+            message_context=ANY,
         )
         warning_messages = [
             call.args[0] for call in logging_gateway.warning.call_args_list
@@ -681,6 +713,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     room_id="15550088",
                     sender="15550088",
                     message=expected_text,
+                    message_context=ANY,
                 )
 
     async def test_button_message_without_extractable_text_delegates_to_handlers(
@@ -961,12 +994,14 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             room_id="15550100",
             sender="15550100",
             message="first",
+            message_context=ANY,
         )
         messaging_service.handle_text_message.assert_any_await(
             "whatsapp",
             room_id="15550100",
             sender="15550100",
             message="second",
+            message_context=ANY,
         )
 
     async def test_status_event_routes_to_message_handlers(self) -> None:
@@ -1068,6 +1103,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             room_id="15550110",
             sender="15550110",
             message="still processed",
+            message_context=ANY,
         )
 
     async def test_duplicate_message_event_is_acknowledged_without_reprocessing(
@@ -1111,6 +1147,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             room_id="15550044",
             sender="15550044",
             message="hello",
+            message_context=ANY,
         )
         logging_gateway.debug.assert_any_call("Skip duplicate WhatsApp message event.")
 
@@ -1572,6 +1609,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             room_id="15550011",
             sender="15550011",
             message="hello",
+            message_context=ANY,
         )
         client.send_text_message.assert_not_awaited()
 
@@ -1863,9 +1901,11 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
 
         supported.handle_message.assert_called_once_with(
+            platform="whatsapp",
             room_id="15550005",
             sender="15550005",
             message={"id": "m1"},
+            message_context=None,
         )
         create_task.assert_called_once()
         gather.assert_called_once_with("task")
@@ -1890,6 +1930,128 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender=None,
         )
         client.send_text_message.assert_not_awaited()
+
+    async def test_ingress_router_default_and_helper_fallback_branches(self) -> None:
+        ext = WhatsAppWACAPIIPCExtension(
+            config=_make_config(beta_active=False),
+            logging_gateway=Mock(),
+            relational_storage_gateway=_MemoryRelational(),
+            messaging_service=_make_messaging_service(),
+            user_service=_make_user_service(),
+            whatsapp_client=_make_client(),
+            ingress_routing_service=None,
+        )
+        sentinel_router = object()
+        with patch.object(
+            ipc_ext,
+            "DefaultIngressRoutingService",
+            return_value=sentinel_router,
+        ) as router_ctor:
+            self.assertIs(ext._ingress_router(), sentinel_router)  # pylint: disable=protected-access
+            self.assertIs(ext._ingress_router(), sentinel_router)  # pylint: disable=protected-access
+            router_ctor.assert_called_once()
+
+        self.assertIsNone(ext._coerce_nonempty_string(123))  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            ext._compose_message_context(
+                ingress_route={"tenant_slug": "tenant-a"},
+                extra_context=["bad"],
+            ),
+            [
+                {
+                    "type": "ingress_route",
+                    "content": {"tenant_slug": "tenant-a"},
+                }
+            ],
+        )
+        merged = ext._merge_ingress_metadata(  # pylint: disable=protected-access
+            payload={"metadata": {"k": "v"}},
+            ingress_route={"tenant_slug": "tenant-a"},
+        )
+        self.assertEqual(merged["metadata"]["k"], "v")
+        self.assertEqual(merged["metadata"]["ingress_route"]["tenant_slug"], "tenant-a")
+        self.assertEqual(  # pylint: disable=protected-access
+            ext._extract_phone_number_id({"metadata": {"phone_number_id": " 999 "}}),
+            "999",
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            ext._extract_phone_number_id({"metadata": {"phone_number_id": "   "}}),
+            "pnid-1",
+        )
+
+    async def test_unresolved_ingress_route_is_dead_lettered_and_skips_processing(self) -> None:
+        class _UnresolvedRouter:
+            async def resolve(self, request):  # noqa: ARG002
+                return IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                    reason_detail=None,
+                )
+
+        logger = Mock()
+        relational = _MemoryRelational()
+        messaging = _make_messaging_service()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            logging_gateway=logger,
+            relational_storage_gateway=relational,
+            messaging_service=messaging,
+            ingress_routing_service=_UnresolvedRouter(),
+        )
+        payload = _make_request(
+            _make_message_event(
+                {
+                    "id": "wamid-unresolved",
+                    "type": "text",
+                    "text": {"body": "hello"},
+                },
+                sender="15550014",
+            )
+        )
+
+        await ext._wacapi_event(payload)  # pylint: disable=protected-access
+        messaging.handle_text_message.assert_not_awaited()
+        self.assertEqual(relational.dead_letters[0]["reason_code"], "route_unresolved")
+        logger.warning.assert_called()
+
+        class _UnresolvedWithDetailRouter:
+            async def resolve(self, request):  # noqa: ARG002
+                return IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                    reason_detail="detail",
+                )
+
+        ext_with_detail = _new_extension(
+            config=_make_config(beta_active=False),
+            logging_gateway=Mock(),
+            relational_storage_gateway=_MemoryRelational(),
+            ingress_routing_service=_UnresolvedWithDetailRouter(),
+        )
+        await ext_with_detail._resolve_ingress_route(  # pylint: disable=protected-access
+            phone_number_id="pnid-1",
+            webhook_payload={"entry": []},
+        )
+        self.assertIn(
+            "detail",
+            str(ext_with_detail._relational_storage_gateway.dead_letters[0]["error_message"]),  # pylint: disable=protected-access
+        )
+
+    async def test_process_message_and_status_normalize_explicit_ingress_route(self) -> None:
+        ext = _new_extension(config=_make_config(beta_active=False))
+        with (
+            patch.object(ext, "_is_duplicate_event", new=AsyncMock(return_value=True)),
+            patch.object(ext, "_emit_processing_signal", new=AsyncMock()),
+        ):
+            await ext._process_message_event(  # pylint: disable=protected-access
+                event_value={},
+                message={"id": "m-route", "type": "text", "from": "15550015"},
+                ingress_route={"tenant_slug": "tenant-a"},
+            )
+            await ext._process_status_event(  # pylint: disable=protected-access
+                {"id": "s-route", "status": "sent", "recipient_id": "15550015"},
+                ingress_route={"tenant_slug": "tenant-a"},
+            )
 
 
 def _ok_payload(data: dict | None = None, raw: str = "{}") -> dict:

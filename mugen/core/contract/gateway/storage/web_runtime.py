@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+import uuid
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class IWebRuntimeStore(ABC):
         *,
         conversation_id: str,
         auth_user: str,
+        tenant_id: uuid.UUID | None,
         create_if_missing: bool,
         stream_generation: str,
         stream_version: int,

@@ -4,10 +4,15 @@ from inspect import unwrap
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 from sqlalchemy.exc import IntegrityError
 
 from mugen.core.client.whatsapp import DefaultWhatsAppClient
+from mugen.core.contract.service.ingress_routing import (
+    IngressRouteResolution,
+    IngressRouteResult,
+)
 from mugen.core.service.ipc import DefaultIPCService
 from mugen.core.plugin.whatsapp.wacapi.api import webhook
 from mugen.core.plugin.whatsapp.wacapi.ipc_ext import WhatsAppWACAPIIPCExtension
@@ -113,6 +118,26 @@ def _make_message_event(message_id: str, text: str) -> dict:
     }
 
 
+class _IngressRoutingStub:
+    async def resolve(self, request) -> IngressRouteResolution:
+        identifier_value = request.identifier_value
+        if not isinstance(identifier_value, str) or identifier_value.strip() == "":
+            identifier_value = "123456789"
+        return IngressRouteResolution(
+            ok=True,
+            result=IngressRouteResult(
+                tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                tenant_slug="tenant-a",
+                platform="whatsapp",
+                channel_key="whatsapp",
+                identifier_claims={
+                    "identifier_type": "phone_number_id",
+                    "identifier_value": str(identifier_value),
+                },
+            ),
+        )
+
+
 class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
     """Exercises duplicate webhook handling and transient retry recovery."""
 
@@ -144,6 +169,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             messaging_service=messaging_service,
             user_service=user_service,
             whatsapp_client=client,
+            ingress_routing_service=_IngressRoutingStub(),
         )
         ipc_service = DefaultIPCService(
             config=SimpleNamespace(),
@@ -180,6 +206,24 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             room_id="15551230001",
             sender="15551230001",
             message="hello",
+            message_context=[
+                {
+                    "type": "ingress_route",
+                    "content": {
+                        "tenant_id": "11111111-1111-1111-1111-111111111111",
+                        "tenant_slug": "tenant-a",
+                        "platform": "whatsapp",
+                        "channel_key": "whatsapp",
+                        "identifier_claims": {
+                            "identifier_type": "phone_number_id",
+                            "identifier_value": "123456789",
+                        },
+                        "channel_profile_id": None,
+                        "route_key": None,
+                        "binding_id": None,
+                    },
+                }
+            ],
         )
         logger.debug.assert_any_call("Skip duplicate WhatsApp message event.")
 
@@ -234,6 +278,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             messaging_service=messaging_service,
             user_service=user_service,
             whatsapp_client=whatsapp_client,
+            ingress_routing_service=_IngressRoutingStub(),
         )
         ipc_service = DefaultIPCService(
             config=SimpleNamespace(),
@@ -260,4 +305,22 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             room_id="15551230001",
             sender="15551230001",
             message="hello",
+            message_context=[
+                {
+                    "type": "ingress_route",
+                    "content": {
+                        "tenant_id": "11111111-1111-1111-1111-111111111111",
+                        "tenant_slug": "tenant-a",
+                        "platform": "whatsapp",
+                        "channel_key": "whatsapp",
+                        "identifier_claims": {
+                            "identifier_type": "phone_number_id",
+                            "identifier_value": "123456789",
+                        },
+                        "channel_profile_id": None,
+                        "route_key": None,
+                        "binding_id": None,
+                    },
+                }
+            ],
         )
