@@ -1,11 +1,16 @@
 """Unit tests for mugen.core.service.messaging.DefaultMessagingService."""
 
+from __future__ import annotations
+
 import asyncio
 from types import SimpleNamespace
 import unittest
-from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
+import mugen.core.service.messaging as messaging_module
+from mugen.core.constants import GLOBAL_TENANT_ID
+from mugen.core.contract.context import ContextScope
+from mugen.core.contract.service.messaging import MessagingTurnRequest
 from mugen.core.service.messaging import DefaultMessagingService
 
 
@@ -14,76 +19,81 @@ class _DummyMhExt:
         self,
         *,
         platforms: list[str],
-        message_types: list[str] | Any,
-        response: Any = None,
-        callback: Any = None,
+        message_types: object,
+        response: object = None,
+        side_effect: object = None,
     ) -> None:
         self._platforms = set(platforms)
+        self.platforms = list(platforms)
         self.message_types = message_types
-        self._response = response
-        self._callback = callback
-        self.handle_message = AsyncMock(side_effect=self._handle)
+        self.handle_message = AsyncMock(return_value=response, side_effect=side_effect)
 
     def platform_supported(self, platform: str) -> bool:
         return platform in self._platforms
 
-    async def _handle(self, **kwargs):
-        if self._callback is None:
-            return self._response
 
-        result = self._callback(**kwargs)
-        if asyncio.iscoroutine(result):
-            return await result
+class _BuiltinTextHandler:
+    def __init__(self, **kwargs) -> None:
+        self.init_kwargs = kwargs
+        self.handle_message = AsyncMock(
+            return_value=[{"type": "text", "content": "builtin-response"}]
+        )
 
-        return result
+
+def _scope(
+    *,
+    tenant_id: str = "tenant-1",
+    platform: str = "matrix",
+    room_id: str = "!room",
+    sender_id: str = "@alice",
+) -> ContextScope:
+    return ContextScope(
+        tenant_id=tenant_id,
+        platform=platform,
+        channel_id=platform,
+        room_id=room_id,
+        sender_id=sender_id,
+        conversation_id=room_id,
+    )
 
 
 class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
-    """Tests message handler fanout and extension registration."""
+    """Covers messaging runtime orchestration around the context engine seam."""
 
     def _new_service(
         self,
         *,
         mh_mode: str = "optional",
-        completion_content: str = "core-response",
+        environment: str = "test",
     ) -> DefaultMessagingService:
-        keyval_storage_gateway = Mock()
-        keyval_storage_gateway.get_json = AsyncMock(return_value={"messages": []})
-        keyval_storage_gateway.get_entry = AsyncMock(return_value=None)
-        keyval_storage_gateway.put_json = AsyncMock(return_value=None)
-
         completion_gateway = Mock()
-        completion_gateway.get_completion = AsyncMock(
-            return_value=SimpleNamespace(content=completion_content)
-        )
+        completion_gateway.get_completion = AsyncMock()
+
+        logging_gateway = Mock()
+        context_engine_service = Mock()
+        user_service = Mock()
 
         svc = DefaultMessagingService(
             config=SimpleNamespace(
                 mugen=SimpleNamespace(
+                    environment=environment,
                     messaging=SimpleNamespace(
-                        extension_timeout_seconds=10.0,
                         mh_mode=mh_mode,
-                    )
+                        extension_timeout_seconds=10.0,
+                    ),
                 )
             ),
             completion_gateway=completion_gateway,
-            keyval_storage_gateway=keyval_storage_gateway,
-            logging_gateway=Mock(),
-            user_service=Mock(),
+            context_engine_service=context_engine_service,
+            logging_gateway=logging_gateway,
+            user_service=user_service,
         )
-        svc._cp_extensions = []
-        svc._ct_extensions = []
-        svc._ctx_extensions = []
-        svc._mh_extensions = []
-        svc._rag_extensions = []
-        svc._rpp_extensions = []
+        svc._builtin_text_handler = _BuiltinTextHandler()  # pylint: disable=protected-access
         return svc
 
     def test_init_supports_dict_messaging_config(self) -> None:
         completion_gateway = Mock()
-        completion_gateway.get_completion = AsyncMock(
-            return_value=SimpleNamespace(content="ok")
-        )
+        completion_gateway.get_completion = AsyncMock()
 
         svc = DefaultMessagingService(
             config=SimpleNamespace(
@@ -95,7 +105,7 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
                 )
             ),
             completion_gateway=completion_gateway,
-            keyval_storage_gateway=Mock(),
+            context_engine_service=Mock(),
             logging_gateway=Mock(),
             user_service=Mock(),
         )
@@ -104,9 +114,7 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
 
     def test_init_rejects_invalid_mh_mode(self) -> None:
         completion_gateway = Mock()
-        completion_gateway.get_completion = AsyncMock(
-            return_value=SimpleNamespace(content="ok")
-        )
+        completion_gateway.get_completion = AsyncMock()
 
         with self.assertRaisesRegex(ValueError, "mugen.messaging.mh_mode"):
             DefaultMessagingService(
@@ -119,18 +127,16 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
                     )
                 ),
                 completion_gateway=completion_gateway,
-                keyval_storage_gateway=Mock(),
+                context_engine_service=Mock(),
                 logging_gateway=Mock(),
                 user_service=Mock(),
             )
 
     def test_init_wraps_builtin_pipeline_import_error(self) -> None:
         completion_gateway = Mock()
-        completion_gateway.get_completion = AsyncMock(
-            return_value=SimpleNamespace(content="ok")
-        )
+        completion_gateway.get_completion = AsyncMock()
 
-        with unittest.mock.patch(
+        with patch(
             "mugen.core.service.messaging.importlib.import_module",
             side_effect=ImportError("boom"),
         ):
@@ -145,20 +151,15 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
                         )
                     ),
                     completion_gateway=completion_gateway,
-                    keyval_storage_gateway=Mock(),
+                    context_engine_service=Mock(),
                     logging_gateway=Mock(),
                     user_service=Mock(),
                 )
 
-    async def test_handle_text_message_returns_unsupported_when_no_match(self) -> None:
+    async def test_handle_text_message_uses_builtin_handler_with_fallback_global_scope(
+        self,
+    ) -> None:
         svc = self._new_service()
-        svc._mh_extensions = [
-            _DummyMhExt(
-                platforms=["matrix"],
-                message_types=["audio"],
-                response=[{"type": "text", "content": "ignored"}],
-            ),
-        ]
 
         result = await svc.handle_text_message(
             platform="matrix",
@@ -167,13 +168,21 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             message="hello",
         )
 
+        self.assertEqual(result, [{"type": "text", "content": "builtin-response"}])
+        builtin_call = svc._builtin_text_handler.handle_message.await_args.kwargs  # pylint: disable=protected-access
+        builtin_scope = builtin_call["scope"]
+        self.assertIsInstance(builtin_scope, ContextScope)
+        self.assertEqual(builtin_scope.tenant_id, str(GLOBAL_TENANT_ID))
         self.assertEqual(
-            result,
-            [{"type": "text", "content": "core-response"}],
+            builtin_call["ingress_metadata"]["tenant_resolution"]["mode"],
+            "fallback_global",
         )
-        svc._completion_gateway.get_completion.assert_awaited_once()  # pylint: disable=protected-access
+        self.assertEqual(
+            builtin_call["message_context"][-1]["type"],
+            "ingress_route",
+        )
 
-    async def test_handle_text_message_raises_when_mode_required_and_no_mh_available(
+    async def test_handle_text_message_raises_when_required_mode_has_no_mh_extension(
         self,
     ) -> None:
         svc = self._new_service(mh_mode="required")
@@ -203,14 +212,16 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             message_types=["text"],
             response=[{"type": "text", "content": "c"}],
         )
-        svc._mh_extensions = [ext_a, ext_b, ext_c]
+        svc._mh_extensions = [ext_a, ext_b, ext_c]  # pylint: disable=protected-access
 
+        scope = _scope()
         result = await svc.handle_text_message(
             platform="matrix",
             room_id="!room",
             sender="@alice",
             message="hello",
-            message_context=[{"type": "ctx", "content": "ctx"}],
+            message_context=[{"type": "seed", "content": "ctx"}],
+            scope=scope,
         )
 
         self.assertEqual(
@@ -223,999 +234,857 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
         ext_a.handle_message.assert_awaited_once()
         ext_b.handle_message.assert_awaited_once()
         ext_c.handle_message.assert_not_awaited()
+        self.assertIs(ext_a.handle_message.await_args.kwargs["scope"], scope)
 
-    async def test_handle_audio_file_image_video_call_text_pipeline(self) -> None:
+    async def test_collect_message_handler_responses_rejects_invalid_shapes(self) -> None:
+        svc = self._new_service()
+        bad_type = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response="not-a-list",
+        )
+        bad_item = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response=[{"type": "text", "content": "ok"}, "bad-item"],
+        )
+        ignored_type = _DummyMhExt(
+            platforms=["matrix"],
+            message_types="text",
+            response=[{"type": "text", "content": "ignored"}],
+        )
+        svc._mh_extensions = [bad_type, bad_item, ignored_type]  # pylint: disable=protected-access
+
+        result = await svc._collect_message_handler_responses(  # pylint: disable=protected-access
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+            message_types={"text"},
+            scope=_scope(),
+        )
+
+        self.assertEqual(result, [{"type": "text", "content": "ok"}])
+        svc._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
+        ignored_type.handle_message.assert_not_awaited()
+
+    async def test_invoke_message_handler_fail_open_logs_and_returns_none(self) -> None:
         svc = self._new_service()
         ext = _DummyMhExt(
             platforms=["matrix"],
-            message_types=["audio", "file", "image", "video"],
-            response=[{"type": "ctx", "content": "x"}],
+            message_types=["text"],
+            side_effect=RuntimeError("boom"),
         )
-        svc._mh_extensions = [ext]
-        svc.handle_text_message = AsyncMock(
+
+        result = await svc._invoke_message_handler(  # pylint: disable=protected-access
+            extension=ext,
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+            scope=_scope(),
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(
+            svc._extension_metrics["messaging.extensions.exception"],  # pylint: disable=protected-access
+            1,
+        )
+        svc._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
+
+    async def test_invoke_message_handler_fail_closed_raises_for_critical_extension(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            side_effect=asyncio.TimeoutError(),
+        )
+        svc.bind_mh_extension(ext, critical=True)
+
+        with self.assertRaises(RuntimeError):
+            await svc._invoke_message_handler(  # pylint: disable=protected-access
+                extension=ext,
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message="hello",
+                scope=_scope(),
+            )
+
+        self.assertIn(
+            ("mh", f"{type(ext).__module__}.{type(ext).__qualname__}", ("matrix",)),
+            svc._critical_extension_keys,  # pylint: disable=protected-access
+        )
+
+    async def test_handle_media_message_collects_context_then_calls_text_pipeline(self) -> None:
+        svc = self._new_service()
+        ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["audio"],
+            response=[{"type": "audio_summary", "content": {"text": "clip"}}],
+        )
+        svc._mh_extensions = [ext]  # pylint: disable=protected-access
+        svc.handle_text_message = AsyncMock(  # type: ignore[method-assign]
             return_value=[{"type": "text", "content": "ok"}]
         )
 
-        await svc.handle_audio_message("matrix", "!room", "@alice", {"k": 1})
-        await svc.handle_file_message("matrix", "!room", "@alice", {"k": 2})
-        await svc.handle_image_message("matrix", "!room", "@alice", {"k": 3})
-        await svc.handle_video_message("matrix", "!room", "@alice", {"k": 4})
-
-        self.assertEqual(svc.handle_text_message.await_count, 4)
-        audio_call = svc.handle_text_message.await_args_list[0].kwargs
-        file_call = svc.handle_text_message.await_args_list[1].kwargs
-        image_call = svc.handle_text_message.await_args_list[2].kwargs
-        video_call = svc.handle_text_message.await_args_list[3].kwargs
-        self.assertEqual(audio_call["message"], "Uploaded an audio file.")
-        self.assertEqual(file_call["message"], "Uploaded a file.")
-        self.assertEqual(image_call["message"], "Uploaded an image file.")
-        self.assertEqual(video_call["message"], "Uploaded video file.")
-
-    async def test_handlers_skip_unsupported_platform_and_ignore_empty_responses(
-        self,
-    ) -> None:
-        svc = self._new_service()
-        unsupported = _DummyMhExt(
-            platforms=["whatsapp"],
-            message_types=["audio", "file", "image", "text", "video"],
-            response=[{"type": "ctx", "content": "unsupported"}],
+        scope = _scope()
+        result = await svc.handle_audio_message(
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message={"file_path": "clip.ogg"},
+            message_context=[{"type": "seed", "content": "ctx"}],
+            scope=scope,
         )
-        empty = _DummyMhExt(
-            platforms=["matrix"],
-            message_types=["audio", "file", "image", "text", "video"],
-            response=[],
-        )
-        useful = _DummyMhExt(
-            platforms=["matrix"],
-            message_types=["audio", "file", "image", "text", "video"],
-            response=[{"type": "ctx", "content": "ok"}],
-        )
-        svc._mh_extensions = [unsupported, empty, useful]
 
-        audio = await svc.handle_audio_message("matrix", "!room", "@alice", {})
-        file_resp = await svc.handle_file_message("matrix", "!room", "@alice", {})
-        image = await svc.handle_image_message("matrix", "!room", "@alice", {})
-        text = await svc.handle_text_message("matrix", "!room", "@alice", "hello")
-        video = await svc.handle_video_message("matrix", "!room", "@alice", {})
-
-        self.assertEqual(audio, [{"type": "ctx", "content": "ok"}])
-        self.assertEqual(file_resp, [{"type": "ctx", "content": "ok"}])
-        self.assertEqual(image, [{"type": "ctx", "content": "ok"}])
-        self.assertEqual(text, [{"type": "ctx", "content": "ok"}])
-        self.assertEqual(video, [{"type": "ctx", "content": "ok"}])
-        unsupported.handle_message.assert_not_awaited()
-
-    async def test_handle_audio_file_image_video_return_unsupported_when_no_match(
-        self,
-    ) -> None:
-        svc = self._new_service()
-        svc._mh_extensions = [
-            _DummyMhExt(
-                platforms=["matrix"],
-                message_types=["text"],
-                response=[{"type": "ctx", "content": "x"}],
-            ),
-        ]
-
-        audio = await svc.handle_audio_message("matrix", "!room", "@alice", {})
-        file_resp = await svc.handle_file_message("matrix", "!room", "@alice", {})
-        image = await svc.handle_image_message("matrix", "!room", "@alice", {})
-        video = await svc.handle_video_message("matrix", "!room", "@alice", {})
-
+        self.assertEqual(result, [{"type": "text", "content": "ok"}])
+        call = svc.handle_text_message.await_args.kwargs
+        self.assertEqual(call["message"], "Uploaded an audio file.")
         self.assertEqual(
-            audio,
-            [{"type": "text", "content": "Unsupported message type: audio."}],
-        )
-        self.assertEqual(
-            file_resp,
-            [{"type": "text", "content": "Unsupported message type: file."}],
-        )
-        self.assertEqual(
-            image,
-            [{"type": "text", "content": "Unsupported message type: image."}],
-        )
-        self.assertEqual(
-            video,
-            [{"type": "text", "content": "Unsupported message type: video."}],
-        )
-
-    async def test_handle_composed_message_routes_media_context_and_synthesizes_once(
-        self,
-    ) -> None:
-        svc = self._new_service()
-        text_ext = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            response=[{"type": "text", "content": "final"}],
-        )
-
-        async def _media_callback(**kwargs):
-            message = kwargs["message"]
-            return [
-                {
-                    "type": "ctx",
-                    "content": {
-                        "attachment_id": message.get("attachment_id"),
-                        "mime_type": message.get("mime_type"),
-                    },
-                }
-            ]
-
-        media_ext = _DummyMhExt(
-            platforms=["web"],
-            message_types=["audio", "file", "image", "video"],
-            callback=_media_callback,
-        )
-        svc._mh_extensions = [text_ext, media_ext]
-
-        result = await svc.handle_composed_message(
-            platform="web",
-            room_id="conv-1",
-            sender="user-1",
-            message={
-                "composition_mode": "message_with_attachments",
-                "parts": [
-                    {"type": "text", "text": "first"},
-                    {"type": "attachment", "id": "a1", "caption": "cap-1"},
-                    {"type": "attachment", "id": "a2"},
-                    {"type": "text", "text": "last"},
-                ],
-                "attachments": [
-                    {
-                        "id": "a1",
-                        "file_path": "/tmp/a1.ogg",
-                        "mime_type": "audio/ogg",
-                        "original_filename": "a1.ogg",
-                        "metadata": {"k": "v"},
-                        "caption": "cap-1",
-                    },
-                    {
-                        "id": "a2",
-                        "file_path": "/tmp/a2.pdf",
-                        "mime_type": "application/pdf",
-                        "original_filename": "a2.pdf",
-                        "metadata": {},
-                        "caption": None,
-                    },
-                ],
-                "metadata": {"source": "web"},
-                "client_message_id": "cid-1",
-            },
-            message_context=[
-                {"type": "ingress_route", "content": {"tenant_slug": "tenant-a"}},
-                "not-a-dict",
+            call["message_context"][:2],
+            [
+                {"type": "audio_summary", "content": {"text": "clip"}},
+                {"type": "seed", "content": "ctx"},
             ],
         )
+        self.assertIs(call["scope"], scope)
 
-        self.assertEqual(result, [{"type": "text", "content": "final"}])
-        self.assertEqual(media_ext.handle_message.await_count, 2)
-        text_ext.handle_message.assert_awaited_once()
-        text_call = text_ext.handle_message.await_args.kwargs
+    async def test_handle_composed_message_builds_prompt_and_attachment_context(self) -> None:
+        svc = self._new_service()
+        svc.handle_text_message = AsyncMock(  # type: ignore[method-assign]
+            return_value=[{"type": "text", "content": "ok"}]
+        )
+        media_ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["image"],
+            response=[{"type": "image_summary", "content": {"caption": "receipt"}}],
+        )
+        svc._mh_extensions = [media_ext]  # pylint: disable=protected-access
+
+        scope = _scope()
+        message = {
+            "parts": [
+                {"type": "text", "text": "Please review"},
+                {"type": "attachment", "id": "att-1", "caption": "receipt"},
+            ],
+            "attachments": [
+                {
+                    "id": "att-1",
+                    "file_path": "/tmp/receipt.png",
+                    "mime_type": "image/png",
+                    "original_filename": "receipt.png",
+                    "caption": "receipt",
+                    "metadata": {"page": 1},
+                }
+            ],
+            "composition_mode": "message_with_attachments",
+            "metadata": {"locale": "en-US"},
+        }
+
+        result = await svc.handle_composed_message(
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message=message,
+            scope=scope,
+        )
+
+        self.assertEqual(result, [{"type": "text", "content": "ok"}])
+        text_call = svc.handle_text_message.await_args.kwargs
         self.assertEqual(
             text_call["message"],
-            "first\n[attachment:a1] caption=cap-1\n[attachment:a2]\nlast",
-        )
-        self.assertEqual(text_call["message_context"][0]["type"], "ingress_route")
-        self.assertEqual(text_call["message_context"][1]["content"]["id"], "a1")
-        self.assertEqual(text_call["message_context"][2]["content"]["id"], "a2")
-        self.assertEqual(
-            text_call["message_context"][3]["content"]["attachment_id"],
-            "a1",
+            "Please review\n[attachment:att-1] caption=receipt",
         )
         self.assertEqual(
-            text_call["message_context"][4]["content"]["attachment_id"],
-            "a2",
-        )
-        self.assertEqual(text_call["message_context"][5]["type"], "composed_metadata")
-
-    async def test_handle_composed_message_still_synthesizes_without_media_handlers(self) -> None:
-        svc = self._new_service()
-        text_ext = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            response=[{"type": "text", "content": "only-text-synth"}],
-        )
-        svc._mh_extensions = [text_ext]
-
-        result = await svc.handle_composed_message(
-            platform="web",
-            room_id="conv-2",
-            sender="user-1",
-            message={
-                "composition_mode": "attachment_with_caption",
-                "parts": [{"type": "attachment", "id": "a1", "caption": "caption-1"}],
-                "attachments": [
-                    {
-                        "id": "a1",
-                        "file_path": "/tmp/a1.jpg",
-                        "mime_type": "image/jpeg",
-                        "original_filename": "a1.jpg",
-                        "metadata": {},
-                        "caption": "caption-1",
-                    }
-                ],
-            },
-        )
-
-        self.assertEqual(result, [{"type": "text", "content": "only-text-synth"}])
-        text_ext.handle_message.assert_awaited_once()
-        text_call = text_ext.handle_message.await_args.kwargs
-        self.assertEqual(text_call["message"], "[attachment:a1] caption=caption-1")
-        self.assertEqual(text_call["message_context"][0]["type"], "attachment")
-
-    async def test_handle_composed_message_text_only_path_uses_no_attachment_context(
-        self,
-    ) -> None:
-        svc = self._new_service()
-        text_ext = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            response=[{"type": "text", "content": "text-only"}],
-        )
-        svc._mh_extensions = [text_ext]
-
-        result = await svc.handle_composed_message(
-            platform="web",
-            room_id="conv-4",
-            sender="user-1",
-            message={
-                "composition_mode": "message_with_attachments",
-                "parts": [{"type": "text", "text": "hello"}],
-                "attachments": [],
-            },
-        )
-        self.assertEqual(result, [{"type": "text", "content": "text-only"}])
-        text_ext.handle_message.assert_awaited_once()
-        text_call = text_ext.handle_message.await_args.kwargs
-        self.assertIsNone(text_call["message_context"])
-
-    async def test_collect_message_handler_responses_ignores_non_list_message_types(
-        self,
-    ) -> None:
-        svc = self._new_service()
-        invalid_ext = _DummyMhExt(
-            platforms=["web"],
-            message_types="text",
-            response=[{"type": "ctx", "content": "invalid"}],
-        )
-        valid_ext = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            response=[{"type": "ctx", "content": "valid"}],
-        )
-        svc._mh_extensions = [invalid_ext, valid_ext]
-
-        responses = await svc._collect_message_handler_responses(  # pylint: disable=protected-access
-            platform="web",
-            room_id="conv-3",
-            sender="user-1",
-            message="hello",
-            message_types={"text"},
-        )
-        self.assertEqual(responses, [{"type": "ctx", "content": "valid"}])
-        invalid_ext.handle_message.assert_not_awaited()
-        valid_ext.handle_message.assert_awaited_once()
-
-    async def test_collect_message_handler_responses_rejects_non_list_handler_response(
-        self,
-    ) -> None:
-        svc = self._new_service()
-        invalid_response = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            response={"type": "ctx", "content": "bad-shape"},
-        )
-        valid_response = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            response=[{"type": "ctx", "content": "ok"}],
-        )
-        svc._mh_extensions = [invalid_response, valid_response]
-
-        responses = await svc._collect_message_handler_responses(  # pylint: disable=protected-access
-            platform="web",
-            room_id="conv-shape",
-            sender="user-shape",
-            message="hello",
-            message_types={"text"},
-        )
-        self.assertEqual(responses, [{"type": "ctx", "content": "ok"}])
-        self.assertTrue(
-            any(
-                "invalid response type" in str(call.args[0]).lower()
-                and "dict" in str(call.args[0]).lower()
-                for call in svc._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
-            )
-        )
-
-    async def test_collect_message_handler_responses_drops_non_dict_list_items(self) -> None:
-        svc = self._new_service()
-        mixed_response = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            response=[
-                {"type": "ctx", "content": "first"},
-                "bad-item",
-                99,
-                {"type": "ctx", "content": "second"},
-            ],
-        )
-        svc._mh_extensions = [mixed_response]
-
-        responses = await svc._collect_message_handler_responses(  # pylint: disable=protected-access
-            platform="web",
-            room_id="conv-items",
-            sender="user-items",
-            message="hello",
-            message_types={"text"},
-        )
-        self.assertEqual(
-            responses,
+            text_call["attachment_context"],
             [
-                {"type": "ctx", "content": "first"},
-                {"type": "ctx", "content": "second"},
+                {
+                    "type": "attachment",
+                    "content": {
+                        "index": 1,
+                        "id": "att-1",
+                        "mime_type": "image/png",
+                        "filename": "receipt.png",
+                        "caption": "receipt",
+                        "metadata": {"page": 1},
+                        "composition_mode": "message_with_attachments",
+                    },
+                }
             ],
         )
-        self.assertTrue(
-            any(
-                "invalid response item" in str(call.args[0]).lower()
-                and "str" in str(call.args[0]).lower()
-                for call in svc._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
-            )
+        self.assertEqual(
+            text_call["message_context"][-2:],
+            [
+                {"type": "image_summary", "content": {"caption": "receipt"}},
+                {"type": "composed_metadata", "content": {"metadata": {"locale": "en-US"}}},
+            ],
         )
 
-    async def test_handle_text_message_times_out_hung_extension_and_continues(
-        self,
-    ) -> None:
+    async def test_handle_message_dispatches_typed_request(self) -> None:
         svc = self._new_service()
-        svc._extension_timeout_seconds = 0.01  # pylint: disable=protected-access
-
-        async def _hung_callback(**_kwargs):
-            await asyncio.sleep(10)
-            return [{"type": "text", "content": "late"}]
-
-        hung = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            callback=_hung_callback,
+        svc.handle_text_message = AsyncMock(  # type: ignore[method-assign]
+            return_value=[{"type": "text", "content": "ok"}]
         )
-        fast = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            response=[{"type": "text", "content": "fast"}],
-        )
-        svc._mh_extensions = [hung, fast]
 
-        responses = await svc.handle_text_message(
-            platform="web",
-            room_id="conv-timeout",
-            sender="user-timeout",
+        request = MessagingTurnRequest(
+            scope=_scope(),
+            message_type="text",
             message="hello",
+            message_context=[{"type": "seed", "content": "ctx"}],
+            ingress_metadata={"trace": "123"},
         )
+        result = await svc.handle_message(request)
 
-        self.assertEqual(responses, [{"type": "text", "content": "fast"}])
-        self.assertTrue(svc._logging_gateway.warning.called)  # pylint: disable=protected-access
-        self.assertTrue(
-            any(
-                "timed out" in str(call.args[0])
-                for call in svc._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
-            )
-        )
-
-    async def test_handle_text_message_logs_and_continues_when_handler_raises(self) -> None:
-        svc = self._new_service()
-
-        async def _raise(**_kwargs):
-            raise RuntimeError("extension blew up")
-
-        broken = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            callback=_raise,
-        )
-        healthy = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            response=[{"type": "text", "content": "ok"}],
-        )
-        svc._mh_extensions = [broken, healthy]
-
-        responses = await svc.handle_text_message(
-            platform="web",
-            room_id="conv-err",
-            sender="user-err",
-            message="hello",
-        )
-
-        self.assertEqual(responses, [{"type": "text", "content": "ok"}])
-        self.assertTrue(
-            any(
-                "handler failed" in str(call.args[0]).lower()
-                and "RuntimeError" in str(call.args[0])
-                for call in svc._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
-            )
-        )
-
-    async def test_handle_text_message_without_timeout_logs_and_continues_on_handler_error(
-        self,
-    ) -> None:
-        svc = self._new_service()
-        svc._extension_timeout_seconds = None  # pylint: disable=protected-access
-
-        async def _raise(**_kwargs):
-            raise RuntimeError("extension blew up")
-
-        broken = _DummyMhExt(
-            platforms=["matrix"],
-            message_types=["text"],
-            callback=_raise,
-        )
-        healthy = _DummyMhExt(
-            platforms=["matrix"],
-            message_types=["text"],
-            response=[{"type": "text", "content": "ok"}],
-        )
-        svc._mh_extensions = [broken, healthy]
-
-        responses = await svc.handle_text_message(
-            platform="matrix",
-            room_id="!room",
-            sender="@alice",
-            message="hello",
-        )
-
-        self.assertEqual(responses, [{"type": "text", "content": "ok"}])
-        self.assertTrue(
-            any(
-                "handler failed" in str(call.args[0]).lower()
-                and "RuntimeError" in str(call.args[0])
-                for call in svc._logging_gateway.warning.call_args_list  # pylint: disable=protected-access
-            )
-        )
-
-    async def test_invoke_message_handler_propagates_cancellation_without_timeout(self) -> None:
-        svc = self._new_service()
-        svc._extension_timeout_seconds = None  # pylint: disable=protected-access
-
-        async def _cancel(**_kwargs):
-            raise asyncio.CancelledError()
-
-        ext = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            callback=_cancel,
-        )
-
-        with self.assertRaises(asyncio.CancelledError):
-            await svc._invoke_message_handler(  # pylint: disable=protected-access
-                extension=ext,
-                platform="web",
-                room_id="conv-cancel",
-                sender="user-cancel",
-                message="hello",
-            )
-
-    async def test_invoke_message_handler_propagates_cancellation_with_timeout(self) -> None:
-        svc = self._new_service()
-        svc._extension_timeout_seconds = 10.0  # pylint: disable=protected-access
-
-        async def _cancel(**_kwargs):
-            raise asyncio.CancelledError()
-
-        ext = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            callback=_cancel,
-        )
-
-        with self.assertRaises(asyncio.CancelledError):
-            await svc._invoke_message_handler(  # pylint: disable=protected-access
-                extension=ext,
-                platform="web",
-                room_id="conv-cancel",
-                sender="user-cancel",
-                message="hello",
-            )
-
-    async def test_handle_text_message_without_timeout_awaits_handler_directly(self) -> None:
-        svc = self._new_service()
-        svc._extension_timeout_seconds = None  # pylint: disable=protected-access
-        ext = _DummyMhExt(
-            platforms=["matrix"],
-            message_types=["text"],
-            response=[{"type": "text", "content": "ok"}],
-        )
-        svc._mh_extensions = [ext]
-
-        result = await svc.handle_text_message(
-            platform="matrix",
-            room_id="!room",
-            sender="@alice",
-            message="hello",
-        )
         self.assertEqual(result, [{"type": "text", "content": "ok"}])
+        text_call = svc.handle_text_message.await_args.kwargs
+        self.assertEqual(text_call["platform"], "matrix")
+        self.assertEqual(text_call["message_context"], [{"type": "seed", "content": "ctx"}])
+        self.assertEqual(text_call["ingress_metadata"], {"trace": "123"})
+        self.assertIs(text_call["scope"], request.scope)
 
-    def test_extension_timeout_resolution_handles_invalid_shapes(self) -> None:
+    def test_register_methods_update_extension_lists_and_reject_duplicates(self) -> None:
         svc = self._new_service()
+        cp = Mock(platforms=["matrix"])
+        ct = Mock(platforms=["matrix"])
+        mh = _DummyMhExt(platforms=["matrix"], message_types=["text"])
+        rpp = Mock(platforms=["matrix"])
 
-        svc._config = SimpleNamespace(  # pylint: disable=protected-access
-            mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds=None))
-        )
-        self.assertIsNone(svc._resolve_extension_timeout_seconds())  # pylint: disable=protected-access
+        svc.bind_cp_extension(cp)
+        svc.bind_ct_extension(ct)
+        svc.bind_mh_extension(mh)
+        svc.bind_rpp_extension(rpp)
 
-        svc._config = SimpleNamespace(  # pylint: disable=protected-access
-            mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds=object()))
-        )
-        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
-            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
+        self.assertEqual(svc.cp_extensions, [cp])
+        self.assertEqual(svc.ct_extensions, [ct])
+        self.assertEqual(svc.mh_extensions, [mh])
+        self.assertEqual(svc.rpp_extensions, [rpp])
 
-        svc._config = SimpleNamespace(  # pylint: disable=protected-access
-            mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds="bad"))
-        )
-        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
-            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
+        with self.assertRaisesRegex(ValueError, "instance duplicate"):
+            svc.bind_mh_extension(mh)
 
-        svc._config = SimpleNamespace(  # pylint: disable=protected-access
-            mugen=SimpleNamespace(messaging=SimpleNamespace(extension_timeout_seconds=0))
-        )
-        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
-            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
+        with self.assertRaisesRegex(ValueError, "logical duplicate"):
+            svc.bind_mh_extension(
+                _DummyMhExt(platforms=["matrix"], message_types=["text"])
+            )
 
     def test_extension_timeout_resolution_uses_default_in_production(self) -> None:
-        svc = self._new_service()
-        expected = svc._default_extension_timeout_seconds  # pylint: disable=protected-access
+        completion_gateway = Mock()
+        completion_gateway.get_completion = AsyncMock()
+        logging_gateway = Mock()
 
-        svc._config = SimpleNamespace(  # pylint: disable=protected-access
-            mugen=SimpleNamespace(
-                environment="production",
-                messaging=SimpleNamespace(extension_timeout_seconds=None),
+        with patch(
+            "mugen.core.service.messaging.importlib.import_module",
+            return_value=SimpleNamespace(DefaultTextMHExtension=_BuiltinTextHandler),
+        ):
+            svc = DefaultMessagingService(
+                config=SimpleNamespace(
+                    mugen=SimpleNamespace(
+                        environment="production",
+                        messaging=SimpleNamespace(
+                            mh_mode="optional",
+                            extension_timeout_seconds=None,
+                        ),
+                    )
+                ),
+                completion_gateway=completion_gateway,
+                context_engine_service=Mock(),
+                logging_gateway=logging_gateway,
+                user_service=Mock(),
             )
+
+        self.assertEqual(
+            svc._extension_timeout_seconds,  # pylint: disable=protected-access
+            svc._default_extension_timeout_seconds,  # pylint: disable=protected-access
         )
+        logging_gateway.warning.assert_called_once()
+
+    def test_extension_timeout_resolution_non_production_and_parser_branch(self) -> None:
+        svc = self._new_service(environment="test")
         self.assertEqual(
             svc._resolve_extension_timeout_seconds(),  # pylint: disable=protected-access
-            expected,
+            10.0,
         )
 
         svc._config = SimpleNamespace(  # pylint: disable=protected-access
             mugen=SimpleNamespace(
-                environment="production",
-                messaging=SimpleNamespace(extension_timeout_seconds=object()),
+                environment="test",
+                messaging=SimpleNamespace(
+                    mh_mode="optional",
+                    extension_timeout_seconds=None,
+                ),
             )
         )
-        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
+        self.assertIsNone(
             svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
+        )
 
         svc._config = SimpleNamespace(  # pylint: disable=protected-access
             mugen=SimpleNamespace(
-                environment="production",
-                messaging=SimpleNamespace(extension_timeout_seconds="bad"),
+                environment="test",
+                messaging=SimpleNamespace(
+                    mh_mode="optional",
+                    extension_timeout_seconds="5.5",
+                ),
             )
         )
-        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
-            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
-
-        svc._config = SimpleNamespace(  # pylint: disable=protected-access
-            mugen=SimpleNamespace(
-                environment="production",
-                messaging=SimpleNamespace(extension_timeout_seconds=0),
+        with patch.object(
+            messaging_module,
+            "parse_optional_positive_finite_float",
+            return_value=5.5,
+        ) as parse_optional_positive_finite_float:
+            self.assertEqual(
+                svc._resolve_extension_timeout_seconds(),  # pylint: disable=protected-access
+                5.5,
             )
+        parse_optional_positive_finite_float.assert_called_once_with(
+            "5.5",
+            "mugen.messaging.extension_timeout_seconds",
         )
-        with self.assertRaisesRegex(RuntimeError, "extension_timeout_seconds"):
-            svc._resolve_extension_timeout_seconds()  # pylint: disable=protected-access
 
-    def test_bind_mh_extension_marks_critical_key(self) -> None:
+    def test_extension_platform_key_and_fail_closed_without_cause(self) -> None:
         svc = self._new_service()
-        ext = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            callback=lambda **_kwargs: [],
-        )
-        svc.bind_mh_extension(ext, critical=True)
-        self.assertTrue(
-            svc._is_critical_extension(ext, kind="mh")  # pylint: disable=protected-access
+        ext = _DummyMhExt(platforms=["matrix"], message_types=["text"])
+        ext.platforms = "matrix"
+
+        self.assertEqual(
+            svc._extension_platform_key(ext),  # pylint: disable=protected-access
+            (),
         )
 
-    async def test_invoke_message_handler_fail_closed_raises_on_timeout(self) -> None:
-        svc = self._new_service()
-        svc._extension_timeout_seconds = 0.01  # pylint: disable=protected-access
-
-        async def _slow(**_kwargs):
-            await asyncio.sleep(0.1)
-            return []
-
-        ext = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            callback=_slow,
-        )
-        svc.bind_mh_extension(ext, critical=True)
-
-        with self.assertRaises(RuntimeError):
-            await svc._invoke_message_handler(  # pylint: disable=protected-access
-                extension=ext,
-                platform="web",
-                room_id="conv-timeout",
-                sender="user-timeout",
-                message="hello",
-            )
-
-    async def test_invoke_message_handler_fail_closed_raises_on_handler_error(self) -> None:
-        svc = self._new_service()
-        svc._extension_timeout_seconds = None  # pylint: disable=protected-access
-
-        async def _boom(**_kwargs):
-            raise RuntimeError("extension blew up")
-
-        ext = _DummyMhExt(
-            platforms=["web"],
-            message_types=["text"],
-            callback=_boom,
-        )
-        svc.bind_mh_extension(ext, critical=True)
-
-        with self.assertRaises(RuntimeError):
-            await svc._invoke_message_handler(  # pylint: disable=protected-access
-                extension=ext,
-                platform="web",
-                room_id="conv-error",
-                sender="user-error",
-                message="hello",
-            )
-
-    def test_handle_extension_handler_failure_fail_closed_without_cause(self) -> None:
-        svc = self._new_service()
-        ext = _DummyMhExt(
-            platforms=[],
-            message_types=["text"],
-            callback=lambda **_kwargs: [],
-        )
-        svc.bind_mh_extension(ext, critical=True)
-
-        with self.assertRaisesRegex(RuntimeError, "explicit failure"):
+        svc.bind_mh_extension(_DummyMhExt(platforms=["matrix"], message_types=["text"]), critical=True)
+        critical_ext = svc.mh_extensions[0]
+        extension_name = f"{type(critical_ext).__module__}.{type(critical_ext).__qualname__}"
+        with self.assertRaisesRegex(RuntimeError, "critical failure"):
             svc._handle_extension_handler_failure(  # pylint: disable=protected-access
-                extension_name="mugen.test.Extension",
-                extension=ext,
+                extension_name=extension_name,
+                extension=critical_ext,
                 kind="mh",
-                message="explicit failure",
+                message="critical failure",
                 cause=None,
             )
 
-    def test_composed_helpers_and_normalization_branches(self) -> None:
+    async def test_invoke_message_handler_without_timeout_covers_success_and_exception_paths(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        svc._extension_timeout_seconds = None  # pylint: disable=protected-access
+        success_ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response=[{"type": "text", "content": "ok"}],
+        )
+        failing_ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            side_effect=RuntimeError("boom"),
+        )
+
+        success = await svc._invoke_message_handler(  # pylint: disable=protected-access
+            extension=success_ext,
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+            scope=_scope(),
+        )
+        failure = await svc._invoke_message_handler(  # pylint: disable=protected-access
+            extension=failing_ext,
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+            scope=_scope(),
+        )
+
+        self.assertEqual(success, [{"type": "text", "content": "ok"}])
+        self.assertIsNone(failure)
+
+        cancelled_ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            side_effect=asyncio.CancelledError(),
+        )
+        with self.assertRaises(asyncio.CancelledError):
+            await svc._invoke_message_handler(  # pylint: disable=protected-access
+                extension=cancelled_ext,
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message="hello",
+                scope=_scope(),
+            )
+
+    async def test_invoke_message_handler_timeout_and_cancelled_paths(self) -> None:
+        svc = self._new_service()
+        timeout_ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            side_effect=asyncio.TimeoutError(),
+        )
+        cancelled_ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            side_effect=asyncio.CancelledError(),
+        )
+
+        self.assertIsNone(
+            await svc._invoke_message_handler(  # pylint: disable=protected-access
+                extension=timeout_ext,
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message="hello",
+                scope=_scope(),
+            )
+        )
+        with self.assertRaises(asyncio.CancelledError):
+            await svc._invoke_message_handler(  # pylint: disable=protected-access
+                extension=cancelled_ext,
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message="hello",
+                scope=_scope(),
+            )
+
+    async def test_handle_file_image_and_video_messages_return_unsupported_fallbacks(
+        self,
+    ) -> None:
         svc = self._new_service()
 
+        self.assertEqual(
+            await svc.handle_audio_message(
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message={"file_path": "a.ogg"},
+            ),
+            [{"type": "text", "content": "Unsupported message type: audio."}],
+        )
+
+        self.assertEqual(
+            await svc.handle_file_message(
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message={"file_path": "a.pdf"},
+            ),
+            [{"type": "text", "content": "Unsupported message type: file."}],
+        )
+        self.assertEqual(
+            await svc.handle_image_message(
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message={"file_path": "a.png"},
+            ),
+            [{"type": "text", "content": "Unsupported message type: image."}],
+        )
+        self.assertEqual(
+            await svc.handle_video_message(
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message={"file_path": "a.mp4"},
+            ),
+            [{"type": "text", "content": "Unsupported message type: video."}],
+        )
+
+    async def test_handle_message_dispatches_all_non_text_types_and_rejects_invalid_payloads(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        svc.handle_composed_message = AsyncMock(return_value=[])  # type: ignore[method-assign]
+        svc.handle_audio_message = AsyncMock(return_value=[])  # type: ignore[method-assign]
+        svc.handle_file_message = AsyncMock(return_value=[])  # type: ignore[method-assign]
+        svc.handle_image_message = AsyncMock(return_value=[])  # type: ignore[method-assign]
+        svc.handle_video_message = AsyncMock(return_value=[])  # type: ignore[method-assign]
+        scope = _scope()
+
+        for message_type, handler in (
+            ("composed", svc.handle_composed_message),
+            ("audio", svc.handle_audio_message),
+            ("file", svc.handle_file_message),
+            ("image", svc.handle_image_message),
+            ("video", svc.handle_video_message),
+        ):
+            await svc.handle_message(
+                MessagingTurnRequest(
+                    scope=scope,
+                    message_type=message_type,
+                    message={},
+                )
+            )
+            handler.assert_awaited_once()
+            handler.reset_mock()
+
+        with self.assertRaisesRegex(ValueError, "Composed messaging turns require object payloads"):
+            await svc.handle_message(
+                MessagingTurnRequest(scope=scope, message_type="composed", message="bad")
+            )
+        with self.assertRaisesRegex(ValueError, "Audio messaging turns require object payloads"):
+            await svc.handle_message(
+                MessagingTurnRequest(scope=scope, message_type="audio", message="bad")
+            )
+        with self.assertRaisesRegex(ValueError, "File messaging turns require object payloads"):
+            await svc.handle_message(
+                MessagingTurnRequest(scope=scope, message_type="file", message="bad")
+            )
+        with self.assertRaisesRegex(ValueError, "Image messaging turns require object payloads"):
+            await svc.handle_message(
+                MessagingTurnRequest(scope=scope, message_type="image", message="bad")
+            )
+        with self.assertRaisesRegex(ValueError, "Video messaging turns require object payloads"):
+            await svc.handle_message(
+                MessagingTurnRequest(scope=scope, message_type="video", message="bad")
+            )
+        with self.assertRaisesRegex(ValueError, "Unsupported message type: unknown"):
+            await svc.handle_message(
+                MessagingTurnRequest(scope=scope, message_type="unknown", message="hello")
+            )
+
+    async def test_collect_composed_media_context_covers_type_inference_and_empty_responses(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["audio", "video", "image", "file"],
+            response=[{"type": "summary", "content": {"ok": True}}],
+        )
+        svc._mh_extensions = [ext]  # pylint: disable=protected-access
+
+        media_context = await svc._collect_composed_media_context(  # pylint: disable=protected-access
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            attachments=[
+                {"id": "a1", "mime_type": "audio/ogg"},
+                {"id": "a2", "mime_type": "video/mp4"},
+                {"id": "a3", "mime_type": "image/png"},
+                {"id": "a4", "mime_type": "application/pdf"},
+            ],
+            composition_mode="message_with_attachments",
+            client_message_id="client-1",
+            ingress_metadata={},
+            message_id="msg-1",
+            trace_id="trace-1",
+            scope=_scope(),
+        )
+
+        self.assertEqual(len(media_context), 4)
+        self.assertEqual(
+            [
+                svc._infer_media_message_type("audio/ogg"),  # pylint: disable=protected-access
+                svc._infer_media_message_type("video/mp4"),  # pylint: disable=protected-access
+                svc._infer_media_message_type("image/png"),  # pylint: disable=protected-access
+                svc._infer_media_message_type("application/pdf"),  # pylint: disable=protected-access
+            ],
+            ["audio", "video", "image", "file"],
+        )
+
+        svc._invoke_message_handler = AsyncMock(return_value=None)  # type: ignore[method-assign]
+        self.assertEqual(
+            await svc._collect_composed_media_context(  # pylint: disable=protected-access
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                attachments=[{"id": "a1", "mime_type": "image/png"}],
+                composition_mode="message_with_attachments",
+                client_message_id=None,
+                ingress_metadata={},
+                message_id=None,
+                trace_id=None,
+                scope=_scope(),
+            ),
+            [],
+        )
+
+    async def test_media_handlers_cover_success_paths_for_file_image_and_video(self) -> None:
+        svc = self._new_service()
+        for message_type, method, expected_prompt in (
+            ("file", svc.handle_file_message, "Uploaded a file."),
+            ("image", svc.handle_image_message, "Uploaded an image file."),
+            ("video", svc.handle_video_message, "Uploaded video file."),
+        ):
+            ext = _DummyMhExt(
+                platforms=["matrix"],
+                message_types=[message_type],
+                response=[{"type": f"{message_type}_summary", "content": {"ok": True}}],
+            )
+            svc._mh_extensions = [ext]  # pylint: disable=protected-access
+            svc.handle_text_message = AsyncMock(  # type: ignore[method-assign]
+                return_value=[{"type": "text", "content": "ok"}]
+            )
+
+            result = await method(
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message={"file_path": f"a.{message_type}"},
+                scope=_scope(),
+            )
+
+            self.assertEqual(result, [{"type": "text", "content": "ok"}])
+            self.assertEqual(
+                svc.handle_text_message.await_args.kwargs["message"],
+                expected_prompt,
+            )
+
+    def test_metadata_route_and_composed_helper_methods_cover_edge_cases(self) -> None:
+        svc = self._new_service()
+        global_scope = _scope(tenant_id=str(GLOBAL_TENANT_ID))
+        existing_context = [{"type": "ingress_route", "content": {"tenant_id": "tenant-1"}}]
+
+        self.assertEqual(
+            svc._message_payload_metadata("hello"),  # pylint: disable=protected-access
+            {},
+        )
+        self.assertEqual(
+            svc._message_payload_metadata({"metadata": "bad"}),  # pylint: disable=protected-access
+            {},
+        )
+        self.assertEqual(
+            svc._merge_ingress_metadata(  # pylint: disable=protected-access
+                message={"metadata": {"a": 1}},
+                ingress_metadata={"b": 2},
+            ),
+            {"a": 1, "b": 2},
+        )
+        self.assertIsNone(svc._metadata_text(1))  # pylint: disable=protected-access
+        self.assertIsNone(svc._metadata_text("   "))  # pylint: disable=protected-access
+        self.assertEqual(
+            svc._metadata_text(" hi "),  # pylint: disable=protected-access
+            "hi",
+        )
+        self.assertEqual(
+            svc._extract_ingress_route(  # pylint: disable=protected-access
+                message={"metadata": {"ingress_route": {"tenant_id": "message"}}},
+                message_context=[{"type": "ingress_route", "content": {"tenant_id": "ctx"}}],
+                ingress_metadata={"ingress_route": {"tenant_id": "meta"}},
+            ),
+            {"tenant_id": "meta"},
+        )
+        self.assertEqual(
+            svc._extract_ingress_route(  # pylint: disable=protected-access
+                message={"metadata": {"ingress_route": {"tenant_id": "message"}}},
+                message_context=[{"type": "ingress_route", "content": {"tenant_id": "ctx"}}],
+                ingress_metadata={},
+            ),
+            {"tenant_id": "message"},
+        )
+        self.assertEqual(
+            svc._extract_ingress_route(  # pylint: disable=protected-access
+                message="hello",
+                message_context=[{"type": "ingress_route", "content": {"tenant_id": "ctx"}}],
+                ingress_metadata={},
+            ),
+            {"tenant_id": "ctx"},
+        )
+        self.assertEqual(
+            svc._extract_ingress_route(  # pylint: disable=protected-access
+                message="hello",
+                message_context=[
+                    {"type": "ingress_route", "content": "bad"},
+                    {"type": "ingress_route", "content": {"tenant_id": "ctx"}},
+                ],
+                ingress_metadata={},
+            ),
+            {"tenant_id": "ctx"},
+        )
+        self.assertIs(
+            svc._ensure_ingress_route_message_context(existing_context, {"tenant_id": "tenant-1"}),  # pylint: disable=protected-access
+            existing_context,
+        )
+        self.assertEqual(
+            svc._route_from_scope(  # pylint: disable=protected-access
+                scope=global_scope,
+                platform="matrix",
+                ingress_route=None,
+            )["tenant_slug"],
+            "global",
+        )
+        with self.assertRaisesRegex(RuntimeError, "does not match ContextScope"):
+            svc._route_from_scope(  # pylint: disable=protected-access
+                scope=_scope(),
+                platform="matrix",
+                ingress_route={"tenant_id": "other"},
+            )
+        self.assertEqual(
+            svc._route_from_scope(  # pylint: disable=protected-access
+                scope=_scope(),
+                platform="matrix",
+                ingress_route={"tenant_id": "tenant-1"},
+            ),
+            {
+                "tenant_id": "tenant-1",
+                "platform": "matrix",
+                "channel_key": "matrix",
+                "identifier_claims": {},
+            },
+        )
+        self.assertEqual(
+            svc._build_composed_text_prompt(  # pylint: disable=protected-access
+                parts=[
+                    {"type": "text", "text": "hello"},
+                    {"type": "attachment", "id": "a1", "caption": "receipt"},
+                    {"type": "unknown", "text": "skip"},
+                ]
+            ),
+            "hello\n[attachment:a1] caption=receipt",
+        )
         self.assertEqual(
             svc._build_composed_text_prompt(parts=[]),  # pylint: disable=protected-access
             "",
         )
         self.assertEqual(
             svc._build_composed_text_prompt(  # pylint: disable=protected-access
-                parts=[
-                    {"type": "unknown"},
-                    {"type": "attachment", "id": " ", "caption": ""},
-                ]
+                parts=[{"type": "attachment", "id": "a2", "caption": ""}]
             ),
-            "[attachment:unknown]",
+            "[attachment:a2]",
         )
-        self.assertIsNone(  # pylint: disable=protected-access
-            svc._build_composed_attachment_context(attachments=[], composition_mode="x")
+        self.assertIsNone(
+            svc._build_composed_attachment_context(  # pylint: disable=protected-access
+                attachments=[],
+                composition_mode="message_with_attachments",
+            )
         )
 
+    def test_resolve_turn_scope_covers_explicit_scope_synthesis_and_route_mismatch(self) -> None:
+        svc = self._new_service()
+        scope = _scope()
+
+        resolved_scope, message_context, attachment_context, ingress_metadata = (
+            svc._resolve_turn_scope(  # pylint: disable=protected-access
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message="hello",
+                message_context=["bad", {"type": "seed", "content": "ctx"}],
+                attachment_context="bad",
+                ingress_metadata=None,
+                scope=scope,
+            )
+        )
+        self.assertIs(resolved_scope, scope)
         self.assertEqual(
-            svc._infer_media_message_type("audio/ogg"),  # pylint: disable=protected-access
-            "audio",
+            message_context,
+            [
+                {"type": "seed", "content": "ctx"},
+                {
+                    "type": "ingress_route",
+                    "content": ingress_metadata["ingress_route"],
+                },
+            ],
         )
-        self.assertEqual(
-            svc._infer_media_message_type("video/mp4"),  # pylint: disable=protected-access
-            "video",
+        self.assertEqual(attachment_context, [])
+        self.assertEqual(ingress_metadata["tenant_resolution"]["mode"], "resolved")
+
+        routed_scope = _scope()
+        _, routed_context, _, routed_metadata = svc._resolve_turn_scope(  # pylint: disable=protected-access
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+            message_context=None,
+            attachment_context=None,
+            ingress_metadata={
+                "ingress_route": {
+                    "tenant_id": routed_scope.tenant_id,
+                    "tenant_resolution": {"mode": "resolved", "source": "seed"},
+                }
+            },
+            scope=routed_scope,
         )
-        self.assertEqual(
-            svc._infer_media_message_type("image/png"),  # pylint: disable=protected-access
-            "image",
+        self.assertEqual(routed_metadata["tenant_resolution"]["source"], "seed")
+        self.assertEqual(routed_context[-1]["type"], "ingress_route")
+
+        global_scope = _scope(tenant_id=str(GLOBAL_TENANT_ID))
+        _, _, _, global_metadata = svc._resolve_turn_scope(  # pylint: disable=protected-access
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+            message_context=None,
+            attachment_context=None,
+            ingress_metadata=None,
+            scope=global_scope,
         )
-        self.assertEqual(
-            svc._infer_media_message_type("application/pdf"),  # pylint: disable=protected-access
-            "file",
+        self.assertEqual(global_metadata["tenant_resolution"]["mode"], "fallback_global")
+
+        with self.assertRaisesRegex(RuntimeError, "does not match ContextScope"):
+            svc._resolve_turn_scope(  # pylint: disable=protected-access
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message="hello",
+                message_context=None,
+                attachment_context=None,
+                ingress_metadata={"ingress_route": {"tenant_id": "other"}},
+                scope=scope,
+            )
+
+    async def test_handle_composed_message_without_dict_metadata_skips_composed_metadata(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        svc.handle_text_message = AsyncMock(  # type: ignore[method-assign]
+            return_value=[{"type": "text", "content": "ok"}]
         )
 
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(None)  # pylint: disable=protected-access
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": None,
-                    "parts": [],
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "",
-                    "parts": [],
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "bad",
-                    "parts": [],
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": [],
-                    "attachments": "bad",
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": [],
-                    "attachments": ["bad-item"],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": [],
-                    "attachments": [
-                        {
-                            "id": "a1",
-                            "file_path": "/tmp/a1",
-                            "mime_type": "application/octet-stream",
-                            "metadata": [],
-                        }
-                    ],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": [],
-                    "attachments": [
-                        {
-                            "id": "a1",
-                            "file_path": "/tmp/a1",
-                        },
-                        {
-                            "id": "a1",
-                            "file_path": "/tmp/a2",
-                        },
-                    ],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": "bad",
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": ["bad-item"],
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": [{"type": "bad"}],
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": [{"type": "attachment", "id": "a1"}],
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": [
-                        {
-                            "type": "attachment",
-                            "id": "a1",
-                            "metadata": [],
-                        }
-                    ],
-                    "attachments": [
-                        {
-                            "id": "a1",
-                            "file_path": "/tmp/a1",
-                            "metadata": {},
-                        }
-                    ],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": [],
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "attachment_with_caption",
-                    "parts": [{"type": "text", "text": "bad"}],
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "attachment_with_caption",
-                    "parts": [],
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "attachment_with_caption",
-                    "parts": [{"type": "attachment", "id": "a1"}],
-                    "attachments": [],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "attachment_with_caption",
-                    "parts": [{"type": "attachment", "id": "a1"}],
-                    "attachments": [
-                        {
-                            "id": "a1",
-                            "file_path": "/tmp/a1",
-                            "metadata": {},
-                            "caption": None,
-                        }
-                    ],
-                }
-            )
-
-        with self.assertRaises(ValueError):
-            svc._normalize_composed_message(  # pylint: disable=protected-access
-                {
-                    "composition_mode": "message_with_attachments",
-                    "parts": [{"type": "text", "text": "ok"}],
-                    "attachments": [],
-                    "metadata": [],
-                }
-            )
-
-        normalized_blank_text = svc._normalize_composed_message(  # pylint: disable=protected-access
-            {
+        result = await svc.handle_composed_message(
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message={
+                "parts": [{"type": "text", "text": "hi"}],
+                "attachments": [],
                 "composition_mode": "message_with_attachments",
-                "parts": [{"type": "text", "text": "   "}, {"type": "attachment", "id": "a1"}],
-                "attachments": [
-                    {
-                        "id": "a1",
-                        "file_path": "/tmp/a1",
-                        "metadata": {},
-                    }
-                ],
-            }
+            },
+            scope=_scope(),
         )
-        self.assertEqual(normalized_blank_text["parts"][0]["text"], "   ")
 
-        normalized = svc._normalize_composed_message(  # pylint: disable=protected-access
-            {
-                "composition_mode": "message_with_attachments",
-                "parts": [
-                    {"type": "text", "text": "hello"},
-                    {
-                        "type": "attachment",
-                        "id": "a1",
-                        "caption": " part-cap ",
-                        "metadata": {"part": "meta"},
-                    },
-                ],
-                "attachments": [
-                    {
-                        "id": "a1",
-                        "file_path": "/tmp/a1",
-                        "mime_type": "APPLICATION/OCTET-STREAM",
-                        "original_filename": 123,
-                        "metadata": None,
-                        "caption": " attachment-cap ",
-                    }
-                ],
-                "metadata": {"top": "level"},
-                "client_message_id": 987,
-            }
-        )
-        self.assertEqual(normalized["composition_mode"], "message_with_attachments")
-        self.assertEqual(normalized["attachments"][0]["mime_type"], "application/octet-stream")
-        self.assertEqual(normalized["attachments"][0]["metadata"], {})
-        self.assertEqual(normalized["attachments"][0]["original_filename"], "123")
-        self.assertEqual(normalized["parts"][1]["caption"], "part-cap")
-        self.assertEqual(normalized["parts"][1]["metadata"], {"part": "meta"})
-        self.assertEqual(normalized["metadata"], {"top": "level"})
-        self.assertEqual(normalized["client_message_id"], "987")
-
-    def test_register_methods_update_all_extension_lists(self) -> None:
-        svc = self._new_service()
-
-        cp = Mock()
-        ct = Mock()
-        ctx = Mock()
-        mh = Mock()
-        rag = Mock()
-        rpp = Mock()
-
-        svc.bind_cp_extension(cp)
-        svc.bind_ct_extension(ct)
-        svc.bind_ctx_extension(ctx)
-        svc.bind_mh_extension(mh)
-        svc.bind_rag_extension(rag)
-        svc.bind_rpp_extension(rpp)
-
-        self.assertEqual(svc.cp_extensions, [cp])
-        self.assertEqual(svc.ct_extensions, [ct])
-        self.assertEqual(svc.ctx_extensions, [ctx])
-        self.assertEqual(svc.mh_extensions, [mh])
-        self.assertEqual(svc.rag_extensions, [rag])
-        self.assertEqual(svc.rpp_extensions, [rpp])
-
-    def test_extension_platform_key_returns_empty_tuple_for_non_list(self) -> None:
-        svc = self._new_service()
-        ext = SimpleNamespace(platforms="matrix")
+        self.assertEqual(result, [{"type": "text", "content": "ok"}])
         self.assertEqual(
-            svc._extension_platform_key(ext),  # pylint: disable=protected-access
-            tuple(),
+            svc.handle_text_message.await_args.kwargs["message_context"][-1]["type"],
+            "ingress_route",
         )
 
-    def test_register_extension_rejects_instance_duplicate(self) -> None:
+    async def test_collect_message_handler_responses_skips_non_matching_message_type_lists(
+        self,
+    ) -> None:
         svc = self._new_service()
-        ext = SimpleNamespace(platforms=["matrix"])
-        svc.bind_cp_extension(ext)
-        with self.assertRaises(ValueError):
-            svc.bind_cp_extension(ext)
+        skipped = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["image"],
+            response=[{"type": "text", "content": "skip"}],
+        )
+        svc._mh_extensions = [skipped]  # pylint: disable=protected-access
 
-    def test_register_extension_rejects_logical_duplicate(self) -> None:
+        self.assertEqual(
+            await svc._collect_message_handler_responses(  # pylint: disable=protected-access
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message="hello",
+                message_types={"text"},
+                scope=_scope(),
+            ),
+            [],
+        )
+        skipped.handle_message.assert_not_awaited()
+
+    async def test_handle_message_rejects_non_string_text_payload(self) -> None:
         svc = self._new_service()
 
-        class _LocalExtension:  # pylint: disable=too-few-public-methods
-            def __init__(self) -> None:
-                self.platforms = ["matrix"]
-
-        first = _LocalExtension()
-        second = _LocalExtension()
-        svc.bind_cp_extension(first)
-        with self.assertRaises(ValueError):
-            svc.bind_cp_extension(second)
+        with self.assertRaisesRegex(ValueError, "Text messaging turns require str payloads"):
+            await svc.handle_message(
+                MessagingTurnRequest(
+                    scope=_scope(),
+                    message_type="text",
+                    message={"body": "bad"},
+                )
+            )

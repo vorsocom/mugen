@@ -1,5 +1,7 @@
 """Provides an implementation of IMessagingService."""
 
+from __future__ import annotations
+
 __all__ = ["DefaultMessagingService"]
 
 import asyncio
@@ -7,18 +9,18 @@ import importlib
 from types import SimpleNamespace
 from typing import Any
 
+from mugen.core.constants import GLOBAL_TENANT_ID
+from mugen.core.contract.context import ContextScope, IContextEngine
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
-from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.mh import IMHExtension
-from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
-from mugen.core.contract.service.messaging import IMessagingService
+from mugen.core.contract.service.messaging import IMessagingService, MessagingTurnRequest
 from mugen.core.contract.service.user import IUserService
 from mugen.core.domain.use_case import NormalizeComposedMessageUseCase
+from mugen.core.service.context_scope_resolution import context_scope_from_ingress_route
 from mugen.core.utility.config_value import parse_optional_positive_finite_float
 
 
@@ -26,41 +28,32 @@ from mugen.core.utility.config_value import parse_optional_positive_finite_float
 class DefaultMessagingService(IMessagingService):
     """The default implementation of IMessagingService."""
 
-    _thread_version: int = 1
-
-    _thread_list_version: int = 1
-
     _default_extension_timeout_seconds: float = 10.0
 
-    # pylint: disable=too-many-arguments
-    # pylint: disable=too-many-positional-arguments
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         config: SimpleNamespace,
         completion_gateway: ICompletionGateway,
-        keyval_storage_gateway: IKeyValStorageGateway,
+        context_engine_service: IContextEngine,
         logging_gateway: ILoggingGateway,
         user_service: IUserService,
     ) -> None:
         self._config = config
         self._completion_gateway = completion_gateway
-        self._keyval_storage_gateway = keyval_storage_gateway
+        self._context_engine_service = context_engine_service
         self._logging_gateway = logging_gateway
         self._user_service = user_service
         self._cp_extensions: list[ICPExtension] = []
         self._ct_extensions: list[ICTExtension] = []
-        self._ctx_extensions: list[ICTXExtension] = []
         self._mh_extensions: list[IMHExtension] = []
-        self._rag_extensions: list[IRAGExtension] = []
         self._rpp_extensions: list[IRPPExtension] = []
 
         self._cp_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._ct_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
-        self._ctx_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._mh_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
-        self._rag_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._rpp_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._critical_extension_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+
         self._normalize_composed_message_use_case = NormalizeComposedMessageUseCase()
         self._mh_mode = self._resolve_mh_mode()
         self._builtin_text_handler = self._build_builtin_text_handler()
@@ -120,7 +113,7 @@ class DefaultMessagingService(IMessagingService):
             return handler_class(
                 completion_gateway=self._completion_gateway,
                 config=self._config,
-                keyval_storage_gateway=self._keyval_storage_gateway,
+                context_engine_service=self._context_engine_service,
                 logging_gateway=self._logging_gateway,
                 messaging_service=self,
             )
@@ -163,6 +156,11 @@ class DefaultMessagingService(IMessagingService):
         sender: str,
         message: dict | str,
         message_context: list[dict] | None = None,
+        attachment_context: list[dict] | None = None,
+        ingress_metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        scope: ContextScope,
     ) -> list[dict] | None:
         coroutine = extension.handle_message(
             platform=platform,
@@ -170,6 +168,11 @@ class DefaultMessagingService(IMessagingService):
             sender=sender,
             message=message,
             message_context=message_context,
+            attachment_context=attachment_context,
+            ingress_metadata=ingress_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=scope,
         )
         extension_name = f"{type(extension).__module__}.{type(extension).__qualname__}"
 
@@ -261,44 +264,65 @@ class DefaultMessagingService(IMessagingService):
         ext_list.append(ext)
         ext_keys.add(logical_key)
 
-    async def handle_audio_message(
-        self,
-        platform: str,
-        room_id: str,
-        sender: str,
-        message: dict,
-    ) -> list[dict] | None:
-        handler_responses = await self._collect_message_handler_responses(
-            platform=platform,
-            room_id=room_id,
-            sender=sender,
-            message=message,
-            message_types={"audio"},
-        )
-
-        if not handler_responses:
-            return [
-                {
-                    "type": "text",
-                    "content": "Unsupported message type: audio.",
-                }
-            ]
-
-        return await self.handle_text_message(
-            platform=platform,
-            room_id=room_id,
-            sender=sender,
-            message="Uploaded an audio file.",
-            message_context=handler_responses,
-        )
-
-    async def handle_composed_message(
+    async def handle_audio_message(  # pylint: disable=too-many-arguments
         self,
         platform: str,
         room_id: str,
         sender: str,
         message: dict,
         message_context: list[dict] | None = None,
+        ingress_metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        scope: ContextScope | None = None,
+    ) -> list[dict] | None:
+        resolved_scope, resolved_context, _, resolved_metadata = self._resolve_turn_scope(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message=message,
+            message_context=message_context,
+            attachment_context=None,
+            ingress_metadata=ingress_metadata,
+            scope=scope,
+        )
+        handler_responses = await self._collect_message_handler_responses(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message=message,
+            message_types={"audio"},
+            message_context=resolved_context,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
+        )
+        if not handler_responses:
+            return [{"type": "text", "content": "Unsupported message type: audio."}]
+        return await self.handle_text_message(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message="Uploaded an audio file.",
+            message_context=handler_responses + resolved_context,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
+        )
+
+    async def handle_composed_message(  # pylint: disable=too-many-arguments
+        self,
+        platform: str,
+        room_id: str,
+        sender: str,
+        message: dict,
+        message_context: list[dict] | None = None,
+        ingress_metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        scope: ContextScope | None = None,
     ) -> list[dict] | None:
         normalized_message = self._normalize_composed_message(message)
         parts = list(normalized_message["parts"])
@@ -311,6 +335,18 @@ class DefaultMessagingService(IMessagingService):
             attachments=attachments,
             composition_mode=composition_mode,
         )
+        resolved_scope, resolved_context, resolved_attachments, resolved_metadata = (
+            self._resolve_turn_scope(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=normalized_message,
+                message_context=message_context,
+                attachment_context=attachment_context,
+                ingress_metadata=ingress_metadata,
+                scope=scope,
+            )
+        )
         media_context = await self._collect_composed_media_context(
             platform=platform,
             room_id=room_id,
@@ -318,17 +354,12 @@ class DefaultMessagingService(IMessagingService):
             attachments=attachments,
             composition_mode=composition_mode,
             client_message_id=client_message_id,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
         )
-
-        combined_context: list[dict] = []
-        if isinstance(message_context, list):
-            combined_context.extend(
-                [item for item in message_context if isinstance(item, dict)]
-            )
-        if attachment_context is not None:
-            combined_context += attachment_context
-        combined_context += media_context
-
+        combined_context = [*resolved_context, *media_context]
         request_metadata = normalized_message.get("metadata")
         if isinstance(request_metadata, dict):
             combined_context.append(
@@ -338,94 +369,153 @@ class DefaultMessagingService(IMessagingService):
                 }
             )
 
-        message_context = combined_context if combined_context else None
         return await self.handle_text_message(
             platform=platform,
             room_id=room_id,
             sender=sender,
             message=prompt,
-            message_context=message_context,
+            message_context=combined_context,
+            attachment_context=resolved_attachments,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
         )
 
-    async def handle_file_message(
+    async def handle_file_message(  # pylint: disable=too-many-arguments
         self,
         platform: str,
         room_id: str,
         sender: str,
         message: dict,
+        message_context: list[dict] | None = None,
+        ingress_metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        scope: ContextScope | None = None,
     ) -> list[dict] | None:
+        resolved_scope, resolved_context, _, resolved_metadata = self._resolve_turn_scope(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message=message,
+            message_context=message_context,
+            attachment_context=None,
+            ingress_metadata=ingress_metadata,
+            scope=scope,
+        )
         handler_responses = await self._collect_message_handler_responses(
             platform=platform,
             room_id=room_id,
             sender=sender,
             message=message,
             message_types={"file"},
+            message_context=resolved_context,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
         )
-
         if not handler_responses:
-            return [
-                {
-                    "type": "text",
-                    "content": "Unsupported message type: file.",
-                }
-            ]
-
+            return [{"type": "text", "content": "Unsupported message type: file."}]
         return await self.handle_text_message(
             platform=platform,
             room_id=room_id,
             sender=sender,
             message="Uploaded a file.",
-            message_context=handler_responses,
+            message_context=handler_responses + resolved_context,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
         )
 
-    async def handle_image_message(
+    async def handle_image_message(  # pylint: disable=too-many-arguments
         self,
         platform: str,
         room_id: str,
         sender: str,
         message: dict,
+        message_context: list[dict] | None = None,
+        ingress_metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        scope: ContextScope | None = None,
     ) -> list[dict] | None:
+        resolved_scope, resolved_context, _, resolved_metadata = self._resolve_turn_scope(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message=message,
+            message_context=message_context,
+            attachment_context=None,
+            ingress_metadata=ingress_metadata,
+            scope=scope,
+        )
         handler_responses = await self._collect_message_handler_responses(
             platform=platform,
             room_id=room_id,
             sender=sender,
             message=message,
             message_types={"image"},
+            message_context=resolved_context,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
         )
-
         if not handler_responses:
-            return [
-                {
-                    "type": "text",
-                    "content": "Unsupported message type: image.",
-                }
-            ]
-
+            return [{"type": "text", "content": "Unsupported message type: image."}]
         return await self.handle_text_message(
             platform=platform,
             room_id=room_id,
             sender=sender,
             message="Uploaded an image file.",
-            message_context=handler_responses,
+            message_context=handler_responses + resolved_context,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
         )
 
-    async def handle_text_message(
+    async def handle_text_message(  # pylint: disable=too-many-arguments
         self,
         platform: str,
         room_id: str,
         sender: str,
         message: str,
         message_context: list[dict] | None = None,
+        attachment_context: list[dict] | None = None,
+        ingress_metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        scope: ContextScope | None = None,
     ) -> list[dict] | None:
+        resolved_scope, resolved_context, resolved_attachments, resolved_metadata = (
+            self._resolve_turn_scope(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+                message_context=message_context,
+                attachment_context=attachment_context,
+                ingress_metadata=ingress_metadata,
+                scope=scope,
+            )
+        )
         handler_responses = await self._collect_message_handler_responses(
             platform=platform,
             room_id=room_id,
             sender=sender,
             message=message,
             message_types={"text"},
-            message_context=message_context,
+            message_context=resolved_context,
+            attachment_context=resolved_attachments,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
         )
-
         if not handler_responses:
             if self._mh_mode == "required":
                 raise RuntimeError(
@@ -437,41 +527,153 @@ class DefaultMessagingService(IMessagingService):
                 room_id=room_id,
                 sender=sender,
                 message=message,
-                message_context=message_context,
+                message_context=resolved_context,
+                attachment_context=resolved_attachments,
+                ingress_metadata=resolved_metadata,
+                message_id=message_id,
+                trace_id=trace_id,
+                scope=resolved_scope,
             )
-
         return handler_responses
 
-    async def handle_video_message(
+    async def handle_video_message(  # pylint: disable=too-many-arguments
         self,
         platform: str,
         room_id: str,
         sender: str,
         message: dict,
+        message_context: list[dict] | None = None,
+        ingress_metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        scope: ContextScope | None = None,
     ) -> list[dict] | None:
+        resolved_scope, resolved_context, _, resolved_metadata = self._resolve_turn_scope(
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+            message=message,
+            message_context=message_context,
+            attachment_context=None,
+            ingress_metadata=ingress_metadata,
+            scope=scope,
+        )
         handler_responses = await self._collect_message_handler_responses(
             platform=platform,
             room_id=room_id,
             sender=sender,
             message=message,
             message_types={"video"},
+            message_context=resolved_context,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
         )
-
         if not handler_responses:
-            return [
-                {
-                    "type": "text",
-                    "content": "Unsupported message type: video.",
-                }
-            ]
-
+            return [{"type": "text", "content": "Unsupported message type: video."}]
         return await self.handle_text_message(
             platform=platform,
             room_id=room_id,
             sender=sender,
             message="Uploaded video file.",
-            message_context=handler_responses,
+            message_context=handler_responses + resolved_context,
+            ingress_metadata=resolved_metadata,
+            message_id=message_id,
+            trace_id=trace_id,
+            scope=resolved_scope,
         )
+
+    async def handle_message(
+        self,
+        request: MessagingTurnRequest,
+    ) -> list[dict[str, Any]] | None:
+        if request.message_type == "text":
+            if not isinstance(request.message, str):
+                raise ValueError("Text messaging turns require str payloads.")
+            return await self.handle_text_message(
+                platform=request.scope.platform or "",
+                room_id=request.scope.room_id or request.scope.conversation_id or "",
+                sender=request.scope.sender_id or "",
+                message=request.message,
+                message_context=request.message_context,
+                attachment_context=request.attachment_context,
+                ingress_metadata=request.ingress_metadata,
+                message_id=request.message_id,
+                trace_id=request.trace_id,
+                scope=request.scope,
+            )
+        if request.message_type == "composed":
+            if not isinstance(request.message, dict):
+                raise ValueError("Composed messaging turns require object payloads.")
+            return await self.handle_composed_message(
+                platform=request.scope.platform or "",
+                room_id=request.scope.room_id or request.scope.conversation_id or "",
+                sender=request.scope.sender_id or "",
+                message=request.message,
+                message_context=request.message_context,
+                ingress_metadata=request.ingress_metadata,
+                message_id=request.message_id,
+                trace_id=request.trace_id,
+                scope=request.scope,
+            )
+        if request.message_type == "audio":
+            if not isinstance(request.message, dict):
+                raise ValueError("Audio messaging turns require object payloads.")
+            return await self.handle_audio_message(
+                platform=request.scope.platform or "",
+                room_id=request.scope.room_id or request.scope.conversation_id or "",
+                sender=request.scope.sender_id or "",
+                message=request.message,
+                message_context=request.message_context,
+                ingress_metadata=request.ingress_metadata,
+                message_id=request.message_id,
+                trace_id=request.trace_id,
+                scope=request.scope,
+            )
+        if request.message_type == "file":
+            if not isinstance(request.message, dict):
+                raise ValueError("File messaging turns require object payloads.")
+            return await self.handle_file_message(
+                platform=request.scope.platform or "",
+                room_id=request.scope.room_id or request.scope.conversation_id or "",
+                sender=request.scope.sender_id or "",
+                message=request.message,
+                message_context=request.message_context,
+                ingress_metadata=request.ingress_metadata,
+                message_id=request.message_id,
+                trace_id=request.trace_id,
+                scope=request.scope,
+            )
+        if request.message_type == "image":
+            if not isinstance(request.message, dict):
+                raise ValueError("Image messaging turns require object payloads.")
+            return await self.handle_image_message(
+                platform=request.scope.platform or "",
+                room_id=request.scope.room_id or request.scope.conversation_id or "",
+                sender=request.scope.sender_id or "",
+                message=request.message,
+                message_context=request.message_context,
+                ingress_metadata=request.ingress_metadata,
+                message_id=request.message_id,
+                trace_id=request.trace_id,
+                scope=request.scope,
+            )
+        if request.message_type == "video":
+            if not isinstance(request.message, dict):
+                raise ValueError("Video messaging turns require object payloads.")
+            return await self.handle_video_message(
+                platform=request.scope.platform or "",
+                room_id=request.scope.room_id or request.scope.conversation_id or "",
+                sender=request.scope.sender_id or "",
+                message=request.message,
+                message_context=request.message_context,
+                ingress_metadata=request.ingress_metadata,
+                message_id=request.message_id,
+                trace_id=request.trace_id,
+                scope=request.scope,
+            )
+        raise ValueError(f"Unsupported message type: {request.message_type}")
 
     async def _collect_message_handler_responses(
         self,
@@ -482,20 +684,22 @@ class DefaultMessagingService(IMessagingService):
         message: dict | str,
         message_types: set[str],
         message_context: list[dict] | None = None,
+        attachment_context: list[dict] | None = None,
+        ingress_metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        scope: ContextScope,
     ) -> list[dict]:
         handler_responses: list[dict] = []
         for mh_ext in self._mh_extensions:
             if not mh_ext.platform_supported(platform):
                 continue
-
             extension_name = f"{type(mh_ext).__module__}.{type(mh_ext).__qualname__}"
             supported_message_types = getattr(mh_ext, "message_types", [])
             if not isinstance(supported_message_types, list):
                 continue
-
             if not any(message_type in supported_message_types for message_type in message_types):
                 continue
-
             resp = await self._invoke_message_handler(
                 extension=mh_ext,
                 platform=platform,
@@ -503,8 +707,12 @@ class DefaultMessagingService(IMessagingService):
                 sender=sender,
                 message=message,
                 message_context=message_context,
+                attachment_context=attachment_context,
+                ingress_metadata=ingress_metadata,
+                message_id=message_id,
+                trace_id=trace_id,
+                scope=scope,
             )
-
             if resp is None:
                 continue
             if not isinstance(resp, list):
@@ -514,18 +722,15 @@ class DefaultMessagingService(IMessagingService):
                     f"response_type={type(resp).__name__})."
                 )
                 continue
-
             for item in resp:
                 if isinstance(item, dict):
                     handler_responses.append(item)
                     continue
-
                 self._logging_gateway.warning(
                     "Messaging extension handler returned invalid response item "
                     f"(extension={extension_name} "
                     f"item_type={type(item).__name__})."
                 )
-
         return handler_responses
 
     async def _collect_composed_media_context(
@@ -537,6 +742,10 @@ class DefaultMessagingService(IMessagingService):
         attachments: list[dict[str, Any]],
         composition_mode: str,
         client_message_id: Any,
+        ingress_metadata: dict[str, Any],
+        message_id: str | None,
+        trace_id: str | None,
+        scope: ContextScope,
     ) -> list[dict]:
         media_context: list[dict] = []
         for attachment in attachments:
@@ -557,11 +766,186 @@ class DefaultMessagingService(IMessagingService):
                 sender=sender,
                 message=message_payload,
                 message_types={inferred_type},
+                ingress_metadata=ingress_metadata,
+                message_id=message_id,
+                trace_id=trace_id,
+                scope=scope,
             )
             if handler_responses:
                 media_context += handler_responses
-
         return media_context
+
+    def _resolve_turn_scope(
+        self,
+        *,
+        platform: str,
+        room_id: str,
+        sender: str,
+        message: dict | str,
+        message_context: list[dict] | None,
+        attachment_context: list[dict] | None,
+        ingress_metadata: dict[str, Any] | None,
+        scope: ContextScope | None,
+    ) -> tuple[ContextScope, list[dict], list[dict], dict[str, Any]]:
+        normalized_message_context = self._normalize_context_items(message_context)
+        normalized_attachment_context = self._normalize_context_items(attachment_context)
+        merged_metadata = self._merge_ingress_metadata(
+            message=message,
+            ingress_metadata=ingress_metadata,
+        )
+        ingress_route = self._extract_ingress_route(
+            message=message,
+            message_context=normalized_message_context,
+            ingress_metadata=merged_metadata,
+        )
+        if scope is None:
+            resolved = context_scope_from_ingress_route(
+                platform=platform,
+                channel_key=platform,
+                room_id=room_id,
+                sender_id=sender,
+                ingress_route=ingress_route,
+                ingress_metadata=merged_metadata,
+                conversation_id=self._metadata_text(merged_metadata.get("conversation_id"))
+                or room_id,
+                case_id=self._metadata_text(merged_metadata.get("case_id")),
+                workflow_id=self._metadata_text(merged_metadata.get("workflow_id")),
+                source=f"{platform}.messaging",
+            )
+            resolved_scope = resolved.scope
+            resolved_route = resolved.ingress_route
+            tenant_resolution = resolved.tenant_resolution
+        else:
+            resolved_scope = scope
+            resolved_route = self._route_from_scope(
+                scope=scope,
+                platform=platform,
+                ingress_route=ingress_route,
+            )
+            tenant_resolution = resolved_route.get("tenant_resolution")
+            if not isinstance(tenant_resolution, dict):
+                tenant_resolution = {
+                    "mode": (
+                        "resolved"
+                        if scope.tenant_id != str(GLOBAL_TENANT_ID)
+                        else "fallback_global"
+                    ),
+                    "reason_code": None
+                    if scope.tenant_id != str(GLOBAL_TENANT_ID)
+                    else "explicit_scope",
+                    "source": f"{platform}.messaging",
+                }
+                resolved_route["tenant_resolution"] = tenant_resolution
+        merged_metadata["ingress_route"] = dict(resolved_route)
+        merged_metadata["tenant_resolution"] = dict(tenant_resolution)
+        normalized_message_context = self._ensure_ingress_route_message_context(
+            normalized_message_context,
+            resolved_route,
+        )
+        return (
+            resolved_scope,
+            normalized_message_context,
+            normalized_attachment_context,
+            merged_metadata,
+        )
+
+    @staticmethod
+    def _normalize_context_items(value: list[dict] | None) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+        return [dict(item) for item in value if isinstance(item, dict)]
+
+    @staticmethod
+    def _message_payload_metadata(message: dict | str) -> dict[str, Any]:
+        if not isinstance(message, dict):
+            return {}
+        metadata = message.get("metadata")
+        if not isinstance(metadata, dict):
+            return {}
+        return dict(metadata)
+
+    def _merge_ingress_metadata(
+        self,
+        *,
+        message: dict | str,
+        ingress_metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        merged = self._message_payload_metadata(message)
+        if isinstance(ingress_metadata, dict):
+            merged.update(dict(ingress_metadata))
+        return merged
+
+    @staticmethod
+    def _metadata_text(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def _extract_ingress_route(
+        self,
+        *,
+        message: dict | str,
+        message_context: list[dict],
+        ingress_metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        route = ingress_metadata.get("ingress_route")
+        if isinstance(route, dict):
+            return dict(route)
+        message_metadata = self._message_payload_metadata(message)
+        route = message_metadata.get("ingress_route")
+        if isinstance(route, dict):
+            return dict(route)
+        for item in message_context:
+            if item.get("type") != "ingress_route":
+                continue
+            content = item.get("content")
+            if isinstance(content, dict):
+                return dict(content)
+        return None
+
+    @staticmethod
+    def _ensure_ingress_route_message_context(
+        message_context: list[dict],
+        ingress_route: dict[str, Any],
+    ) -> list[dict]:
+        for item in message_context:
+            if item.get("type") == "ingress_route" and isinstance(item.get("content"), dict):
+                return message_context
+        return [
+            *message_context,
+            {"type": "ingress_route", "content": dict(ingress_route)},
+        ]
+
+    @staticmethod
+    def _route_from_scope(
+        *,
+        scope: ContextScope,
+        platform: str,
+        ingress_route: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if isinstance(ingress_route, dict):
+            route_tenant_id = str(ingress_route.get("tenant_id") or "")
+            if route_tenant_id not in {"", scope.tenant_id}:
+                raise RuntimeError("Ingress route tenant_id does not match ContextScope.")
+            normalized = dict(ingress_route)
+            normalized["tenant_id"] = scope.tenant_id
+            normalized.setdefault("platform", scope.platform or platform)
+            normalized.setdefault("channel_key", scope.channel_id or platform)
+            normalized.setdefault("identifier_claims", {})
+            return normalized
+        return {
+            "tenant_id": scope.tenant_id,
+            "tenant_slug": "global"
+            if scope.tenant_id == str(GLOBAL_TENANT_ID)
+            else None,
+            "platform": scope.platform or platform,
+            "channel_key": scope.channel_id or platform,
+            "identifier_claims": {},
+            "channel_profile_id": None,
+            "route_key": None,
+            "binding_id": None,
+        }
 
     @staticmethod
     def _build_composed_text_prompt(*, parts: list[dict[str, Any]]) -> str:
@@ -571,24 +955,16 @@ class DefaultMessagingService(IMessagingService):
             if part_type == "text":
                 segments.append(str(part.get("text", "")))
                 continue
-
             if part_type != "attachment":
                 continue
-
-            attachment_id = str(part.get("id", "")).strip()
-            if attachment_id == "":
-                attachment_id = "unknown"
+            attachment_id = str(part.get("id", "")).strip() or "unknown"
             placeholder = f"[attachment:{attachment_id}]"
-
             caption = str(part.get("caption") or "").strip()
             if caption != "":
                 placeholder = f"{placeholder} caption={caption}"
-
             segments.append(placeholder)
-
         if not segments:
             return ""
-
         return "\n".join(segments)
 
     @staticmethod
@@ -599,7 +975,6 @@ class DefaultMessagingService(IMessagingService):
     ) -> list[dict] | None:
         if not attachments:
             return None
-
         context: list[dict] = []
         for index, attachment in enumerate(attachments, start=1):
             context.append(
@@ -616,7 +991,6 @@ class DefaultMessagingService(IMessagingService):
                     },
                 }
             )
-
         return context
 
     @staticmethod
@@ -642,16 +1016,8 @@ class DefaultMessagingService(IMessagingService):
         return self._ct_extensions
 
     @property
-    def ctx_extensions(self) -> list[ICTXExtension]:
-        return self._ctx_extensions
-
-    @property
     def mh_extensions(self) -> list[IMHExtension]:
         return self._mh_extensions
-
-    @property
-    def rag_extensions(self) -> list[IRAGExtension]:
-        return self._rag_extensions
 
     @property
     def rpp_extensions(self) -> list[IRPPExtension]:
@@ -694,35 +1060,12 @@ class DefaultMessagingService(IMessagingService):
             critical=critical,
         )
 
-    def bind_ctx_extension(
-        self,
-        ext: ICTXExtension,
-        *,
-        critical: bool = False,
-    ) -> None:
-        self._bind_extension_with_criticality(
-            ext=ext,
-            ext_list=self._ctx_extensions,
-            ext_keys=self._ctx_extension_keys,
-            kind="ctx",
-            critical=critical,
-        )
-
     def bind_mh_extension(self, ext: IMHExtension, *, critical: bool = False) -> None:
         self._bind_extension_with_criticality(
             ext=ext,
             ext_list=self._mh_extensions,
             ext_keys=self._mh_extension_keys,
             kind="mh",
-            critical=critical,
-        )
-
-    def bind_rag_extension(self, ext: IRAGExtension, *, critical: bool = False) -> None:
-        self._bind_extension_with_criticality(
-            ext=ext,
-            ext_list=self._rag_extensions,
-            ext_keys=self._rag_extension_keys,
-            kind="rag",
             critical=critical,
         )
 

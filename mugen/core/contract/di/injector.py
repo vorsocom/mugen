@@ -13,6 +13,7 @@ from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
+from mugen.core.contract.context import IContextEngine
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
@@ -101,6 +102,11 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def user_service(self) -> IUserService:
         """Get the global user service."""
+
+    @property
+    @abstractmethod
+    def context_engine_service(self) -> IContextEngine:
+        """Get the global context engine service."""
 
     @property
     @abstractmethod

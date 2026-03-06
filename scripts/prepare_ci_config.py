@@ -108,6 +108,13 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "contrib": "mugen.core.plugin.channel_orchestration.contrib",
     },
     {
+        "token": "core.fw.context_engine",
+        "name": "com.vorsocomputing.mugen.context_engine",
+        "namespace": "com.vorsocomputing.mugen.context_engine",
+        "models": "",
+        "contrib": "mugen.core.plugin.context_engine.contrib",
+    },
+    {
         "token": "core.fw.web",
         "name": "com.vorsocomputing.mugen.web",
         "namespace": "com.vorsocomputing.mugen.web",
@@ -222,25 +229,54 @@ def _ensure_framework_extension(
     models: str,
     contrib: str,
 ) -> None:
+    normalized_token = token.strip().lower()
     modules = doc["mugen"]["modules"]
+    core_modules = modules["core"]
+    if "extensions" not in core_modules or not isinstance(
+        core_modules.get("extensions"), list
+    ):
+        core_modules["extensions"] = tomlkit.aot()
     if "extensions" not in modules or not isinstance(modules.get("extensions"), list):
         modules["extensions"] = tomlkit.aot()
-    extensions = modules["extensions"]
 
-    normalized_token = token.strip().lower()
-    for extension in extensions:
-        if (
-            str(extension.get("type", "")).strip().lower() == "fw"
-            and str(extension.get("token", "")).strip().lower() == normalized_token
-        ):
-            extension["type"] = "fw"
-            extension["token"] = token
-            extension["enabled"] = True
-            extension["name"] = name
-            extension["namespace"] = namespace
+    matches: list[tuple[object, int, object]] = []
+    core_matches: list[tuple[object, int, object]] = []
+    plugin_matches: list[tuple[object, int, object]] = []
+    sections = [core_modules["extensions"], modules["extensions"]]
+    for section in sections:
+        for index, extension in enumerate(section):
+            if (
+                str(extension.get("type", "")).strip().lower() == "fw"
+                and str(extension.get("token", "")).strip().lower() == normalized_token
+            ):
+                match = (section, index, extension)
+                matches.append(match)
+                if section is modules["extensions"]:
+                    plugin_matches.append(match)
+                else:
+                    core_matches.append(match)
+
+    if matches:
+        if plugin_matches:
+            _, _, extension = plugin_matches[0]
+        else:
+            extension = tomlkit.table()
+            modules["extensions"].append(extension)
+        extension["type"] = "fw"
+        extension["token"] = token
+        extension["enabled"] = True
+        extension["name"] = name
+        extension["namespace"] = namespace
+        if models:
             extension["models"] = models
-            extension["contrib"] = contrib
-            return
+        elif "models" in extension:
+            del extension["models"]
+        extension["contrib"] = contrib
+
+        duplicate_matches = [match for match in matches if match[2] is not extension]
+        for section, index, _ in reversed(duplicate_matches):
+            del section[index]
+        return
 
     # CI requires deterministic extension metadata for migration seeding.
     extension = tomlkit.table()
@@ -249,9 +285,10 @@ def _ensure_framework_extension(
     extension["enabled"] = True
     extension["name"] = name
     extension["namespace"] = namespace
-    extension["models"] = models
+    if models:
+        extension["models"] = models
     extension["contrib"] = contrib
-    extensions.append(extension)
+    modules["extensions"].append(extension)
 
 
 def _enable_ci_framework_plugins(doc: tomlkit.TOMLDocument) -> None:

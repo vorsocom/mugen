@@ -12,6 +12,7 @@ from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
+from mugen.core.contract.context import IContextEngine
 from mugen.core.contract.di.injector import IDependencyInjector
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
@@ -53,6 +54,7 @@ class DependencyInjector(IDependencyInjector):
         nlp_service: INLPService = None,
         platform_service: IPlatformService = None,
         user_service: IUserService = None,
+        context_engine_service: IContextEngine = None,
         messaging_service: IMessagingService = None,
         knowledge_gateway: IKnowledgeGateway = None,
         matrix_client: IMatrixClient = None,
@@ -77,6 +79,7 @@ class DependencyInjector(IDependencyInjector):
         self.__nlp_service = nlp_service
         self.__platform_service = platform_service
         self.__user_service = user_service
+        self.__context_engine_service = context_engine_service
         self.__messaging_service = messaging_service
         self.__knowledge_gateway = knowledge_gateway
         self.__matrix_client = matrix_client
@@ -200,6 +203,14 @@ class DependencyInjector(IDependencyInjector):
     @user_service.setter
     def user_service(self, value: IUserService) -> None:
         self.__user_service = value
+
+    @property
+    def context_engine_service(self) -> IContextEngine:
+        return self.__context_engine_service
+
+    @context_engine_service.setter
+    def context_engine_service(self, value: IContextEngine) -> None:
+        self.__context_engine_service = value
 
     @property
     def messaging_service(self) -> IMessagingService:

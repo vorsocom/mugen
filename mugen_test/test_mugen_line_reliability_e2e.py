@@ -232,6 +232,11 @@ class TestMugenLineReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
+                        "tenant_resolution": {
+                            "mode": "resolved",
+                            "reason_code": None,
+                            "source": "line.ingress_routing",
+                        },
                     },
                 }
             ],
@@ -304,6 +309,11 @@ class TestMugenLineReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
+                        "tenant_resolution": {
+                            "mode": "resolved",
+                            "reason_code": None,
+                            "source": "line.ingress_routing",
+                        },
                     },
                 },
             ],

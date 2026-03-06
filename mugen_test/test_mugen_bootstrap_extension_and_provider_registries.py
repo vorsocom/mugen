@@ -381,6 +381,10 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         self.assertIn("core.ipc.line_messagingapi", token_registry)
         self.assertIn("core.ipc.signal_restapi", token_registry)
 
+    def test_plugin_token_registry_contains_context_engine_extension(self) -> None:
+        token_registry = get_plugin_extension_token_registry()
+        self.assertIn("core.fw.context_engine", token_registry)
+
     def test_parse_bool_default_paths(self) -> None:
         self.assertTrue(ext_mod.parse_bool(object(), default=True))
         self.assertFalse(ext_mod.parse_bool("not-bool", default=False))
@@ -709,9 +713,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             messaging_service=SimpleNamespace(
                 bind_cp_extension=_bind("cp"),
                 bind_ct_extension=_bind("ct"),
-                bind_ctx_extension=_bind("ctx"),
                 bind_mh_extension=_bind("mh"),
-                bind_rag_extension=_bind("rag"),
                 bind_rpp_extension=_bind("rpp"),
             ),
             ipc_service=SimpleNamespace(
@@ -721,7 +723,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             logging_gateway=Mock(),
         )
 
-        for kind in ("ct", "ctx", "mh", "rag", "rpp"):
+        for kind in ("ct", "mh", "rpp"):
             registry._bind_messaging_extension(  # pylint: disable=protected-access
                 extension_type=kind,
                 extension=object(),
@@ -730,7 +732,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             bind_calls,
-            [("ct", True), ("ctx", True), ("mh", True), ("rag", True), ("rpp", True)],
+            [("ct", True), ("mh", True), ("rpp", True)],
         )
         with self.assertRaisesRegex(RuntimeError, "binding is unavailable"):
             registry._bind_messaging_extension(  # pylint: disable=protected-access
@@ -831,6 +833,21 @@ class TestProviderRegistryResolution(unittest.TestCase):
                 interface=ICompletionGateway,
             )
         self.assertIs(resolved, _DummyCompletion)
+
+    def test_context_engine_provider_token_resolves(self) -> None:
+        class _DummyContextEngine:  # noqa: D401
+            pass
+
+        with patch(
+            "mugen.core.di.provider_registry.importlib.import_module",
+            return_value=SimpleNamespace(DefaultContextEngine=_DummyContextEngine),
+        ):
+            resolved = provider_registry.resolve_provider_class(
+                provider_name="context_engine_service",
+                token="default",
+                interface=object,
+            )
+        self.assertIs(resolved, _DummyContextEngine)
 
     def test_vertex_completion_provider_token_resolves(self) -> None:
         with patch(

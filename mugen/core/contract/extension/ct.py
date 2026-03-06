@@ -4,6 +4,8 @@ __all__ = ["ICTExtension"]
 
 from abc import abstractmethod
 
+from mugen.core.contract.context import ContextScope
+
 from . import IExtensionBase
 
 
@@ -22,5 +24,7 @@ class ICTExtension(IExtensionBase):
         role: str,
         room_id: str,
         user_id: str,
+        *,
+        scope: ContextScope,
     ) -> None:
         """Process message for conversational triggers."""

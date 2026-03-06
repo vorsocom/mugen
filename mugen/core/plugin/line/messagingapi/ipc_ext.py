@@ -24,9 +24,13 @@ from mugen.core.contract.service.ingress_routing import (
 from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.service.context_scope_resolution import (
+    ContextScopeResolutionError,
+    context_scope_from_ingress_route,
+    resolve_ingress_route_context,
+)
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
-    build_ingress_route_context,
 )
 from mugen.core.utility.config_value import parse_bool_flag
 from mugen.core.utility.processing_signal import (
@@ -286,35 +290,47 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
         path_token: str | None,
         webhook_payload: dict[str, Any],
     ) -> dict[str, Any] | None:
+        claims = {"path_token": path_token} if path_token is not None else {}
         resolution = await self._ingress_router().resolve(
             IngressRouteRequest(
                 platform="line",
                 channel_key="line",
                 identifier_type="path_token",
                 identifier_value=path_token,
-                claims={"path_token": path_token} if path_token is not None else {},
+                claims=claims,
             )
         )
-        if resolution.ok and resolution.result is not None:
-            return build_ingress_route_context(resolution.result)
+        try:
+            ingress_route = resolve_ingress_route_context(
+                platform="line",
+                channel_key="line",
+                routing=resolution,
+                source="line.ingress_routing",
+                identifier_claims=claims,
+            )
+        except ContextScopeResolutionError as exc:
+            self._increment_metric("line.ipc.route.unresolved")
+            reason_code = str(exc.reason_code or "route_unresolved")
+            error_message = str(exc)
+            await self._record_dead_letter(
+                event_type="webhook",
+                event_payload=webhook_payload,
+                reason_code="route_unresolved",
+                error_message=error_message,
+            )
+            self._logging_gateway.warning(
+                "Dropped LINE webhook due to unresolved ingress route "
+                f"reason_code={reason_code} path_token={path_token!r}."
+            )
+            return None
 
-        self._increment_metric("line.ipc.route.unresolved")
-        reason_code = str(resolution.reason_code or "route_unresolved")
-        reason_detail = str(resolution.reason_detail or "").strip()
-        error_message = reason_code
-        if reason_detail != "":
-            error_message = f"{reason_code}: {reason_detail}"
-        await self._record_dead_letter(
-            event_type="webhook",
-            event_payload=webhook_payload,
-            reason_code="route_unresolved",
-            error_message=error_message,
-        )
-        self._logging_gateway.warning(
-            "Dropped LINE webhook due to unresolved ingress route "
-            f"reason_code={reason_code} path_token={path_token!r}."
-        )
-        return None
+        if resolution.ok is not True:
+            self._increment_metric("line.ipc.route.fallback_global")
+            self._logging_gateway.warning(
+                "Using global tenant fallback for LINE ingress "
+                f"(reason_code={resolution.reason_code} path_token={path_token!r})."
+            )
+        return ingress_route
 
     @staticmethod
     def _api_call_succeeded(response: dict | None) -> bool:
@@ -700,6 +716,22 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
         sender: str,
         message_context: list[dict] | None = None,
     ) -> None:
+        ingress_route = None
+        for item in message_context or []:
+            if item.get("type") != "ingress_route":
+                continue
+            content = item.get("content")
+            if isinstance(content, dict):
+                ingress_route = dict(content)
+                break
+        resolved = context_scope_from_ingress_route(
+            platform="line",
+            channel_key="line",
+            room_id=sender,
+            sender_id=sender,
+            ingress_route=ingress_route,
+            source="line.ipc_extension",
+        )
         hits = 0
         message_handlers: list[IMHExtension] = self._messaging_service.mh_extensions
         for handler in message_handlers:
@@ -713,6 +745,11 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                     sender=sender,
                     message=message,
                     message_context=message_context,
+                    ingress_metadata={
+                        "ingress_route": dict(resolved.ingress_route),
+                        "tenant_resolution": dict(resolved.tenant_resolution),
+                    },
+                    scope=resolved.scope,
                 )
                 hits += 1
 

@@ -23,9 +23,12 @@ from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core import di
+from mugen.core.service.context_scope_resolution import (
+    ContextScopeResolutionError,
+    resolve_ingress_route_context,
+)
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
-    build_ingress_route_context,
 )
 from mugen.core.utility.config_value import parse_bool_flag
 from mugen.core.utility.processing_signal import (
@@ -314,35 +317,46 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
         path_token: str | None,
         webhook_payload: dict[str, Any],
     ) -> dict[str, Any] | None:
+        claims = {"path_token": path_token} if path_token is not None else {}
         resolution = await self._ingress_router().resolve(
             IngressRouteRequest(
                 platform="telegram",
                 channel_key="telegram",
                 identifier_type="path_token",
                 identifier_value=path_token,
-                claims={"path_token": path_token} if path_token is not None else {},
+                claims=claims,
             )
         )
-        if resolution.ok and resolution.result is not None:
-            return build_ingress_route_context(resolution.result)
+        try:
+            ingress_route = resolve_ingress_route_context(
+                platform="telegram",
+                channel_key="telegram",
+                routing=resolution,
+                source="telegram.ingress_routing",
+                identifier_claims=claims,
+            )
+        except ContextScopeResolutionError as exc:
+            self._increment_metric("telegram.ipc.route.unresolved")
+            reason_code = str(exc.reason_code or "route_unresolved")
+            await self._record_dead_letter(
+                event_type="webhook",
+                event_payload=webhook_payload,
+                reason_code="route_unresolved",
+                error_message=str(exc),
+            )
+            self._logging_gateway.warning(
+                "Dropped Telegram webhook due to unresolved ingress route "
+                f"reason_code={reason_code} path_token={path_token!r}."
+            )
+            return None
 
-        self._increment_metric("telegram.ipc.route.unresolved")
-        reason_code = str(resolution.reason_code or "route_unresolved")
-        reason_detail = str(resolution.reason_detail or "").strip()
-        error_message = reason_code
-        if reason_detail != "":
-            error_message = f"{reason_code}: {reason_detail}"
-        await self._record_dead_letter(
-            event_type="webhook",
-            event_payload=webhook_payload,
-            reason_code="route_unresolved",
-            error_message=error_message,
-        )
-        self._logging_gateway.warning(
-            "Dropped Telegram webhook due to unresolved ingress route "
-            f"reason_code={reason_code} path_token={path_token!r}."
-        )
-        return None
+        if resolution.ok is not True:
+            self._increment_metric("telegram.ipc.route.fallback_global")
+            self._logging_gateway.warning(
+                "Using global tenant fallback for Telegram ingress "
+                f"(reason_code={resolution.reason_code} path_token={path_token!r})."
+            )
+        return ingress_route
 
     async def _emit_processing_signal(
         self,

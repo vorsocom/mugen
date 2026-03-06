@@ -140,9 +140,7 @@ class TestCoreDomainArchitecture(unittest.TestCase):
         self.assertIn("bind_ipc_extension", ipc_function_names)
         self.assertIn("bind_cp_extension", messaging_function_names)
         self.assertIn("bind_ct_extension", messaging_function_names)
-        self.assertIn("bind_ctx_extension", messaging_function_names)
         self.assertIn("bind_mh_extension", messaging_function_names)
-        self.assertIn("bind_rag_extension", messaging_function_names)
         self.assertIn("bind_rpp_extension", messaging_function_names)
 
     def test_core_platform_allow_list_excludes_telnet(self) -> None:

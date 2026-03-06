@@ -203,6 +203,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
             web_client=object(),
         )
@@ -226,6 +227,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
         )
         config = {
@@ -280,6 +282,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
         )
         config = {
@@ -307,6 +310,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
         )
         config = {
@@ -336,6 +340,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
         )
         config = {
@@ -365,6 +370,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
         )
         config = {
@@ -394,6 +400,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
         )
         config = {
@@ -422,6 +429,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
             knowledge_gateway=object(),
             matrix_client=object(),
@@ -447,6 +455,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
             email_gateway=object(),
             matrix_client=object(),
@@ -472,6 +481,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
             sms_gateway=object(),
             matrix_client=object(),
@@ -497,6 +507,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
             web_client=object(),
         )
@@ -521,6 +532,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
             matrix_client=object(),
         )
@@ -552,6 +564,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
             web_client=object(),
         )
@@ -575,6 +588,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
         )
         config = {
@@ -597,6 +611,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
             whatsapp_client=object(),
         )
@@ -621,6 +636,7 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             nlp_service=object(),
             platform_service=object(),
             user_service=object(),
+            context_engine_service=object(),
             messaging_service=object(),
         )
         config = {

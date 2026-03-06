@@ -601,24 +601,41 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 webhook_payload={"events": []},
             )
 
-        self.assertIsNone(first)
+        self.assertEqual(
+            first,
+            {
+                "tenant_id": "00000000-0000-0000-0000-000000000000",
+                "tenant_slug": "global",
+                "platform": "line",
+                "channel_key": "line",
+                "identifier_claims": {"path_token": "tok-1"},
+                "channel_profile_id": None,
+                "route_key": None,
+                "binding_id": None,
+                "tenant_resolution": {
+                    "mode": "fallback_global",
+                    "reason_code": "missing_binding",
+                    "source": "line.ingress_routing",
+                },
+            },
+        )
         self.assertIsNone(second)
         self.assertEqual(
             ext._metrics.get("line.ipc.route.unresolved"),  # pylint: disable=protected-access
-            2,
+            1,
         )
-        self.assertEqual(record_dead_letter.await_count, 2)
+        self.assertEqual(
+            ext._metrics.get("line.ipc.route.fallback_global"),  # pylint: disable=protected-access
+            1,
+        )
+        self.assertEqual(record_dead_letter.await_count, 1)
         self.assertEqual(
             record_dead_letter.await_args_list[0].kwargs["error_message"],
-            "missing_binding: binding not found",
-        )
-        self.assertEqual(
-            record_dead_letter.await_args_list[1].kwargs["error_message"],
             "route_unresolved",
         )
         logger.warning.assert_any_call(
-            "Dropped LINE webhook due to unresolved ingress route "
-            "reason_code=missing_binding path_token='tok-1'."
+            "Using global tenant fallback for LINE ingress "
+            "(reason_code=missing_binding path_token='tok-1')."
         )
         logger.warning.assert_any_call(
             "Dropped LINE webhook due to unresolved ingress route "
@@ -1035,6 +1052,40 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="U-1",
         )
         logger.debug.assert_called_once_with("Unsupported LINE event type: follow.")
+
+    async def test_call_message_handlers_skips_non_dict_ingress_route_context_items(
+        self,
+    ) -> None:
+        handler = SimpleNamespace(
+            message_types=["text"],
+            platform_supported=lambda _platform: True,
+            handle_message=AsyncMock(),
+        )
+        messaging_service = _make_messaging_service()
+        messaging_service.mh_extensions = [handler]
+        ext = _new_extension(
+            config=_make_config(),
+            messaging_service=messaging_service,
+            logging_gateway=Mock(),
+        )
+
+        await ext._call_message_handlers(  # pylint: disable=protected-access
+            message={"x": 1},
+            message_type="text",
+            sender="U-1",
+            message_context=[
+                {"type": "ingress_route", "content": "bad"},
+                {"type": "ingress_route", "content": {"tenant_id": "tenant-1"}},
+            ],
+        )
+
+        handler.handle_message.assert_awaited_once()
+        self.assertEqual(
+            handler.handle_message.await_args.kwargs["ingress_metadata"]["ingress_route"][
+                "tenant_id"
+            ],
+            "tenant-1",
+        )
 
     async def test_handle_message_event_edge_paths(self) -> None:
         logger = Mock()

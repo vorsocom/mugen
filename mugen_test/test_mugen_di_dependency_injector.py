@@ -11,6 +11,7 @@ from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
+from mugen.core.contract.context import IContextEngine
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
 from mugen.core.contract.gateway.knowledge import IKnowledgeGateway
@@ -45,6 +46,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.nlp_service)
         self.assertIsNone(injector.platform_service)
         self.assertIsNone(injector.user_service)
+        self.assertIsNone(injector.context_engine_service)
         self.assertIsNone(injector.messaging_service)
         self.assertIsNone(injector.knowledge_gateway)
         self.assertIsNone(injector.matrix_client)
@@ -294,6 +296,38 @@ class TestDependencyInjector(unittest.TestCase):
             logging_gateway=logging_gateway,
         )
 
+        class DummyContextEngineClass(IContextEngine):
+            """Dummy context engine class."""
+
+            def __init__(self, config, logging_gateway):
+                _ = (config, logging_gateway)
+
+            async def prepare_turn(self, request):
+                _ = request
+                pass
+
+            async def commit_turn(
+                self,
+                request,
+                prepared,
+                completion,
+                final_user_responses,
+                outcome,
+            ):
+                _ = (
+                    request,
+                    prepared,
+                    completion,
+                    final_user_responses,
+                    outcome,
+                )
+                pass
+
+        context_engine_service = DummyContextEngineClass(
+            config=config,
+            logging_gateway=logging_gateway,
+        )
+
         # Messaging Service
         class DummyMessagingServiceClass(IMessagingService):
             """Dummy messaging class."""
@@ -302,12 +336,17 @@ class TestDependencyInjector(unittest.TestCase):
                 self,
                 config,
                 completion_gateway,
-                keyval_storage_gateway,
+                context_engine_service,
                 logging_gateway,
                 user_service,
             ):
-                _ = completion_gateway
-                pass
+                _ = (
+                    config,
+                    completion_gateway,
+                    context_engine_service,
+                    logging_gateway,
+                    user_service,
+                )
 
             @property
             def cp_extensions(self):
@@ -318,104 +357,41 @@ class TestDependencyInjector(unittest.TestCase):
                 pass
 
             @property
-            def ctx_extensions(self):
-                pass
-
-            @property
             def mh_extensions(self):
-                pass
-
-            @property
-            def rag_extensions(self):
                 pass
 
             @property
             def rpp_extensions(self):
                 pass
 
-            async def handle_audio_message(
-                self,
-                platform: str,
-                room_id: str,
-                sender: str,
-                message: dict,
-            ) -> list[dict] | None:
-                pass
-
-            async def handle_composed_message(
-                self,
-                platform: str,
-                room_id: str,
-                sender: str,
-                message: dict,
-            ) -> list[dict] | None:
-                pass
-
-            async def handle_file_message(
-                self,
-                platform: str,
-                room_id: str,
-                sender: str,
-                message: dict,
-            ) -> list[dict] | None:
-                pass
-
-            async def handle_image_message(
-                self,
-                platform: str,
-                room_id: str,
-                sender: str,
-                message: dict,
-            ) -> list[dict] | None:
-                pass
-
-            async def handle_text_message(
-                self,
-                platform: str,
-                room_id: str,
-                sender: str,
-                message: str,
-                message_context: list[str] = None,
-            ):
-                pass
-
-            async def handle_video_message(
-                self,
-                platform: str,
-                room_id: str,
-                sender: str,
-                message: dict,
-            ) -> list[dict] | None:
+            async def handle_message(self, request):
+                _ = request
                 pass
 
             def bind_cp_extension(self, ext, *, critical: bool = False):
+                _ = ext
                 _ = critical
                 pass
 
             def bind_ct_extension(self, ext, *, critical: bool = False):
-                _ = critical
-                pass
-
-            def bind_ctx_extension(self, ext, *, critical: bool = False):
+                _ = ext
                 _ = critical
                 pass
 
             def bind_mh_extension(self, ext, *, critical: bool = False):
-                _ = critical
-                pass
-
-            def bind_rag_extension(self, ext, *, critical: bool = False):
+                _ = ext
                 _ = critical
                 pass
 
             def bind_rpp_extension(self, ext, *, critical: bool = False):
+                _ = ext
                 _ = critical
                 pass
 
         messaging_service = DummyMessagingServiceClass(
             config=config,
             completion_gateway=completion_gateway,
-            keyval_storage_gateway=keyval_storage_gateway,
+            context_engine_service=context_engine_service,
             logging_gateway=logging_gateway,
             user_service=user_service,
         )
@@ -1237,6 +1213,7 @@ class TestDependencyInjector(unittest.TestCase):
             nlp_service=nlp_service,
             platform_service=platform_service,
             user_service=user_service,
+            context_engine_service=context_engine_service,
             messaging_service=messaging_service,
             knowledge_gateway=knowledge_gateway,
             matrix_client=matrix_client,
@@ -1264,6 +1241,7 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.nlp_service, nlp_service)
         self.assertEqual(injector.platform_service, platform_service)
         self.assertEqual(injector.user_service, user_service)
+        self.assertEqual(injector.context_engine_service, context_engine_service)
         self.assertEqual(injector.messaging_service, messaging_service)
         self.assertEqual(injector.knowledge_gateway, knowledge_gateway)
         self.assertEqual(injector.matrix_client, matrix_client)
