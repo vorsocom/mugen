@@ -333,11 +333,20 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         config,
                         ipc_service,
                         keyval_storage_gateway,
+                        relational_storage_gateway,
                         logging_gateway,
                         messaging_service,
                         user_service,
                     ):
-                        pass
+                        _ = (
+                            config,
+                            ipc_service,
+                            keyval_storage_gateway,
+                            relational_storage_gateway,
+                            logging_gateway,
+                            messaging_service,
+                            user_service,
+                        )
 
                     async def __aenter__(self):
                         pass
@@ -385,12 +394,13 @@ class TestDIBuildMatrixClient(unittest.TestCase):
 
                 DummyMatrixClientClass.__module__ = "valid_matrix_module"
 
-
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_matrix_module": unittest.mock.Mock(DummyMatrixClientClass=DummyMatrixClientClass),
+                            "valid_matrix_module": unittest.mock.Mock(
+                                DummyMatrixClientClass=DummyMatrixClientClass
+                            ),
                         },
                     ),
                     unittest.mock.patch(

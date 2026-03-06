@@ -240,6 +240,8 @@ class TestDependencyInjector(unittest.TestCase):
             logging_gateway=logging_gateway,
         )
 
+        relational_storage_gateway = object()
+
         # NLP Service
         # pylint: disable=too-few-public-methods
         class DummyNLPServiceClass(INLPService):
@@ -431,11 +433,20 @@ class TestDependencyInjector(unittest.TestCase):
                 config,
                 ipc_service,
                 keyval_storage_gateway,
+                relational_storage_gateway,
                 logging_gateway,
                 messaging_service,
                 user_service,
             ):
-                pass
+                _ = (
+                    config,
+                    ipc_service,
+                    keyval_storage_gateway,
+                    relational_storage_gateway,
+                    logging_gateway,
+                    messaging_service,
+                    user_service,
+                )
 
             async def __aenter__(self):
                 pass
@@ -485,6 +496,7 @@ class TestDependencyInjector(unittest.TestCase):
             config=config,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
+            relational_storage_gateway=relational_storage_gateway,
             logging_gateway=logging_gateway,
             messaging_service=messaging_service,
             user_service=user_service,

@@ -65,6 +65,7 @@ Ingress routing is resolved before orchestration actions run.
 Routing identifiers currently used by adapters:
 
 - LINE: `identifier_type="path_token"` from webhook path token.
+- Matrix: `identifier_type="room_id"` from inbound Matrix DM room id.
 - Telegram: `identifier_type="path_token"` from webhook path token.
 - WeChat: `identifier_type="path_token"` from webhook path token.
 - Signal: `identifier_type="account_number"` from normalized account number.
@@ -116,6 +117,10 @@ Resolver failure reason codes:
 
 Adapter behavior on unresolved route:
 
+- Matrix:
+  - missing binding / missing identifier: continue with global tenant fallback,
+  - inactive / ambiguous / invalid / unauthorized / resolution-error:
+    warning-log and drop inbound message processing before messaging handlers.
 - Webhook adapters (LINE/Telegram/WeChat/Signal/WhatsApp) dead-letter the
   payload, increment unresolved-route metrics, log warning details, and drop
   further processing.
