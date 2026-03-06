@@ -29,6 +29,20 @@ from mugen.core.plugin.billing.service.payment import PaymentService
 from mugen.core.plugin.billing.service.price import PriceService
 from mugen.core.plugin.billing.service.product import ProductService
 from mugen.core.plugin.billing.service.usage_allocation import UsageAllocationService
+from mugen.core.plugin.context_engine.service.admin_resource import (
+    ContextContributorBindingService,
+    ContextPolicyService,
+    ContextProfileService,
+    ContextSourceBindingService,
+    ContextTracePolicyService,
+)
+from mugen.core.plugin.context_engine.service.runtime import (
+    ContextCacheRecordService,
+    ContextEventLogService,
+    ContextMemoryRecordService,
+    ContextStateSnapshotService,
+    ContextTraceService,
+)
 
 
 class TestMugenRelationalServiceCtorSmoke(unittest.TestCase):
@@ -60,6 +74,16 @@ class TestMugenRelationalServiceCtorSmoke(unittest.TestCase):
             PriceService,
             ProductService,
             UsageAllocationService,
+            ContextProfileService,
+            ContextPolicyService,
+            ContextContributorBindingService,
+            ContextSourceBindingService,
+            ContextTracePolicyService,
+            ContextStateSnapshotService,
+            ContextEventLogService,
+            ContextMemoryRecordService,
+            ContextCacheRecordService,
+            ContextTraceService,
         ]
 
         for idx, ctor in enumerate(ctor_types, start=1):

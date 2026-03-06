@@ -1,80 +1,36 @@
 """Unit tests for mugen.core.extension.mh.default_text."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from mugen.core.contract.gateway.completion import CompletionGatewayError
-from mugen.core.contract.gateway.storage.keyval_model import KeyValConflictError
+from mugen.core.contract.context import (
+    ContextArtifact,
+    ContextBundle,
+    ContextCandidate,
+    ContextPolicy,
+    ContextProvenance,
+    ContextScope,
+    ContextState,
+    ContextTurnRequest,
+    PreparedContextTurn,
+)
+from mugen.core.contract.context.result import TurnOutcome
+from mugen.core.contract.gateway.completion import (
+    CompletionGatewayError,
+    CompletionMessage,
+    CompletionRequest,
+    CompletionResponse,
+)
 from mugen.core.extension.mh.default_text import DefaultTextMHExtension
 
 
-class _MemoryKeyVal:
-    def __init__(self):
-        self.store = {}
-        self._versions: dict[str, int] = {}
-
-    def has_key(self, key: str) -> bool:
-        return key in self.store
-
-    def get(self, key: str, _decode: bool = True):
-        return self.store[key]
-
-    def put(self, key: str, value):
-        self.store[key] = value
-        self._versions[key] = int(self._versions.get(key, 0)) + 1
-
-    async def get_json(self, key: str):
-        payload = self.store.get(key)
-        if payload in [None, ""]:
-            return None
-        if isinstance(payload, bytes):
-            try:
-                payload = payload.decode("utf-8")
-            except UnicodeDecodeError:
-                return None
-        try:
-            loaded = json.loads(payload)
-        except (TypeError, ValueError):
-            return None
-        return loaded
-
-    async def get_entry(self, key: str):
-        if key not in self.store:
-            return None
-        return SimpleNamespace(
-            row_version=int(self._versions.get(key, 1)),
-        )
-
-    async def put_json(
-        self,
-        key: str,
-        value,
-        *,
-        expected_row_version: int | None = None,
-    ) -> None:
-        current_row_version = 0 if key not in self.store else int(
-            self._versions.get(key, 1)
-        )
-        if (
-            expected_row_version is not None
-            and int(expected_row_version) != current_row_version
-        ):
-            raise KeyValConflictError(
-                namespace="default",
-                key=key,
-                expected_row_version=int(expected_row_version),
-                current_row_version=current_row_version,
-            )
-
-        self.store[key] = json.dumps(value, ensure_ascii=True)
-        self._versions[key] = 1 if current_row_version == 0 else current_row_version + 1
-
-
 class _BaseExt:
-    def __init__(self, supported: bool):
+    def __init__(self, supported: bool) -> None:
         self._supported = supported
 
     def platform_supported(self, _platform: str) -> bool:
@@ -82,145 +38,159 @@ class _BaseExt:
 
 
 class _CommandExt(_BaseExt):
-    def __init__(self, supported: bool, commands, response=None, side_effect=None):
+    def __init__(self, supported: bool, commands, response=None, side_effect=None) -> None:
         super().__init__(supported)
         self.commands = commands
         self.process_message = AsyncMock(return_value=response, side_effect=side_effect)
 
 
-class _ContextExt(_BaseExt):
-    def __init__(self, supported: bool, context=None, side_effect=None):
-        super().__init__(supported)
-        if side_effect is not None:
-            self.get_context = Mock(side_effect=side_effect)
-        else:
-            self.get_context = Mock(return_value=context)
-
-
-class _RagExt(_BaseExt):
-    def __init__(self, supported: bool, rag_context=None, rag_responses=None, side_effect=None):
-        super().__init__(supported)
-        if side_effect is not None:
-            self.retrieve = AsyncMock(side_effect=side_effect)
-        else:
-            self.retrieve = AsyncMock(return_value=(rag_context, rag_responses))
-
-
 class _RppExt(_BaseExt):
-    def __init__(self, supported: bool, response: str | None = None, side_effect=None):
+    def __init__(self, supported: bool, response: object = None, side_effect=None) -> None:
         super().__init__(supported)
-        if side_effect is not None:
-            self.preprocess_response = AsyncMock(side_effect=side_effect)
-        else:
-            self.preprocess_response = AsyncMock(return_value=response)
-
-
-class _LegacyRppExt(_BaseExt):
-    def __init__(self, supported: bool, response: str):
-        super().__init__(supported)
-        self._response = response
-        self.calls: list[tuple[str, str]] = []
-
-    async def preprocess_response(self, room_id: str, user_id: str) -> str:
-        self.calls.append((room_id, user_id))
-        return self._response
+        self.preprocess_response = AsyncMock(
+            return_value=response,
+            side_effect=side_effect,
+        )
 
 
 class _CtExt(_BaseExt):
-    def __init__(self, supported: bool, triggers=None, side_effect=None):
+    def __init__(self, supported: bool, triggers=None, side_effect=None) -> None:
         super().__init__(supported)
-        self.triggers = triggers if triggers is not None else []
+        self.triggers = [] if triggers is None else triggers
         self.process_message = AsyncMock(return_value=None, side_effect=side_effect)
 
 
-# pylint: disable=too-many-arguments
-# pylint: disable=too-many-positional-arguments
-def _make_messaging_service(
+def _scope(
     *,
-    cp_extensions=None,
-    ctx_extensions=None,
-    rag_extensions=None,
-    rpp_extensions=None,
-    ct_extensions=None,
-):
-    return SimpleNamespace(
-        cp_extensions=cp_extensions or [],
-        ctx_extensions=ctx_extensions or [],
-        rag_extensions=rag_extensions or [],
-        rpp_extensions=rpp_extensions or [],
-        ct_extensions=ct_extensions or [],
+    tenant_id: str = "tenant-1",
+    room_id: str = "room-1",
+    sender_id: str = "user-1",
+) -> ContextScope:
+    return ContextScope(
+        tenant_id=tenant_id,
+        platform="matrix",
+        channel_id="matrix",
+        room_id=room_id,
+        sender_id=sender_id,
+        conversation_id=room_id,
     )
 
 
-# pylint: disable=too-many-arguments
-# pylint: disable=too-many-positional-arguments
+def _prepared_turn() -> PreparedContextTurn:
+    candidate = ContextCandidate(
+        artifact=ContextArtifact(
+            artifact_id="persona-1",
+            lane="system_persona_policy",
+            kind="policy",
+            content={"instruction": "Be concise."},
+            provenance=ContextProvenance(
+                contributor="persona",
+                source_kind="config",
+                tenant_id="tenant-1",
+            ),
+        ),
+        contributor="persona",
+        priority=100,
+        score=1.0,
+    )
+    bundle = ContextBundle(
+        policy=ContextPolicy(),
+        state=ContextState(revision=3, summary="summary"),
+        selected_candidates=(candidate,),
+        dropped_candidates=(),
+        prefix_fingerprint="prefix-123",
+        cache_hints={"prefix_fingerprint": "prefix-123"},
+        trace={"selected": [{"artifact_id": "persona-1"}]},
+    )
+    return PreparedContextTurn(
+        completion_request=CompletionRequest(
+            messages=[
+                CompletionMessage(role="system", content={"lane": "persona"}),
+                CompletionMessage(role="user", content="hello"),
+            ]
+        ),
+        bundle=bundle,
+        state_handle="tenant-1:matrix:room-1:user-1",
+        commit_token="commit-123",
+        trace={"selected": [{"artifact_id": "persona-1"}]},
+    )
+
+
 def _make_config(
     *,
-    debug_conversation: bool,
-    history_max_messages: int = 40,
     extension_timeout_seconds: float = 10.0,
     ct_trigger_prefilter_enabled: bool = True,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         mugen=SimpleNamespace(
-            debug_conversation=debug_conversation,
             messaging=SimpleNamespace(
-                history_max_messages=history_max_messages,
                 extension_timeout_seconds=extension_timeout_seconds,
                 ct_trigger_prefilter_enabled=ct_trigger_prefilter_enabled,
-            ),
+            )
         )
     )
 
 
-class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
-    """Covers command handling and full text-message pipeline behavior."""
+def _make_messaging_service(
+    *,
+    cp_extensions=None,
+    rpp_extensions=None,
+    ct_extensions=None,
+):
+    return SimpleNamespace(
+        cp_extensions=cp_extensions or [],
+        rpp_extensions=rpp_extensions or [],
+        ct_extensions=ct_extensions or [],
+    )
 
-    # pylint: disable=too-many-arguments
-    # pylint: disable=too-many-positional-arguments
+
+class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
+    """Covers the built-in text orchestration over the context engine."""
+
     def _new_ext(
         self,
         *,
-        completion_result,
-        messaging_service,
-        keyval,
-        debug_conversation: bool,
-        completion_side_effect=None,
-        history_max_messages: int = 40,
+        completion_result: CompletionResponse | None = None,
+        completion_side_effect: object = None,
+        prepared: PreparedContextTurn | None = None,
+        commit_side_effect: object = None,
+        messaging_service=None,
         extension_timeout_seconds: float = 10.0,
         ct_trigger_prefilter_enabled: bool = True,
-    ) -> DefaultTextMHExtension:
+    ) -> tuple[DefaultTextMHExtension, Mock, Mock]:
         completion_gateway = Mock()
-        if completion_side_effect is not None:
-            completion_gateway.get_completion = AsyncMock(side_effect=completion_side_effect)
+        if completion_side_effect is None:
+            completion_gateway.get_completion = AsyncMock(
+                return_value=completion_result
+                or CompletionResponse(content="assistant answer")
+            )
         else:
-            completion_gateway.get_completion = AsyncMock(return_value=completion_result)
+            completion_gateway.get_completion = AsyncMock(side_effect=completion_side_effect)
 
-        return DefaultTextMHExtension(
+        context_engine_service = Mock()
+        context_engine_service.prepare_turn = AsyncMock(
+            return_value=prepared or _prepared_turn()
+        )
+        context_engine_service.commit_turn = AsyncMock(side_effect=commit_side_effect)
+
+        ext = DefaultTextMHExtension(
             completion_gateway=completion_gateway,
             config=_make_config(
-                debug_conversation=debug_conversation,
-                history_max_messages=history_max_messages,
                 extension_timeout_seconds=extension_timeout_seconds,
                 ct_trigger_prefilter_enabled=ct_trigger_prefilter_enabled,
             ),
-            keyval_storage_gateway=keyval,
+            context_engine_service=context_engine_service,
             logging_gateway=Mock(),
-            messaging_service=messaging_service,
+            messaging_service=messaging_service or _make_messaging_service(),
         )
+        return ext, completion_gateway, context_engine_service
 
     async def test_message_type_and_platform_metadata(self) -> None:
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="ok"),
-            messaging_service=_make_messaging_service(),
-            keyval=_MemoryKeyVal(),
-            debug_conversation=False,
-        )
+        ext, _, _ = self._new_ext()
         self.assertEqual(ext.message_types, ["text"])
         self.assertEqual(ext.platforms, [])
 
     async def test_command_path_fail_open_and_early_return(self) -> None:
-        keyval = _MemoryKeyVal()
         failing_cp = _CommandExt(
             supported=True,
             commands=["/clear"],
@@ -231,13 +201,10 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             commands=["/clear"],
             response=[{"type": "text", "content": "Context cleared."}],
         )
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="unused"),
+        ext, completion_gateway, context_engine_service = self._new_ext(
             messaging_service=_make_messaging_service(
                 cp_extensions=[failing_cp, successful_cp],
-            ),
-            keyval=keyval,
-            debug_conversation=False,
+            )
         )
 
         response = await ext.handle_message(
@@ -245,324 +212,164 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             room_id="room-1",
             sender="user-1",
             message="/clear",
+            scope=_scope(),
         )
 
         self.assertEqual(response, [{"type": "text", "content": "Context cleared."}])
-        ext._completion_gateway.get_completion.assert_not_called()
-        ext._logging_gateway.warning.assert_called()
+        completion_gateway.get_completion.assert_not_awaited()
+        context_engine_service.prepare_turn.assert_not_awaited()
+        ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
+        self.assertEqual(
+            successful_cp.process_message.await_args.kwargs["scope"],
+            _scope(),
+        )
 
-    async def test_augmentation_is_request_only_and_does_not_mutate_persisted_history(
-        self,
-    ) -> None:
-        keyval = _MemoryKeyVal()
-        keyval.store["chat_history:room-2"] = json.dumps(
-            {"messages": [{"role": "assistant", "content": "old"}]}
-        )
-        ctx_ext = _ContextExt(
-            supported=True,
-            context=[{"role": "system", "content": "persona"}],
-        )
-        rag_ext = _RagExt(
-            supported=True,
-            rag_context=[{"content": "RAG fact"}],
-            rag_responses=[{"type": "text", "content": "RAG response"}],
-        )
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="assistant answer"),
+    async def test_handle_message_runs_context_engine_completion_rpp_ct_and_commit(self) -> None:
+        rpp = _RppExt(supported=True, response="revised answer")
+        ct = _CtExt(supported=True, triggers=["revised"])
+        ext, completion_gateway, context_engine_service = self._new_ext(
+            completion_result=CompletionResponse(content="assistant answer"),
             messaging_service=_make_messaging_service(
-                ctx_extensions=[ctx_ext],
-                rag_extensions=[rag_ext],
+                rpp_extensions=[rpp],
+                ct_extensions=[ct],
             ),
-            keyval=keyval,
-            debug_conversation=True,
         )
+        scope = _scope()
 
         response = await ext.handle_message(
             platform="matrix",
-            room_id="room-2",
-            sender="user-2",
+            room_id="room-1",
+            sender="user-1",
             message="hello",
-            message_context=[{"content": "Attached context"}],
+            message_context=[{"type": "seed", "content": "ctx"}],
+            attachment_context=[{"type": "attachment", "content": {"id": "a1"}}],
+            ingress_metadata={"trace": "123"},
+            message_id="msg-1",
+            trace_id="trace-1",
+            scope=scope,
         )
 
-        self.assertEqual(response[0], {"type": "text", "content": "assistant answer"})
-        self.assertEqual(response[1], {"type": "text", "content": "RAG response"})
-
-        completion_request = ext._completion_gateway.get_completion.await_args.args[0]
-        self.assertEqual(completion_request.messages[-1].role, "user")
-        self.assertEqual(completion_request.messages[-1].content, "hello")
-
-        augmented_messages = [
-            message
-            for message in completion_request.messages
-            if message.role == "system"
-            and isinstance(message.content, str)
-            and "[REFERENCE_CONTEXT]" in message.content
-        ]
-        self.assertEqual(len(augmented_messages), 1)
-        self.assertIn("Attached context", augmented_messages[0].content)
-        self.assertIn("RAG fact", augmented_messages[0].content)
-
-        persisted = json.loads(keyval.store["chat_history:room-2"])
-        self.assertEqual(persisted["messages"][-2], {"role": "user", "content": "hello"})
+        self.assertEqual(response, [{"type": "text", "content": "revised answer"}])
+        prepare_request = context_engine_service.prepare_turn.await_args.args[0]
         self.assertEqual(
-            persisted["messages"][-1],
-            {"role": "assistant", "content": "assistant answer"},
+            prepare_request,
+            ContextTurnRequest(
+                scope=scope,
+                message_id="msg-1",
+                trace_id="trace-1",
+                user_message="hello",
+                message_context=[{"type": "seed", "content": "ctx"}],
+                attachment_context=[{"type": "attachment", "content": {"id": "a1"}}],
+                ingress_metadata={"trace": "123"},
+            ),
         )
+        completion_gateway.get_completion.assert_awaited_once()
+        self.assertEqual(
+            completion_gateway.get_completion.await_args.args[0].messages[-1].content,
+            "hello",
+        )
+        rpp.preprocess_response.assert_awaited_once()
+        self.assertEqual(rpp.preprocess_response.await_args.kwargs["scope"], scope)
+        ct.process_message.assert_awaited_once()
+        self.assertEqual(ct.process_message.await_args.kwargs["scope"], scope)
+        commit_call = context_engine_service.commit_turn.await_args.kwargs
+        self.assertEqual(commit_call["final_user_responses"], response)
+        self.assertEqual(commit_call["outcome"], TurnOutcome.COMPLETED)
 
-    async def test_completion_failure_returns_error_without_persisting(self) -> None:
-        keyval = _MemoryKeyVal()
-        initial_history = {
-            "messages": [{"role": "assistant", "content": "existing"}],
-        }
-        keyval.store["chat_history:room-3"] = json.dumps(initial_history)
-
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="unused"),
+    async def test_completion_failure_returns_error_and_commits_failed_outcome(self) -> None:
+        ext, _, context_engine_service = self._new_ext(
             completion_side_effect=CompletionGatewayError(
                 provider="bedrock",
                 operation="completion",
                 message="failed",
             ),
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
         )
 
         response = await ext.handle_message(
             platform="matrix",
-            room_id="room-3",
-            sender="user-3",
+            room_id="room-1",
+            sender="user-1",
             message="hello",
+            scope=_scope(),
         )
 
         self.assertEqual(
             response,
-            [{"type": "text", "content": ext._completion_error_message}],
+            [{"type": "text", "content": ext._completion_error_message}],  # pylint: disable=protected-access
         )
-        self.assertEqual(
-            keyval.store["chat_history:room-3"],
-            json.dumps(initial_history),
-        )
+        commit_call = context_engine_service.commit_turn.await_args.kwargs
+        self.assertIsNone(commit_call["completion"])
+        self.assertEqual(commit_call["outcome"], TurnOutcome.COMPLETION_FAILED)
 
-    async def test_malformed_message_context_and_rag_payloads_are_skipped(self) -> None:
-        keyval = _MemoryKeyVal()
-        rag_ext = _RagExt(
-            supported=True,
-            rag_context=[
-                "bad",
-                {"missing": "content"},
-                {"content": "rag-one"},
-                {"content": {"rag": "two"}},
-            ],
-            rag_responses=[{"type": "text", "content": "rag-response"}, "bad"],
-        )
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="assistant answer"),
-            messaging_service=_make_messaging_service(rag_extensions=[rag_ext]),
-            keyval=keyval,
-            debug_conversation=False,
+    async def test_commit_failure_is_fail_open(self) -> None:
+        ext, _, context_engine_service = self._new_ext(
+            commit_side_effect=RuntimeError("persist boom")
         )
 
         response = await ext.handle_message(
             platform="matrix",
-            room_id="room-4",
-            sender="user-4",
+            room_id="room-1",
+            sender="user-1",
             message="hello",
-            message_context=["bad", {"content": "ctx-one"}, {"x": "missing"}],
-        )
-
-        self.assertEqual(response[0], {"type": "text", "content": "assistant answer"})
-        self.assertEqual(response[1], {"type": "text", "content": "rag-response"})
-
-        completion_request = ext._completion_gateway.get_completion.await_args.args[0]
-        augmented_message = [
-            message
-            for message in completion_request.messages
-            if message.role == "system"
-            and isinstance(message.content, str)
-            and "[REFERENCE_CONTEXT]" in message.content
-        ][0]
-        self.assertIn("ctx-one", augmented_message.content)
-        self.assertIn("rag-one", augmented_message.content)
-        self.assertIn('"rag": "two"', augmented_message.content)
-
-    async def test_extension_failures_and_timeouts_are_fail_open(self) -> None:
-        keyval = _MemoryKeyVal()
-
-        async def _slow_rag(_sender, _message, _chat_history):
-            await asyncio.sleep(0.05)
-            return ([{"content": "ignored"}], [])
-
-        failing_ctx = _ContextExt(
-            supported=True,
-            side_effect=RuntimeError("ctx-failure"),
-        )
-        slow_rag = _RagExt(
-            supported=True,
-            side_effect=_slow_rag,
-        )
-        failing_rpp = _RppExt(supported=True, side_effect=RuntimeError("rpp-failure"))
-        failing_ct = _CtExt(
-            supported=True,
-            triggers=[],
-            side_effect=RuntimeError("ct-failure"),
-        )
-
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="assistant answer"),
-            messaging_service=_make_messaging_service(
-                ctx_extensions=[failing_ctx],
-                rag_extensions=[slow_rag],
-                rpp_extensions=[failing_rpp],
-                ct_extensions=[failing_ct],
-            ),
-            keyval=keyval,
-            debug_conversation=False,
-            extension_timeout_seconds=0.01,
-        )
-
-        response = await ext.handle_message(
-            platform="matrix",
-            room_id="room-5",
-            sender="user-5",
-            message="hello",
+            scope=_scope(),
         )
 
         self.assertEqual(response, [{"type": "text", "content": "assistant answer"}])
-        ext._logging_gateway.warning.assert_called()
-        failing_ct.process_message.assert_awaited_once()
+        context_engine_service.commit_turn.assert_awaited_once()
+        ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
 
     async def test_completion_content_is_serialized_to_text(self) -> None:
-        keyval = _MemoryKeyVal()
-        completion_payload = {"structured": True}
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content=completion_payload),
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
+        ext, _, _ = self._new_ext(
+            completion_result=CompletionResponse(content={"structured": True})
         )
 
         response = await ext.handle_message(
             platform="matrix",
-            room_id="room-6",
-            sender="user-6",
+            room_id="room-1",
+            sender="user-1",
             message="hello",
+            scope=_scope(),
         )
 
-        expected = json.dumps(completion_payload, ensure_ascii=True)
-        self.assertEqual(response, [{"type": "text", "content": expected}])
-
-        saved = json.loads(keyval.store["chat_history:room-6"])
-        self.assertEqual(saved["messages"][-1], {"role": "assistant", "content": expected})
-
-    async def test_history_trimming_applies_to_context_and_persistence(self) -> None:
-        keyval = _MemoryKeyVal()
-        keyval.store["chat_history:room-7"] = json.dumps(
-            {
-                "messages": [
-                    {"role": "user", "content": "u1"},
-                    {"role": "assistant", "content": "a1"},
-                    {"role": "user", "content": "u2"},
-                    {"role": "assistant", "content": "a2"},
-                    {"role": "user", "content": "u3"},
-                    {"role": "assistant", "content": "a3"},
-                ]
-            }
-        )
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="assistant answer"),
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
-            history_max_messages=4,
+        self.assertEqual(
+            response,
+            [{"type": "text", "content": json.dumps({"structured": True}, ensure_ascii=True)}],
         )
 
-        await ext.handle_message(
+    async def test_blank_assistant_response_logs_completion_payload(self) -> None:
+        ext, _, _ = self._new_ext(
+            completion_result=CompletionResponse(content="", model="gpt-test")
+        )
+
+        response = await ext.handle_message(
             platform="matrix",
-            room_id="room-7",
-            sender="user-7",
+            room_id="room-1",
+            sender="user-1",
             message="hello",
+            scope=_scope(),
         )
 
-        completion_request = ext._completion_gateway.get_completion.await_args.args[0]
-        thread_messages = [
-            message
-            for message in completion_request.messages
-            if message.role in {"user", "assistant"}
-        ]
-        self.assertEqual(len(thread_messages), 5)
-
-        saved = json.loads(keyval.store["chat_history:room-7"])
-        self.assertEqual(len(saved["messages"]), 4)
-        self.assertEqual(saved["messages"][-1], {"role": "assistant", "content": "assistant answer"})
-
-    async def test_room_lock_prevents_concurrent_history_loss(self) -> None:
-        keyval = _MemoryKeyVal()
-
-        async def _completion_side_effect(request):
-            await asyncio.sleep(0.01)
-            user_message = request.messages[-1].content
-            return SimpleNamespace(content=f"assistant:{user_message}")
-
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="unused"),
-            completion_side_effect=_completion_side_effect,
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
-        )
-
-        await asyncio.gather(
-            ext.handle_message(
-                platform="matrix",
-                room_id="room-8",
-                sender="user-8",
-                message="one",
-            ),
-            ext.handle_message(
-                platform="matrix",
-                room_id="room-8",
-                sender="user-8",
-                message="two",
-            ),
-        )
-
-        saved = json.loads(keyval.store["chat_history:room-8"])
-        self.assertEqual(len(saved["messages"]), 4)
-        self.assertEqual(
-            sorted(item["content"] for item in saved["messages"] if item["role"] == "user"),
-            ["one", "two"],
-        )
-        self.assertEqual(
-            sorted(
-                item["content"]
-                for item in saved["messages"]
-                if item["role"] == "assistant"
-            ),
-            ["assistant:one", "assistant:two"],
-        )
+        self.assertEqual(response, [{"type": "text", "content": ""}])
+        ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
 
     async def test_ct_trigger_prefilter_enabled(self) -> None:
-        keyval = _MemoryKeyVal()
         ct_matching = _CtExt(supported=True, triggers=["urgent"])
         ct_not_matching = _CtExt(supported=True, triggers=["billing"])
         ct_empty = _CtExt(supported=True, triggers=[])
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="Need URGENT support"),
+        ext, _, _ = self._new_ext(
+            completion_result=CompletionResponse(content="Need URGENT support"),
             messaging_service=_make_messaging_service(
                 ct_extensions=[ct_matching, ct_not_matching, ct_empty],
             ),
-            keyval=keyval,
-            debug_conversation=False,
             ct_trigger_prefilter_enabled=True,
         )
 
         await ext.handle_message(
             platform="matrix",
-            room_id="room-9",
-            sender="user-9",
+            room_id="room-1",
+            sender="user-1",
             message="hello",
+            scope=_scope(),
         )
 
         ct_matching.process_message.assert_awaited_once()
@@ -570,571 +377,338 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         ct_empty.process_message.assert_awaited_once()
 
     async def test_ct_trigger_prefilter_disabled(self) -> None:
-        keyval = _MemoryKeyVal()
         ct_matching = _CtExt(supported=True, triggers=["urgent"])
         ct_not_matching = _CtExt(supported=True, triggers=["billing"])
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="Need URGENT support"),
+        ext, _, _ = self._new_ext(
+            completion_result=CompletionResponse(content="Need URGENT support"),
             messaging_service=_make_messaging_service(
                 ct_extensions=[ct_matching, ct_not_matching],
             ),
-            keyval=keyval,
-            debug_conversation=False,
             ct_trigger_prefilter_enabled=False,
         )
 
         await ext.handle_message(
             platform="matrix",
-            room_id="room-10",
-            sender="user-10",
+            room_id="room-1",
+            sender="user-1",
             message="hello",
+            scope=_scope(),
         )
 
         ct_matching.process_message.assert_awaited_once()
         ct_not_matching.process_message.assert_awaited_once()
 
-    async def test_rpp_supports_new_and_legacy_signatures(self) -> None:
-        keyval = _MemoryKeyVal()
-        new_rpp = _RppExt(supported=True, response="new-response")
-        legacy_rpp = _LegacyRppExt(supported=True, response="legacy-response")
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="assistant answer"),
-            messaging_service=_make_messaging_service(
-                rpp_extensions=[new_rpp, legacy_rpp],
-            ),
-            keyval=keyval,
-            debug_conversation=False,
+    async def test_invalid_command_payload_is_ignored(self) -> None:
+        cp = _CommandExt(
+            supported=True,
+            commands=["/clear"],
+            response=["bad-item", {"type": "text", "content": "ok"}],
+        )
+        ext, _, _ = self._new_ext(
+            messaging_service=_make_messaging_service(cp_extensions=[cp])
         )
 
         response = await ext.handle_message(
             platform="matrix",
-            room_id="room-11",
-            sender="user-11",
-            message="hello",
+            room_id="room-1",
+            sender="user-1",
+            message="/clear",
+            scope=_scope(),
         )
 
-        self.assertEqual(response, [{"type": "text", "content": "legacy-response"}])
-        new_rpp.preprocess_response.assert_awaited_once_with(
-            room_id="room-11",
-            user_id="user-11",
-            assistant_response="assistant answer",
-        )
-        self.assertEqual(legacy_rpp.calls, [("room-11", "user-11")])
+        self.assertEqual(response, [{"type": "text", "content": "ok"}])
+        ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
 
-    async def test_handle_message_skips_unsupported_and_non_matching_command_extensions(
+    async def test_handle_message_requires_context_scope(self) -> None:
+        ext, _, _ = self._new_ext()
+
+        with self.assertRaisesRegex(TypeError, "ContextScope"):
+            await ext.handle_message(
+                platform="matrix",
+                room_id="room-1",
+                sender="user-1",
+                message="hello",
+                scope="bad-scope",
+            )
+
+    async def test_room_lock_serializes_same_scope_turns(self) -> None:
+        state = {"active": 0, "max_active": 0}
+
+        async def _prepare_turn(_request):
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            await asyncio.sleep(0.01)
+            state["active"] -= 1
+            return _prepared_turn()
+
+        ext, _, context_engine_service = self._new_ext()
+        context_engine_service.prepare_turn = AsyncMock(side_effect=_prepare_turn)
+
+        await asyncio.gather(
+            ext.handle_message(
+                platform="matrix",
+                room_id="room-1",
+                sender="user-1",
+                message="one",
+                scope=_scope(),
+            ),
+            ext.handle_message(
+                platform="matrix",
+                room_id="room-1",
+                sender="user-1",
+                message="two",
+                scope=_scope(),
+            ),
+        )
+
+        self.assertEqual(state["max_active"], 1)
+
+    async def test_run_command_extensions_skips_non_string_blank_and_unsupported_cases(
         self,
     ) -> None:
-        keyval = _MemoryKeyVal()
-        unsupported_cp = _CommandExt(supported=False, commands=["/noop"])
-        cp_with_invalid_commands = _CommandExt(supported=True, commands=["/noop"])
-        cp_with_invalid_commands.commands = "not-a-list"
-        non_matching_cp = _CommandExt(supported=True, commands=["/noop"])
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="assistant answer"),
+        supported = _CommandExt(supported=True, commands=["/clear"], response=[])
+        unsupported = _CommandExt(supported=False, commands=["/clear"], response=[])
+        invalid_commands = _CommandExt(supported=True, commands="bad", response=[])
+        ext, _, _ = self._new_ext(
             messaging_service=_make_messaging_service(
-                cp_extensions=[unsupported_cp, cp_with_invalid_commands, non_matching_cp],
-            ),
-            keyval=keyval,
-            debug_conversation=False,
-        )
-
-        response = await ext.handle_message(
-            platform="matrix",
-            room_id="room-12",
-            sender="user-12",
-            message="hello",
-        )
-
-        self.assertEqual(response, [{"type": "text", "content": "assistant answer"}])
-        unsupported_cp.process_message.assert_not_awaited()
-        cp_with_invalid_commands.process_message.assert_not_awaited()
-        non_matching_cp.process_message.assert_not_awaited()
-
-    async def test_collectors_skip_unsupported_extensions_and_bad_rag_payload(self) -> None:
-        keyval = _MemoryKeyVal()
-        unsupported_ctx = _ContextExt(
-            supported=False,
-            context=[{"role": "system", "content": "ignored"}],
-        )
-        unsupported_rag = _RagExt(
-            supported=False,
-            rag_context=[{"content": "ignored"}],
-            rag_responses=[{"type": "text", "content": "ignored"}],
-        )
-        bad_rag = _RagExt(supported=True, rag_context=[], rag_responses=[])
-        bad_rag.retrieve = AsyncMock(return_value={"bad": "payload"})
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="assistant answer"),
-            messaging_service=_make_messaging_service(
-                ctx_extensions=[unsupported_ctx],
-                rag_extensions=[unsupported_rag, bad_rag],
-            ),
-            keyval=keyval,
-            debug_conversation=False,
-        )
-
-        context_messages = await ext._collect_context_messages("matrix", "user-13")
-        rag_data, rag_responses = await ext._collect_rag_data(
-            platform="matrix",
-            sender="user-13",
-            message="hello",
-            chat_history={"messages": []},
-        )
-
-        self.assertEqual(context_messages, [])
-        self.assertEqual(rag_data, [])
-        self.assertEqual(rag_responses, [])
-        ext._logging_gateway.warning.assert_called()
-
-    async def test_handle_message_with_no_completion_request_still_runs_post_processing(
-        self,
-    ) -> None:
-        keyval = _MemoryKeyVal()
-        rpp_ext = _RppExt(supported=True, response="rpp-response")
-        ct_ext = _CtExt(supported=True, triggers=[])
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="unused"),
-            messaging_service=_make_messaging_service(
-                rpp_extensions=[rpp_ext],
-                ct_extensions=[ct_ext],
-            ),
-            keyval=keyval,
-            debug_conversation=False,
-        )
-        ext._build_completion_request = Mock(return_value=None)
-
-        response = await ext.handle_message(
-            platform="matrix",
-            room_id="room-13",
-            sender="user-13",
-            message="hello",
-        )
-
-        self.assertEqual(response[0]["content"], "rpp-response")
-        self.assertNotIn("chat_history:room-13", keyval.store)
-        ct_ext.process_message.assert_awaited_once()
-
-    async def test_get_completion_response_handles_generic_failure(self) -> None:
-        keyval = _MemoryKeyVal()
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="unused"),
-            completion_side_effect=RuntimeError("boom"),
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
-        )
-
-        completion_request = ext._build_completion_request(
-            [{"role": "user", "content": "hello"}]
-        )
-        response = await ext._get_completion_response(completion_request)
-
-        self.assertIsNone(response)
-        ext._logging_gateway.warning.assert_called()
-
-    async def test_get_completion_response_success_does_not_log_full_payload(self) -> None:
-        keyval = _MemoryKeyVal()
-        completion_result = SimpleNamespace(
-            content="assistant response",
-            model="gpt-test",
-            usage={"total_tokens": 123},
-        )
-        ext = self._new_ext(
-            completion_result=completion_result,
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
-        )
-
-        completion_request = ext._build_completion_request(
-            [{"role": "user", "content": "hello"}]
-        )
-        response = await ext._get_completion_response(completion_request)
-
-        self.assertIs(response, completion_result)
-        ext._logging_gateway.debug.assert_called_once_with("Get completion.")
-
-    async def test_handle_message_logs_full_payload_only_for_blank_assistant_response(
-        self,
-    ) -> None:
-        keyval = _MemoryKeyVal()
-        completion_result = SimpleNamespace(
-            content=None,
-            model="gpt-test",
-            usage={"total_tokens": 123},
-        )
-        ext = self._new_ext(
-            completion_result=completion_result,
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
-        )
-
-        response = await ext.handle_message(
-            platform="web",
-            room_id="room-blank",
-            sender="user-blank",
-            message="hello",
-        )
-
-        self.assertEqual(response, [{"type": "text", "content": ""}])
-        warning_messages = [call.args[0] for call in ext._logging_gateway.warning.call_args_list]
-        self.assertTrue(
-            any(
-                "Assistant response is blank" in message
-                and "'No response generated.'" in message
-                and "room_id=room-blank" in message
-                and '"model": "gpt-test"' in message
-                and '"total_tokens": 123' in message
-                for message in warning_messages
+                cp_extensions=[supported, unsupported, invalid_commands]
             )
         )
 
-    async def test_format_completion_response_for_log_branch_coverage(self) -> None:
-        keyval = _MemoryKeyVal()
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="assistant response"),
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
-        )
-
-        self.assertEqual(ext._format_completion_response_for_log(None), "null")
-
-        class _ModelDumpOk:
-            def model_dump(self):
-                return {"model": "ok"}
-
-        class _ModelDumpFail:
-            def model_dump(self):
-                raise RuntimeError("boom")
-
-            def __str__(self) -> str:
-                return "model-dump-failed"
-
-        class _ToDictOk:
-            def to_dict(self):
-                return {"dict": "ok"}
-
-        class _ToDictFail:
-            def to_dict(self):
-                raise RuntimeError("boom")
-
-            def __str__(self) -> str:
-                return "to-dict-failed"
-
-        class _VarsCarrier:
-            pass
-
-        self.assertIn(
-            '"model": "ok"',
-            ext._format_completion_response_for_log(_ModelDumpOk()),
-        )
-        self.assertIn(
-            "model-dump-failed",
-            ext._format_completion_response_for_log(_ModelDumpFail()),
-        )
-        self.assertIn(
-            '"dict": "ok"',
-            ext._format_completion_response_for_log(_ToDictOk()),
-        )
-        self.assertIn(
-            "to-dict-failed",
-            ext._format_completion_response_for_log(_ToDictFail()),
-        )
-
-        vars_carrier = _VarsCarrier()
-        vars_carrier.field = "value"
-        self.assertIn(
-            '"field": "value"',
-            ext._format_completion_response_for_log(vars_carrier),
-        )
-
-        with patch("builtins.vars", side_effect=TypeError("vars boom")):
-            self.assertIn(
-                "_VarsCarrier",
-                ext._format_completion_response_for_log(_VarsCarrier()),
-            )
-
-        with patch("mugen.core.extension.mh.default_text.json.dumps", side_effect=TypeError("dumps boom")):
-            self.assertEqual(
-                ext._format_completion_response_for_log({"k": "v"}),
-                "{'k': 'v'}",
-            )
-
-    async def test_helpers_cover_validation_and_fallback_paths(self) -> None:
-        keyval = _MemoryKeyVal()
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="unused"),
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
-        )
-
-        self.assertIsNone(ext._build_completion_request([]))
-        self.assertIsNone(ext._build_completion_request([{"role": 1, "content": "x"}]))
         self.assertEqual(
-            ext._normalize_response_payload_list(payload="bad", stage="test"),
+            await ext._run_command_extensions(  # pylint: disable=protected-access
+                platform="matrix",
+                room_id="room-1",
+                sender="user-1",
+                message={"text": "hello"},
+                scope=_scope(),
+            ),
             [],
         )
         self.assertEqual(
-            ext._normalize_completion_message_list("bad", stage="test"),
+            await ext._run_command_extensions(  # pylint: disable=protected-access
+                platform="matrix",
+                room_id="room-1",
+                sender="user-1",
+                message="   ",
+                scope=_scope(),
+            ),
             [],
         )
         self.assertEqual(
-            ext._normalize_completion_message_list(
-                [
-                    "bad",
-                    {"role": 1, "content": "bad-role"},
-                    {"role": "user", "content": [{"a": 1}]},
-                    {"role": "assistant", "content": [1, 2]},
-                ],
-                stage="test",
+            await ext._run_command_extensions(  # pylint: disable=protected-access
+                platform="matrix",
+                room_id="room-1",
+                sender="user-1",
+                message="/noop",
+                scope=_scope(),
             ),
-            [
-                {"role": "user", "content": [{"a": 1}]},
-                {"role": "assistant", "content": "[1, 2]"},
-            ],
+            [],
         )
-        self.assertEqual(ext._normalize_completion_message_content(123), "123")
-        self.assertEqual(ext._normalize_augmentation_items(payload="bad", stage="test"), [])
+        supported.process_message.assert_not_awaited()
+        unsupported.process_message.assert_not_awaited()
+        invalid_commands.process_message.assert_not_awaited()
 
-        with unittest.mock.patch(
-            "mugen.core.extension.mh.default_text.json.dumps",
-            side_effect=TypeError("bad"),
-        ):
-            self.assertEqual(ext._coerce_to_text({"a": 1}), "{'a': 1}")
-        self.assertEqual(ext._coerce_to_text(None), "")
-        self.assertEqual(ext._coerce_to_text(123), "123")
+    async def test_complete_handles_unexpected_gateway_exception(self) -> None:
+        ext, _, _ = self._new_ext(completion_side_effect=RuntimeError("boom"))
 
-        self.assertTrue(ext._rpp_supports_assistant_response(object()))
-        self.assertEqual(
-            ext._inject_augmentation_context(
-                [{"role": "system", "content": "persona"}],
-                ["ctx"],
-            )[-1]["role"],
-            "system",
-        )
+        completion, assistant_response = await ext._complete(_prepared_turn())  # pylint: disable=protected-access
 
-    async def test_load_chat_history_and_config_resolution_fallbacks(self) -> None:
-        keyval = _MemoryKeyVal()
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="unused"),
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
-        )
+        self.assertIsNone(completion)
+        self.assertEqual(assistant_response, ext._completion_error_message)  # pylint: disable=protected-access
+        ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
 
-        keyval.store["chat_history:room-14"] = b"\xff"
-        self.assertEqual(await ext._load_chat_history("room-14"), {"messages": []})
-
-        keyval.store["chat_history:room-14"] = "{"
-        self.assertEqual(await ext._load_chat_history("room-14"), {"messages": []})
-
-        keyval.store["chat_history:room-14"] = json.dumps(["not-a-dict"])
-        self.assertEqual(await ext._load_chat_history("room-14"), {"messages": []})
-
-        invalid_cfg_ext = DefaultTextMHExtension(
-            completion_gateway=Mock(get_completion=AsyncMock(return_value=None)),
-            config=SimpleNamespace(
-                mugen=SimpleNamespace(
-                    debug_conversation=False,
-                    messaging=SimpleNamespace(
-                        history_max_messages=0,
-                        extension_timeout_seconds=0.0,
-                        ct_trigger_prefilter_enabled="yes",
-                    ),
-                )
-            ),
-            keyval_storage_gateway=keyval,
-            logging_gateway=Mock(),
-            messaging_service=_make_messaging_service(),
-        )
-        self.assertEqual(
-            invalid_cfg_ext._history_max_messages,
-            invalid_cfg_ext._default_history_max_messages,
-        )
-        self.assertEqual(
-            invalid_cfg_ext._extension_timeout_seconds,
-            invalid_cfg_ext._default_extension_timeout_seconds,
-        )
-        self.assertEqual(
-            invalid_cfg_ext._history_save_cas_retries,
-            invalid_cfg_ext._default_history_save_cas_retries,
-        )
-        self.assertEqual(
-            invalid_cfg_ext._ct_trigger_prefilter_enabled,
-            invalid_cfg_ext._default_ct_trigger_prefilter_enabled,
-        )
-
-        non_numeric_cfg_ext = DefaultTextMHExtension(
-            completion_gateway=Mock(get_completion=AsyncMock(return_value=None)),
-            config=SimpleNamespace(
-                mugen=SimpleNamespace(
-                    debug_conversation=False,
-                    messaging=SimpleNamespace(
-                        history_max_messages="bad",
-                        history_save_cas_retries="bad",
-                        extension_timeout_seconds="bad",
-                        ct_trigger_prefilter_enabled=True,
-                    ),
-                )
-            ),
-            keyval_storage_gateway=keyval,
-            logging_gateway=Mock(),
-            messaging_service=_make_messaging_service(),
-        )
-        self.assertEqual(
-            non_numeric_cfg_ext._history_max_messages,
-            non_numeric_cfg_ext._default_history_max_messages,
-        )
-        self.assertEqual(
-            non_numeric_cfg_ext._extension_timeout_seconds,
-            non_numeric_cfg_ext._default_extension_timeout_seconds,
-        )
-        self.assertEqual(
-            non_numeric_cfg_ext._history_save_cas_retries,
-            non_numeric_cfg_ext._default_history_save_cas_retries,
-        )
-
-        no_mugen_cfg_ext = DefaultTextMHExtension(
-            completion_gateway=Mock(get_completion=AsyncMock(return_value=None)),
-            config=SimpleNamespace(),
-            keyval_storage_gateway=keyval,
-            logging_gateway=Mock(),
-            messaging_service=_make_messaging_service(),
-        )
-        self.assertFalse(no_mugen_cfg_ext._debug_conversation_enabled())
-
-        no_messaging_cfg_ext = DefaultTextMHExtension(
-            completion_gateway=Mock(get_completion=AsyncMock(return_value=None)),
-            config=SimpleNamespace(mugen=SimpleNamespace(debug_conversation=False)),
-            keyval_storage_gateway=keyval,
-            logging_gateway=Mock(),
-            messaging_service=_make_messaging_service(),
-        )
-        self.assertIsInstance(no_messaging_cfg_ext._messaging_config(), SimpleNamespace)
-
-    async def test_extension_timeout_and_trigger_prefilter_edge_cases(self) -> None:
-        keyval = _MemoryKeyVal()
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="assistant answer"),
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
-            extension_timeout_seconds=0.01,
-        )
-
-        def _slow_callback(**_kwargs):
-            import time
-
-            time.sleep(0.05)
-            return [{"role": "system", "content": "ignored"}]
-
-        sync_result = await ext._run_sync_extension_call(
-            stage="ctx.get_context",
-            ext=SimpleNamespace(),
-            callback=_slow_callback,
-            user_id="user-15",
-        )
-        self.assertIsNone(sync_result)
-
-        non_string_trigger_ext = _CtExt(supported=True, triggers=[None, "", "match"])
-        self.assertTrue(ext._ct_extension_triggered(non_string_trigger_ext, "this has match"))
-        self.assertFalse(
-            ext._ct_extension_triggered(non_string_trigger_ext, "this has no token")
-        )
-
-        unsupported_rpp = _RppExt(supported=False, response="ignored")
-        unsupported_ct = _CtExt(supported=False, triggers=["assistant"])
-        ext_with_unsupported = self._new_ext(
-            completion_result=SimpleNamespace(content="assistant answer"),
+    async def test_preprocess_and_trigger_helpers_cover_skip_paths(self) -> None:
+        unsupported_rpp = _RppExt(supported=False, response="skip")
+        none_rpp = _RppExt(supported=True, response=None)
+        unsupported_ct = _CtExt(supported=False, triggers=["hello"])
+        miss_ct = _CtExt(supported=True, triggers=["missing"])
+        ext, _, _ = self._new_ext(
             messaging_service=_make_messaging_service(
-                rpp_extensions=[unsupported_rpp],
-                ct_extensions=[unsupported_ct],
-            ),
-            keyval=keyval,
-            debug_conversation=False,
+                rpp_extensions=[unsupported_rpp, none_rpp],
+                ct_extensions=[unsupported_ct, miss_ct],
+            )
         )
-        response = await ext_with_unsupported.handle_message(
+
+        processed = await ext._preprocess_assistant_response(  # pylint: disable=protected-access
             platform="matrix",
-            room_id="room-15",
-            sender="user-15",
-            message="hello",
+            room_id="room-1",
+            sender="user-1",
+            assistant_response="hello",
+            scope=_scope(),
         )
-        self.assertEqual(response, [{"type": "text", "content": "assistant answer"}])
+        await ext._dispatch_conversational_triggers(  # pylint: disable=protected-access
+            platform="matrix",
+            room_id="room-1",
+            sender="user-1",
+            assistant_response="hello",
+            scope=_scope(),
+        )
+
+        self.assertEqual(processed, "hello")
         unsupported_rpp.preprocess_response.assert_not_awaited()
         unsupported_ct.process_message.assert_not_awaited()
-
-    async def test_save_chat_history_conflict_fallback_and_retry_config_default(self) -> None:
-        keyval = Mock()
-        keyval.get_entry = AsyncMock(return_value=SimpleNamespace(row_version=1))
-        keyval.put_json = AsyncMock(
-            side_effect=[
-                KeyValConflictError(
-                    namespace="default",
-                    key="chat_history:room-cas",
-                    expected_row_version=1,
-                    current_row_version=2,
-                ),
-                KeyValConflictError(
-                    namespace="default",
-                    key="chat_history:room-cas",
-                    expected_row_version=1,
-                    current_row_version=2,
-                ),
-                KeyValConflictError(
-                    namespace="default",
-                    key="chat_history:room-cas",
-                    expected_row_version=1,
-                    current_row_version=2,
-                ),
-                KeyValConflictError(
-                    namespace="default",
-                    key="chat_history:room-cas",
-                    expected_row_version=1,
-                    current_row_version=2,
-                ),
-                KeyValConflictError(
-                    namespace="default",
-                    key="chat_history:room-cas",
-                    expected_row_version=1,
-                    current_row_version=2,
-                ),
-                None,
-            ]
-        )
-        ext = self._new_ext(
-            completion_result=SimpleNamespace(content="unused"),
-            messaging_service=_make_messaging_service(),
-            keyval=keyval,
-            debug_conversation=False,
+        miss_ct.process_message.assert_not_awaited()
+        self.assertTrue(
+            ext._ct_extension_triggered(  # pylint: disable=protected-access
+                _CtExt(supported=True, triggers=[None, "", "hello"]),
+                "hello there",
+            )
         )
 
-        await ext._save_chat_history(  # pylint: disable=protected-access
-            "room-cas",
-            {"messages": []},
-        )
-        self.assertEqual(keyval.put_json.await_count, 6)
+    async def test_await_extension_call_covers_timeout_and_exception_paths(self) -> None:
+        ext, _, _ = self._new_ext(extension_timeout_seconds=0.001)
 
-        retry_cfg_ext = DefaultTextMHExtension(
-            completion_gateway=Mock(get_completion=AsyncMock(return_value=None)),
-            config=SimpleNamespace(
-                mugen=SimpleNamespace(
-                    debug_conversation=False,
-                    messaging=SimpleNamespace(
-                        history_save_cas_retries=0,
-                        history_max_messages=40,
-                        extension_timeout_seconds=10.0,
-                        ct_trigger_prefilter_enabled=True,
-                    ),
-                )
+        async def _sleep():
+            await asyncio.sleep(0.01)
+            return "late"
+
+        async def _fail():
+            raise RuntimeError("boom")
+
+        self.assertIsNone(
+            await ext._await_extension_call(  # pylint: disable=protected-access
+                stage="test.timeout",
+                ext=_BaseExt(True),
+                awaitable=_sleep(),
+            )
+        )
+        self.assertIsNone(
+            await ext._await_extension_call(  # pylint: disable=protected-access
+                stage="test.failure",
+                ext=_BaseExt(True),
+                awaitable=_fail(),
+            )
+        )
+        ext._extension_timeout_seconds = None  # pylint: disable=protected-access
+        self.assertEqual(
+            await ext._await_extension_call(  # pylint: disable=protected-access
+                stage="test.success",
+                ext=_BaseExt(True),
+                awaitable=asyncio.sleep(0, result="ok"),
             ),
-            keyval_storage_gateway=_MemoryKeyVal(),
-            logging_gateway=Mock(),
-            messaging_service=_make_messaging_service(),
+            "ok",
+        )
+        ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
+
+    def test_response_normalization_and_text_coercion_helpers_cover_edge_paths(self) -> None:
+        ext, _, _ = self._new_ext()
+        circular: list[object] = []
+        circular.append(circular)
+
+        self.assertEqual(
+            ext._normalize_response_payload_list(payload=None, stage="test"),  # pylint: disable=protected-access
+            [],
         )
         self.assertEqual(
-            retry_cfg_ext._history_save_cas_retries,  # pylint: disable=protected-access
-            retry_cfg_ext._default_history_save_cas_retries,  # pylint: disable=protected-access
+            ext._normalize_response_payload_list(payload="bad", stage="test"),  # pylint: disable=protected-access
+            [],
+        )
+        self.assertEqual(
+            ext._normalize_response_payload_list(  # pylint: disable=protected-access
+                payload=[{"type": "text", "content": "ok"}, "bad"],
+                stage="test",
+            ),
+            [{"type": "text", "content": "ok"}],
+        )
+        self.assertEqual(ext._coerce_to_text(None), "")  # pylint: disable=protected-access
+        self.assertEqual(ext._coerce_to_text(5), "5")  # pylint: disable=protected-access
+        self.assertEqual(
+            ext._coerce_to_text(circular),  # pylint: disable=protected-access
+            str(circular),
+        )
+
+    def test_format_completion_response_for_log_and_config_helpers_cover_fallbacks(
+        self,
+    ) -> None:
+        class _ModelDumpResponse:
+            def model_dump(self):
+                return {"value": 1}
+
+        class _ToDictResponse:
+            def to_dict(self):
+                return {"value": 2}
+
+        class _VarsResponse:
+            def __init__(self) -> None:
+                self.value = 3
+
+        class _FallbackResponse:
+            __slots__ = ()
+
+            def __str__(self) -> str:
+                return "fallback"
+
+        class _CircularDumpResponse:
+            def model_dump(self):
+                payload = {}
+                payload["self"] = payload
+                return payload
+
+        class _BrokenModelDumpResponse:
+            def model_dump(self):
+                raise RuntimeError("boom")
+
+        class _BrokenToDictResponse:
+            def to_dict(self):
+                raise RuntimeError("boom")
+
+        class _BrokenVarsResponse:
+            def __init__(self) -> None:
+                self.value = 4
+
+        ext, _, _ = self._new_ext(
+            extension_timeout_seconds="bad",  # type: ignore[arg-type]
+            ct_trigger_prefilter_enabled="bad",  # type: ignore[arg-type]
+        )
+        ext_zero, _, _ = self._new_ext(extension_timeout_seconds=0)
+
+        self.assertEqual(
+            ext._format_completion_response_for_log(None),  # pylint: disable=protected-access
+            "null",
+        )
+        self.assertEqual(
+            ext._format_completion_response_for_log(_ModelDumpResponse()),  # pylint: disable=protected-access
+            '{"value": 1}',
+        )
+        self.assertEqual(
+            ext._format_completion_response_for_log(_ToDictResponse()),  # pylint: disable=protected-access
+            '{"value": 2}',
+        )
+        self.assertEqual(
+            ext._format_completion_response_for_log(_VarsResponse()),  # pylint: disable=protected-access
+            '{"value": 3}',
+        )
+        self.assertEqual(
+            ext._format_completion_response_for_log(_FallbackResponse()),  # pylint: disable=protected-access
+            '"fallback"',
+        )
+        self.assertEqual(
+            ext._format_completion_response_for_log(_CircularDumpResponse()),  # pylint: disable=protected-access
+            "{'self': {...}}",
+        )
+        self.assertIn(
+            "BrokenModelDumpResponse",
+            ext._format_completion_response_for_log(_BrokenModelDumpResponse()),  # pylint: disable=protected-access
+        )
+        self.assertIn(
+            "BrokenToDictResponse",
+            ext._format_completion_response_for_log(_BrokenToDictResponse()),  # pylint: disable=protected-access
+        )
+        with patch("builtins.vars", side_effect=TypeError("boom")):
+            self.assertIn(
+                "BrokenVarsResponse",
+                ext._format_completion_response_for_log(_BrokenVarsResponse()),  # pylint: disable=protected-access
+            )
+        self.assertEqual(
+            ext._extension_timeout_seconds,  # pylint: disable=protected-access
+            ext._default_extension_timeout_seconds,  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            ext_zero._extension_timeout_seconds,  # pylint: disable=protected-access
+            ext_zero._default_extension_timeout_seconds,  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            ext._ct_trigger_prefilter_enabled,  # pylint: disable=protected-access
+            ext._default_ct_trigger_prefilter_enabled,  # pylint: disable=protected-access
         )

@@ -221,6 +221,11 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
+                        "tenant_resolution": {
+                            "mode": "resolved",
+                            "reason_code": None,
+                            "source": "whatsapp.ingress_routing",
+                        },
                     },
                 }
             ],
@@ -320,6 +325,11 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
+                        "tenant_resolution": {
+                            "mode": "resolved",
+                            "reason_code": None,
+                            "source": "whatsapp.ingress_routing",
+                        },
                     },
                 }
             ],

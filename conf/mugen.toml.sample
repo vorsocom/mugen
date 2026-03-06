@@ -35,11 +35,7 @@ clear = "..."
 # - optional: zero-MH runtime is supported with core built-in text orchestration.
 # - required: startup fails if no MH extension is available for active messaging platforms.
 mh_mode = "optional"
-# Max number of chat history messages persisted and forwarded to completion context.
-history_max_messages = 40
-# Max CAS retries for chat-history persistence across workers/processes.
-history_save_cas_retries = 5
-# Timeout in seconds for extension callbacks (CP/CTX/RAG/RPP/CT).
+# Timeout in seconds for extension callbacks (CP/MH/RPP/CT).
 extension_timeout_seconds = 10.0
 # If true, CT extensions with non-empty triggers only run on trigger matches.
 ct_trigger_prefilter_enabled = true
@@ -80,6 +76,7 @@ gateway.storage.relational = "sqlalchemy"
 gateway.storage.web_runtime = "relational"
 
 service.ipc = "default"
+service.context_engine = "default"
 service.messaging = "default"
 service.nlp = "default"
 service.platform = "default"
@@ -87,27 +84,49 @@ service.user = "default"
 
 # Core-owned extensions.
 [[mugen.modules.core.extensions]]
-type = "ctx"
-token = "core.ctx.system_persona"
-
-# Commands.
-[[mugen.modules.core.extensions]]
 type = "cp"
 token = "core.cp.clear_history"
 
+# Framework entries may optionally declare:
+# enabled = true
+# name = "com.vorsocomputing.mugen.plugin_name"
+# namespace = "com.vorsocomputing.mugen.plugin_name"
+# contrib = "mugen.core.plugin.plugin_name.contrib"
+# models = ["mugen.core.plugin.plugin_name.model"]
+#
 # Web platform FW contract (required when `web` is active).
 [[mugen.modules.core.extensions]]
 type = "fw"
 token = "core.fw.acp"
+enabled = true
+name = "com.vorsocomputing.mugen.acp"
+namespace = "com.vorsocomputing.mugen.acp"
+contrib = "mugen.core.plugin.acp.contrib"
 
 [[mugen.modules.core.extensions]]
 type = "fw"
 token = "core.fw.web"
+enabled = true
+name = "com.vorsocomputing.mugen.web"
+namespace = "com.vorsocomputing.mugen.web"
+contrib = "mugen.core.plugin.web.contrib"
+
+[[mugen.modules.core.extensions]]
+type = "fw"
+token = "core.fw.context_engine"
+enabled = true
+name = "com.vorsocomputing.mugen.context_engine"
+namespace = "com.vorsocomputing.mugen.context_engine"
+contrib = "mugen.core.plugin.context_engine.contrib"
 
 # Telegram platform FW/IPC contract (required when `telegram` is active).
 # [[mugen.modules.core.extensions]]
 # type = "fw"
 # token = "core.fw.telegram_botapi"
+# enabled = true
+# name = "com.vorsocomputing.mugen.telegram"
+# namespace = "com.vorsocomputing.mugen.telegram"
+# contrib = "mugen.core.plugin.telegram.botapi.contrib"
 #
 # [[mugen.modules.core.extensions]]
 # type = "ipc"
@@ -117,6 +136,10 @@ token = "core.fw.web"
 # [[mugen.modules.core.extensions]]
 # type = "fw"
 # token = "core.fw.line_messagingapi"
+# enabled = true
+# name = "com.vorsocomputing.mugen.line"
+# namespace = "com.vorsocomputing.mugen.line"
+# contrib = "mugen.core.plugin.line.messagingapi.contrib"
 #
 # [[mugen.modules.core.extensions]]
 # type = "ipc"
@@ -131,6 +154,10 @@ token = "core.fw.web"
 # [[mugen.modules.core.extensions]]
 # type = "fw"
 # token = "core.fw.wechat"
+# enabled = true
+# name = "com.vorsocomputing.mugen.wechat"
+# namespace = "com.vorsocomputing.mugen.wechat"
+# contrib = "mugen.core.plugin.wechat.contrib"
 #
 # [[mugen.modules.core.extensions]]
 # type = "ipc"
@@ -140,6 +167,10 @@ token = "core.fw.web"
 # [[mugen.modules.core.extensions]]
 # type = "fw"
 # token = "core.fw.whatsapp_wacapi"
+# enabled = true
+# name = "com.vorsocomputing.mugen.whatsapp"
+# namespace = "com.vorsocomputing.mugen.whatsapp"
+# contrib = "mugen.core.plugin.whatsapp.wacapi.contrib"
 #
 # [[mugen.modules.core.extensions]]
 # type = "ipc"
@@ -147,8 +178,12 @@ token = "core.fw.web"
 
 # Plugin and downstream extensions (opt-in).
 # [[mugen.modules.extensions]]
-# type = "ctx"
-# token = "my_org.ctx.custom_context"
+# type = "fw"
+# token = "my_org.fw.custom_context_source"
+# enabled = true
+# name = "my_org.custom_context"
+# namespace = "my_org.custom_context"
+# contrib = "my_org.custom_context.contrib"
 
 # === ACP plugin ===
 [acp]
@@ -631,7 +666,16 @@ version_table = "alembic_version"
 version_table_schema = "mugen"
 
 # Downstream plugin tracks run independently from core.
-# Each track gets its own schema + version table contract.
+# New plugin tracks can keep their own Alembic lineage even when they target
+# the shared runtime schema used by the current relational gateway.
+[[rdbms.migration_tracks.plugins]]
+name = "context_engine"
+enabled = true
+alembic_config = "plugins/context_engine/alembic.ini"
+schema = "mugen"
+version_table = "alembic_version_context_engine"
+version_table_schema = "mugen"
+
 # [[rdbms.migration_tracks.plugins]]
 # name = "acme_extension"
 # enabled = true

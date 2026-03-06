@@ -1,359 +1,188 @@
 # Developing muGen Extensions
 
-muGen extensions are modular components that allow developers to customize and extend the framework’s capabilities by adding platform-agnostic or platform-specific behaviors at different stages of the message lifecycle. There are seven extension types: Framework (FW) extensions for integrating core features, Inter-process Communication (IPC) extensions for managing commands and scheduled tasks, Message Handler (MH) extensions for processing non-text inputs, Context (CTX) extensions for enriching conversation histories, Retrieval Augmented Generation (RAG) extensions for performing knowledge retrieval, Response Pre-processor (RPP) extensions for adjusting LLM responses, and Conversational Trigger (CT) extensions for detecting cues and initiating actions. By using object-oriented programming (OOP) interfaces and dependency injection, these extensions enhance the flexibility, maintainability, and reusability of muGen applications.
+muGen extensions customize behavior at explicit lifecycle boundaries. The core
+runtime now supports five message-lifecycle extension categories:
 
-## Prerequisites
+- `fw`: framework/bootstrap extensions
+- `ipc`: typed IPC handlers
+- `mh`: message handlers
+- `rpp`: response preprocessors
+- `ct`: conversational triggers
 
-Before starting, make sure you have:
-
-1. Followed the guide on [building muGen applications](apps.md) and set up a project repository.
-2. Familiarity with Python programming, [object-oriented programming (OOP)](https://en.wikipedia.org/wiki/Object-oriented_programming), and [dependency injection](https://en.wikipedia.org/wiki/Dependency_injection).
-
-## The Extension Directory
-
-While extension modules can be loaded from anywhere in the directory structure, we recommended creating an `extension` directory in the project root.
-
-```text
-root
-└── extension
-    └── ...
-```
-
-As a best practice, consider grouping extensions that serve the same business use case into "app" directories. This would make it easier to reuse the functionality they provide in other systems. For example:
-
-```text
-root
-└── extension
-    ├── app1
-    │   ├── ctx_ext.py
-    │   └── rag_ext.py
-    └── app2
-        └── mh_ext.py
-```
-
-You can use your own naming conventions for extension directories and files.
-
-## Interfaces
-
-muGen provides contracts (OOP interfaces) for the different extension types it supports. These interfaces are located in `mugen.core.contract.extension`. For example, if you want to create a Context extension, you would import the interface as follows:
-
-```python
-from mugen.core.contract.extension.ctx import ICTXExtension
-```
-
-Remember that your extensions must strictly conform to the specified contracts as the framework will never access your extensions directly, but rather through these interfaces.
-
-## Migration Notes (Core Contract Updates)
-
-Recent core hardening introduced the following contract-level updates that extension and adapter authors should apply:
-
-1. `IWebClient` now requires `wait_until_stopped()` so Phase-B can supervise long-running web runtime health.
-2. `IKnowledgeGateway.search(...)` now returns `KnowledgeSearchResult` instead of a provider-specific raw list/count payload.
-3. Clean interactor generics were tightened:
-   - request handlers are parameterized by `IRequest` and `IResponse`, not handler types.
-
-When updating downstream modules, prioritize typed contract conformance first, then provider-specific payload handling migration.
+CTX and RAG are no longer extension categories. Context preparation, retrieval,
+bounded state, provenance, cache hints, and post-turn writeback now live behind
+the core context engine service boundary. If you need to contribute runtime
+context, do it through the context engine plugin contributor interfaces instead
+of legacy CTX/RAG hooks.
 
 ## Platform Targeting
 
-All extensions must declare their target platform(s) using the `platforms` property, which must return a list of strings. Platform targeting ensures that an extension is only applied when interacting with specified platforms. For example, if you have features that are specific to WhatsApp and Telnet, setting up platform targeting allows your extension to activate only when the corresponding platform is in use.
-
-For platform-agnostic extensions, the `platforms` property should return an empty list.
+Every extension declares `platforms`. Return an empty list for platform-agnostic
+behavior.
 
 ```python
 @property
 def platforms(self) -> list[str]:
-    """Get the platforms this extension supports."""
-    # This extension targets the telnet and WhatsApp platforms.
-    return ["telnet", "whatsapp"]
-
+    return ["whatsapp", "web"]
 ```
 
 ## Dependency Injection
 
-Dependency injection allows extensions to access application configuration, core clients, gateways, and services in a flexible manner without hardcoding dependencies. This approach makes the code more modular and easier to maintain, as dependencies are managed by the framework instead of being directly instantiated within the extension. The `mugen.core.di` module is used to enable this feature.
+Use explicit constructor args for testability. For optional fallback wiring, use
+module-level provider callables that resolve from `di.container` at runtime.
+Avoid inline `... else di.container.<dep>` expressions and never resolve DI
+defaults at import time.
 
-For example, a Context extension that requires access to the TOML configuration and logging could have the following setup.
+Common services available from `di.container`:
 
+- `config`
+- `logging_gateway`
+- `ipc_service`
+- `messaging_service`
+- `platform_service`
+- `user_service`
+- `context_engine_service`
 
-```python
+Extension-provided shared services should be registered through the injector’s
+extension-service API, not through module globals.
 
-from mugen.core import di
-from mugen.core.contract.extension.ctx import ICTXExtension
-from mugen.core.contract.gateway.logging import ILoggingGateway
+## Loading Extensions
 
-
-class MyCTXExtension(ICTXExtension):
-    
-    def __init__(
-        self,
-        config=di.container.config,
-        logging_gateway=di.container.logging_gateway,
-    ) -> None:
-        self._config = config
-        self._logging_gateway = logging_gateway
-
-        self._logging_gateway.info("Init complete.")
-        self._logging_gateway.info(
-            f"Application environment: {self._config.mugen.environment}"
-        )
-
-    ...
-```
-
-The following is a listing of available clients, gateways, and services.
-
-* Clients:
-    * [Matrix](/mugen/core/contract/client/matrix.py) (di.container.matrix_client)
-    * [Telnet](/mugen/core/contract/client/telnet.py) (di.container.telnet_client)
-    * [Web](/mugen/core/contract/client/web.py) (di.container.web_client)
-    * [WhatsApp](/mugen/core/contract/client/whatsapp.py) (di.container.whatsapp_client)
-* Gateways:
-    * [Completion](/mugen/core/contract/gateway/completion.py) (di.container.completion_gateway)
-    * [Email](/mugen/core/contract/gateway/email.py) (di.container.email_gateway)
-    * [Knowledge](/mugen/core/contract/gateway/knowledge.py) (di.container.knowledge_gateway)
-    * [Logging](/mugen/core/contract/gateway/logging.py) (di.container.logging_gateway)
-    * [SMS](/mugen/core/contract/gateway/sms.py) (di.container.sms_gateway)
-    * Storage:
-        * [key-val](/mugen/core/contract/gateway/storage/keyval.py) (di.container.keyval_storage_gateway)
-* Services:
-    * [IPC](/mugen/core/contract/service/ipc.py) (di.container.ipc_service)
-    * [Messaging](/mugen/core/contract/service/messaging.py) (di.container.messaging_service)
-    * [NLP](/mugen/core/contract/service/nlp.py) (di.container.nlp_service)
-    * [Platform](/mugen/core/contract/service/platform.py) (di.container.platform_service)
-    * [User](/mugen/core/contract/service/user.py) (di.container.user_service)
-
-## Loading extensions
-
-Extensions are loaded by setting their type and path in `mugen.toml`.
+Extensions are loaded from `mugen.modules.extensions` entries in `mugen.toml`.
+Use strict tokens for core extensions and module paths only for your own custom
+extension classes where the loader explicitly expects them.
 
 ```toml
-...
 [[mugen.modules.extensions]]
-type = "ctx"
-path = "extension.app1.ctx_ext"
-
-[[mugen.modules.extensions]]
-type = "rag"
-path = "extension.app1.rag_ext"
+type = "fw"
+path = "extension.app1.fw_ext"
 
 [[mugen.modules.extensions]]
 type = "mh"
-path = "extension.app2.mh_ext"
-...
+path = "extension.app1.media_ext"
+
+[[mugen.modules.extensions]]
+type = "rpp"
+path = "extension.app1.response_ext"
 ```
 
-For now, and unfortunately, extensions have to be wired for loading individually, even if they are in the same app directory. Hopefully, as the framework matures, a better loading mechanism will be implemented.
+`type = "ctx"` and `type = "rag"` are rejected by bootstrap validation.
 
-## Extension Types
+## Message Handler Extensions
 
-### Framework (FW) Extensions
-
-Framework extensions add core functionalities to the muGen framework and are initialized during application startup. Implement the `IFWExtension` interface to create a Framework extension.
-
-**Setup Code:**
+MH extensions handle inbound message types such as `image`, `audio`, `file`, or
+custom text paths. Their runtime method is scope-aware.
 
 ```python
-"""Provides an implementation for IFWExtension."""
+from typing import Any
 
-__all__ = ["MyFWExtension"]
+from mugen.core.contract.context import ContextScope
+from mugen.core.contract.extension.mh import IMHExtension
 
-from mugen.core.contract.extension.fw import IFWExtension
 
-
-class MyFWExtension(IFWExtension):
-    """Custom implementation of IFWExtension."""
-
+class MyMHExtension(IMHExtension):
     @property
     def platforms(self) -> list[str]:
-        """Get the platforms this extension supports."""
         return []
 
-    async def setup(self) -> None:
-        """Perform extension setup during application initialization."""
-        print("Setting up MyFWExtension...")
-        # Add custom setup logic here
+    @property
+    def message_types(self) -> list[str]:
+        return ["image"]
+
+    async def handle_message(
+        self,
+        platform: str,
+        room_id: str,
+        sender: str,
+        message: dict | str,
+        message_context: list[dict] | None = None,
+        attachment_context: list[dict] | None = None,
+        ingress_metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        *,
+        scope: ContextScope,
+    ) -> list[dict] | None:
+        return [
+            {
+                "type": "image_summary",
+                "content": {"caption": "Processed image", "tenant_id": scope.tenant_id},
+            }
+        ]
 ```
 
-### Inter-process Communication (IPC) Extensions
+`mugen.messaging.mh_mode` controls whether the runtime may fall back to the
+built-in text handler when no MH extension handles a text turn.
 
-IPC extensions handle background tasks, push notifications, and scheduled
-operations. Implement the `IIPCExtension` interface to create an IPC extension.
-IPC handlers now use a typed request/response contract and must return an
-`IPCHandlerResult` value (no queue side effects).
+## IPC Extensions
 
-**Setup Code:**
+IPC extensions process typed command requests and return typed handler results.
 
 ```python
-"""Provides an implementation for IIPCExtension."""
-
-__all__ = ["MyIPCExtension"]
-
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 
 
 class MyIPCExtension(IIPCExtension):
-    """Custom implementation of IIPCExtension."""
-
     @property
     def platforms(self) -> list[str]:
-        """Get the platforms this extension supports."""
         return []
 
     @property
     def ipc_commands(self) -> list[str]:
-        """Get the list of IPC commands processed by this extension."""
-        return ["ping", "status"]
+        return ["ping"]
 
     async def process_ipc_command(
         self,
         request: IPCCommandRequest,
     ) -> IPCHandlerResult:
-        """Process an IPC command."""
-        print(f"Processing IPC command: {request.command}")
         return IPCHandlerResult(
             handler=type(self).__name__,
-            response={"status": "ok"},
+            response={"status": "ok", "command": request.command},
         )
 ```
 
-For WhatsApp webhook IPC handlers, transport ACK remains a fast `200`/`OK`,
-while processing reliability uses relational dedupe and dead-letter records for
-recovery and observability.
+## Command Processor Extensions
 
-### Message Handler (MH) Extensions
-
-Message Handler extensions process non-textual input such as images or audio. Implement the `IMHExtension` interface to create a Message Handler extension.
-
-Runtime mode is controlled by `mugen.messaging.mh_mode`:
-- `optional`: zero-MH runtime is supported; core built-in text orchestration remains available.
-- `required`: startup fails when no compatible MH extension is bound for active messaging platforms.
-
-**Setup Code:**
+CP extensions handle explicit commands before normal text completion runs.
 
 ```python
-"""Provides an implementation for IMHExtension."""
-
-__all__ = ["MyMHExtension"]
-
-from mugen.core.contract.extension.mh import IMHExtension
+from mugen.core.contract.context import ContextScope
+from mugen.core.contract.extension.cp import ICPExtension
 
 
-class MyMHExtension(IMHExtension):
-    """Custom implementation of IMHExtension."""
-
+class MyCommandExtension(ICPExtension):
     @property
     def platforms(self) -> list[str]:
-        """Get the platforms this extension supports."""
         return []
 
     @property
-    def message_types(self) -> list[str]:
-        """Get the list of message types handled by this extension."""
-        return ["image", "audio"]
+    def commands(self) -> list[str]:
+        return ["/status"]
 
-    async def handle_message(
+    async def process_message(
         self,
+        message: str,
         room_id: str,
-        sender: str,
-        message: dict
-    ) -> None:
-        """Handle a message."""
-        print(f"Message from {sender} in room {room_id}: {message}")
-        # Implement message handling logic here
+        user_id: str,
+        *,
+        scope: ContextScope,
+    ) -> list[dict] | None:
+        return [{"type": "text", "content": f"tenant={scope.tenant_id}"}]
 ```
 
-### Context (CTX) Extensions
+## Response Pre-processor Extensions
 
-Context extensions provide additional context to the language model during conversations. Implement the `ICTXExtension` interface to create a Context extension.
-
-**Setup Code:**
+RPP extensions receive the final assistant text before the user sees it.
 
 ```python
-"""Provides an implementation for ICTXExtension."""
-
-__all__ = ["MyCTXExtension"]
-
-from mugen.core.contract.extension.ctx import ICTXExtension
-
-
-class MyCTXExtension(ICTXExtension):
-    """Custom implementation of ICTXExtension."""
-
-    @property
-    def platforms(self) -> list[str]:
-        """Get the platforms this extension supports."""
-        return []
-
-    def get_context(self, user_id: str) -> list[dict]:
-        """Provide additional context for a given user."""
-        print(f"Fetching context for user ID: {user_id}")
-        # Return contextual information here
-        return [
-            {
-                "role": "system",
-                "content": "User-specific context",
-            }
-        ]
-```
-
-### Retrieval Augmented Generation (RAG) Extensions
-
-RAG extensions enable dynamic knowledge retrieval to augment LLM responses. Implement the `IRAGExtension` interface to create a RAG extension.
-
-**Setup Code:**
-
-```python
-"""Provides an implementation for IRAGExtension."""
-
-__all__ = ["MyRAGExtension"]
-
-from mugen.core.contract.extension.rag import IRAGExtension
-
-
-class MyRAGExtension(IRAGExtension):
-    """Custom implementation of IRAGExtension."""
-
-    _cache_key: str = "ext_cache_key"
-
-    @property
-    def platforms(self) -> list[str]:
-        """Get the platforms this extension supports."""
-        return []
-
-    @property
-    def cache_key(self) -> str:
-        """Get the key used to access the provider cache."""
-        return self._cache_key
-
-    async def retrieve(self, sender: str, message: str) -> None:
-        """Perform knowledge retrieval based on the message."""
-        print(f"Retrieving knowledge for sender {sender}: {message}")
-        # Implement retrieval logic here
-```
-
-### Response Pre-processor (RPP) Extensions
-
-RPP extensions modify LLM responses before they are sent to the user. Implement the `IRPPExtension` interface to create an RPP extension.
-Use the signature `preprocess_response(room_id, user_id, assistant_response)`.
-
-**Setup Code:**
-
-```python
-"""Provides an implementation for IRPPExtension."""
-
-__all__ = ["MyRPPExtension"]
-
+from mugen.core.contract.context import ContextScope
 from mugen.core.contract.extension.rpp import IRPPExtension
 
 
 class MyRPPExtension(IRPPExtension):
-    """Custom implementation of IRPPExtension."""
-
     @property
     def platforms(self) -> list[str]:
-        """Get the platforms this extension supports."""
         return []
 
     async def preprocess_response(
@@ -361,52 +190,72 @@ class MyRPPExtension(IRPPExtension):
         room_id: str,
         user_id: str,
         assistant_response: str,
+        *,
+        scope: ContextScope,
     ) -> str:
-        """Modify the assistant response before it is delivered."""
-        print(f"Preprocessing response for user {user_id} in room {room_id}")
-        # Implement response preprocessing logic here
-        return f"Modified response: {assistant_response}"
+        return f"[{scope.tenant_id}] {assistant_response}"
 ```
 
-### Conversational Trigger (CT) Extensions
+## Conversational Trigger Extensions
 
-CT extensions detect cues in messages and trigger actions based on those cues. Implement the `ICTExtension` interface to create a CT extension.
-
-**Setup Code:**
+CT extensions observe the final assistant text and may trigger downstream
+operations.
 
 ```python
-"""Provides an implementation for ICTExtension."""
-
-__all__ = ["MyCTExtension"]
-
+from mugen.core.contract.context import ContextScope
 from mugen.core.contract.extension.ct import ICTExtension
 
 
 class MyCTExtension(ICTExtension):
-    """Custom implementation of ICTExtension."""
-
     @property
     def platforms(self) -> list[str]:
-        """Get the platforms this extension supports."""
         return []
 
     @property
     def triggers(self) -> list[str]:
-        """Get the list of triggers that activate the service."""
-        return ["help", "support"]
+        return ["handoff"]
 
     async def process_message(
-        self, message: str, role: str, room_id: str, user_id: str
+        self,
+        message: str,
+        role: str,
+        room_id: str,
+        user_id: str,
+        *,
+        scope: ContextScope,
     ) -> None:
-        """Process message to detect and respond to conversational triggers."""
-        print(f"Processing message from {user_id} in room {room_id}: {message}")
-        # Implement trigger processing logic here
+        _ = (message, role, room_id, user_id, scope)
 ```
 
-## Next Steps
+## Framework Extensions
 
-You are now equipped with the knowledge to effectively extend muGen. To continue learning:
+FW extensions run during startup and are the correct place to register plugin
+services, ACP contributors, migration tracks, or runtime collaborator bindings.
 
-- Check out our guides on working with [clients](clients.md), [gateways](gateways.md), and [services](services.md).
-- Learn how to [configure logging](logging.md) to better debug your extensions.
-- Explore our [troubleshooting guide](troubleshooting.md) for common issues and solutions.
+The core context engine plugin uses an FW extension token:
+
+- `core.fw.context_engine`
+
+That FW extension registers the shared context component registry, default
+contributors, ACP resource contributions, and plugin-owned migration track
+hooks.
+
+## Context Contributors
+
+To extend context behavior itself, implement context-engine collaborators rather
+than message-lifecycle extensions. The main ports live in
+`mugen.core.contract.context`:
+
+- `IContextContributor`
+- `IContextGuard`
+- `IContextRanker`
+- `IMemoryWriter`
+- `IContextCache`
+- `IContextTraceSink`
+
+Context contributors emit typed `ContextCandidate` artifacts with provenance and
+estimated token cost. They are tenant-scoped by `ContextScope` and are composed
+through the context engine plugin’s runtime registry.
+
+See `docs/context-engine-design.md` for the runtime contract and control-plane
+shape.

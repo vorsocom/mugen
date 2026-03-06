@@ -3,6 +3,9 @@
 __all__ = ["IMHExtension"]
 
 from abc import abstractmethod
+from typing import Any
+
+from mugen.core.contract.context import ContextScope
 
 from . import IExtensionBase
 
@@ -24,6 +27,12 @@ class IMHExtension(IExtensionBase):
         room_id: str,
         sender: str,
         message: dict | str,
-        message_context: list[dict] = None,
+        message_context: list[dict] | None = None,
+        attachment_context: list[dict] | None = None,
+        ingress_metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        *,
+        scope: ContextScope,
     ) -> list[dict] | None:
         """Handle a message."""

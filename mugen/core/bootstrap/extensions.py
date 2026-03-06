@@ -9,10 +9,8 @@ from typing import Any
 
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
-from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.fw import IFWExtension
 from mugen.core.contract.extension.ipc import IIPCExtension
-from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.registry import IExtensionRegistry
 from mugen.core.contract.extension.rpp import IRPPExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -20,7 +18,7 @@ from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.platform import IPlatformService
 
-_KNOWN_EXTENSION_TYPES = {"cp", "ct", "ctx", "fw", "ipc", "mh", "rag", "rpp"}
+_KNOWN_EXTENSION_TYPES = {"cp", "ct", "fw", "ipc", "mh", "rpp"}
 _PLUGIN_EXTENSION_REGISTRY_MODULE = "mugen.core.plugin.token_registry"
 _PLUGIN_EXTENSION_REGISTRY_FUNC = "get_plugin_extension_token_registry"
 
@@ -56,12 +54,6 @@ class _ExtensionClassRef:
 
 
 _CORE_EXTENSION_TOKEN_REGISTRY: dict[str, _ExtensionClassRef] = {
-    "core.ctx.system_persona": _ExtensionClassRef(
-        "ctx",
-        ICTXExtension,
-        "mugen.core.extension.ctx.system_persona",
-        "SystemPersonaCTXExtension",
-    ),
     "core.cp.clear_history": _ExtensionClassRef(
         "cp",
         ICPExtension,
@@ -221,6 +213,11 @@ class DefaultExtensionRegistry(IExtensionRegistry):
         critical: bool,
     ) -> bool:
         ext_type = str(extension_type).strip().lower()
+        if ext_type in {"ctx", "rag"}:
+            raise RuntimeError(
+                "Legacy extension types 'ctx' and 'rag' are unsupported. "
+                "Use the context engine service boundary instead."
+            )
         if ext_type not in _KNOWN_EXTENSION_TYPES:
             raise RuntimeError(f"Unknown extension type: {extension_type!r}.")
         if self._platform_service.extension_supported(extension) is not True:
@@ -263,14 +260,8 @@ class DefaultExtensionRegistry(IExtensionRegistry):
         if extension_type == "ct":
             self._messaging_service.bind_ct_extension(extension, critical=critical)
             return
-        if extension_type == "ctx":
-            self._messaging_service.bind_ctx_extension(extension, critical=critical)
-            return
         if extension_type == "mh":
             self._messaging_service.bind_mh_extension(extension, critical=critical)
-            return
-        if extension_type == "rag":
-            self._messaging_service.bind_rag_extension(extension, critical=critical)
             return
         if extension_type == "rpp":
             self._messaging_service.bind_rpp_extension(extension, critical=critical)

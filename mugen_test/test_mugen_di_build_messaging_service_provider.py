@@ -1,5 +1,6 @@
 """Provides unit tests for mugen.core.di._build_messaging_service_provider."""
 
+from types import SimpleNamespace
 import unittest
 import unittest.mock
 
@@ -232,7 +233,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "messaging": "valid_messaging_module:DummyMessagingServiceClass",
+                                    "messaging": "default",
                                 }
                             }
                         }
@@ -250,12 +251,17 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         self,
                         config,
                         completion_gateway,
-                        keyval_storage_gateway,
+                        context_engine_service,
                         logging_gateway,
                         user_service,
                     ):
-                        _ = completion_gateway
-                        pass
+                        _ = (
+                            config,
+                            completion_gateway,
+                            context_engine_service,
+                            logging_gateway,
+                            user_service,
+                        )
 
                     @property
                     def cp_extensions(self):
@@ -266,102 +272,44 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         pass
 
                     @property
-                    def ctx_extensions(self):
-                        pass
-
-                    @property
                     def mh_extensions(self):
-                        pass
-
-                    @property
-                    def rag_extensions(self):
                         pass
 
                     @property
                     def rpp_extensions(self):
                         pass
 
-                    async def handle_audio_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: dict,
-                    ) -> list[dict] | None:
-                        pass
-
-                    async def handle_composed_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: dict,
-                    ) -> list[dict] | None:
-                        pass
-
-                    async def handle_file_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: dict,
-                    ) -> list[dict] | None:
-                        pass
-
-                    async def handle_image_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: dict,
-                    ) -> list[dict] | None:
-                        pass
-
-                    async def handle_text_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: str,
-                        message_context: list[str] = None,
-                    ):
-                        pass
-
-                    async def handle_video_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: dict,
-                    ) -> list[dict] | None:
+                    async def handle_message(self, request):
+                        _ = request
                         pass
 
                     def bind_cp_extension(self, ext, *, critical: bool = False):
+                        _ = ext
                         _ = critical
                         pass
 
                     def bind_ct_extension(self, ext, *, critical: bool = False):
-                        _ = critical
-                        pass
-
-                    def bind_ctx_extension(self, ext, *, critical: bool = False):
+                        _ = ext
                         _ = critical
                         pass
 
                     def bind_mh_extension(self, ext, *, critical: bool = False):
-                        _ = critical
-                        pass
-
-                    def bind_rag_extension(self, ext, *, critical: bool = False):
+                        _ = ext
                         _ = critical
                         pass
 
                     def bind_rpp_extension(self, ext, *, critical: bool = False):
+                        _ = ext
                         _ = critical
                         pass
 
                 DummyMessagingServiceClass.__module__ = "valid_messaging_module"
 
+                injector.config = SimpleNamespace()
+                injector.completion_gateway = object()
+                injector.context_engine_service = object()
+                injector.logging_gateway = object()
+                injector.user_service = object()
 
                 with (
                     unittest.mock.patch.dict(

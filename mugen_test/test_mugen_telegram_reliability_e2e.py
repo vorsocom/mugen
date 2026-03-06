@@ -250,6 +250,11 @@ class TestMugenTelegramReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
+                        "tenant_resolution": {
+                            "mode": "resolved",
+                            "reason_code": None,
+                            "source": "telegram.ingress_routing",
+                        },
                     },
                 }
             ],
@@ -323,6 +328,11 @@ class TestMugenTelegramReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
+                        "tenant_resolution": {
+                            "mode": "resolved",
+                            "reason_code": None,
+                            "source": "telegram.ingress_routing",
+                        },
                     },
                 },
             ],

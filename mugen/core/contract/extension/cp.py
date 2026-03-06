@@ -4,6 +4,8 @@ __all__ = ["ICPExtension"]
 
 from abc import abstractmethod
 
+from mugen.core.contract.context import ContextScope
+
 from . import IExtensionBase
 
 
@@ -21,5 +23,7 @@ class ICPExtension(IExtensionBase):
         message: str,
         room_id: str,
         user_id: str,
+        *,
+        scope: ContextScope,
     ) -> list[dict] | None:
         """Process message for commands."""

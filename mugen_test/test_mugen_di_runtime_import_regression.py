@@ -13,9 +13,10 @@ class TestMuGenDiRuntimeImportRegression(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         modules = [
             "mugen",
-            "mugen.core.extension.ctx.system_persona",
             "mugen.core.extension.cp.clear_history",
             "mugen.core.extension.mh.default_text",
+            "mugen.core.plugin.context_engine.fw_ext",
+            "mugen.core.plugin.context_engine.service.contributor",
             "mugen.core.plugin.whatsapp.wacapi.api.decorator",
             "mugen.core.plugin.whatsapp.wacapi.api.webhook",
             "mugen.core.plugin.whatsapp.wacapi.fw_ext",

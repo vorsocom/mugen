@@ -10,6 +10,11 @@ This note documents the core DI structure in `mugen/core/di/__init__.py` and the
 
 Keep `logging_gateway` as the bootstrap provider and keep the remaining providers in `_PROVIDER_BUILD_ORDER` dependency-safe order.
 
+`context_engine_service` is now a first-class provider in that order.
+`messaging_service` must remain after `context_engine_service` because messaging
+depends on the context engine service boundary instead of legacy CTX/RAG
+extension collection.
+
 ## Canonical Provider Tokens
 
 Runtime config values under `mugen.modules.core.*` must use these token values
@@ -27,6 +32,7 @@ from `mugen/core/di/provider_registry.py` (never module paths):
 | `mugen.modules.core.gateway.storage.relational` | `sqlalchemy` |
 | `mugen.modules.core.gateway.storage.web_runtime` | `relational` |
 | `mugen.modules.core.service.ipc` | `default` |
+| `mugen.modules.core.service.context_engine` | `default` |
 | `mugen.modules.core.service.messaging` | `default` |
 | `mugen.modules.core.service.nlp` | `default` |
 | `mugen.modules.core.service.platform` | `default` |
@@ -93,6 +99,7 @@ When changing DI/provider wiring, maintain these boundaries first, then update i
   - `EXT_SERVICE_ADMIN_REGISTRY`
   - `EXT_SERVICE_ADMIN_SVC_JWT`
   - `EXT_SERVICE_ADMIN_SVC_AUTH`
+  - `EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY`
 - ACP modules should keep DI defaults as module-level callables that resolve from
   `di.container` at call time (not import time).
 - ACP modules should build namespaced ACP keys via `AdminNs` instead of inline
@@ -142,6 +149,8 @@ Done:
   - `mugen_test/test_mugen_di_runtime_import_regression.py`
 - Constructor fallback behavior is covered by:
   - `mugen_test/test_mugen_di_constructor_fallbacks.py`
+- Provider/build-order integrity for the context engine seam is covered by:
+  - `mugen_test/test_mugen_di_provider_spec_integrity.py`
 - CI test gate (which includes DI coverage) exists at:
   - `.github/workflows/test-gates.yml`
 

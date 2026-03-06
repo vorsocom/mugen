@@ -4,25 +4,31 @@ __all__ = ["ClearChatHistoryICPExtension"]
 
 from types import SimpleNamespace
 
-
+from mugen.core import di
+from mugen.core.constants import GLOBAL_TENANT_ID
+from mugen.core.contract.context import ContextScope, ContextTurnRequest
 from mugen.core.contract.extension.cp import ICPExtension
-from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
-from mugen.core.contract.gateway.storage.keyval_model import KeyValConflictError
+from mugen.core.utility.context_runtime import (
+    prefix_cache_prefix,
+    retrieval_cache_prefix,
+    working_set_cache_prefix,
+)
+
+
+def _context_component_registry_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY)
 
 
 class ClearChatHistoryICPExtension(ICPExtension):
     """An implementation of ICPExtension to clear chat history."""
 
-    _default_history_save_cas_retries: int = 5
-
-    def __init__(  # pylint: disable=too-many-arguments
+    def __init__(
         self,
         config: SimpleNamespace,
-        keyval_storage_gateway: IKeyValStorageGateway,
+        context_component_registry_provider=_context_component_registry_provider,
     ) -> None:
         self._config = config
-        self._keyval_storage_gateway = keyval_storage_gateway
-        self._history_save_cas_retries = self._resolve_history_save_cas_retries()
+        self._context_component_registry_provider = context_component_registry_provider
 
     @property
     def platforms(self) -> list[str]:
@@ -37,15 +43,19 @@ class ClearChatHistoryICPExtension(ICPExtension):
         message: str,
         room_id: str,
         user_id: str,
+        *,
+        scope: ContextScope,
     ) -> list[dict] | None:
-        return await self._handle_clear_command(room_id)
+        _ = message
+        _ = room_id
+        _ = user_id
+        return await self._handle_clear_command(scope)
 
     async def _handle_clear_command(
         self,
-        room_id: str,
+        scope: ContextScope,
     ) -> list[dict]:
-        # Clear chat history.
-        await self._clear_chat_history(room_id)
+        await self._clear_context(scope)
         return [
             {
                 "type": "text",
@@ -53,52 +63,40 @@ class ClearChatHistoryICPExtension(ICPExtension):
             },
         ]
 
-    async def _clear_chat_history(self, room_id: str, keep: int = 0) -> None:
-        # Get the attention thread.
-        history = await self._load_chat_history(room_id)
-
-        if keep == 0:
-            history["messages"] = []
-        else:
-            history["messages"] = history["messages"][-abs(keep) :]
-
-        # Persist the cleared thread.
-        await self._save_chat_history(room_id, history)
-
-    async def _load_chat_history(self, room_id: str) -> dict | None:
-        history_key = f"chat_history:{room_id}"
-        loaded = await self._keyval_storage_gateway.get_json(history_key)
-        if isinstance(loaded, dict) and isinstance(loaded.get("messages"), list):
-            return loaded
-
-        return {"messages": []}
-
-    async def _save_chat_history(self, room_id: str, history: dict) -> None:
-        history_key = f"chat_history:{room_id}"
-        for _ in range(self._history_save_cas_retries):
-            entry = await self._keyval_storage_gateway.get_entry(history_key)
-            expected_row_version = 0
-            if entry is not None:
-                expected_row_version = int(entry.row_version)
-            try:
-                await self._keyval_storage_gateway.put_json(
-                    history_key,
-                    history,
-                    expected_row_version=expected_row_version,
-                )
-                return
-            except KeyValConflictError:
-                continue
-
-        await self._keyval_storage_gateway.put_json(history_key, history)
-
-    def _resolve_history_save_cas_retries(self) -> int:
-        raw_value = getattr(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "messaging", None),
-            "history_save_cas_retries",
-            self._default_history_save_cas_retries,
+    async def _clear_context(self, scope: ContextScope) -> None:
+        registry = self._context_component_registry_provider()
+        state_store = getattr(registry, "state_store", None)
+        if state_store is None:
+            raise RuntimeError("Context component registry missing state_store.")
+        await state_store.clear(
+            ContextTurnRequest(
+                scope=scope,
+                user_message="",
+                ingress_metadata={
+                    "tenant_resolution": {
+                        "mode": (
+                            "resolved"
+                            if scope.tenant_id != str(GLOBAL_TENANT_ID)
+                            else "fallback_global"
+                        ),
+                        "reason_code": None,
+                        "source": "core.cp.clear_history",
+                    }
+                },
+            )
         )
-        if isinstance(raw_value, int) and not isinstance(raw_value, bool):
-            if raw_value > 0:
-                return raw_value
-        return self._default_history_save_cas_retries
+        cache = getattr(registry, "cache", None)
+        if cache is None:
+            return
+        await cache.invalidate(
+            namespace="working_set",
+            key_prefix=working_set_cache_prefix(scope),
+        )
+        await cache.invalidate(
+            namespace="retrieval",
+            key_prefix=retrieval_cache_prefix(scope),
+        )
+        await cache.invalidate(
+            namespace="prefix_fingerprint",
+            key_prefix=prefix_cache_prefix(scope),
+        )

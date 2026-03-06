@@ -260,6 +260,36 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(unknown.ok)
         self.assertEqual(unknown.code, "not_found")
 
+    async def test_provider_helpers_return_from_di_container_and_emit_skip_branch(
+        self,
+    ) -> None:
+        container = SimpleNamespace(
+            whatsapp_client="client",
+            config="config",
+            logging_gateway="logger",
+            relational_storage_gateway="rsg",
+            messaging_service="ms",
+            user_service="us",
+        )
+
+        with patch.object(ipc_ext.di, "container", container):
+            self.assertEqual(ipc_ext._whatsapp_client_provider(), "client")
+            self.assertEqual(ipc_ext._config_provider(), "config")
+            self.assertEqual(ipc_ext._logging_gateway_provider(), "logger")
+            self.assertEqual(ipc_ext._relational_storage_gateway_provider(), "rsg")
+            self.assertEqual(ipc_ext._messaging_service_provider(), "ms")
+            self.assertEqual(ipc_ext._user_service_provider(), "us")
+
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=SimpleNamespace(),
+        )
+        await ext._emit_processing_signal(  # pylint: disable=protected-access
+            sender="15550000",
+            message_id="mid-1",
+            state="start",
+        )
+
     async def test_extract_api_data_handles_missing_failed_and_non_dict(self) -> None:
         logging_gateway = Mock()
         ext = _new_extension(
@@ -1900,13 +1930,47 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 sender="15550005",
             )
 
-        supported.handle_message.assert_called_once_with(
-            platform="whatsapp",
-            room_id="15550005",
-            sender="15550005",
-            message={"id": "m1"},
-            message_context=None,
+        supported.handle_message.assert_called_once()
+        kwargs = supported.handle_message.call_args.kwargs
+        self.assertEqual(
+            kwargs,
+            {
+                "platform": "whatsapp",
+                "room_id": "15550005",
+                "sender": "15550005",
+                "message": {"id": "m1"},
+                "message_context": None,
+                "ingress_metadata": {
+                    "ingress_route": {
+                        "tenant_id": "00000000-0000-0000-0000-000000000000",
+                        "tenant_slug": "global",
+                        "platform": "whatsapp",
+                        "channel_key": "whatsapp",
+                        "identifier_claims": {},
+                        "channel_profile_id": None,
+                        "route_key": None,
+                        "binding_id": None,
+                        "tenant_resolution": {
+                            "mode": "fallback_global",
+                            "reason_code": "no_ingress_route",
+                            "source": "whatsapp.ipc_extension",
+                        },
+                    },
+                    "tenant_resolution": {
+                        "mode": "fallback_global",
+                        "reason_code": "no_ingress_route",
+                        "source": "whatsapp.ipc_extension",
+                    },
+                },
+                "scope": kwargs["scope"],
+            },
         )
+        self.assertEqual(kwargs["scope"].tenant_id, "00000000-0000-0000-0000-000000000000")
+        self.assertEqual(kwargs["scope"].platform, "whatsapp")
+        self.assertEqual(kwargs["scope"].channel_id, "whatsapp")
+        self.assertEqual(kwargs["scope"].room_id, "15550005")
+        self.assertEqual(kwargs["scope"].sender_id, "15550005")
+        self.assertEqual(kwargs["scope"].conversation_id, "15550005")
         create_task.assert_called_once()
         gather.assert_called_once_with("task")
 
@@ -1930,6 +1994,64 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender=None,
         )
         client.send_text_message.assert_not_awaited()
+
+    async def test_call_message_handlers_uses_message_context_route_and_active_route(
+        self,
+    ) -> None:
+        messaging_service = _make_messaging_service()
+        supported = _MhExtension(supported=True, message_types=["custom"])
+        messaging_service.mh_extensions = [supported]
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            messaging_service=messaging_service,
+            logging_gateway=Mock(),
+        )
+
+        def _create_task(coro):
+            coro.close()
+            return "task"
+
+        with (
+            patch(
+                "mugen.core.plugin.whatsapp.wacapi.ipc_ext.asyncio.create_task",
+                side_effect=_create_task,
+            ),
+            patch(
+                "mugen.core.plugin.whatsapp.wacapi.ipc_ext.asyncio.gather",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            await ext._call_message_handlers(  # pylint: disable=protected-access
+                message={"id": "m4"},
+                message_type="custom",
+                sender="15550007",
+                message_context=[
+                    {"type": "seed", "content": "ctx"},
+                    {"type": "ingress_route", "content": {"tenant_id": "tenant-1"}},
+                ],
+            )
+
+            ext._active_ingress_route = {"tenant_id": "tenant-2"}  # pylint: disable=protected-access
+            await ext._call_message_handlers(  # pylint: disable=protected-access
+                message={"id": "m5"},
+                message_type="custom",
+                sender="15550008",
+                message_context=[
+                    {"type": "seed", "content": "ctx"},
+                    {"type": "ingress_route", "content": "bad"},
+                ],
+            )
+
+        first_call = supported.handle_message.call_args_list[0].kwargs
+        second_call = supported.handle_message.call_args_list[1].kwargs
+        self.assertEqual(
+            first_call["ingress_metadata"]["ingress_route"]["tenant_id"],
+            "tenant-1",
+        )
+        self.assertEqual(
+            second_call["ingress_metadata"]["ingress_route"]["tenant_id"],
+            "tenant-2",
+        )
 
     async def test_ingress_router_default_and_helper_fallback_branches(self) -> None:
         ext = WhatsAppWACAPIIPCExtension(
@@ -1979,8 +2101,8 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             "pnid-1",
         )
 
-    async def test_unresolved_ingress_route_is_dead_lettered_and_skips_processing(self) -> None:
-        class _UnresolvedRouter:
+    async def test_missing_binding_ingress_route_falls_back_to_global_tenant(self) -> None:
+        class _FallbackRouter:
             async def resolve(self, request):  # noqa: ARG002
                 return IngressRouteResolution(
                     ok=False,
@@ -1996,7 +2118,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             logging_gateway=logger,
             relational_storage_gateway=relational,
             messaging_service=messaging,
-            ingress_routing_service=_UnresolvedRouter(),
+            ingress_routing_service=_FallbackRouter(),
         )
         payload = _make_request(
             _make_message_event(
@@ -2010,15 +2132,30 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
 
         await ext._wacapi_event(payload)  # pylint: disable=protected-access
-        messaging.handle_text_message.assert_not_awaited()
-        self.assertEqual(relational.dead_letters[0]["reason_code"], "route_unresolved")
-        logger.warning.assert_called()
+        messaging.handle_text_message.assert_awaited_once()
+        kwargs = messaging.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "15550014")
+        self.assertEqual(kwargs["sender"], "15550014")
+        self.assertEqual(kwargs["message"], "hello")
+        self.assertEqual(
+            kwargs["message_context"][-1]["content"]["tenant_resolution"],
+            {
+                "mode": "fallback_global",
+                "reason_code": "missing_binding",
+                "source": "whatsapp.ingress_routing",
+            },
+        )
+        self.assertEqual(relational.dead_letters, [])
+        logger.warning.assert_any_call(
+            "Using global tenant fallback for WhatsApp ingress "
+            "(reason_code=missing_binding phone_number_id='pnid-1')."
+        )
 
         class _UnresolvedWithDetailRouter:
             async def resolve(self, request):  # noqa: ARG002
                 return IngressRouteResolution(
                     ok=False,
-                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                    reason_code=IngressRouteReason.RESOLUTION_ERROR.value,
                     reason_detail="detail",
                 )
 
@@ -2036,6 +2173,31 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             "detail",
             str(ext_with_detail._relational_storage_gateway.dead_letters[0]["error_message"]),  # pylint: disable=protected-access
         )
+
+    async def test_event_skips_processing_when_ingress_route_resolution_returns_none(
+        self,
+    ) -> None:
+        messaging = _make_messaging_service()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            messaging_service=messaging,
+        )
+        ext._resolve_ingress_route = AsyncMock(return_value=None)  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._wacapi_event(  # pylint: disable=protected-access
+            _make_request(
+                _make_message_event(
+                    {
+                        "id": "wamid-skip",
+                        "type": "text",
+                        "text": {"body": "hello"},
+                    },
+                    sender="15550015",
+                )
+            )
+        )
+
+        messaging.handle_text_message.assert_not_awaited()
 
     async def test_process_message_and_status_normalize_explicit_ingress_route(self) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))

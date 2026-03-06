@@ -63,6 +63,65 @@ and provide reusable platform primitives:
 - `ops_vpn`: operations vendor registry and lifecycle scorecard primitives.
 - `ops_workflow`: workflow definitions, instances, tasks, and approvals.
 
+## Context Engine Service Boundary
+
+Core messaging no longer treats context assembly and retrieval as CTX/RAG
+extension categories. That split has been replaced by a dedicated
+`IContextEngine` runtime service with a two-phase contract:
+
+- `prepare_turn(ContextTurnRequest) -> PreparedContextTurn`
+- `commit_turn(request, prepared, completion, final_user_responses, outcome) -> ContextCommitResult`
+
+The default engine composes typed collaborators behind ports:
+
+- contributors emit typed `ContextCandidate` artifacts with provenance;
+- guards redact or veto artifacts before compilation;
+- rankers score candidates without owning storage;
+- caches provide working-set, retrieval, and prefix-hint storage;
+- trace sinks record selected and dropped artifacts plus commit outcomes;
+- state and memory writers persist bounded state and long-term writeback.
+
+The compiled output targets the existing normalized completion contract
+(`CompletionRequest` / `CompletionMessage`) instead of provider-specific prompt
+logic.
+
+## Context Engine Plugin
+
+The core `context_engine` plugin is both a runtime-composition layer and an ACP
+control-plane contributor.
+
+Runtime responsibilities:
+
+- register default contributors for persona/policy, state, recent turns,
+  knowledge packs, orchestration overlays, case state, audit traces, and memory;
+- register state store, cache, memory writer, and trace sink services;
+- keep all runtime records tenant-scoped and provenance-aware.
+
+ACP-managed resources:
+
+- `ContextProfiles`
+- `ContextPolicies`
+- `ContextContributorBindings`
+- `ContextSourceBindings`
+- `ContextTracePolicies`
+
+High-churn runtime internals remain behind service/storage layers rather than
+ACP CRUD resources.
+
+## Tenant Fallback Policy
+
+`ContextScope.tenant_id` is mandatory for every turn. When ingress routing
+cannot positively resolve a tenant, muGen may fall back to `GLOBAL_TENANT_ID`
+only for these cases:
+
+- missing identifier
+- missing binding
+- no tenant-routing subsystem for the platform path
+
+Explicit negative routing outcomes still fail closed. Fallback-global turns are
+recorded in `ingress_metadata["tenant_resolution"]` and in context traces so
+operators can distinguish `resolved` from `fallback_global` behavior.
+
 ## Planning Guidance
 
 For downstream business-case planning:

@@ -779,8 +779,8 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(merged["metadata"]["ingress_route"]["tenant_slug"], "tenant-a")
 
-    async def test_unresolved_ingress_route_is_dead_lettered_and_dropped(self) -> None:
-        class _UnresolvedRouter:
+    async def test_missing_binding_ingress_route_falls_back_to_global_tenant(self) -> None:
+        class _FallbackRouter:
             async def resolve(self, request):  # noqa: ARG002
                 return IngressRouteResolution(
                     ok=False,
@@ -796,7 +796,7 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
             logging_gateway=logger,
             relational_storage_gateway=relational,
             messaging_service=messaging,
-            ingress_routing_service=_UnresolvedRouter(),
+            ingress_routing_service=_FallbackRouter(),
         )
 
         await ext._wechat_event(  # pylint: disable=protected-access
@@ -806,15 +806,30 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
             ),
             expected_provider="official_account",
         )
-        messaging.handle_text_message.assert_not_awaited()
-        self.assertEqual(relational.dead_letters[0]["reason_code"], "route_unresolved")
-        logger.warning.assert_called()
+        messaging.handle_text_message.assert_awaited_once()
+        kwargs = messaging.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "user-1")
+        self.assertEqual(kwargs["sender"], "user-1")
+        self.assertEqual(kwargs["message"], "hello")
+        self.assertEqual(
+            kwargs["message_context"][-1]["content"]["tenant_resolution"],
+            {
+                "mode": "fallback_global",
+                "reason_code": "missing_binding",
+                "source": "wechat.ingress_routing",
+            },
+        )
+        self.assertEqual(relational.dead_letters, [])
+        logger.warning.assert_any_call(
+            "Using global tenant fallback for WeChat ingress "
+            "(reason_code=missing_binding path_token='wechat-path-token')."
+        )
 
         class _UnresolvedWithDetailRouter:
             async def resolve(self, request):  # noqa: ARG002
                 return IngressRouteResolution(
                     ok=False,
-                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                    reason_code=IngressRouteReason.RESOLUTION_ERROR.value,
                     reason_detail="detail",
                 )
 
@@ -832,3 +847,23 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
             "detail",
             str(ext_with_detail._relational_storage_gateway.dead_letters[0]["error_message"]),  # pylint: disable=protected-access
         )
+
+    async def test_event_returns_early_when_ingress_route_resolution_returns_none(
+        self,
+    ) -> None:
+        messaging = _make_messaging_service()
+        ext = _new_extension(
+            config=_make_config(),
+            messaging_service=messaging,
+        )
+        ext._resolve_ingress_route = AsyncMock(return_value=None)  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._wechat_event(  # pylint: disable=protected-access
+            _make_request(
+                {"provider": "official_account", "payload": _make_text_payload()},
+                command="wechat_official_account_event",
+            ),
+            expected_provider="official_account",
+        )
+
+        messaging.handle_text_message.assert_not_awaited()

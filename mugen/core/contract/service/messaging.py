@@ -1,18 +1,89 @@
-"""Provides an abstract base class for messaging services."""
+"""Provides typed contracts for messaging services."""
 
-__all__ = ["IMessagingService"]
+from __future__ import annotations
+
+__all__ = ["IMessagingService", "MessagingTurnRequest"]
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
 
+from mugen.core.contract.context import ContextScope
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
-from mugen.core.contract.extension.ctx import ICTXExtension
 from mugen.core.contract.extension.mh import IMHExtension
-from mugen.core.contract.extension.rag import IRAGExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
 
 
-# pylint: disable=too-many-public-methods
+def _normalize_payload_list(value: object, *, field_name: str) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise TypeError(f"{field_name} must be a list[dict].")
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise TypeError(f"{field_name} entries must be dict values.")
+        normalized.append(dict(item))
+    return normalized
+
+
+def _normalize_mapping(value: object, *, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise TypeError(f"{field_name} must be a dict.")
+    return dict(value)
+
+
+@dataclass(frozen=True, slots=True)
+class MessagingTurnRequest:
+    """Typed inbound turn contract for messaging orchestration."""
+
+    scope: ContextScope
+    message_type: str
+    message: str | dict[str, Any]
+    message_id: str | None = None
+    trace_id: str | None = None
+    message_context: list[dict[str, Any]] = field(default_factory=list)
+    attachment_context: list[dict[str, Any]] = field(default_factory=list)
+    ingress_metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.scope, ContextScope):
+            raise TypeError("MessagingTurnRequest.scope must be ContextScope.")
+        message_type = str(self.message_type or "").strip().lower()
+        if message_type == "":
+            raise ValueError("MessagingTurnRequest.message_type is required.")
+        object.__setattr__(self, "message_type", message_type)
+        if not isinstance(self.message, (str, dict)):
+            raise TypeError("MessagingTurnRequest.message must be str or dict.")
+        object.__setattr__(
+            self,
+            "message_context",
+            _normalize_payload_list(
+                self.message_context,
+                field_name="MessagingTurnRequest.message_context",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "attachment_context",
+            _normalize_payload_list(
+                self.attachment_context,
+                field_name="MessagingTurnRequest.attachment_context",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "ingress_metadata",
+            _normalize_mapping(
+                self.ingress_metadata,
+                field_name="MessagingTurnRequest.ingress_metadata",
+            ),
+        )
+
+
 class IMessagingService(ABC):
     """An abstract base class for messaging services."""
 
@@ -25,16 +96,8 @@ class IMessagingService(ABC):
         """Bind a CT extension to the service runtime."""
 
     @abstractmethod
-    def bind_ctx_extension(self, ext: ICTXExtension, *, critical: bool = False) -> None:
-        """Bind a CTX extension to the service runtime."""
-
-    @abstractmethod
     def bind_mh_extension(self, ext: IMHExtension, *, critical: bool = False) -> None:
         """Bind an MH extension to the service runtime."""
-
-    @abstractmethod
-    def bind_rag_extension(self, ext: IRAGExtension, *, critical: bool = False) -> None:
-        """Bind a RAG extension to the service runtime."""
 
     @abstractmethod
     def bind_rpp_extension(self, ext: IRPPExtension, *, critical: bool = False) -> None:
@@ -43,105 +106,26 @@ class IMessagingService(ABC):
     @property
     @abstractmethod
     def cp_extensions(self) -> list[ICPExtension]:
-        """Get the list of Command Processor extensions
-        registered with the service.
-        """
+        """Get the list of CP extensions registered with the service."""
 
     @property
     @abstractmethod
     def ct_extensions(self) -> list[ICTExtension]:
-        """Get the list of Coversational Trigger extensions
-        registered with the service.
-        """
-
-    @property
-    @abstractmethod
-    def ctx_extensions(self) -> list[ICTXExtension]:
-        """Get the list of Context extensions
-        registered with the service.
-        """
+        """Get the list of CT extensions registered with the service."""
 
     @property
     @abstractmethod
     def mh_extensions(self) -> list[IMHExtension]:
-        """Get the list of Message Handler extensions
-        registered with the service.
-        """
-
-    @property
-    @abstractmethod
-    def rag_extensions(self) -> list[IRAGExtension]:
-        """Get the list of Retrieval Augmented Generation extensions
-        registered with the service.
-        """
+        """Get the list of MH extensions registered with the service."""
 
     @property
     @abstractmethod
     def rpp_extensions(self) -> list[IRPPExtension]:
-        """Get the list of Response Pre-Processor extensions
-        registered with the service.
-        """
+        """Get the list of RPP extensions registered with the service."""
 
     @abstractmethod
-    async def handle_audio_message(
+    async def handle_message(
         self,
-        platform: str,
-        room_id: str,
-        sender: str,
-        message: dict,
-    ) -> list[dict] | None:
-        """Handle an audio message from a chat."""
-
-    @abstractmethod
-    async def handle_composed_message(
-        self,
-        platform: str,
-        room_id: str,
-        sender: str,
-        message: dict,
-        message_context: list[dict] | None = None,
-    ) -> list[dict] | None:
-        """Handle a composed message from a chat."""
-
-    @abstractmethod
-    async def handle_file_message(
-        self,
-        platform: str,
-        room_id: str,
-        sender: str,
-        message: dict,
-    ) -> list[dict] | None:
-        """Handle a file message from a chat."""
-
-    @abstractmethod
-    async def handle_image_message(
-        self,
-        platform: str,
-        room_id: str,
-        sender: str,
-        message: dict,
-    ) -> list[dict] | None:
-        """Handle an image message from a chat."""
-
-    # pylint: disable=too-many-arguments
-    # pylint: disable=too-many-positional-arguments
-    @abstractmethod
-    async def handle_text_message(
-        self,
-        platform: str,
-        room_id: str,
-        sender: str,
-        message: str,
-        message_context: list[dict] | None = None,
-    ) -> list[dict] | None:
-        """Handle a text message from a chat."""
-
-    @abstractmethod
-    async def handle_video_message(
-        self,
-        platform: str,
-        room_id: str,
-        sender: str,
-        message: dict,
-    ) -> list[dict] | None:
-        """Handle a video message from a chat."""
+        request: MessagingTurnRequest,
+    ) -> list[dict[str, Any]] | None:
+        """Handle one typed inbound message turn."""

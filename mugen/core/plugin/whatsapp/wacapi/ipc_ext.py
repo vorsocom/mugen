@@ -25,9 +25,13 @@ from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core import di
+from mugen.core.service.context_scope_resolution import (
+    ContextScopeResolutionError,
+    context_scope_from_ingress_route,
+    resolve_ingress_route_context,
+)
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
-    build_ingress_route_context,
 )
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
@@ -295,39 +299,50 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         phone_number_id: str | None,
         webhook_payload: dict[str, Any],
     ) -> dict[str, Any] | None:
+        claims = (
+            {"phone_number_id": phone_number_id}
+            if phone_number_id is not None
+            else {}
+        )
         resolution = await self._ingress_router().resolve(
             IngressRouteRequest(
                 platform="whatsapp",
                 channel_key="whatsapp",
                 identifier_type="phone_number_id",
                 identifier_value=phone_number_id,
-                claims=(
-                    {"phone_number_id": phone_number_id}
-                    if phone_number_id is not None
-                    else {}
-                ),
+                claims=claims,
             )
         )
-        if resolution.ok and resolution.result is not None:
-            return build_ingress_route_context(resolution.result)
+        try:
+            ingress_route = resolve_ingress_route_context(
+                platform="whatsapp",
+                channel_key="whatsapp",
+                routing=resolution,
+                source="whatsapp.ingress_routing",
+                identifier_claims=claims,
+            )
+        except ContextScopeResolutionError as exc:
+            self._increment_metric("whatsapp.ipc.route.unresolved")
+            reason_code = str(exc.reason_code or "route_unresolved")
+            await self._record_dead_letter(
+                event_type="webhook",
+                event_payload=webhook_payload,
+                reason_code="route_unresolved",
+                error_message=str(exc),
+            )
+            self._logging_gateway.warning(
+                "Dropped WhatsApp ingress due to unresolved route "
+                f"reason_code={reason_code} phone_number_id={phone_number_id!r}."
+            )
+            return None
 
-        self._increment_metric("whatsapp.ipc.route.unresolved")
-        reason_code = str(resolution.reason_code or "route_unresolved")
-        reason_detail = str(resolution.reason_detail or "").strip()
-        error_message = reason_code
-        if reason_detail != "":
-            error_message = f"{reason_code}: {reason_detail}"
-        await self._record_dead_letter(
-            event_type="webhook",
-            event_payload=webhook_payload,
-            reason_code="route_unresolved",
-            error_message=error_message,
-        )
-        self._logging_gateway.warning(
-            "Dropped WhatsApp ingress due to unresolved route "
-            f"reason_code={reason_code} phone_number_id={phone_number_id!r}."
-        )
-        return None
+        if resolution.ok is not True:
+            self._increment_metric("whatsapp.ipc.route.fallback_global")
+            self._logging_gateway.warning(
+                "Using global tenant fallback for WhatsApp ingress "
+                f"(reason_code={resolution.reason_code} phone_number_id={phone_number_id!r})."
+            )
+        return ingress_route
 
     @staticmethod
     def _now_utc() -> datetime:
@@ -1023,6 +1038,26 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         sender: str = None,
         message_context: list[dict] | None = None,
     ) -> None:
+        ingress_route = None
+        for item in message_context or []:
+            if item.get("type") != "ingress_route":
+                continue
+            content = item.get("content")
+            if isinstance(content, dict):
+                ingress_route = dict(content)
+                break
+        if ingress_route is None:
+            active_route = getattr(self, "_active_ingress_route", None)
+            if isinstance(active_route, dict):
+                ingress_route = dict(active_route)
+        resolved = context_scope_from_ingress_route(
+            platform="whatsapp",
+            channel_key="whatsapp",
+            room_id=sender or "",
+            sender_id=sender or "",
+            ingress_route=ingress_route,
+            source="whatsapp.ipc_extension",
+        )
         hits: int = 0
         message_handlers: list[IMHExtension] = self._messaging_service.mh_extensions
         for handler in message_handlers:
@@ -1037,6 +1072,11 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                             sender=sender,
                             message=message,
                             message_context=message_context,
+                            ingress_metadata={
+                                "ingress_route": dict(resolved.ingress_route),
+                                "tenant_resolution": dict(resolved.tenant_resolution),
+                            },
+                            scope=resolved.scope,
                         )
                     )
                 )

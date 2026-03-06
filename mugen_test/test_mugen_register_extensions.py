@@ -21,6 +21,15 @@ class _RegistryStub:
         return self._result
 
 
+def _provider_kwargs(app: Quart) -> dict[str, object]:
+    return {
+        "ipc_provider": lambda: SimpleNamespace(),
+        "logger_provider": lambda: app.logger,
+        "messaging_provider": lambda: SimpleNamespace(),
+        "platform_provider": lambda: SimpleNamespace(),
+    }
+
+
 def _base_cfg(
     core_extensions: list[SimpleNamespace],
     *,
@@ -56,7 +65,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             await register_extensions(
                 app=app,
                 config_provider=lambda: config,
-                logger_provider=lambda: app.logger,
+                **_provider_kwargs(app),
             )
 
     async def test_register_extensions_fails_for_critical_unknown_token(self) -> None:
@@ -74,7 +83,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             await register_extensions(
                 app=app,
                 config_provider=lambda: config,
-                logger_provider=lambda: app.logger,
+                **_provider_kwargs(app),
             )
 
     async def test_register_extensions_ignores_noncritical_unknown_token(self) -> None:
@@ -91,7 +100,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         await register_extensions(
             app=app,
             config_provider=lambda: config,
-            logger_provider=lambda: app.logger,
+            **_provider_kwargs(app),
         )
 
     async def test_register_extensions_skips_disabled_entries(self) -> None:
@@ -109,7 +118,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         await register_extensions(
             app=app,
             config_provider=lambda: config,
-            logger_provider=lambda: app.logger,
+            **_provider_kwargs(app),
             extension_registry_provider=lambda: registry,
         )
         self.assertEqual(registry.calls, [])
@@ -129,7 +138,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         await register_extensions(
             app=app,
             config_provider=lambda: config,
-            logger_provider=lambda: app.logger,
+            **_provider_kwargs(app),
             extension_registry_provider=lambda: registry,
         )
         self.assertEqual(len(registry.calls), 1)
@@ -152,7 +161,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             await register_extensions(
                 app=app,
                 config_provider=lambda: config,
-                logger_provider=lambda: app.logger,
+                **_provider_kwargs(app),
             )
 
     async def test_register_extensions_wraps_invalid_extension_schema(self) -> None:
@@ -162,7 +171,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             await register_extensions(
                 app=app,
                 config_provider=lambda: config,
-                logger_provider=lambda: app.logger,
+                **_provider_kwargs(app),
             )
 
     async def test_register_extensions_returns_grouped_registered_tokens(self) -> None:
@@ -178,7 +187,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         report = await register_extensions(
             app=app,
             config_provider=lambda: config,
-            logger_provider=lambda: app.logger,
+            **_provider_kwargs(app),
             extension_registry_provider=lambda: registry,
         )
 

@@ -2,6 +2,7 @@
 
 __all__ = [
     "ContainerShutdownError",
+    "EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY",
     "EXT_SERVICE_ADMIN_REGISTRY",
     "EXT_SERVICE_ADMIN_SANDBOX_ENFORCER",
     "EXT_SERVICE_ADMIN_SVC_AUTH",
@@ -50,6 +51,7 @@ from mugen.core.contract.wechat_runtime_config import (
 from mugen.core.contract.whatsapp_runtime_config import (
     validate_whatsapp_enabled_runtime_config,
 )
+from mugen.core.contract.context import IContextEngine
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
@@ -81,6 +83,7 @@ EXT_SERVICE_ADMIN_REGISTRY = "admin_registry"
 EXT_SERVICE_ADMIN_SANDBOX_ENFORCER = "admin_sandbox_enforcer"
 EXT_SERVICE_ADMIN_SVC_JWT = "admin_svc_jwt"
 EXT_SERVICE_ADMIN_SVC_AUTH = "admin_svc_auth"
+EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY = "context_component_registry"
 
 _CONFIG_NAMESPACE_CONVERSION = NamespaceConfig(
     keep_raw=True,
@@ -287,6 +290,11 @@ def _validate_extension_entry_schema(
         raise RuntimeError(
             f"Invalid configuration: {path}.type must be a string when provided."
         )
+    if isinstance(ext_type, str) and ext_type.strip().lower() in {"ctx", "rag"}:
+        raise RuntimeError(
+            f"Invalid configuration: {path}.type={ext_type!r} is unsupported. "
+            "Legacy CTX/RAG extensions were replaced by the context engine service."
+        )
 
 
 def _validate_core_module_schema(config: dict) -> None:
@@ -429,7 +437,10 @@ def _validate_core_module_schema(config: dict) -> None:
             "client",
             {"line", "matrix", "signal", "telegram", "wechat", "whatsapp", "web"},
         ),
-        ("service", {"ipc", "messaging", "nlp", "platform", "user"}),
+        (
+            "service",
+            {"context_engine", "ipc", "messaging", "nlp", "platform", "user"},
+        ),
     ):
         section = core_cfg.get(section_name)
         if not isinstance(section, dict):
@@ -626,6 +637,7 @@ def _validate_container(config: dict, injector: DependencyInjector) -> None:
         "nlp_service",
         "platform_service",
         "user_service",
+        "context_engine_service",
         "messaging_service",
     ]
     if "web" in active_platform_set:
@@ -860,6 +872,16 @@ _PROVIDER_SPECS = {
             ("logging_gateway", "logging_gateway"),
         ),
     ),
+    "context_engine_service": _ProviderSpec(
+        provider_name="context_engine_service",
+        injector_attr="context_engine_service",
+        interface=IContextEngine,
+        module_path=("mugen", "modules", "core", "service", "context_engine"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+    ),
     "messaging_service": _ProviderSpec(
         provider_name="messaging_service",
         injector_attr="messaging_service",
@@ -868,7 +890,7 @@ _PROVIDER_SPECS = {
         constructor_bindings=(
             ("config", "config"),
             ("completion_gateway", "completion_gateway"),
-            ("keyval_storage_gateway", "keyval_storage_gateway"),
+            ("context_engine_service", "context_engine_service"),
             ("logging_gateway", "logging_gateway"),
             ("user_service", "user_service"),
         ),
@@ -1020,6 +1042,7 @@ _PROVIDER_BUILD_ORDER = (
     "nlp_service",
     "platform_service",
     "user_service",
+    "context_engine_service",
     "messaging_service",
     "knowledge_gateway",
     "matrix_client",

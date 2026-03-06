@@ -117,6 +117,12 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             class_name="DefaultUserService",
         ),
     },
+    "context_engine_service": {
+        "default": _ProviderTokenSpec(
+            module_path="mugen.core.service.context_engine",
+            class_name="DefaultContextEngine",
+        ),
+    },
     "messaging_service": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.service.messaging",

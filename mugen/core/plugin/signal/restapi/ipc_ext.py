@@ -24,9 +24,12 @@ from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core import di
+from mugen.core.service.context_scope_resolution import (
+    ContextScopeResolutionError,
+    resolve_ingress_route_context,
+)
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
-    build_ingress_route_context,
 )
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
@@ -325,39 +328,46 @@ class SignalRestAPIIPCExtension(IIPCExtension):
         account_number: str | None,
         webhook_payload: dict[str, Any],
     ) -> dict[str, Any] | None:
+        claims = {"account_number": account_number} if account_number is not None else {}
         resolution = await self._ingress_router().resolve(
             IngressRouteRequest(
                 platform="signal",
                 channel_key="signal",
                 identifier_type="account_number",
                 identifier_value=account_number,
-                claims=(
-                    {"account_number": account_number}
-                    if account_number is not None
-                    else {}
-                ),
+                claims=claims,
             )
         )
-        if resolution.ok and resolution.result is not None:
-            return build_ingress_route_context(resolution.result)
+        try:
+            ingress_route = resolve_ingress_route_context(
+                platform="signal",
+                channel_key="signal",
+                routing=resolution,
+                source="signal.ingress_routing",
+                identifier_claims=claims,
+            )
+        except ContextScopeResolutionError as exc:
+            self._increment_metric("signal.ipc.route.unresolved")
+            reason_code = str(exc.reason_code or "route_unresolved")
+            await self._record_dead_letter(
+                event_type="webhook",
+                event_payload=webhook_payload,
+                reason_code="route_unresolved",
+                error_message=str(exc),
+            )
+            self._logging_gateway.warning(
+                "Dropped Signal ingress due to unresolved route "
+                f"reason_code={reason_code} account_number={account_number!r}."
+            )
+            return None
 
-        self._increment_metric("signal.ipc.route.unresolved")
-        reason_code = str(resolution.reason_code or "route_unresolved")
-        reason_detail = str(resolution.reason_detail or "").strip()
-        error_message = reason_code
-        if reason_detail != "":
-            error_message = f"{reason_code}: {reason_detail}"
-        await self._record_dead_letter(
-            event_type="webhook",
-            event_payload=webhook_payload,
-            reason_code="route_unresolved",
-            error_message=error_message,
-        )
-        self._logging_gateway.warning(
-            "Dropped Signal ingress due to unresolved route "
-            f"reason_code={reason_code} account_number={account_number!r}."
-        )
-        return None
+        if resolution.ok is not True:
+            self._increment_metric("signal.ipc.route.fallback_global")
+            self._logging_gateway.warning(
+                "Using global tenant fallback for Signal ingress "
+                f"(reason_code={resolution.reason_code} account_number={account_number!r})."
+            )
+        return ingress_route
 
     @staticmethod
     def _extract_room_id(envelope: dict, sender: str) -> str:

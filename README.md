@@ -54,10 +54,10 @@ muGen supports various types of extensions, which can be platform-agnostic or sp
 1. **Framework (FW) Extensions:** These operate outside the message lifecycle, adding core functionalities like API endpoints. They are initialized during application startup.
 2. **Inter-process Communication (IPC) Extensions:** These handle incoming requests to execute commands using a typed request/result contract, enabling tasks such as running scheduled jobs and processing push API requests.
 3. **Message Handler (MH) Extensions:** These manage non-text input, such as images or audio, and handle their processing within the system.
-4. **Context (CTX) Extensions:** These provide additional context for the language model by injecting information into conversation histories.
-5. **Retrieval Augmented Generation (RAG) Extensions:** These perform knowledge retrieval from external sources, enriching the language model's context with relevant information.
-6. **Response Pre-processor (RPP) Extensions:** These modify the language model's responses before they are sent to the user, allowing for custom transformations.
-7. **Conversational Trigger (CT) Extensions:** These detect specific cues in the final version of the language model's response and trigger operations based on those cues.
+4. **Response Pre-processor (RPP) Extensions:** These modify the language model's responses before they are sent to the user, allowing for custom transformations.
+5. **Conversational Trigger (CT) Extensions:** These detect specific cues in the final version of the language model's response and trigger operations based on those cues.
+
+Context and retrieval are no longer modeled as CTX/RAG extension categories. They are handled by the core context engine service boundary, which prepares a structured `CompletionRequest`, tracks provenance, manages bounded state/memory/cache behavior, and commits post-turn writeback after the final assistant output is known.
 
 Extensions are built against object-oriented programming (OOP) style interfaces, not concrete implementations, and rely on dependency injection to interact with core modules. This design promotes flexibility and reusability.
 
@@ -73,6 +73,13 @@ Gateways and services form the core of muGen, providing platform-agnostic functi
 - **Gateways:** Integrations with external libraries or systems.
 
 The configuration for these modules is also managed using a TOML file, giving developers flexibility in selecting and configuring the services they need.
+
+The core messaging path now depends on a dedicated context engine service:
+
+- `mugen.modules.core.service.context_engine = "default"`
+- `mugen.modules.core.service.messaging = "default"`
+
+The default context engine is provider-neutral and composes pluggable contributors, guards, rankers, caches, and trace sinks behind typed contracts.
 
 ## Quick Start
 
@@ -94,9 +101,13 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 # Edit mugen.toml to set your preferred values.
 # At minimum, configure the completion gateway by
 # setting mugen.modules.core.gateway.completion.
+# Keep mugen.modules.core.service.context_engine set to
+# "default" unless you are intentionally swapping the
+# context runtime implementation.
 # Keep mugen.runtime.profile explicitly set
 # to platform_full.
-# If web platform is enabled, keep both core.fw.acp and core.fw.web enabled.
+# If web platform is enabled, keep core.fw.acp,
+# core.fw.context_engine, and core.fw.web enabled.
 # If matrix platform is enabled, set security.secrets.encryption_key.
 # Gateways are currently provided for AWS Bedrock,
 # Cerebras, Groq, OpenAI, Azure AI Foundry,

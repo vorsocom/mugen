@@ -55,6 +55,17 @@ class TestDIProviderSpecIntegrity(unittest.TestCase):
 
             available.add(spec.injector_attr)
 
+    def test_context_engine_is_built_before_messaging_and_bound_as_dependency(self):
+        """Messaging should depend on the dedicated context-engine provider."""
+        context_index = di._PROVIDER_BUILD_ORDER.index("context_engine_service")
+        messaging_index = di._PROVIDER_BUILD_ORDER.index("messaging_service")
+
+        self.assertLess(context_index, messaging_index)
+        self.assertIn(
+            ("context_engine_service", "context_engine_service"),
+            di._PROVIDER_SPECS["messaging_service"].constructor_bindings,
+        )
+
     def test_shutdown_order_is_reverse_build_order_with_logging_last(self):
         """Shutdown order should be deterministic and reverse the build dependency order."""
         expected = list(reversed(("logging_gateway",) + di._PROVIDER_BUILD_ORDER))
