@@ -47,6 +47,9 @@ from mugen.core.contract.telegram_runtime_config import (
 from mugen.core.contract.wechat_runtime_config import (
     validate_wechat_enabled_runtime_config,
 )
+from mugen.core.contract.whatsapp_runtime_config import (
+    validate_whatsapp_enabled_runtime_config,
+)
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
@@ -553,6 +556,8 @@ def _validate_core_module_schema(config: dict) -> None:
         validate_telegram_enabled_runtime_config(config)
     if "wechat" in active_platforms:
         validate_wechat_enabled_runtime_config(config)
+    if "whatsapp" in active_platforms:
+        validate_whatsapp_enabled_runtime_config(config)
 
 
 def _get_active_platforms(config: dict) -> list[str] | None:

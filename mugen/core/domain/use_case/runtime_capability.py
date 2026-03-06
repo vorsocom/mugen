@@ -39,6 +39,12 @@ _REQUIRED_WECHAT_FW_EXTENSION_TOKENS = (
 _REQUIRED_WECHAT_IPC_EXTENSION_TOKENS = (
     "core.ipc.wechat",
 )
+_REQUIRED_WHATSAPP_FW_EXTENSION_TOKENS = (
+    "core.fw.whatsapp_wacapi",
+)
+_REQUIRED_WHATSAPP_IPC_EXTENSION_TOKENS = (
+    "core.ipc.whatsapp_wacapi",
+)
 _REQUIRED_SIGNAL_IPC_EXTENSION_TOKENS = (
     "core.ipc.signal_restapi",
 )
@@ -55,6 +61,7 @@ class RuntimeCapabilityInput:
     has_line_client_runtime_path: bool = False
     has_telegram_client_runtime_path: bool = False
     has_wechat_client_runtime_path: bool = False
+    has_whatsapp_client_runtime_path: bool = False
     has_signal_client_runtime_path: bool = False
     registered_fw_extension_tokens: list[object] | None = None
     registered_ipc_extension_tokens: list[object] | None = None
@@ -308,6 +315,44 @@ def evaluate_runtime_capabilities(
             healthy=not missing_ipc_tokens,
             error=(
                 "WeChat platform requires registered IPC extension token(s): "
+                + ", ".join(missing_ipc_tokens)
+                + "."
+            ),
+        )
+
+    if "whatsapp" in active_platforms:
+        _record(
+            "whatsapp.client_runtime_path",
+            healthy=capability.has_whatsapp_client_runtime_path,
+            error=(
+                "WhatsApp platform requires configured runtime client path at "
+                "mugen.modules.core.client.whatsapp."
+            ),
+        )
+        missing_fw_tokens = [
+            token
+            for token in _REQUIRED_WHATSAPP_FW_EXTENSION_TOKENS
+            if token not in registered_fw_extension_tokens
+        ]
+        _record(
+            "whatsapp.fw.extension_contract",
+            healthy=not missing_fw_tokens,
+            error=(
+                "WhatsApp platform requires registered FW extension token(s): "
+                + ", ".join(missing_fw_tokens)
+                + "."
+            ),
+        )
+        missing_ipc_tokens = [
+            token
+            for token in _REQUIRED_WHATSAPP_IPC_EXTENSION_TOKENS
+            if token not in registered_ipc_extension_tokens
+        ]
+        _record(
+            "whatsapp.ipc.extension_contract",
+            healthy=not missing_ipc_tokens,
+            error=(
+                "WhatsApp platform requires registered IPC extension token(s): "
                 + ", ".join(missing_ipc_tokens)
                 + "."
             ),

@@ -144,6 +144,37 @@ def _valid_core_config() -> dict:
                 "agent_id": 1000002,
             },
         },
+        "whatsapp": {
+            "app": {
+                "id": "app-id",
+                "secret": "whatsapp-app-secret",
+            },
+            "beta": {
+                "users": ["15550000001"],
+            },
+            "business": {
+                "phone_number_id": "phone-number-id",
+            },
+            "graphapi": {
+                "access_token": "graph-token",
+                "base_url": "https://graph.facebook.com",
+                "version": "v20.0",
+                "timeout_seconds": 10.0,
+                "max_download_bytes": 1024,
+                "typing_indicator_enabled": True,
+                "max_api_retries": 2,
+                "retry_backoff_seconds": 0.5,
+            },
+            "servers": {
+                "allowed": "conf/whatsapp-allowed.txt",
+                "verify_ip": False,
+                "trust_forwarded_for": False,
+            },
+            "webhook": {
+                "verification_token": "verification-token",
+                "dedupe_ttl_seconds": 86400,
+            },
+        },
         "security": {
             "secrets": {
                 "encryption_key": "0123456789abcdef0123456789abcdef",
@@ -655,6 +686,52 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["wechat"]
         cfg["wechat"]["provider"] = "wecom"
+        di._validate_core_module_schema(cfg)
+
+    def test_core_schema_requires_strict_whatsapp_runtime_contract_when_enabled(
+        self,
+    ) -> None:
+        cases: list[tuple[dict, str]] = []
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["whatsapp"]
+        cfg["whatsapp"]["app"]["secret"] = ""
+        cases.append((cfg, "whatsapp.app.secret"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["whatsapp"]
+        cfg["whatsapp"]["business"]["phone_number_id"] = ""
+        cases.append((cfg, "whatsapp.business.phone_number_id"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["whatsapp"]
+        cfg["whatsapp"]["graphapi"]["typing_indicator_enabled"] = "true"
+        cases.append((cfg, "whatsapp.graphapi.typing_indicator_enabled"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["whatsapp"]
+        cfg["whatsapp"]["servers"]["verify_ip"] = True
+        cfg["whatsapp"]["servers"]["allowed"] = ""
+        cases.append((cfg, "whatsapp.servers.allowed"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["whatsapp"]
+        cfg["mugen"]["beta"] = {"active": True}
+        cfg["whatsapp"]["beta"]["users"] = ["", "15550000001"]
+        cases.append((cfg, "whatsapp.beta.users[0]"))
+
+        for candidate, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(RuntimeError, re.escape(message)):
+                    di._validate_core_module_schema(candidate)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["whatsapp"]
+        di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["whatsapp"]
+        cfg["mugen"]["beta"] = {"active": True}
         di._validate_core_module_schema(cfg)
 
     def test_build_provider_logs_relational_runtime_bootstrap_failure(self) -> None:

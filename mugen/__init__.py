@@ -742,6 +742,10 @@ async def bootstrap_app(
         _config_path_exists(config, "mugen", "modules", "core", "client", "wechat")
         and _wechat_provider() is not None
     )
+    has_whatsapp_client_runtime_path = (
+        _config_path_exists(config, "mugen", "modules", "core", "client", "whatsapp")
+        and _whatsapp_provider() is not None
+    )
 
     capability_result = evaluate_runtime_capabilities(
         RuntimeCapabilityInput(
@@ -753,6 +757,7 @@ async def bootstrap_app(
             has_signal_client_runtime_path=has_signal_client_runtime_path,
             has_telegram_client_runtime_path=has_telegram_client_runtime_path,
             has_wechat_client_runtime_path=has_wechat_client_runtime_path,
+            has_whatsapp_client_runtime_path=has_whatsapp_client_runtime_path,
             registered_fw_extension_tokens=registered_fw_extension_tokens,
             registered_ipc_extension_tokens=registered_ipc_extension_tokens,
             container_ready=(
