@@ -12,6 +12,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 import mugen.core.client.web as web_mod
 from mugen.core.client.web import DefaultWebClient
@@ -19,11 +20,17 @@ from mugen.core.contract.gateway.storage.web_runtime import (
     WebRuntimeTailBatch,
     WebRuntimeTailEvent,
 )
+from mugen.core.contract.service.ingress_routing import (
+    IngressRouteReason,
+    IngressRouteResolution,
+    IngressRouteResult,
+)
 from mugen.core.gateway.storage.web_runtime.relational_store import (
     RelationalWebRuntimeStore,
 )
 from mugen.core.gateway.storage.media.provider import DefaultMediaStorageGateway
 from mugen.core.contract.gateway.storage.keyval_model import KeyValEntry, KeyValListPage
+from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 
 
 class _InMemoryKeyVal:
@@ -469,6 +476,22 @@ class _InMemoryWebRelationalSession:
                 return _MemoryResult(rows=[])
             return _MemoryResult(rows=[{"owner_user_id": row.get("owner_user_id")}])
 
+        if sql.startswith(
+            "select owner_user_id, tenant_id from mugen.web_conversation_state where conversation_id = :conversation_id"
+        ):
+            conversation_id = str(args.get("conversation_id", ""))
+            row = self._state.conversation_states.get(conversation_id)
+            if row is None:
+                return _MemoryResult(rows=[])
+            return _MemoryResult(
+                rows=[
+                    {
+                        "owner_user_id": row.get("owner_user_id"),
+                        "tenant_id": row.get("tenant_id") or GLOBAL_TENANT_ID,
+                    }
+                ]
+            )
+
         if (
             sql.startswith("select owner_user_id, stream_generation, next_event_id from mugen.web_conversation_state")
             and "where conversation_id = :conversation_id" in sql
@@ -513,6 +536,7 @@ class _InMemoryWebRelationalSession:
                 self._state.conversation_states[conversation_id] = {
                     "conversation_id": conversation_id,
                     "owner_user_id": owner_user_id,
+                    "tenant_id": args.get("tenant_id") or GLOBAL_TENANT_ID,
                     "stream_generation": args.get("stream_generation"),
                     "stream_version": args.get("stream_version"),
                     "next_event_id": next_event_id,
@@ -525,6 +549,11 @@ class _InMemoryWebRelationalSession:
                 row["stream_generation"] = args.get("stream_generation")
                 row["stream_version"] = args.get("stream_version")
                 row["next_event_id"] = next_event_id
+                row["tenant_id"] = (
+                    args.get("tenant_id")
+                    or row.get("tenant_id")
+                    or GLOBAL_TENANT_ID
+                )
                 row["updated_at"] = now
                 return _MemoryResult(rowcount=1)
             return _MemoryResult(rowcount=0)
@@ -3981,6 +4010,14 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.messaging.handle_video_message = AsyncMock(return_value=[])
         self.messaging.handle_image_message = AsyncMock(return_value=[])
         await self.client._dispatch_job_to_messaging({**job, "message_type": "audio"})  # pylint: disable=protected-access
+        await self.client._dispatch_job_to_messaging(  # pylint: disable=protected-access
+            {
+                **job,
+                "message_type": "audio",
+                "metadata": [],
+                "ingress_route": {"tenant_slug": "tenant-a"},
+            }
+        )
         await self.client._dispatch_job_to_messaging({**job, "message_type": "video"})  # pylint: disable=protected-access
         await self.client._dispatch_job_to_messaging({**job, "message_type": "image"})  # pylint: disable=protected-access
         with self.assertRaises(ValueError):
@@ -5031,6 +5068,142 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.client._web_runtime_store = runtime_store  # pylint: disable=protected-access
         await self.client._cleanup_media_tokens_and_files()  # pylint: disable=protected-access
         runtime_store.delete_media_token.assert_not_awaited()
+
+    async def test_resolve_web_ingress_route_branches(self) -> None:
+        class _IngressRouter:
+            async def resolve(self, request):
+                slug = str(request.tenant_slug or "")
+                if slug == "forbidden":
+                    return IngressRouteResolution(
+                        ok=False,
+                        reason_code=IngressRouteReason.UNAUTHORIZED_TENANT.value,
+                    )
+                if slug == "bad":
+                    return IngressRouteResolution(
+                        ok=False,
+                        reason_code=IngressRouteReason.INVALID_TENANT_SLUG.value,
+                    )
+                return IngressRouteResolution(
+                    ok=True,
+                    result=IngressRouteResult(
+                        tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                        tenant_slug=slug,
+                        platform="web",
+                        channel_key="web",
+                        identifier_claims={
+                            "identifier_type": "tenant_slug",
+                            "identifier_value": slug,
+                        },
+                    ),
+                )
+
+        self.client._ingress_routing_service = _IngressRouter()  # pylint: disable=protected-access
+
+        route = await self.client._resolve_web_ingress_route(  # pylint: disable=protected-access
+            auth_user="user-1",
+            tenant_slug=None,
+        )
+        self.assertEqual(route.tenant_id, GLOBAL_TENANT_ID)
+        self.assertEqual(route.tenant_slug, "global")
+
+        with self.assertRaises(ValueError):
+            await self.client._resolve_web_ingress_route(  # pylint: disable=protected-access
+                auth_user="not-a-uuid",
+                tenant_slug="tenant-a",
+            )
+
+        blank_slug_route = await self.client._resolve_web_ingress_route(  # pylint: disable=protected-access
+            auth_user="user-1",
+            tenant_slug="   ",
+        )
+        self.assertEqual(blank_slug_route.tenant_id, GLOBAL_TENANT_ID)
+
+        route = await self.client._resolve_web_ingress_route(  # pylint: disable=protected-access
+            auth_user="11111111-1111-1111-1111-111111111111",
+            tenant_slug="tenant-a",
+        )
+        self.assertEqual(route.tenant_slug, "tenant-a")
+
+        with self.assertRaises(PermissionError):
+            await self.client._resolve_web_ingress_route(  # pylint: disable=protected-access
+                auth_user="11111111-1111-1111-1111-111111111111",
+                tenant_slug="forbidden",
+            )
+
+        with self.assertRaises(ValueError):
+            await self.client._resolve_web_ingress_route(  # pylint: disable=protected-access
+                auth_user="11111111-1111-1111-1111-111111111111",
+                tenant_slug="bad",
+            )
+
+    async def test_ensure_conversation_owner_maps_tenant_mismatch(self) -> None:
+        runtime_store = self.client._web_runtime_store  # pylint: disable=protected-access
+        runtime_store.ensure_conversation_owner = AsyncMock(  # type: ignore[attr-defined]
+            side_effect=ValueError("conversation tenant mismatch")
+        )
+        with self.assertRaises(web_mod.WebConversationTenantConflictError):
+            await self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-tenant",
+                auth_user="user-1",
+                tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                create_if_missing=False,
+            )
+
+    async def test_ensure_conversation_owner_reraises_unexpected_value_error(self) -> None:
+        runtime_store = self.client._web_runtime_store  # pylint: disable=protected-access
+        runtime_store.ensure_conversation_owner = AsyncMock(  # type: ignore[attr-defined]
+            side_effect=ValueError("other-value-error")
+        )
+        with self.assertRaisesRegex(ValueError, "other-value-error"):
+            await self.client._ensure_conversation_owner_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-tenant",
+                auth_user="user-1",
+                tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                create_if_missing=False,
+            )
+
+    async def test_ingress_router_provider_and_runtime_error_paths(self) -> None:
+        sentinel_gateway = object()
+
+        with patch.object(
+            web_mod.di,
+            "container",
+            new=SimpleNamespace(relational_storage_gateway=sentinel_gateway),
+        ):
+            self.assertIs(web_mod._relational_storage_gateway_provider(), sentinel_gateway)
+
+        self.client._ingress_routing_service = None  # pylint: disable=protected-access
+        self.client._relational_storage_gateway = None  # pylint: disable=protected-access
+        with patch.object(
+            web_mod,
+            "_relational_storage_gateway_provider",
+            return_value=sentinel_gateway,
+        ):
+            router = self.client._ingress_router()  # pylint: disable=protected-access
+        self.assertIs(self.client._relational_storage_gateway, sentinel_gateway)  # pylint: disable=protected-access
+        self.assertIs(self.client._ingress_router(), router)  # pylint: disable=protected-access
+
+        self.client._ingress_routing_service = None  # pylint: disable=protected-access
+        self.client._relational_storage_gateway = sentinel_gateway  # pylint: disable=protected-access
+        with patch.object(
+            web_mod,
+            "_relational_storage_gateway_provider",
+            side_effect=AssertionError("provider should not be called"),
+        ):
+            self.client._ingress_router()  # pylint: disable=protected-access
+
+        self.client._ingress_routing_service = None  # pylint: disable=protected-access
+        self.client._relational_storage_gateway = None  # pylint: disable=protected-access
+        with patch.object(
+            web_mod,
+            "_relational_storage_gateway_provider",
+            side_effect=RuntimeError("missing"),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Relational storage gateway is required for web tenant routing",
+            ):
+                self.client._ingress_router()  # pylint: disable=protected-access
 
 
 class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):

@@ -15,10 +15,18 @@ from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.rdbms import IRelationalStorageGateway
+from mugen.core.contract.service.ingress_routing import (
+    IIngressRoutingService,
+    IngressRouteRequest,
+)
 from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
 from mugen.core import di
+from mugen.core.service.ingress_routing import (
+    DefaultIngressRoutingService,
+    build_ingress_route_context,
+)
 from mugen.core.utility.config_value import parse_bool_flag
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
@@ -67,6 +75,7 @@ class WeChatIPCExtension(IIPCExtension):
         messaging_service: IMessagingService | None = None,
         user_service: IUserService | None = None,
         wechat_client: IWeChatClient | None = None,
+        ingress_routing_service: IIngressRoutingService | None = None,
     ) -> None:
         self._client = wechat_client if wechat_client is not None else _wechat_client_provider()
         self._config = config if config is not None else _config_provider()
@@ -86,6 +95,7 @@ class WeChatIPCExtension(IIPCExtension):
             else _messaging_service_provider()
         )
         self._user_service = user_service if user_service is not None else _user_service_provider()
+        self._ingress_routing_service = ingress_routing_service
         self._event_dedup_ttl_seconds = self._resolve_event_dedup_ttl_seconds()
         self._typing_enabled = self._resolve_typing_enabled()
 
@@ -121,6 +131,15 @@ class WeChatIPCExtension(IIPCExtension):
             True,
         )
         return parse_bool_flag(raw_enabled, True)
+
+    def _ingress_router(self) -> IIngressRoutingService:
+        if self._ingress_routing_service is not None:
+            return self._ingress_routing_service
+        self._ingress_routing_service = DefaultIngressRoutingService(
+            relational_storage_gateway=self._relational_storage_gateway,
+            logging_gateway=self._logging_gateway,
+        )
+        return self._ingress_routing_service
 
     @staticmethod
     def _now_utc() -> datetime:
@@ -217,6 +236,86 @@ class WeChatIPCExtension(IIPCExtension):
     def _coerce_nonempty_string(value: object) -> str | None:
         if isinstance(value, str) and value.strip() != "":
             return value.strip()
+        return None
+
+    @staticmethod
+    def _compose_message_context(
+        *,
+        ingress_route: dict,
+        extra_context: list[dict] | None = None,
+    ) -> list[dict]:
+        combined: list[dict] = []
+        if isinstance(extra_context, list):
+            combined.extend([item for item in extra_context if isinstance(item, dict)])
+        combined.append(
+            {
+                "type": "ingress_route",
+                "content": dict(ingress_route),
+            }
+        )
+        return combined
+
+    @staticmethod
+    def _normalize_ingress_route(
+        ingress_route: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if isinstance(ingress_route, dict):
+            return dict(ingress_route)
+        return {
+            "platform": "wechat",
+            "channel_key": "wechat",
+            "identifier_claims": {},
+        }
+
+    @staticmethod
+    def _merge_ingress_metadata(
+        *,
+        payload: dict[str, Any],
+        ingress_route: dict,
+    ) -> dict[str, Any]:
+        merged = dict(payload)
+        metadata = merged.get("metadata")
+        if isinstance(metadata, dict):
+            normalized_metadata = dict(metadata)
+        else:
+            normalized_metadata = {}
+        normalized_metadata["ingress_route"] = dict(ingress_route)
+        merged["metadata"] = normalized_metadata
+        return merged
+
+    async def _resolve_ingress_route(
+        self,
+        *,
+        path_token: str | None,
+        webhook_payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        resolution = await self._ingress_router().resolve(
+            IngressRouteRequest(
+                platform="wechat",
+                channel_key="wechat",
+                identifier_type="path_token",
+                identifier_value=path_token,
+                claims={"path_token": path_token} if path_token is not None else {},
+            )
+        )
+        if resolution.ok and resolution.result is not None:
+            return build_ingress_route_context(resolution.result)
+
+        reason_code = str(resolution.reason_code or "route_unresolved")
+        reason_detail = str(resolution.reason_detail or "").strip()
+        error_message = reason_code
+        if reason_detail != "":
+            error_message = f"{reason_code}: {reason_detail}"
+        await self._record_dead_letter(
+            event_type="webhook",
+            event_payload=webhook_payload,
+            reason_code="route_unresolved",
+            error_message=error_message,
+        )
+        self._logging_gateway.warning(
+            "Dropped WeChat webhook due to unresolved ingress route "
+            f"reason_code={reason_code} path_token={path_token!r}."
+        )
         return None
 
     async def _emit_processing_signal(
@@ -387,7 +486,14 @@ class WeChatIPCExtension(IIPCExtension):
 
         self._logging_gateway.error(f"Unsupported response type: {response_type}.")
 
-    async def _process_inbound_message(self, *, provider: str, payload: dict) -> None:
+    async def _process_inbound_message(
+        self,
+        *,
+        provider: str,
+        payload: dict,
+        ingress_route: dict[str, Any] | None = None,
+    ) -> None:
+        ingress_route = self._normalize_ingress_route(ingress_route)
         event_type = f"{provider}:event"
         if await self._is_duplicate_event(event_type, payload):
             self._logging_gateway.debug("Skip duplicate WeChat event.")
@@ -419,6 +525,9 @@ class WeChatIPCExtension(IIPCExtension):
                         room_id=room_id,
                         sender=sender,
                         message=text,
+                        message_context=self._compose_message_context(
+                            ingress_route=ingress_route,
+                        ),
                     )
             elif msg_type in {"voice", "audio"}:
                 media_id = self._coerce_nonempty_string(payload.get("MediaId"))
@@ -429,10 +538,13 @@ class WeChatIPCExtension(IIPCExtension):
                             "wechat",
                             room_id=room_id,
                             sender=sender,
-                            message={
-                                "message": payload,
-                                **media,
-                            },
+                            message=self._merge_ingress_metadata(
+                                payload={
+                                    "message": payload,
+                                    **media,
+                                },
+                                ingress_route=ingress_route,
+                            ),
                         )
             elif msg_type in {"image"}:
                 media_id = self._coerce_nonempty_string(payload.get("MediaId"))
@@ -443,10 +555,13 @@ class WeChatIPCExtension(IIPCExtension):
                             "wechat",
                             room_id=room_id,
                             sender=sender,
-                            message={
-                                "message": payload,
-                                **media,
-                            },
+                            message=self._merge_ingress_metadata(
+                                payload={
+                                    "message": payload,
+                                    **media,
+                                },
+                                ingress_route=ingress_route,
+                            ),
                         )
             elif msg_type in {"video", "shortvideo"}:
                 media_id = self._coerce_nonempty_string(payload.get("MediaId"))
@@ -457,10 +572,13 @@ class WeChatIPCExtension(IIPCExtension):
                             "wechat",
                             room_id=room_id,
                             sender=sender,
-                            message={
-                                "message": payload,
-                                **media,
-                            },
+                            message=self._merge_ingress_metadata(
+                                payload={
+                                    "message": payload,
+                                    **media,
+                                },
+                                ingress_route=ingress_route,
+                            ),
                         )
             elif msg_type == "file":
                 media_id = self._coerce_nonempty_string(payload.get("MediaId"))
@@ -471,10 +589,13 @@ class WeChatIPCExtension(IIPCExtension):
                             "wechat",
                             room_id=room_id,
                             sender=sender,
-                            message={
-                                "message": payload,
-                                **media,
-                            },
+                            message=self._merge_ingress_metadata(
+                                payload={
+                                    "message": payload,
+                                    **media,
+                                },
+                                ingress_route=ingress_route,
+                            ),
                         )
             else:
                 self._logging_gateway.debug(
@@ -506,12 +627,24 @@ class WeChatIPCExtension(IIPCExtension):
             provider = str(data.get("provider") or "").strip().lower()
             if provider != expected_provider:
                 raise ValueError("provider_mismatch")
+            path_token = self._coerce_nonempty_string(data.get("path_token"))
 
             payload = data.get("payload")
             if not isinstance(payload, dict):
                 raise TypeError
 
-            await self._process_inbound_message(provider=provider, payload=payload)
+            ingress_route = await self._resolve_ingress_route(
+                path_token=path_token,
+                webhook_payload=event_payload,
+            )
+            if ingress_route is None:
+                return
+
+            await self._process_inbound_message(
+                provider=provider,
+                payload=payload,
+                ingress_route=ingress_route,
+            )
         except (KeyError, TypeError):
             self._logging_gateway.error("Malformed WeChat event payload.")
             await self._record_dead_letter(

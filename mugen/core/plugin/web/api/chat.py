@@ -11,7 +11,10 @@ from quart import Response, abort, jsonify, request, send_file
 
 from mugen.core import di
 from mugen.core.api import api
-from mugen.core.contract.client.web import IWebClient
+from mugen.core.contract.client.web import (
+    IWebClient,
+    WebConversationTenantConflictError,
+)
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.api.decorator.auth import global_auth_required
 from mugen.core.plugin.web.api.decorator import web_platform_required
@@ -606,6 +609,15 @@ async def web_messages_create(  # pylint: disable=too-many-locals,too-many-branc
     if not isinstance(conversation_id, str) or conversation_id.strip() == "":
         abort(400, "conversation_id is required")
 
+    tenant_slug_raw = form.get("tenant_slug")
+    tenant_slug: str | None = None
+    if tenant_slug_raw is not None:
+        if not isinstance(tenant_slug_raw, str):
+            abort(400, "tenant_slug must be a string when provided")
+        tenant_slug = tenant_slug_raw.strip()
+        if tenant_slug == "":
+            abort(400, "tenant_slug must be non-empty when provided")
+
     try:
         client_message_id = _normalize_client_message_id(form.get("client_message_id"))
     except ValueError as exc:
@@ -637,6 +649,7 @@ async def web_messages_create(  # pylint: disable=too-many-locals,too-many-branc
             response_payload = await web_client.enqueue_message(
                 auth_user=auth_user,
                 conversation_id=conversation_id,
+                tenant_slug=tenant_slug,
                 message_type="composed",
                 metadata=structured_metadata,
                 client_message_id=client_message_id,
@@ -647,6 +660,9 @@ async def web_messages_create(  # pylint: disable=too-many-locals,too-many-branc
         except PermissionError:
             _remove_files_if_exist(persisted_file_paths)
             abort(403)
+        except WebConversationTenantConflictError:
+            _remove_files_if_exist(persisted_file_paths)
+            abort(409, "conversation tenant mismatch")
         except OverflowError:
             _remove_files_if_exist(persisted_file_paths)
             abort(429, "web queue is full")
@@ -728,6 +744,7 @@ async def web_messages_create(  # pylint: disable=too-many-locals,too-many-branc
         response_payload = await web_client.enqueue_message(
             auth_user=auth_user,
             conversation_id=conversation_id,
+            tenant_slug=tenant_slug,
             message_type=message_type,
             text=text,
             metadata=metadata,
@@ -739,6 +756,9 @@ async def web_messages_create(  # pylint: disable=too-many-locals,too-many-branc
     except PermissionError:
         _remove_file_if_exists(file_path)
         abort(403)
+    except WebConversationTenantConflictError:
+        _remove_file_if_exists(file_path)
+        abort(409, "conversation tenant mismatch")
     except OverflowError:
         _remove_file_if_exists(file_path)
         abort(429, "web queue is full")

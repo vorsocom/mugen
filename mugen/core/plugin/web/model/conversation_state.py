@@ -2,7 +2,17 @@
 
 __all__ = ["WebConversationState"]
 
-from sqlalchemy import BigInteger, CheckConstraint, Index, Integer, UniqueConstraint
+import uuid
+
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column
@@ -23,6 +33,13 @@ class WebConversationState(ModelBase):
 
     owner_user_id: Mapped[str] = mapped_column(
         CITEXT(255),
+        nullable=False,
+        index=True,
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("mugen.admin_tenant.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )

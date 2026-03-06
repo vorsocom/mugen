@@ -1,7 +1,6 @@
 """Provides webhook decorators for WeChat endpoints."""
 
 from functools import wraps
-import hmac
 from types import SimpleNamespace
 
 from quart import abort
@@ -61,23 +60,12 @@ def wechat_webhook_path_token_required(
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
 
             path_token = kwargs.get("path_token")
             if not isinstance(path_token, str) or path_token.strip() == "":
                 logger.error("WeChat webhook path token missing.")
                 abort(400)
-
-            try:
-                expected_token = str(config.wechat.webhook.path_token)
-            except (AttributeError, KeyError):
-                logger.error("WeChat webhook path token configuration missing.")
-                abort(500)
-
-            if hmac.compare_digest(path_token.strip(), expected_token.strip()) is not True:
-                logger.error("WeChat webhook path token verification failed.")
-                abort(401)
 
             return await func(*args, **kwargs)
 

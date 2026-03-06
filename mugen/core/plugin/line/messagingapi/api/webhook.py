@@ -35,7 +35,6 @@ async def line_messagingapi_webhook_event(
     logger_provider=_logger_provider,
 ):
     """Respond to LINE Messaging API webhook events."""
-    _ = path_token
 
     ipc_svc: IIPCService = ipc_provider()
     logger: ILoggingGateway = logger_provider()
@@ -49,7 +48,10 @@ async def line_messagingapi_webhook_event(
         IPCCommandRequest(
             platform="line",
             command="line_messagingapi_event",
-            data=data,
+            data={
+                "path_token": path_token,
+                "payload": data,
+            },
         )
     )
     if response.errors:

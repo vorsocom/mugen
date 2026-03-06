@@ -86,7 +86,13 @@ class TestMugenTelegramBotapiWebhook(unittest.IsolatedAsyncioTestCase):
         request_payload = ipc_service.handle_ipc_request.await_args.args[0]
         self.assertEqual(request_payload.platform, "telegram")
         self.assertEqual(request_payload.command, "telegram_botapi_update")
-        self.assertEqual(request_payload.data, {"update_id": 1})
+        self.assertEqual(
+            request_payload.data,
+            {
+                "path_token": "path-token",
+                "payload": {"update_id": 1},
+            },
+        )
 
     async def test_event_returns_ok_and_logs_when_ipc_has_errors(self) -> None:
         endpoint = unwrap(webhook.telegram_botapi_webhook_event)

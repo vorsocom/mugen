@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
+import uuid
 
 from mugen.core.gateway.storage.web_runtime.relational_store import (
     RelationalWebRuntimeStore,
@@ -309,3 +310,24 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(batch.effective_after_event_id, 0)
         self.assertIsNone(batch.first_event_id)
         self.assertEqual(batch.events, [])
+
+    async def test_ensure_conversation_owner_raises_tenant_mismatch(self) -> None:
+        session = _SequenceSession(
+            responses=[
+                {
+                    "owner_user_id": "user-1",
+                    "tenant_id": "11111111-1111-1111-1111-111111111111",
+                }
+            ]
+        )
+        store, _ = self._build_store(row=None, session=session)
+
+        with self.assertRaisesRegex(ValueError, "conversation tenant mismatch"):
+            await store.ensure_conversation_owner(
+                conversation_id="conv-1",
+                auth_user="user-1",
+                tenant_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+                create_if_missing=False,
+                stream_generation="gen-1",
+                stream_version=1,
+            )

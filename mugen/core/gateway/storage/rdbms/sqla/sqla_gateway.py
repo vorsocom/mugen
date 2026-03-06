@@ -143,12 +143,16 @@ class SQLAlchemyRelationalStorageGateway(IRelationalStorageGateway):
             "columns": {
                 "conversation_id",
                 "owner_user_id",
+                "tenant_id",
                 "stream_generation",
                 "stream_version",
                 "next_event_id",
             },
             "constraints": {"ux_web_conversation_state_conversation_id"},
-            "indexes": {"ix_web_conversation_state_conversation_id"},
+            "indexes": {
+                "ix_web_conversation_state_conversation_id",
+                "ix_web_conversation_state_tenant_id",
+            },
         }
         checks["web_conversation_event"] = {
             "columns": {

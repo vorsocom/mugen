@@ -5,9 +5,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from mugen.core.contract.service.ingress_routing import (
+    IngressRouteResolution,
+    IngressRouteResult,
+)
 from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.line.messagingapi import ipc_ext
 from mugen.core.plugin.line.messagingapi.ipc_ext import LineMessagingAPIIPCExtension
@@ -25,11 +30,18 @@ def _make_config(*, typing_enabled: bool = True, dedupe_ttl: int = 86400) -> Sim
 def _make_request(
     data: dict,
     command: str = "line_messagingapi_event",
+    path_token: str = "line-path-token",
 ) -> IPCCommandRequest:
+    payload = data
+    if command == "line_messagingapi_event":
+        payload = {
+            "path_token": path_token,
+            "payload": data,
+        }
     return IPCCommandRequest(
         platform="line",
         command=command,
-        data=data,
+        data=payload,
     )
 
 
@@ -95,6 +107,26 @@ class _MemoryRelational:
         return dict(existing)
 
 
+class _IngressRoutingStub:
+    async def resolve(self, request) -> IngressRouteResolution:
+        identifier_value = request.identifier_value
+        if not isinstance(identifier_value, str) or identifier_value.strip() == "":
+            identifier_value = "line-path-token"
+        return IngressRouteResolution(
+            ok=True,
+            result=IngressRouteResult(
+                tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                tenant_slug="tenant-a",
+                platform="line",
+                channel_key="line",
+                identifier_claims={
+                    "identifier_type": "path_token",
+                    "identifier_value": str(identifier_value),
+                },
+            ),
+        )
+
+
 def _new_extension(
     *,
     config,
@@ -103,6 +135,7 @@ def _new_extension(
     messaging_service=None,
     user_service=None,
     logging_gateway=None,
+    ingress_routing_service=None,
 ) -> LineMessagingAPIIPCExtension:
     return LineMessagingAPIIPCExtension(
         config=config,
@@ -113,6 +146,7 @@ def _new_extension(
         messaging_service=messaging_service or _make_messaging_service(),
         user_service=user_service or _make_user_service(),
         line_client=client or _make_client(),
+        ingress_routing_service=ingress_routing_service or _IngressRoutingStub(),
     )
 
 
@@ -211,12 +245,14 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
             _make_request({"events": [_message_event()]})
         )
 
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "line",
-            room_id="U-1",
-            sender="U-1",
-            message="hello",
-        )
+        messaging_service.handle_text_message.assert_awaited_once()
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "U-1")
+        self.assertEqual(kwargs["sender"], "U-1")
+        self.assertEqual(kwargs["message"], "hello")
+        message_context = kwargs.get("message_context")
+        self.assertIsInstance(message_context, list)
+        self.assertEqual(message_context[-1]["type"], "ingress_route")
         user_service.add_known_user.assert_awaited_once_with("U-1", "Line User", "U-1")
         client.reply_messages.assert_awaited_once()
         client.emit_processing_signal.assert_any_await(
@@ -245,20 +281,15 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
             _make_request({"events": [_postback_event(data="btn-data")]})
         )
 
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "line",
-            room_id="U-1",
-            sender="U-1",
-            message="btn-data",
-            message_context=[
-                {
-                    "type": "line_postback",
-                    "content": {
-                        "postback": {"data": "btn-data"},
-                    },
-                }
-            ],
-        )
+        messaging_service.handle_text_message.assert_awaited_once()
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "U-1")
+        self.assertEqual(kwargs["sender"], "U-1")
+        self.assertEqual(kwargs["message"], "btn-data")
+        message_context = kwargs.get("message_context")
+        self.assertIsInstance(message_context, list)
+        self.assertEqual(message_context[0]["type"], "line_postback")
+        self.assertEqual(message_context[-1]["type"], "ingress_route")
 
     async def test_lifecycle_events_route_to_message_handlers_only(self) -> None:
         handler = SimpleNamespace(
@@ -491,6 +522,107 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(
             ext_zero._api_call_succeeded({"ok": True, "status": "200"})  # pylint: disable=protected-access
+        )
+
+    async def test_ingress_router_default_provider_is_lazy_and_cached(self) -> None:
+        logger = Mock()
+        relational = _MemoryRelational()
+        ext = LineMessagingAPIIPCExtension(
+            config=_make_config(),
+            logging_gateway=logger,
+            relational_storage_gateway=relational,
+            messaging_service=_make_messaging_service(),
+            user_service=_make_user_service(),
+            line_client=_make_client(),
+            ingress_routing_service=None,
+        )
+        sentinel_router = object()
+        with patch.object(
+            ipc_ext,
+            "DefaultIngressRoutingService",
+            return_value=sentinel_router,
+        ) as default_router_cls:
+            first = ext._ingress_router()  # pylint: disable=protected-access
+            second = ext._ingress_router()  # pylint: disable=protected-access
+
+        self.assertIs(first, sentinel_router)
+        self.assertIs(second, sentinel_router)
+        default_router_cls.assert_called_once_with(
+            relational_storage_gateway=relational,
+            logging_gateway=logger,
+        )
+
+    async def test_merge_ingress_metadata_normalizes_non_dict_metadata(self) -> None:
+        merged = LineMessagingAPIIPCExtension._merge_ingress_metadata(
+            payload={"metadata": "invalid", "event": "x"},  # pylint: disable=protected-access
+            ingress_route={"tenant_slug": "tenant-a"},
+        )
+        self.assertEqual(
+            merged["metadata"],
+            {
+                "ingress_route": {"tenant_slug": "tenant-a"},
+            },
+        )
+
+    async def test_resolve_ingress_route_unresolved_records_reason_variants(self) -> None:
+        logger = Mock()
+        routing_service = SimpleNamespace(
+            resolve=AsyncMock(
+                side_effect=[
+                    IngressRouteResolution(
+                        ok=False,
+                        reason_code="missing_binding",
+                        reason_detail="binding not found",
+                    ),
+                    IngressRouteResolution(
+                        ok=False,
+                        reason_code="route_unresolved",
+                        reason_detail=None,
+                    ),
+                ]
+            )
+        )
+        ext = _new_extension(
+            config=_make_config(),
+            logging_gateway=logger,
+            ingress_routing_service=routing_service,
+        )
+        with patch.object(
+            ext,
+            "_record_dead_letter",
+            new=AsyncMock(),
+        ) as record_dead_letter:
+            first = await ext._resolve_ingress_route(  # pylint: disable=protected-access
+                path_token="tok-1",
+                webhook_payload={"events": []},
+            )
+            second = await ext._resolve_ingress_route(  # pylint: disable=protected-access
+                path_token="tok-2",
+                webhook_payload={"events": []},
+            )
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(
+            ext._metrics.get("line.ipc.route.unresolved"),  # pylint: disable=protected-access
+            2,
+        )
+        self.assertEqual(record_dead_letter.await_count, 2)
+        self.assertEqual(
+            record_dead_letter.await_args_list[0].kwargs["error_message"],
+            "missing_binding: binding not found",
+        )
+        self.assertEqual(
+            record_dead_letter.await_args_list[1].kwargs["error_message"],
+            "route_unresolved",
+        )
+        logger.warning.assert_any_call(
+            "Dropped LINE webhook due to unresolved ingress route "
+            "reason_code=missing_binding path_token='tok-1'."
+        )
+        logger.warning.assert_any_call(
+            "Dropped LINE webhook due to unresolved ingress route "
+            "reason_code=route_unresolved path_token='tok-2'."
         )
 
     async def test_dead_letter_and_dedupe_branch_edges(self) -> None:
@@ -1052,6 +1184,55 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
         logger.error.assert_any_call(
             "Unhandled LINE webhook processing failure."
             " error=RuntimeError: dead-letter boom"
+        )
+
+    async def test_line_messagingapi_event_rejects_non_dict_outer_request(self) -> None:
+        logger = Mock()
+        ext = _new_extension(
+            config=_make_config(),
+            logging_gateway=logger,
+        )
+        request = IPCCommandRequest(
+            platform="line",
+            command="line_messagingapi_event",
+            data="bad-request-payload",
+        )
+        with patch.object(
+            ext,
+            "_record_dead_letter",
+            new=AsyncMock(),
+        ) as record_dead_letter:
+            await ext._line_messagingapi_event(request)  # pylint: disable=protected-access
+
+        record_dead_letter.assert_awaited_once_with(
+            event_type="webhook",
+            event_payload={},
+            reason_code="malformed_payload",
+            error_message="Malformed LINE webhook payload.",
+        )
+        logger.error.assert_any_call("Malformed LINE webhook payload.")
+
+    async def test_line_messagingapi_event_returns_early_when_route_unresolved(self) -> None:
+        ext = _new_extension(config=_make_config())
+        with (
+            patch.object(
+                ext,
+                "_resolve_ingress_route",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ext,
+                "_process_single_event",
+                new=AsyncMock(),
+            ) as process_single_event,
+        ):
+            await ext._line_messagingapi_event(  # pylint: disable=protected-access
+                _make_request({"events": [_message_event()]})
+            )
+
+        process_single_event.assert_not_awaited()
+        self.assertIsNone(
+            ext._metrics.get("line.ipc.event.processed_ok")  # pylint: disable=protected-access
         )
 
     async def test_line_messagingapi_event_process_exception_records_dead_letter(self) -> None:

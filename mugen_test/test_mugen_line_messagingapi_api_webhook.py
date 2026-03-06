@@ -86,7 +86,13 @@ class TestMugenLineMessagingapiWebhook(unittest.IsolatedAsyncioTestCase):
         request_payload = ipc_service.handle_ipc_request.await_args.args[0]
         self.assertEqual(request_payload.platform, "line")
         self.assertEqual(request_payload.command, "line_messagingapi_event")
-        self.assertEqual(request_payload.data, {"events": []})
+        self.assertEqual(
+            request_payload.data,
+            {
+                "path_token": "path-token",
+                "payload": {"events": []},
+            },
+        )
 
     async def test_event_returns_ok_and_logs_when_ipc_has_errors(self) -> None:
         endpoint = unwrap(webhook.line_messagingapi_webhook_event)

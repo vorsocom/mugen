@@ -381,6 +381,10 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
                 "metadata": {"source": "web"},
                 "client_message_id": "cid-1",
             },
+            message_context=[
+                {"type": "ingress_route", "content": {"tenant_slug": "tenant-a"}},
+                "not-a-dict",
+            ],
         )
 
         self.assertEqual(result, [{"type": "text", "content": "final"}])
@@ -391,17 +395,18 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             text_call["message"],
             "first\n[attachment:a1] caption=cap-1\n[attachment:a2]\nlast",
         )
-        self.assertEqual(text_call["message_context"][0]["content"]["id"], "a1")
-        self.assertEqual(text_call["message_context"][1]["content"]["id"], "a2")
+        self.assertEqual(text_call["message_context"][0]["type"], "ingress_route")
+        self.assertEqual(text_call["message_context"][1]["content"]["id"], "a1")
+        self.assertEqual(text_call["message_context"][2]["content"]["id"], "a2")
         self.assertEqual(
-            text_call["message_context"][2]["content"]["attachment_id"],
+            text_call["message_context"][3]["content"]["attachment_id"],
             "a1",
         )
         self.assertEqual(
-            text_call["message_context"][3]["content"]["attachment_id"],
+            text_call["message_context"][4]["content"]["attachment_id"],
             "a2",
         )
-        self.assertEqual(text_call["message_context"][4]["type"], "composed_metadata")
+        self.assertEqual(text_call["message_context"][5]["type"], "composed_metadata")
 
     async def test_handle_composed_message_still_synthesizes_without_media_handlers(self) -> None:
         svc = self._new_service()

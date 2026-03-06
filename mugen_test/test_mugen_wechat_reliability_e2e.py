@@ -4,9 +4,14 @@ from inspect import unwrap
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 from sqlalchemy.exc import IntegrityError
 
+from mugen.core.contract.service.ingress_routing import (
+    IngressRouteResolution,
+    IngressRouteResult,
+)
 from mugen.core.plugin.wechat.api import webhook
 from mugen.core.plugin.wechat.ipc_ext import WeChatIPCExtension
 from mugen.core.service.ipc import DefaultIPCService
@@ -85,6 +90,26 @@ def _make_client() -> SimpleNamespace:
     )
 
 
+class _IngressRoutingStub:
+    async def resolve(self, request) -> IngressRouteResolution:
+        identifier_value = request.identifier_value
+        if not isinstance(identifier_value, str) or identifier_value.strip() == "":
+            identifier_value = "path-token"
+        return IngressRouteResolution(
+            ok=True,
+            result=IngressRouteResult(
+                tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                tenant_slug="tenant-a",
+                platform="wechat",
+                channel_key="wechat",
+                identifier_claims={
+                    "identifier_type": "path_token",
+                    "identifier_value": str(identifier_value),
+                },
+            ),
+        )
+
+
 def _new_extension(
     *,
     logger: Mock,
@@ -100,6 +125,7 @@ def _new_extension(
         messaging_service=messaging_service,
         user_service=user_service,
         wechat_client=client,
+        ingress_routing_service=_IngressRoutingStub(),
     )
 
 
@@ -213,6 +239,24 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             room_id="user-1",
             sender="user-1",
             message="hello",
+            message_context=[
+                {
+                    "type": "ingress_route",
+                    "content": {
+                        "tenant_id": "11111111-1111-1111-1111-111111111111",
+                        "tenant_slug": "tenant-a",
+                        "platform": "wechat",
+                        "channel_key": "wechat",
+                        "identifier_claims": {
+                            "identifier_type": "path_token",
+                            "identifier_value": "path-token",
+                        },
+                        "channel_profile_id": None,
+                        "route_key": None,
+                        "binding_id": None,
+                    },
+                }
+            ],
         )
         logger.debug.assert_any_call("Skip duplicate WeChat event.")
 
@@ -346,4 +390,3 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             )
 
         ipc_service.handle_ipc_request.assert_not_awaited()
-

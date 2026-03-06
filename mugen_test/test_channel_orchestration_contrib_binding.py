@@ -19,6 +19,9 @@ from mugen.core.plugin.channel_orchestration.service.channel_profile import (
 from mugen.core.plugin.channel_orchestration.service.conversation_state import (
     ConversationStateService,
 )
+from mugen.core.plugin.channel_orchestration.service.ingress_binding import (
+    IngressBindingService,
+)
 from mugen.core.plugin.channel_orchestration.service.intake_rule import (
     IntakeRuleService,
 )
@@ -73,6 +76,7 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
         registry.freeze()
 
         channel_profiles = registry.get_resource("ChannelProfiles")
+        ingress_bindings = registry.get_resource("IngressBindings")
         intake_rules = registry.get_resource("IntakeRules")
         routing_rules = registry.get_resource("RoutingRules")
         policies = registry.get_resource("OrchestrationPolicies")
@@ -82,6 +86,7 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
         events = registry.get_resource("OrchestrationEvents")
 
         self.assertIn("channel_orchestration_channel_profile", fake_rsg.tables)
+        self.assertIn("channel_orchestration_ingress_binding", fake_rsg.tables)
         self.assertIn("channel_orchestration_intake_rule", fake_rsg.tables)
         self.assertIn("channel_orchestration_routing_rule", fake_rsg.tables)
         self.assertIn("channel_orchestration_orchestration_policy", fake_rsg.tables)
@@ -93,6 +98,10 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
         self.assertIsInstance(
             registry.get_edm_service(channel_profiles.service_key),
             ChannelProfileService,
+        )
+        self.assertIsInstance(
+            registry.get_edm_service(ingress_bindings.service_key),
+            IngressBindingService,
         )
         self.assertIsInstance(
             registry.get_edm_service(intake_rules.service_key),

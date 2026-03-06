@@ -91,6 +91,33 @@ def contribute(
             ),
         },
         {
+            "set": "IngressBindings",
+            "entity": "IngressBinding",
+            "description": (
+                "Tenant-scoped inbound identifier bindings used to resolve"
+                " ingress traffic into tenant/channel profile context."
+            ),
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "crud": CrudPolicy(
+                create_schema=(
+                    "TenantId",
+                    "ChannelKey",
+                    "IdentifierType",
+                    "IdentifierValue",
+                ),
+                update_schema=(
+                    "ChannelProfileId",
+                    "ChannelKey",
+                    "IdentifierType",
+                    "IdentifierValue",
+                    "IsActive",
+                    "Attributes",
+                ),
+            ),
+        },
+        {
             "set": "IntakeRules",
             "entity": "IntakeRule",
             "description": (

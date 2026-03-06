@@ -15,6 +15,7 @@ from mugen.core.contract.gateway.storage.web_runtime import (
     WebRuntimeTailBatch,
     WebRuntimeTailEvent,
 )
+from mugen.core.constants import GLOBAL_TENANT_ID
 from mugen.core.domain.use_case.queue_job_lifecycle import QueueJobLifecycleUseCase
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.gateway.storage.web_runtime.sql import text as web_sql_text
@@ -146,6 +147,15 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         return uuid.uuid4().hex
 
     @staticmethod
+    def _normalize_tenant_id(value: Any) -> uuid.UUID:
+        if isinstance(value, uuid.UUID):
+            return value
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError):
+            return GLOBAL_TENANT_ID
+
+    @staticmethod
     def _normalize_stream_generation(value: Any, *, fallback: str) -> str:
         if isinstance(value, str):
             normalized = value.strip()
@@ -188,6 +198,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             "file_path": payload.get("file_path"),
             "mime_type": payload.get("mime_type"),
             "original_filename": payload.get("original_filename"),
+            "ingress_route": payload.get("ingress_route"),
             "client_message_id": getter("client_message_id"),
             "status": getter("status"),
             "attempts": int(getter("attempts") or 0),
@@ -216,14 +227,16 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         *,
         conversation_id: str,
         auth_user: str,
+        tenant_id: uuid.UUID | None,
         create_if_missing: bool,
         stream_generation: str,
         stream_version: int,
     ) -> None:
+        normalized_tenant_id = tenant_id if tenant_id is not None else GLOBAL_TENANT_ID
         async with self._relational_session() as session:
             result = await session.execute(
                 self._schema_sql(
-                    "SELECT owner_user_id "
+                    "SELECT owner_user_id, tenant_id "
                     "FROM mugen.web_conversation_state "
                     "WHERE conversation_id = :conversation_id"
                 ),
@@ -238,11 +251,11 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                     self._schema_sql(
                         "INSERT INTO mugen.web_conversation_state "
                         "("
-                        "conversation_id, owner_user_id, stream_generation, "
+                        "conversation_id, owner_user_id, tenant_id, stream_generation, "
                         "stream_version, next_event_id, created_at, updated_at"
                         ") "
                         "VALUES ("
-                        ":conversation_id, :owner_user_id, :stream_generation, "
+                        ":conversation_id, :owner_user_id, :tenant_id, :stream_generation, "
                         ":stream_version, 1, now(), now()"
                         ") "
                         "ON CONFLICT (conversation_id) DO NOTHING"
@@ -250,6 +263,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                     {
                         "conversation_id": conversation_id,
                         "owner_user_id": auth_user,
+                        "tenant_id": normalized_tenant_id,
                         "stream_generation": stream_generation,
                         "stream_version": stream_version,
                     },
@@ -257,7 +271,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
 
                 result = await session.execute(
                     self._schema_sql(
-                        "SELECT owner_user_id "
+                        "SELECT owner_user_id, tenant_id "
                         "FROM mugen.web_conversation_state "
                         "WHERE conversation_id = :conversation_id"
                     ),
@@ -272,6 +286,10 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
 
             if row.get("owner_user_id") != auth_user:
                 raise PermissionError("conversation owner mismatch")
+
+            current_tenant_id = self._normalize_tenant_id(row.get("tenant_id"))
+            if tenant_id is not None and current_tenant_id != normalized_tenant_id:
+                raise ValueError("conversation tenant mismatch")
 
     async def count_pending_jobs(self) -> int:
         async with self._relational_session() as session:
@@ -482,17 +500,18 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                     self._schema_sql(
                         "INSERT INTO mugen.web_conversation_state "
                         "("
-                        "conversation_id, owner_user_id, stream_generation, "
+                        "conversation_id, owner_user_id, tenant_id, stream_generation, "
                         "stream_version, next_event_id, created_at, updated_at"
                         ") "
                         "VALUES ("
-                        ":conversation_id, 'system', :stream_generation, "
+                        ":conversation_id, 'system', :tenant_id, :stream_generation, "
                         ":stream_version, 1, now(), now()"
                         ") "
                         "ON CONFLICT (conversation_id) DO NOTHING"
                     ),
                     {
                         "conversation_id": conversation_id,
+                        "tenant_id": GLOBAL_TENANT_ID,
                         "stream_generation": self._new_stream_generation(),
                         "stream_version": event_log_version,
                     },
@@ -1115,7 +1134,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         async with self._relational_session() as session:
             owner_result = await session.execute(
                 self._schema_sql(
-                    "SELECT owner_user_id "
+                    "SELECT owner_user_id, tenant_id "
                     "FROM mugen.web_conversation_state "
                     "WHERE conversation_id = :conversation_id"
                 ),
@@ -1123,16 +1142,21 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             )
             owner_row = owner_result.mappings().one_or_none()
             owner_user_id = owner_row.get("owner_user_id") if owner_row is not None else "system"
+            tenant_id = (
+                self._normalize_tenant_id(owner_row.get("tenant_id"))
+                if owner_row is not None
+                else GLOBAL_TENANT_ID
+            )
 
             await session.execute(
                 self._schema_sql(
                     "INSERT INTO mugen.web_conversation_state "
                     "("
-                    "conversation_id, owner_user_id, stream_generation, "
+                    "conversation_id, owner_user_id, tenant_id, stream_generation, "
                     "stream_version, next_event_id, created_at, updated_at"
                     ") "
                     "VALUES ("
-                    ":conversation_id, :owner_user_id, :stream_generation, "
+                    ":conversation_id, :owner_user_id, :tenant_id, :stream_generation, "
                     ":stream_version, :next_event_id, now(), now()"
                     ") "
                     "ON CONFLICT (conversation_id) DO UPDATE "
@@ -1144,6 +1168,7 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
                 {
                     "conversation_id": conversation_id,
                     "owner_user_id": owner_user_id,
+                    "tenant_id": tenant_id,
                     "stream_generation": generation,
                     "stream_version": event_log_version,
                     "next_event_id": next_event_id,

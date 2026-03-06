@@ -8,9 +8,15 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from mugen.core.contract.service.ingress_routing import (
+    IngressRouteReason,
+    IngressRouteResolution,
+    IngressRouteResult,
+)
 from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.signal.restapi import ipc_ext
 from mugen.core.plugin.signal.restapi.ipc_ext import SignalRestAPIIPCExtension
@@ -19,6 +25,7 @@ from mugen.core.plugin.signal.restapi.ipc_ext import SignalRestAPIIPCExtension
 def _make_config(*, typing_enabled: bool = True, dedupe_ttl: int = 86400) -> SimpleNamespace:
     return SimpleNamespace(
         signal=SimpleNamespace(
+            account=SimpleNamespace(number="+15550000001"),
             receive=SimpleNamespace(dedupe_ttl_seconds=dedupe_ttl),
             typing=SimpleNamespace(enabled=typing_enabled),
         )
@@ -117,6 +124,26 @@ class _DedupeUpdateErrorRelational(_MemoryRelational):
         raise SQLAlchemyError("update-down")
 
 
+class _IngressRoutingStub:
+    async def resolve(self, request) -> IngressRouteResolution:
+        identifier_value = request.identifier_value
+        if not isinstance(identifier_value, str) or identifier_value.strip() == "":
+            identifier_value = "+15550000001"
+        return IngressRouteResolution(
+            ok=True,
+            result=IngressRouteResult(
+                tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                tenant_slug="tenant-a",
+                platform="signal",
+                channel_key="signal",
+                identifier_claims={
+                    "identifier_type": "account_number",
+                    "identifier_value": str(identifier_value),
+                },
+            ),
+        )
+
+
 def _new_extension(
     *,
     config,
@@ -125,6 +152,7 @@ def _new_extension(
     messaging_service=None,
     user_service=None,
     logging_gateway=None,
+    ingress_routing_service=None,
 ) -> SignalRestAPIIPCExtension:
     return SignalRestAPIIPCExtension(
         config=config,
@@ -135,6 +163,7 @@ def _new_extension(
         messaging_service=messaging_service or _make_messaging_service(),
         user_service=user_service or _make_user_service(),
         signal_client=client or _make_client(),
+        ingress_routing_service=ingress_routing_service or _IngressRoutingStub(),
     )
 
 
@@ -287,6 +316,91 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(ext._classify_event_type({}), "unknown")  # pylint: disable=protected-access
 
+    async def test_ingress_router_default_and_metadata_merge_paths(self) -> None:
+        ext = SignalRestAPIIPCExtension(
+            config=_make_config(),
+            logging_gateway=Mock(),
+            relational_storage_gateway=_MemoryRelational(),
+            messaging_service=_make_messaging_service(),
+            user_service=_make_user_service(),
+            signal_client=_make_client(),
+            ingress_routing_service=None,
+        )
+        sentinel_router = object()
+        with patch.object(
+            ipc_ext,
+            "DefaultIngressRoutingService",
+            return_value=sentinel_router,
+        ) as router_ctor:
+            self.assertIs(ext._ingress_router(), sentinel_router)  # pylint: disable=protected-access
+            self.assertIs(ext._ingress_router(), sentinel_router)  # pylint: disable=protected-access
+            router_ctor.assert_called_once()
+
+        merged = ext._merge_ingress_metadata(  # pylint: disable=protected-access
+            payload={"metadata": {"k": "v"}},
+            ingress_route={"tenant_slug": "tenant-a"},
+        )
+        self.assertEqual(merged["metadata"]["k"], "v")
+        self.assertEqual(merged["metadata"]["ingress_route"]["tenant_slug"], "tenant-a")
+
+    async def test_unresolved_ingress_route_is_dead_lettered_and_dropped(self) -> None:
+        class _UnresolvedRouter:
+            async def resolve(self, request):  # noqa: ARG002
+                return IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                    reason_detail="no binding",
+                )
+
+        logger = Mock()
+        relational = _MemoryRelational()
+        messaging = _make_messaging_service()
+        ext = _new_extension(
+            config=_make_config(),
+            logging_gateway=logger,
+            relational_storage_gateway=relational,
+            messaging_service=messaging,
+            ingress_routing_service=_UnresolvedRouter(),
+        )
+
+        route = await ext._resolve_ingress_route(  # pylint: disable=protected-access
+            account_number="+15550000001",
+            webhook_payload={"event": "x"},
+        )
+        self.assertIsNone(route)
+        self.assertEqual(relational.dead_letters[0]["reason_code"], "route_unresolved")
+        self.assertIn("missing_binding", str(relational.dead_letters[0]["error_message"]))
+
+        await ext._signal_restapi_event(  # pylint: disable=protected-access
+            _make_request(_receive_payload(_text_envelope(text="hello")))
+        )
+        messaging.handle_text_message.assert_not_awaited()
+        logger.warning.assert_called()
+
+        class _UnresolvedNoDetailRouter:
+            async def resolve(self, request):  # noqa: ARG002
+                return IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                    reason_detail=None,
+                )
+
+        ext_no_detail = _new_extension(
+            config=_make_config(),
+            logging_gateway=Mock(),
+            relational_storage_gateway=_MemoryRelational(),
+            messaging_service=_make_messaging_service(),
+            ingress_routing_service=_UnresolvedNoDetailRouter(),
+        )
+        await ext_no_detail._resolve_ingress_route(  # pylint: disable=protected-access
+            account_number="+15550000001",
+            webhook_payload={"event": "no-detail"},
+        )
+        self.assertEqual(
+            ext_no_detail._relational_storage_gateway.dead_letters[0]["error_message"],  # pylint: disable=protected-access
+            IngressRouteReason.MISSING_BINDING.value,
+        )
+
     async def test_text_message_routes_and_registers_user(self) -> None:
         client = _make_client()
         messaging_service = _make_messaging_service()
@@ -305,13 +419,13 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
             _make_request(_receive_payload(_text_envelope(text="hello")))
         )
 
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "signal",
-            room_id="+15550001",
-            sender="+15550001",
-            message="hello",
-            message_context=None,
-        )
+        messaging_service.handle_text_message.assert_awaited_once()
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "+15550001")
+        self.assertEqual(kwargs["sender"], "+15550001")
+        self.assertEqual(kwargs["message"], "hello")
+        self.assertIsInstance(kwargs.get("message_context"), list)
+        self.assertEqual(kwargs["message_context"][-1]["type"], "ingress_route")
         user_service.add_known_user.assert_awaited_once_with(
             "+15550001",
             "+15550001",

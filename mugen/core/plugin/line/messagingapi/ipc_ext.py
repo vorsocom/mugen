@@ -17,9 +17,17 @@ from mugen.core.contract.extension.ipc import IIPCExtension
 from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.rdbms import IRelationalStorageGateway
+from mugen.core.contract.service.ingress_routing import (
+    IIngressRoutingService,
+    IngressRouteRequest,
+)
 from mugen.core.contract.service.ipc import IPCCommandRequest, IPCHandlerResult
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.service.ingress_routing import (
+    DefaultIngressRoutingService,
+    build_ingress_route_context,
+)
 from mugen.core.utility.config_value import parse_bool_flag
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
@@ -69,6 +77,7 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
         messaging_service: IMessagingService | None = None,
         user_service: IUserService | None = None,
         line_client: ILineClient | None = None,
+        ingress_routing_service: IIngressRoutingService | None = None,
     ) -> None:
         self._client = line_client if line_client is not None else _line_client_provider()
         self._config = config if config is not None else _config_provider()
@@ -84,6 +93,7 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
             messaging_service if messaging_service is not None else _messaging_service_provider()
         )
         self._user_service = user_service if user_service is not None else _user_service_provider()
+        self._ingress_routing_service = ingress_routing_service
         self._event_dedup_ttl_seconds = self._resolve_event_dedup_ttl_seconds()
         self._typing_enabled = self._resolve_typing_enabled()
         self._metrics: dict[str, int] = {}
@@ -117,6 +127,15 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
             True,
         )
         return parse_bool_flag(raw_enabled, True)
+
+    def _ingress_router(self) -> IIngressRoutingService:
+        if self._ingress_routing_service is not None:
+            return self._ingress_routing_service
+        self._ingress_routing_service = DefaultIngressRoutingService(
+            relational_storage_gateway=self._relational_storage_gateway,
+            logging_gateway=self._logging_gateway,
+        )
+        return self._ingress_routing_service
 
     @staticmethod
     def _now_utc() -> datetime:
@@ -214,6 +233,87 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
     def _coerce_nonempty_string(value: object) -> str | None:
         if isinstance(value, str) and value.strip() != "":
             return value.strip()
+        return None
+
+    @staticmethod
+    def _compose_message_context(
+        *,
+        ingress_route: dict,
+        extra_context: list[dict] | None = None,
+    ) -> list[dict]:
+        combined: list[dict] = []
+        if isinstance(extra_context, list):
+            combined.extend([item for item in extra_context if isinstance(item, dict)])
+        combined.append(
+            {
+                "type": "ingress_route",
+                "content": dict(ingress_route),
+            }
+        )
+        return combined
+
+    @staticmethod
+    def _normalize_ingress_route(
+        ingress_route: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if isinstance(ingress_route, dict):
+            return dict(ingress_route)
+        return {
+            "platform": "line",
+            "channel_key": "line",
+            "identifier_claims": {},
+        }
+
+    @staticmethod
+    def _merge_ingress_metadata(
+        *,
+        payload: dict[str, Any],
+        ingress_route: dict,
+    ) -> dict[str, Any]:
+        merged = dict(payload)
+        metadata = merged.get("metadata")
+        if isinstance(metadata, dict):
+            normalized_metadata = dict(metadata)
+        else:
+            normalized_metadata = {}
+        normalized_metadata["ingress_route"] = dict(ingress_route)
+        merged["metadata"] = normalized_metadata
+        return merged
+
+    async def _resolve_ingress_route(
+        self,
+        *,
+        path_token: str | None,
+        webhook_payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        resolution = await self._ingress_router().resolve(
+            IngressRouteRequest(
+                platform="line",
+                channel_key="line",
+                identifier_type="path_token",
+                identifier_value=path_token,
+                claims={"path_token": path_token} if path_token is not None else {},
+            )
+        )
+        if resolution.ok and resolution.result is not None:
+            return build_ingress_route_context(resolution.result)
+
+        self._increment_metric("line.ipc.route.unresolved")
+        reason_code = str(resolution.reason_code or "route_unresolved")
+        reason_detail = str(resolution.reason_detail or "").strip()
+        error_message = reason_code
+        if reason_detail != "":
+            error_message = f"{reason_code}: {reason_detail}"
+        await self._record_dead_letter(
+            event_type="webhook",
+            event_payload=webhook_payload,
+            reason_code="route_unresolved",
+            error_message=error_message,
+        )
+        self._logging_gateway.warning(
+            "Dropped LINE webhook due to unresolved ingress route "
+            f"reason_code={reason_code} path_token={path_token!r}."
+        )
         return None
 
     @staticmethod
@@ -619,7 +719,14 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
         if hits == 0:
             self._logging_gateway.debug(f"Unsupported LINE event type: {message_type}.")
 
-    async def _handle_message_event(self, *, event: dict, sender: str) -> None:
+    async def _handle_message_event(
+        self,
+        *,
+        event: dict,
+        sender: str,
+        ingress_route: dict[str, Any] | None = None,
+    ) -> None:
+        ingress_route = self._normalize_ingress_route(ingress_route)
         message = event.get("message")
         if not isinstance(message, dict):
             self._logging_gateway.error("Malformed LINE message payload.")
@@ -651,6 +758,9 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                     room_id=sender,
                     sender=sender,
                     message=text,
+                    message_context=self._compose_message_context(
+                        ingress_route=ingress_route,
+                    ),
                 )
             elif message_type == "audio":
                 media = await self._download_message_media(message=message)
@@ -659,10 +769,13 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                         "line",
                         room_id=sender,
                         sender=sender,
-                        message={
-                            "message": message,
-                            **media,
-                        },
+                        message=self._merge_ingress_metadata(
+                            payload={
+                                "message": message,
+                                **media,
+                            },
+                            ingress_route=ingress_route,
+                        ),
                     )
             elif message_type == "file":
                 media = await self._download_message_media(message=message)
@@ -671,10 +784,13 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                         "line",
                         room_id=sender,
                         sender=sender,
-                        message={
-                            "message": message,
-                            **media,
-                        },
+                        message=self._merge_ingress_metadata(
+                            payload={
+                                "message": message,
+                                **media,
+                            },
+                            ingress_route=ingress_route,
+                        ),
                     )
             elif message_type == "image":
                 media = await self._download_message_media(message=message)
@@ -683,10 +799,13 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                         "line",
                         room_id=sender,
                         sender=sender,
-                        message={
-                            "message": message,
-                            **media,
-                        },
+                        message=self._merge_ingress_metadata(
+                            payload={
+                                "message": message,
+                                **media,
+                            },
+                            ingress_route=ingress_route,
+                        ),
                     )
             elif message_type == "video":
                 media = await self._download_message_media(message=message)
@@ -695,25 +814,31 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                         "line",
                         room_id=sender,
                         sender=sender,
-                        message={
-                            "message": message,
-                            **media,
-                        },
+                        message=self._merge_ingress_metadata(
+                            payload={
+                                "message": message,
+                                **media,
+                            },
+                            ingress_route=ingress_route,
+                        ),
                     )
             else:
                 await self._call_message_handlers(
                     message=event,
                     message_type=message_type,
                     sender=sender,
-                    message_context=[
-                        {
-                            "type": "line_event",
-                            "content": {
-                                "event_type": "message",
-                                "message_type": message_type,
-                            },
-                        }
-                    ],
+                    message_context=self._compose_message_context(
+                        ingress_route=ingress_route,
+                        extra_context=[
+                            {
+                                "type": "line_event",
+                                "content": {
+                                    "event_type": "message",
+                                    "message_type": message_type,
+                                },
+                            }
+                        ],
+                    ),
                 )
                 return
 
@@ -729,7 +854,14 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                 state=PROCESSING_STATE_STOP,
             )
 
-    async def _handle_postback_event(self, *, event: dict, sender: str) -> None:
+    async def _handle_postback_event(
+        self,
+        *,
+        event: dict,
+        sender: str,
+        ingress_route: dict[str, Any] | None = None,
+    ) -> None:
+        ingress_route = self._normalize_ingress_route(ingress_route)
         reply_token = self._coerce_nonempty_string(event.get("replyToken"))
         postback = event.get("postback")
         if not isinstance(postback, dict):
@@ -757,14 +889,17 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                 room_id=sender,
                 sender=sender,
                 message=data,
-                message_context=[
-                    {
-                        "type": "line_postback",
-                        "content": {
-                            "postback": postback,
-                        },
-                    }
-                ],
+                message_context=self._compose_message_context(
+                    ingress_route=ingress_route,
+                    extra_context=[
+                        {
+                            "type": "line_postback",
+                            "content": {
+                                "postback": postback,
+                            },
+                        }
+                    ],
+                ),
             )
             await self._dispatch_message_responses(
                 responses=responses,
@@ -784,24 +919,34 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
         event: dict,
         sender: str,
         event_type: str,
+        ingress_route: dict[str, Any] | None = None,
     ) -> None:
+        ingress_route = self._normalize_ingress_route(ingress_route)
         if event_type != "unfollow":
             await self._register_sender_if_unknown(sender=sender)
         await self._call_message_handlers(
             message=event,
             message_type=event_type,
             sender=sender,
-            message_context=[
-                {
-                    "type": "line_event",
-                    "content": {
-                        "event_type": event_type,
-                    },
-                }
-            ],
+            message_context=self._compose_message_context(
+                ingress_route=ingress_route,
+                extra_context=[
+                    {
+                        "type": "line_event",
+                        "content": {
+                            "event_type": event_type,
+                        },
+                    }
+                ],
+            ),
         )
 
-    async def _process_single_event(self, event: dict) -> None:
+    async def _process_single_event(
+        self,
+        event: dict,
+        ingress_route: dict[str, Any] | None = None,
+    ) -> None:
+        ingress_route = self._normalize_ingress_route(ingress_route)
         source = event.get("source")
         if not isinstance(source, dict):
             self._logging_gateway.error("Malformed LINE event source.")
@@ -832,11 +977,19 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
             return
 
         if event_type == "message":
-            await self._handle_message_event(event=event, sender=sender)
+            await self._handle_message_event(
+                event=event,
+                sender=sender,
+                ingress_route=ingress_route,
+            )
             return
 
         if event_type == "postback":
-            await self._handle_postback_event(event=event, sender=sender)
+            await self._handle_postback_event(
+                event=event,
+                sender=sender,
+                ingress_route=ingress_route,
+            )
             return
 
         if event_type in {"follow", "unfollow", "accountLink", "beacon"}:
@@ -844,6 +997,7 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                 event=event,
                 sender=sender,
                 event_type=event_type,
+                ingress_route=ingress_route,
             )
             return
 
@@ -851,14 +1005,17 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
             message=event,
             message_type=event_type,
             sender=sender,
-            message_context=[
-                {
-                    "type": "line_event",
-                    "content": {
-                        "event_type": event_type,
-                    },
-                }
-            ],
+            message_context=self._compose_message_context(
+                ingress_route=ingress_route,
+                extra_context=[
+                    {
+                        "type": "line_event",
+                        "content": {
+                            "event_type": event_type,
+                        },
+                    }
+                ],
+            ),
         )
 
     async def process_ipc_command(
@@ -893,9 +1050,20 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
             if not isinstance(webhook_payload, dict):
                 raise TypeError
 
+            path_token = self._coerce_nonempty_string(webhook_payload.get("path_token"))
+            if isinstance(webhook_payload.get("payload"), dict):
+                webhook_payload = webhook_payload.get("payload")
+
             events = webhook_payload.get("events")
             if not isinstance(events, list):
                 raise TypeError
+
+            ingress_route = await self._resolve_ingress_route(
+                path_token=path_token,
+                webhook_payload=event_payload,
+            )
+            if ingress_route is None:
+                return
 
             for event in events:
                 if not isinstance(event, dict):
@@ -910,7 +1078,10 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                     continue
 
                 try:
-                    await self._process_single_event(event)
+                    await self._process_single_event(
+                        event=event,
+                        ingress_route=ingress_route,
+                    )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     self._increment_metric("line.ipc.event.processed_failed")
                     self._logging_gateway.error(

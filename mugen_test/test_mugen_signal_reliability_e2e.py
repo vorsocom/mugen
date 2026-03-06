@@ -3,9 +3,14 @@
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
+import uuid
 
 from sqlalchemy.exc import IntegrityError
 
+from mugen.core.contract.service.ingress_routing import (
+    IngressRouteResolution,
+    IngressRouteResult,
+)
 from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.signal.restapi.ipc_ext import SignalRestAPIIPCExtension
 from mugen.core.service.ipc import DefaultIPCService
@@ -74,6 +79,26 @@ def _make_client() -> SimpleNamespace:
     )
 
 
+class _IngressRoutingStub:
+    async def resolve(self, request) -> IngressRouteResolution:
+        identifier_value = request.identifier_value
+        if not isinstance(identifier_value, str) or identifier_value.strip() == "":
+            identifier_value = "+15550000"
+        return IngressRouteResolution(
+            ok=True,
+            result=IngressRouteResult(
+                tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                tenant_slug="tenant-a",
+                platform="signal",
+                channel_key="signal",
+                identifier_claims={
+                    "identifier_type": "account_number",
+                    "identifier_value": str(identifier_value),
+                },
+            ),
+        )
+
+
 def _new_extension(
     *,
     logger: Mock,
@@ -89,6 +114,7 @@ def _new_extension(
         messaging_service=messaging_service,
         user_service=user_service,
         signal_client=client,
+        ingress_routing_service=_IngressRoutingStub(),
     )
 
 
@@ -164,7 +190,24 @@ class TestMugenSignalReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             room_id="+15550001",
             sender="+15550001",
             message="hello",
-            message_context=None,
+            message_context=[
+                {
+                    "type": "ingress_route",
+                    "content": {
+                        "tenant_id": "11111111-1111-1111-1111-111111111111",
+                        "tenant_slug": "tenant-a",
+                        "platform": "signal",
+                        "channel_key": "signal",
+                        "identifier_claims": {
+                            "identifier_type": "account_number",
+                            "identifier_value": "+15550000",
+                        },
+                        "channel_profile_id": None,
+                        "route_key": None,
+                        "binding_id": None,
+                    },
+                }
+            ],
         )
 
     async def test_processing_failure_is_persisted_to_dead_letter(self) -> None:
