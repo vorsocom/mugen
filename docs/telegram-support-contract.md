@@ -6,6 +6,8 @@ This document defines the v1 Telegram platform contract in muGen.
 
 - Ingress mode: webhook only.
 - Webhook path: `POST /api/telegram/botapi/webhook/<path_token>`.
+- One muGen runtime may host multiple active Telegram bot profiles
+  concurrently.
 - Tenant-aware ingress route resolution:
   [`channel-orchestration` downstream note](./downstream-notes/channel-orchestration.md#tenant-aware-ingress-routing).
 - Chat scope: private chats only (`chat.type == "private"`).
@@ -20,36 +22,45 @@ This document defines the v1 Telegram platform contract in muGen.
 When `"telegram"` is enabled in `mugen.platforms`, startup is fail-closed unless all requirements below are met:
 
 1. Runtime config has valid Telegram keys:
-   - `telegram.bot.token`
-   - `telegram.webhook.path_token`
-   - `telegram.webhook.secret_token`
-   - `telegram.webhook.dedupe_ttl_seconds`
-   - `telegram.api.base_url`
-   - `telegram.api.timeout_seconds`
-   - `telegram.api.max_api_retries`
-   - `telegram.api.retry_backoff_seconds`
-   - `telegram.media.allowed_mimetypes`
-   - `telegram.media.max_download_bytes`
-   - `telegram.typing.enabled`
+   - shared root settings:
+     - `telegram.webhook.dedupe_ttl_seconds`
+     - `telegram.api.base_url`
+     - `telegram.api.timeout_seconds`
+     - `telegram.api.max_api_retries`
+     - `telegram.api.retry_backoff_seconds`
+     - `telegram.media.allowed_mimetypes`
+     - `telegram.media.max_download_bytes`
+     - `telegram.typing.enabled`
+   - per-runtime-profile settings under `[[telegram.profiles]]`:
+     - `key`
+     - `telegram.profiles[].bot.token`
+     - `telegram.profiles[].webhook.path_token`
+     - `telegram.profiles[].webhook.secret_token`
 2. DI provider path exists and resolves:
    - `mugen.modules.core.client.telegram`
 3. Required extension tokens are registered:
    - FW: `core.fw.telegram_botapi`
    - IPC: `core.ipc.telegram_botapi`
 
+Legacy single-profile Telegram config is normalized to one implicit runtime
+profile with key `default`.
+
 ## Webhook Security Contract
 
 Webhook ingress is guarded by all of:
 
 1. Telegram platform enabled gate.
-2. Path token verification (`<path_token>` equals `telegram.webhook.path_token`).
-3. Secret header verification (`X-Telegram-Bot-Api-Secret-Token` equals `telegram.webhook.secret_token`).
+2. Path token verification (`<path_token>` resolves one configured
+   `telegram.profiles[].webhook.path_token`).
+3. Secret header verification (`X-Telegram-Bot-Api-Secret-Token` equals the
+   matched runtime profile's `webhook.secret_token`).
 
 Any verification failure is rejected before IPC dispatch.
 
 ## Webhook Registration (Telegram-Side)
 
-muGen does not automatically call Telegram `setWebhook`. Register the webhook explicitly.
+muGen does not automatically call Telegram `setWebhook`. Register each active
+runtime profile explicitly.
 
 `url` must use one of Telegram's allowed ports: `80`, `88`, `443`, or `8443`.
 
@@ -61,10 +72,11 @@ curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
   --data-urlencode "drop_pending_updates=false"
 ```
 
-The `<path_token>` and `<secret_token>` values must match:
+The `<path_token>` and `<secret_token>` values must match the same configured
+runtime profile:
 
-- `telegram.webhook.path_token`
-- `telegram.webhook.secret_token`
+- `telegram.profiles[].webhook.path_token`
+- `telegram.profiles[].webhook.secret_token`
 
 Validate registration and delivery status:
 

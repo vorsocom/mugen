@@ -8,7 +8,8 @@ This document defines the v1 Signal platform contract in muGen.
 - Ingress mode: websocket receive stream from `GET /v1/receive/{number}`.
 - Tenant-aware ingress route resolution:
   [`channel-orchestration` downstream note](./downstream-notes/channel-orchestration.md#tenant-aware-ingress-routing).
-- Account model: one Signal account per deployment.
+- Account model: multiple Signal accounts may run concurrently in one deployment
+  via `signal.profiles[]`.
 - Supported inbound envelope types:
   - text messages
   - media attachments
@@ -21,33 +22,39 @@ This document defines the v1 Signal platform contract in muGen.
 When `"signal"` is enabled in `mugen.platforms`, startup is fail-closed unless all requirements below are met:
 
 1. Runtime config has valid Signal keys:
-   - `signal.account.number`
-   - `signal.api.base_url`
-   - `signal.api.bearer_token`
-   - `signal.api.timeout_seconds`
-   - `signal.api.max_api_retries`
-   - `signal.api.retry_backoff_seconds`
-   - `signal.receive.heartbeat_seconds`
-   - `signal.receive.reconnect_base_seconds`
-   - `signal.receive.reconnect_max_seconds`
-   - `signal.receive.reconnect_jitter_seconds`
-   - `signal.receive.dedupe_ttl_seconds`
-   - `signal.media.allowed_mimetypes`
-   - `signal.media.max_download_bytes`
-   - `signal.typing.enabled`
+   - shared root settings:
+     - `signal.api.timeout_seconds`
+     - `signal.api.max_api_retries`
+     - `signal.api.retry_backoff_seconds`
+     - `signal.receive.heartbeat_seconds`
+     - `signal.receive.reconnect_base_seconds`
+     - `signal.receive.reconnect_max_seconds`
+     - `signal.receive.reconnect_jitter_seconds`
+     - `signal.receive.dedupe_ttl_seconds`
+     - `signal.media.allowed_mimetypes`
+     - `signal.media.max_download_bytes`
+     - `signal.typing.enabled`
+   - per-runtime-profile settings under `[[signal.profiles]]`:
+     - `key`
+     - `signal.profiles[].account.number`
+     - `signal.profiles[].api.base_url`
+     - `signal.profiles[].api.bearer_token`
 2. DI provider path exists and resolves:
    - `mugen.modules.core.client.signal`
 3. Required extension tokens are registered:
    - IPC: `core.ipc.signal_restapi`
 
+Legacy single-profile Signal config is normalized to one implicit runtime
+profile with key `default`.
+
 At runtime, client startup verifies:
 
-1. `GET /v1/health` succeeds.
-2. `GET /v1/about` returns mode `json-rpc`.
+1. each configured runtime profile passes `GET /v1/health`;
+2. each configured runtime profile returns mode `json-rpc` from `GET /v1/about`.
 
 ## Gateway Auth Contract
 
-- Every Signal API request includes `Authorization: Bearer <signal.api.bearer_token>`.
+- Every Signal API request includes `Authorization: Bearer <matched runtime profile bearer token>`.
 - Token-based authorization must be enforced by the gateway/proxy.
 
 ## Reliability Contract
@@ -56,6 +63,8 @@ At runtime, client startup verifies:
 - Durable dead-letter table: `signal_restapi_event_dead_letter`.
 - Dedupe key format: `<event_type>:<sha256(normalized_payload)>`.
 - Malformed payloads and unhandled processing failures are written to dead-letter persistence.
+- One receive loop runs per active runtime profile and inbound events retain the
+  resolved `runtime_profile_key` for outbound reply dispatch.
 
 ## Outbound Response Contract
 
@@ -69,6 +78,5 @@ At runtime, client startup verifies:
 ## Unsupported Boundaries (v1)
 
 - Signal account provisioning/registration/linking lifecycle.
-- Multi-account routing.
 - Stories, polls, stickers, calls.
 - Full Signal group administration features.
