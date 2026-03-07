@@ -8,6 +8,8 @@ This document defines the v1 WhatsApp Cloud API platform contract in muGen.
 - Webhook routes:
   - Subscription verification: `GET /api/whatsapp/wacapi/webhook`
   - Event delivery: `POST /api/whatsapp/wacapi/webhook`
+- One muGen runtime may host multiple active WhatsApp runtime profiles
+  concurrently.
 - Tenant-aware ingress route resolution:
   [`channel-orchestration` downstream note](./downstream-notes/channel-orchestration.md#tenant-aware-ingress-routing).
 - Supported inbound event families:
@@ -22,29 +24,37 @@ This document defines the v1 WhatsApp Cloud API platform contract in muGen.
 When `"whatsapp"` is enabled in `mugen.platforms`, startup is fail-closed unless all requirements below are met:
 
 1. Runtime config has valid WhatsApp keys:
-   - `whatsapp.app.secret`
-   - `whatsapp.business.phone_number_id`
-   - `whatsapp.graphapi.access_token`
-   - `whatsapp.graphapi.base_url`
-   - `whatsapp.graphapi.version`
-   - `whatsapp.graphapi.timeout_seconds`
-   - `whatsapp.graphapi.max_download_bytes`
-   - `whatsapp.graphapi.typing_indicator_enabled`
-   - `whatsapp.graphapi.max_api_retries` (optional; default `2`)
-   - `whatsapp.graphapi.retry_backoff_seconds` (optional; default `0.5`)
-   - `whatsapp.servers.verify_ip`
-   - `whatsapp.servers.allowed` (required when `verify_ip=true`)
-   - `whatsapp.servers.trust_forwarded_for`
-   - `whatsapp.webhook.verification_token`
-   - `whatsapp.webhook.dedupe_ttl_seconds`
-   - `whatsapp.beta.users` (used when `mugen.beta.active=true`)
+   - shared root settings:
+     - `whatsapp.graphapi.base_url`
+     - `whatsapp.graphapi.version`
+     - `whatsapp.graphapi.timeout_seconds`
+     - `whatsapp.graphapi.max_download_bytes`
+     - `whatsapp.graphapi.typing_indicator_enabled`
+     - `whatsapp.graphapi.max_api_retries` (optional; default `2`)
+     - `whatsapp.graphapi.retry_backoff_seconds` (optional; default `0.5`)
+     - `whatsapp.servers.verify_ip`
+     - `whatsapp.servers.allowed` (required when `verify_ip=true`)
+     - `whatsapp.servers.trust_forwarded_for`
+     - `whatsapp.webhook.verification_token`
+     - `whatsapp.webhook.dedupe_ttl_seconds`
+     - `whatsapp.beta.users` (used when `mugen.beta.active=true`)
+   - per-runtime-profile settings under `[[whatsapp.profiles]]`:
+     - `key`
+     - `whatsapp.profiles[].app.id`
+     - `whatsapp.profiles[].app.secret`
+     - `whatsapp.profiles[].business.phone_number_id`
+     - `whatsapp.profiles[].graphapi.access_token`
 2. DI provider path exists and resolves:
    - `mugen.modules.core.client.whatsapp`
 3. Required extension tokens are registered:
    - FW: `core.fw.whatsapp_wacapi`
    - IPC: `core.ipc.whatsapp_wacapi`
 4. Startup probe succeeds:
-   - Graph API probe `GET /<phone_number_id>` against configured `graphapi.base_url` + `graphapi.version`.
+   - each runtime profile passes Graph API probe `GET /<phone_number_id>`
+     against configured `graphapi.base_url` + `graphapi.version`.
+
+Legacy single-profile WhatsApp config is normalized to one implicit runtime
+profile with key `default`.
 
 ## Webhook Security Contract
 
@@ -61,7 +71,7 @@ Webhook ingress is guarded by all of:
    - `hub.challenge` is required and echoed back.
 4. Request signature verification (POST):
    - `X-Hub-Signature-256` header is required.
-   - Signature must match `HMAC-SHA256(raw_body, whatsapp.app.secret)`.
+   - Signature must match `HMAC-SHA256(raw_body, <matched runtime profile app secret>)`.
 
 Any verification failure is rejected before IPC dispatch.
 
@@ -76,6 +86,8 @@ Any verification failure is rejected before IPC dispatch.
 ## IPC Contract
 
 - Webhook dispatches `platform="whatsapp"`, `command="whatsapp_wacapi_event"`.
+- Runtime profile selection is resolved from
+  `entry[].changes[].value.metadata.phone_number_id`.
 - `value.messages[]` are processed as message events.
 - `value.statuses[]` are processed as status events.
 

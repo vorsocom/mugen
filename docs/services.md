@@ -41,6 +41,22 @@ see `docs/acp-rbac-policy.md`.
 Downstream plugins should compose business orchestration on top of ACP-exposed
 resources/actions rather than bypassing them with direct table writes.
 
+## Live Platform Runtime Reload
+
+ACP now also exposes an admin action for reconciling active multi-profile
+platform runtimes without a full process restart.
+
+- entity set: `SystemFlags`
+- action: `reloadPlatformProfiles`
+
+Behavior:
+
+- rereads and validates the active config file;
+- reloads changed runtime profiles for active profiled messaging platforms;
+- leaves unchanged platforms untouched;
+- rolls back reloaded platforms if a later reload step fails;
+- rejects platform activation changes, which still require restart.
+
 For schema ownership and migration isolation between core and downstream
 plugins, see `docs/migration-track-separation.md`.
 

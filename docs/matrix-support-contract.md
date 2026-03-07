@@ -18,6 +18,8 @@ muGen core keeps Matrix support intentionally lean:
 ### Session and Sync
 
 - Matrix client login with stored-credential reuse.
+- One muGen runtime may host multiple active Matrix runtime profiles
+  concurrently.
 - Sync lifecycle with bounded exponential backoff and jitter on transient
   failures.
 - Explicit auth-failure shutdown path for token/auth errors.
@@ -33,11 +35,9 @@ muGen core keeps Matrix support intentionally lean:
 ### Runtime Configuration Contract (Matrix Enabled)
 
 When `matrix` is enabled in `mugen.platforms`, bootstrap is strict fail-closed.
-Core requires all of the following at startup:
 
-- `matrix.homeserver` (non-empty string)
-- `matrix.client.user` (non-empty string)
-- `matrix.client.password` (non-empty string)
+Shared required root settings:
+
 - `matrix.domains.allowed` (non-empty `list[str]`)
 - `matrix.domains.denied` (`list[str]`)
 - `matrix.invites.direct_only` (`bool`)
@@ -47,6 +47,16 @@ Core requires all of the following at startup:
 - if mode is `allowlist`, every entry must include non-empty `user_id` and
   non-empty `device_ids`
 - `security.secrets.encryption_key` (non-empty string)
+
+Per-runtime-profile required settings under `[[matrix.profiles]]`:
+
+- `key` (non-empty unique string)
+- `homeserver` (non-empty string)
+- `client.user` (non-empty string)
+- `client.password` (non-empty string)
+
+Legacy single-profile Matrix config is normalized to one implicit runtime
+profile with key `default`.
 
 Legacy permissive fallback behavior for malformed matrix runtime policy is not
 supported.
@@ -64,14 +74,17 @@ supported.
 - Tenant-aware ingress routing for inbound room messages using
   `IngressBindings` with:
   - `channel_key = "matrix"`
-  - `identifier_type = "room_id"`
-  - `identifier_value = <Matrix room_id>`
+  - `identifier_type = "recipient_user_id"`
+  - `identifier_value = <active Matrix runtime profile user id>`
 - Resolved bindings provide tenant-aware `ContextScope` and ingress metadata to
   the messaging runtime.
-- Missing binding or missing room identifier falls back to the global tenant.
+- Missing binding or missing recipient identifier falls back to the global
+  tenant.
 - Inactive, ambiguous, invalid, unauthorized, and resolver-error outcomes fail
   closed and drop inbound Matrix message processing before messaging handlers
   run.
+- `room_id` remains conversation context and reply destination metadata; it is
+  not the tenant-routing identifier.
 - Text messages (`m.text`) routed into messaging service handlers.
 - Encrypted media handling for audio/file/image/video:
   - MIME allowlist enforcement,

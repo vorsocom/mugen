@@ -56,6 +56,14 @@ Use core ACP resources directly:
 
 Downstream stores only integration-specific metadata outside this model set.
 
+`ChannelProfile.runtime_profile_key` is part of the core model contract for
+non-web messaging transports:
+
+- it selects the configured runtime transport profile used for that tenant
+  channel endpoint;
+- it is required for non-web messaging channel profiles;
+- it must match one active configured runtime profile for the same platform.
+
 ### Services / APIs
 
 #### Tenant-aware ingress routing
@@ -65,7 +73,8 @@ Ingress routing is resolved before orchestration actions run.
 Routing identifiers currently used by adapters:
 
 - LINE: `identifier_type="path_token"` from webhook path token.
-- Matrix: `identifier_type="room_id"` from inbound Matrix DM room id.
+- Matrix: `identifier_type="recipient_user_id"` from the active Matrix runtime
+  profile user id that received the room event.
 - Telegram: `identifier_type="path_token"` from webhook path token.
 - WeChat: `identifier_type="path_token"` from webhook path token.
 - Signal: `identifier_type="account_number"` from normalized account number.
@@ -102,7 +111,8 @@ Resolver flow (`IIngressRoutingService.resolve`):
    - else `None`.
 7. Return ingress context envelope:
    `tenant_id`, `tenant_slug`, `platform`, `channel_key`, `identifier_claims`,
-   optional `channel_profile_id`, optional `route_key`, optional `binding_id`.
+   optional `channel_profile_id`, optional `route_key`, optional `binding_id`,
+   optional `runtime_profile_key`.
 
 Resolver failure reason codes:
 
@@ -118,7 +128,7 @@ Resolver failure reason codes:
 Adapter behavior on unresolved route:
 
 - Matrix:
-  - missing binding / missing identifier: continue with global tenant fallback,
+  - missing binding / missing recipient identifier: continue with global tenant fallback,
   - inactive / ambiguous / invalid / unauthorized / resolution-error:
     warning-log and drop inbound message processing before messaging handlers.
 - Webhook adapters (LINE/Telegram/WeChat/Signal/WhatsApp) dead-letter the
@@ -131,6 +141,10 @@ On successful resolution, attach ingress context to downstream processing:
 
 - `message_context` item: `{"type":"ingress_route","content":{...}}`
 - media/message metadata: `metadata.ingress_route={...}`
+
+Transport conversation identifiers such as Matrix `room_id`, LINE reply tokens,
+Telegram `chat_id`, or phone-number recipients remain conversation context and
+reply-target data. They are not the canonical tenant-routing identifier.
 
 Recommended downstream ingress sequence:
 
