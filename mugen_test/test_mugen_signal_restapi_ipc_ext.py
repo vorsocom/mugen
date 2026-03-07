@@ -344,7 +344,7 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(merged["metadata"]["k"], "v")
         self.assertEqual(merged["metadata"]["ingress_route"]["tenant_slug"], "tenant-a")
 
-    async def test_missing_binding_ingress_route_falls_back_to_global_tenant(self) -> None:
+    async def test_missing_binding_ingress_route_is_dead_lettered_and_dropped(self) -> None:
         class _FallbackRouter:
             async def resolve(self, request):  # noqa: ARG002
                 return IngressRouteResolution(
@@ -368,45 +368,24 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
             account_number="+15550000001",
             webhook_payload={"event": "x"},
         )
-        self.assertEqual(
-            route,
-            {
-                "tenant_id": "00000000-0000-0000-0000-000000000000",
-                "tenant_slug": "global",
-                "platform": "signal",
-                "channel_key": "signal",
-                "identifier_claims": {"account_number": "+15550000001"},
-                "channel_profile_id": None,
-                "route_key": None,
-                "binding_id": None,
-                "tenant_resolution": {
-                    "mode": "fallback_global",
-                    "reason_code": "missing_binding",
-                    "source": "signal.ingress_routing",
-                },
-            },
-        )
-        self.assertEqual(relational.dead_letters, [])
+        self.assertIsNone(route)
+        self.assertEqual(len(relational.dead_letters), 1)
+        self.assertEqual(relational.dead_letters[0]["reason_code"], "route_unresolved")
+        self.assertIn("missing_binding", relational.dead_letters[0]["error_message"])
+        self.assertIn("no binding", relational.dead_letters[0]["error_message"])
 
         await ext._signal_restapi_event(  # pylint: disable=protected-access
             _make_request(_receive_payload(_text_envelope(text="hello")))
         )
-        messaging.handle_text_message.assert_awaited_once()
-        kwargs = messaging.handle_text_message.await_args.kwargs
-        self.assertEqual(kwargs["room_id"], "+15550001")
-        self.assertEqual(kwargs["sender"], "+15550001")
-        self.assertEqual(kwargs["message"], "hello")
+        messaging.handle_text_message.assert_not_awaited()
         self.assertEqual(
-            kwargs["message_context"][-1]["content"]["tenant_resolution"],
-            {
-                "mode": "fallback_global",
-                "reason_code": "missing_binding",
-                "source": "signal.ingress_routing",
-            },
+            ext._metrics.get("signal.ipc.route.unresolved"),  # pylint: disable=protected-access
+            2,
         )
+        self.assertEqual(len(relational.dead_letters), 2)
         logger.warning.assert_any_call(
-            "Using global tenant fallback for Signal ingress "
-            "(reason_code=missing_binding account_number='+15550000001')."
+            "Dropped Signal ingress due to unresolved route "
+            "reason_code=missing_binding account_number='+15550000001'."
         )
 
         class _UnresolvedNoDetailRouter:

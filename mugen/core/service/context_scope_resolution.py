@@ -11,7 +11,7 @@ __all__ = [
 ]
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping
 
 from mugen.core.constants import GLOBAL_TENANT_ID
 from mugen.core.contract.context import ContextScope
@@ -64,6 +64,22 @@ def _normalize_optional_text(value: object) -> str | None:
 
 def _route_value(route: Mapping[str, Any], key: str) -> str | None:
     return _normalize_optional_text(route.get(key))
+
+
+def _normalize_reason_codes(
+    values: Collection[str] | None,
+    *,
+    default: set[str],
+) -> set[str]:
+    if values is None:
+        return set(default)
+
+    normalized: set[str] = set()
+    for value in values:
+        value_text = _normalize_optional_text(value)
+        if value_text is not None:
+            normalized.add(value_text)
+    return normalized
 
 
 def _default_ingress_route(
@@ -120,6 +136,7 @@ def resolve_context_ingress(
     workflow_id: str | None = None,
     identifier_claims: Mapping[str, Any] | None = None,
     allow_global_without_routing: bool = False,
+    global_fallback_reasons: Collection[str] | None = None,
 ) -> ResolvedContextIngress:
     """Resolve one ingress route outcome into ContextScope plus metadata."""
     if routing is not None and routing.ok and routing.result is not None:
@@ -151,6 +168,10 @@ def resolve_context_ingress(
     reason_detail = _normalize_optional_text(
         None if routing is None else routing.reason_detail
     )
+    fallback_reasons = _normalize_reason_codes(
+        global_fallback_reasons,
+        default=_GLOBAL_FALLBACK_REASONS,
+    )
 
     if routing is None:
         if allow_global_without_routing is not True:
@@ -164,7 +185,7 @@ def resolve_context_ingress(
             reason_code=reason_code,
             detail=reason_detail,
         )
-    elif reason_code not in _GLOBAL_FALLBACK_REASONS:
+    elif reason_code not in fallback_reasons:
         raise ContextScopeResolutionError(
             reason_code=reason_code or "route_unresolved",
             detail=reason_detail,
@@ -267,6 +288,7 @@ def resolve_ingress_route_context(
     source: str,
     identifier_claims: Mapping[str, Any] | None = None,
     allow_global_without_routing: bool = False,
+    global_fallback_reasons: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Resolve an ingress route envelope with the same fallback policy as scope resolution."""
     resolved = resolve_context_ingress(
@@ -278,5 +300,6 @@ def resolve_ingress_route_context(
         source=source,
         identifier_claims=identifier_claims,
         allow_global_without_routing=allow_global_without_routing,
+        global_fallback_reasons=global_fallback_reasons,
     )
     return dict(resolved.ingress_route)

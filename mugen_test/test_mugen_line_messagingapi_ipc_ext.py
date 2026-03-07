@@ -601,41 +601,24 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 webhook_payload={"events": []},
             )
 
-        self.assertEqual(
-            first,
-            {
-                "tenant_id": "00000000-0000-0000-0000-000000000000",
-                "tenant_slug": "global",
-                "platform": "line",
-                "channel_key": "line",
-                "identifier_claims": {"path_token": "tok-1"},
-                "channel_profile_id": None,
-                "route_key": None,
-                "binding_id": None,
-                "tenant_resolution": {
-                    "mode": "fallback_global",
-                    "reason_code": "missing_binding",
-                    "source": "line.ingress_routing",
-                },
-            },
-        )
+        self.assertIsNone(first)
         self.assertIsNone(second)
         self.assertEqual(
             ext._metrics.get("line.ipc.route.unresolved"),  # pylint: disable=protected-access
-            1,
+            2,
         )
-        self.assertEqual(
-            ext._metrics.get("line.ipc.route.fallback_global"),  # pylint: disable=protected-access
-            1,
-        )
-        self.assertEqual(record_dead_letter.await_count, 1)
+        self.assertEqual(record_dead_letter.await_count, 2)
         self.assertEqual(
             record_dead_letter.await_args_list[0].kwargs["error_message"],
+            "missing_binding: binding not found",
+        )
+        self.assertEqual(
+            record_dead_letter.await_args_list[1].kwargs["error_message"],
             "route_unresolved",
         )
         logger.warning.assert_any_call(
-            "Using global tenant fallback for LINE ingress "
-            "(reason_code=missing_binding path_token='tok-1')."
+            "Dropped LINE webhook due to unresolved ingress route "
+            "reason_code=missing_binding path_token='tok-1'."
         )
         logger.warning.assert_any_call(
             "Dropped LINE webhook due to unresolved ingress route "
