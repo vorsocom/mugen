@@ -70,6 +70,36 @@ class TestMatrixRuntimeConfigContract(unittest.TestCase):
         ]
         validate_matrix_enabled_runtime_config(cfg)
 
+    def test_accepts_profiles_and_rejects_duplicate_client_users(self) -> None:
+        cfg = _valid_config()
+        cfg["matrix"]["profiles"] = [
+            {
+                "key": "default",
+                "homeserver": "https://matrix-a.example.com",
+                "client": {
+                    "user": "@assistant-a:example.com",
+                    "password": "pw-a",
+                },
+            },
+            {
+                "key": "secondary",
+                "homeserver": "https://matrix-b.example.com",
+                "client": {
+                    "user": "@assistant-b:example.com",
+                    "password": "pw-b",
+                },
+            },
+        ]
+        validate_matrix_enabled_runtime_config(cfg)
+
+        cfg = copy.deepcopy(cfg)
+        cfg["matrix"]["profiles"][1]["client"]["user"] = "@assistant-a:example.com"
+        with self.assertRaisesRegex(
+            RuntimeError,
+            re.escape("matrix client.user values must be unique"),
+        ):
+            validate_matrix_enabled_runtime_config(cfg)
+
     def test_rejects_invalid_shapes_and_values(self) -> None:
         cases: list[tuple[dict, str]] = []
 

@@ -8,6 +8,12 @@ from quart import abort
 
 from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.utility.platform_runtime_profile import (
+    find_platform_runtime_profile_key,
+    get_platform_profile_section,
+    get_platform_runtime_profile_keys,
+    identifier_configured_for_platform,
+)
 
 
 def _config_provider():
@@ -70,16 +76,26 @@ def wechat_webhook_path_token_required(
                 abort(400)
 
             try:
-                expected_path_token = str(config.wechat.webhook.path_token).strip()
-            except (AttributeError, KeyError):
+                identifier_configured = identifier_configured_for_platform(
+                    config,
+                    platform="wechat",
+                    identifier_type="path_token",
+                )
+                runtime_profile_key = find_platform_runtime_profile_key(
+                    config,
+                    platform="wechat",
+                    identifier_type="path_token",
+                    identifier_value=path_token,
+                )
+            except RuntimeError:
                 logger.error("WeChat webhook path token configuration missing.")
                 abort(500)
 
-            if expected_path_token == "":
+            if identifier_configured is not True:
                 logger.error("WeChat webhook path token configuration missing.")
                 abort(500)
 
-            if hmac.compare_digest(path_token.strip(), expected_path_token) is not True:
+            if runtime_profile_key is None:
                 logger.error("WeChat webhook path token verification failed.")
                 abort(401)
 
@@ -110,8 +126,50 @@ def wechat_provider_required(
             logger: ILoggingGateway = logger_provider()
 
             try:
-                configured_provider = str(config.wechat.provider).strip().lower()
-            except (AttributeError, KeyError):
+                identifier_configured = identifier_configured_for_platform(
+                    config,
+                    platform="wechat",
+                    identifier_type="path_token",
+                )
+            except RuntimeError:
+                logger.error("WeChat provider configuration missing.")
+                abort(500)
+
+            if identifier_configured is not True:
+                logger.error("WeChat provider configuration missing.")
+                abort(500)
+
+            profile_keys = get_platform_runtime_profile_keys(
+                config,
+                platform="wechat",
+            )
+            path_token = kwargs.get("path_token")
+            runtime_profile_key = None
+            if not isinstance(path_token, str) or path_token.strip() == "":
+                if len(profile_keys) == 1:
+                    runtime_profile_key = profile_keys[0]
+                else:
+                    logger.error("WeChat webhook path token missing.")
+                    abort(400)
+
+            try:
+                if runtime_profile_key is None:
+                    runtime_profile_key = find_platform_runtime_profile_key(
+                        config,
+                        platform="wechat",
+                        identifier_type="path_token",
+                        identifier_value=path_token,
+                    )
+                if runtime_profile_key is None:
+                    logger.error("WeChat webhook path token verification failed.")
+                    abort(401)
+                profile_cfg = get_platform_profile_section(
+                    config,
+                    platform="wechat",
+                    runtime_profile_key=runtime_profile_key,
+                )
+                configured_provider = str(profile_cfg.provider).strip().lower()
+            except (AttributeError, KeyError, RuntimeError):
                 logger.error("WeChat provider configuration missing.")
                 abort(500)
 

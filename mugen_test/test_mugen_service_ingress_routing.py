@@ -79,11 +79,13 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
             channel_profile_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
             route_key="queue.line",
             binding_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+            runtime_profile_key="default",
         )
 
         context = build_ingress_route_context(result)
         self.assertEqual(context["tenant_slug"], "tenant-a")
         self.assertEqual(context["route_key"], "queue.line")
+        self.assertEqual(context["runtime_profile_key"], "default")
 
         item = build_ingress_route_message_context_item(result)
         self.assertEqual(item["type"], "ingress_route")
@@ -153,6 +155,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
                     "tenant_id": tenant_id,
                     "is_active": True,
                     "route_default_key": "queue.default",
+                    "runtime_profile_key": "profile-a",
                 }
             ],
         }
@@ -179,6 +182,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved.result.route_key, "queue.line")
         self.assertEqual(resolved.result.channel_profile_id, channel_profile_id)
         self.assertEqual(resolved.result.binding_id, binding_id)
+        self.assertEqual(resolved.result.runtime_profile_key, "profile-a")
 
     async def test_resolve_success_uses_profile_route_key_when_binding_attrs_missing(self) -> None:
         tenant_id = uuid.uuid4()

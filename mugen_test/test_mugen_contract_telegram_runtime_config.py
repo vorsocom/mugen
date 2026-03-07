@@ -46,6 +46,36 @@ class TestTelegramRuntimeConfigContract(unittest.TestCase):
         cfg = _valid_config()
         validate_telegram_enabled_runtime_config(cfg)
 
+    def test_accepts_profiles_and_rejects_duplicate_profile_keys(self) -> None:
+        cfg = _valid_config()
+        cfg["telegram"]["profiles"] = [
+            {
+                "key": "default",
+                "bot": {"token": "token-a"},
+                "webhook": {
+                    "path_token": "path-token-a",
+                    "secret_token": "secret-token-a",
+                },
+            },
+            {
+                "key": "secondary",
+                "bot": {"token": "token-b"},
+                "webhook": {
+                    "path_token": "path-token-b",
+                    "secret_token": "secret-token-b",
+                },
+            },
+        ]
+        validate_telegram_enabled_runtime_config(cfg)
+
+        cfg = copy.deepcopy(cfg)
+        cfg["telegram"]["profiles"][1]["key"] = "default"
+        with self.assertRaisesRegex(
+            RuntimeError,
+            re.escape("telegram profile keys must be unique"),
+        ):
+            validate_telegram_enabled_runtime_config(cfg)
+
     def test_rejects_invalid_shapes_and_values(self) -> None:
         cases: list[tuple[dict, str]] = []
 

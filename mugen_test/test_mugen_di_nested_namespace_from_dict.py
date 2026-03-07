@@ -133,6 +133,6 @@ class TestDINestedNamespaceFromDict(unittest.TestCase):
 
     def test_non_namespace_conversion_result_is_ignored(self):
         namespace = SimpleNamespace()
-        with patch("mugen.core.di.to_namespace", return_value=[]):
+        with patch("mugen.core.di.build_config_namespace", return_value=[]):
             di._nested_namespace_from_dict(items={"a": 1}, ns=namespace)
         self.assertFalse(hasattr(namespace, "a"))

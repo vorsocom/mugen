@@ -26,6 +26,27 @@ def _sync_signal(wait_side_effect=None) -> SimpleNamespace:
 class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
     """Unit tests for mugen.run_matrix_client."""
 
+    async def test_run_matrix_client_uses_multi_profile_runner_when_available(
+        self,
+    ) -> None:
+        runner = unittest.mock.AsyncMock()
+        client = SimpleNamespace(run_profiles_forever=runner)
+
+        await run_matrix_client(
+            config_provider=lambda: SimpleNamespace(),
+            logger_provider=lambda: unittest.mock.Mock(),
+            matrix_provider=lambda: client,
+            started_callback="started",
+            degraded_callback="degraded",
+            healthy_callback="healthy",
+        )
+
+        runner.assert_awaited_once_with(
+            started_callback="started",
+            degraded_callback="degraded",
+            healthy_callback="healthy",
+        )
+
     async def test_normal_run(self) -> None:
         """Test normal run of matrix client."""
         # Create dummy app to get context.

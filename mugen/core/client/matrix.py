@@ -1,6 +1,6 @@
 """Provides an implementation of IMatrixClient."""
 
-__all__ = ["DefaultMatrixClient"]
+__all__ = ["DefaultMatrixClient", "MultiProfileMatrixClient"]
 
 from io import BytesIO
 
@@ -12,10 +12,12 @@ import json
 from math import isfinite
 import mimetypes
 import os
+import random
+import re
 import tempfile
 import traceback
 from types import SimpleNamespace
-from typing import Coroutine
+from typing import Any, Coroutine
 
 import aiofiles
 from cryptography.fernet import Fernet, InvalidToken
@@ -87,6 +89,12 @@ from mugen.core.service.context_scope_resolution import (
 )
 from mugen.core.service.ingress_routing import DefaultIngressRoutingService
 from mugen.core.utility.platforms import normalize_platforms
+from mugen.core.utility.platform_runtime_profile import (
+    DEFAULT_RUNTIME_PROFILE_KEY,
+    clone_config_with_platform_profile,
+    get_platform_profile_dicts,
+    get_platform_runtime_profile_keys,
+)
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
     PROCESSING_STATE_STOP,
@@ -138,10 +146,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._vendor_client = AsyncClient(
             homeserver=self._config.matrix.homeserver,
             user=self._config.matrix.client.user,
-            store_path=os.path.join(
-                self._config.basedir,
-                self._config.matrix.storage.olm.path,
-            ),
+            store_path=self._resolve_olm_store_path(),
         )
         self.synced = getattr(self._vendor_client, "synced", asyncio.Event())
         self._ipc_service = ipc_service
@@ -694,16 +699,41 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             SimpleNamespace(),
         )
         client_user = str(getattr(client_cfg, "user", ""))
+        runtime_profile_key = self._resolve_runtime_profile_key()
         identity_material = "|".join(
             [
                 environment,
                 "matrix",
+                runtime_profile_key,
                 homeserver.strip().lower(),
                 client_user.strip().lower(),
             ]
         )
         digest = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:16]
         return f"matrix:{environment}:{digest}"
+
+    def _resolve_runtime_profile_key(self) -> str:
+        raw_value = getattr(
+            getattr(self._config, "matrix", SimpleNamespace()),
+            "runtime_profile_key",
+            DEFAULT_RUNTIME_PROFILE_KEY,
+        )
+        if not isinstance(raw_value, str) or raw_value.strip() == "":
+            return DEFAULT_RUNTIME_PROFILE_KEY
+        return raw_value.strip()
+
+    def _resolve_olm_store_path(self) -> str:
+        relative_path = str(
+            getattr(self._config.matrix.storage.olm, "path", "")
+        ).strip()
+        if relative_path == "":
+            relative_path = ".olmstore"
+        runtime_profile_key = self._resolve_runtime_profile_key()
+        return os.path.join(
+            self._config.basedir,
+            relative_path,
+            runtime_profile_key,
+        )
 
     def _keyval_key(self, key_name: str) -> str:
         return f"{self._credentials_key_prefix}:{key_name}"
@@ -1285,11 +1315,14 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     ) -> tuple[object, dict[str, object]] | None:
         room_id = self._coerce_optional_string(getattr(room, "room_id", None))
         sender_id = self._coerce_optional_string(getattr(message, "sender", None)) or ""
+        recipient_user_id = self._coerce_optional_string(self.current_user_id)
         claims = {"sender_mxid": sender_id}
         if room_id is not None:
             claims["room_id"] = room_id
+        if recipient_user_id is not None:
+            claims["recipient_user_id"] = recipient_user_id
 
-        if room_id is None:
+        if recipient_user_id is None:
             resolution = IngressRouteResolution(
                 ok=False,
                 reason_code=IngressRouteReason.MISSING_IDENTIFIER.value,
@@ -1300,8 +1333,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                     IngressRouteRequest(
                         platform="matrix",
                         channel_key="matrix",
-                        identifier_type="room_id",
-                        identifier_value=room_id,
+                        identifier_type="recipient_user_id",
+                        identifier_value=recipient_user_id,
                         claims=claims,
                     )
                 )
@@ -2345,3 +2378,520 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 filesize=file["size"],
                 encrypt=encrypt,
             )
+
+
+class MultiProfileMatrixClient(IMatrixClient):
+    """Matrix client manager that runs multiple runtime profiles concurrently."""
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        config: SimpleNamespace = None,
+        ipc_service: IIPCService = None,
+        keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway = None,
+        logging_gateway: ILoggingGateway = None,
+        messaging_service: IMessagingService = None,
+        user_service: IUserService = None,
+    ) -> None:
+        self._root_config = config
+        self._ipc_service = ipc_service
+        self._keyval_storage_gateway = keyval_storage_gateway
+        self._relational_storage_gateway = relational_storage_gateway
+        self._logging_gateway = logging_gateway
+        self._messaging_service = messaging_service
+        self._user_service = user_service
+        self._lock = asyncio.Lock()
+        self.synced = asyncio.Event()
+        self._entered = False
+        self._generation = 0
+        self._failure_queue: asyncio.Queue[BaseException] = asyncio.Queue()
+        self._sync_tasks: dict[str, asyncio.Task] = {}
+        self._health_tasks: dict[str, asyncio.Task] = {}
+        self._clients, self._profile_snapshots = self._build_clients(config)
+
+    def _build_clients(
+        self,
+        config: SimpleNamespace,
+    ) -> tuple[dict[str, DefaultMatrixClient], dict[str, dict[str, Any]]]:
+        clients: dict[str, DefaultMatrixClient] = {}
+        snapshots: dict[str, dict[str, Any]] = {}
+        profile_keys = get_platform_runtime_profile_keys(config, platform="matrix")
+        profile_dicts = get_platform_profile_dicts(config, platform="matrix")
+
+        for index, runtime_profile_key in enumerate(profile_keys):
+            profile_config = clone_config_with_platform_profile(
+                config,
+                platform="matrix",
+                runtime_profile_key=runtime_profile_key,
+            )
+            clients[runtime_profile_key] = DefaultMatrixClient(
+                config=profile_config,
+                ipc_service=self._ipc_service,
+                keyval_storage_gateway=self._keyval_storage_gateway,
+                relational_storage_gateway=self._relational_storage_gateway,
+                logging_gateway=self._logging_gateway,
+                messaging_service=self._messaging_service,
+                user_service=self._user_service,
+            )
+            snapshots[runtime_profile_key] = dict(profile_dicts[index])
+
+        if not clients:
+            raise RuntimeError("No matrix runtime profiles configured.")
+        return clients, snapshots
+
+    def managed_clients(self) -> dict[str, DefaultMatrixClient]:
+        """Return active managed Matrix clients keyed by runtime profile."""
+        return dict(self._clients)
+
+    @property
+    def sync_token(self) -> str:
+        first = next(iter(self._clients.values()), None)
+        if first is None:
+            return ""
+        value = getattr(first, "sync_token", None)
+        return value if isinstance(value, str) else ""
+
+    async def _enter_clients(
+        self,
+        clients: dict[str, DefaultMatrixClient],
+    ) -> None:
+        for client in clients.values():
+            await client.__aenter__()
+
+    async def _close_clients(
+        self,
+        clients: dict[str, DefaultMatrixClient],
+    ) -> None:
+        await asyncio.gather(
+            *(client.close() for client in clients.values()),
+            return_exceptions=True,
+        )
+
+    async def _cancel_runtime_tasks(
+        self,
+        sync_tasks: dict[str, asyncio.Task],
+        health_tasks: dict[str, asyncio.Task],
+    ) -> None:
+        tasks = tuple(sync_tasks.values()) + tuple(health_tasks.values())
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _bind_runtime_task(
+        self,
+        task: asyncio.Task,
+        *,
+        generation: int,
+        runtime_profile_key: str,
+        kind: str,
+    ) -> None:
+        def _callback(done: asyncio.Task) -> None:
+            if generation != self._generation:
+                return
+            if done.cancelled():
+                return
+            try:
+                error = done.exception()
+            except asyncio.CancelledError:
+                return
+            if error is None:
+                error = RuntimeError(
+                    "Matrix runtime task exited unexpectedly "
+                    f"(runtime_profile_key={runtime_profile_key!r} kind={kind})."
+                )
+            self._failure_queue.put_nowait(error)
+
+        task.add_done_callback(_callback)
+
+    async def _prepare_client_set(
+        self,
+        clients: dict[str, DefaultMatrixClient],
+        *,
+        generation: int,
+    ) -> tuple[dict[str, asyncio.Task], dict[str, asyncio.Task]]:
+        self.synced.clear()
+        sync_tasks: dict[str, asyncio.Task] = {}
+        health_tasks: dict[str, asyncio.Task] = {}
+
+        for runtime_profile_key, client in clients.items():
+            clear_sync_signal = getattr(getattr(client, "synced", None), "clear", None)
+            if callable(clear_sync_signal):
+                result = clear_sync_signal()
+                if inspect.isawaitable(result):
+                    await result
+
+            sync_task = asyncio.create_task(
+                client.sync_forever(
+                    since=client.sync_token,
+                    timeout=100,
+                    full_state=True,
+                    set_presence="online",
+                ),
+                name=f"mugen.matrix.sync_forever.{runtime_profile_key}",
+            )
+            health_task = asyncio.create_task(
+                client.monitor_runtime_health(),
+                name=f"mugen.matrix.runtime_health.{runtime_profile_key}",
+            )
+            self._bind_runtime_task(
+                sync_task,
+                generation=generation,
+                runtime_profile_key=runtime_profile_key,
+                kind="sync",
+            )
+            self._bind_runtime_task(
+                health_task,
+                generation=generation,
+                runtime_profile_key=runtime_profile_key,
+                kind="health",
+            )
+            sync_tasks[runtime_profile_key] = sync_task
+            health_tasks[runtime_profile_key] = health_task
+
+        async def _wait_until_all_synced() -> None:
+            await asyncio.gather(*(client.synced.wait() for client in clients.values()))
+
+        async def _wait_for_initial_failure():
+            return await asyncio.wait(
+                tuple(sync_tasks.values()) + tuple(health_tasks.values()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+        ready_task = asyncio.create_task(
+            _wait_until_all_synced(),
+            name=f"mugen.matrix.initial_sync.{generation}",
+        )
+        failure_task = asyncio.create_task(
+            _wait_for_initial_failure(),
+            name=f"mugen.matrix.initial_failure_wait.{generation}",
+        )
+        done, pending = await asyncio.wait(
+            (ready_task, failure_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+        if failure_task in done:
+            completed, _ = await failure_task
+            first_task = next(iter(completed))
+            error = first_task.exception()
+            if error is None:
+                error = RuntimeError("Matrix runtime task exited before initial sync.")
+            await self._cancel_runtime_tasks(sync_tasks, health_tasks)
+            raise error
+
+        await ready_task
+        await self._apply_profile_post_sync_setup(clients)
+        return sync_tasks, health_tasks
+
+    async def _apply_profile_post_sync_setup(
+        self,
+        clients: dict[str, DefaultMatrixClient],
+    ) -> None:
+        for client in clients.values():
+            profile = await client.get_profile()
+            assistant_display_name = getattr(
+                client._config.matrix.assistant,  # pylint: disable=protected-access
+                "name",
+                None,
+            )
+            if (
+                assistant_display_name is not None
+                and profile.displayname != assistant_display_name
+            ):
+                await client.set_displayname(assistant_display_name)
+            await client.trust_known_user_devices()
+
+    async def run_profiles_forever(
+        self,
+        *,
+        started_callback=None,
+        degraded_callback=None,
+        healthy_callback=None,
+    ) -> None:
+        max_sync_retries = 5
+        backoff_base_seconds = 1.0
+        backoff_max_seconds = 30.0
+        backoff_jitter_seconds = 0.25
+        started_signalled = False
+        runtime_degraded = False
+        consecutive_sync_failures = 0
+
+        async with self:
+            while True:
+                try:
+                    async with self._lock:
+                        next_generation = self._generation + 1
+                    sync_tasks, health_tasks = await self._prepare_client_set(
+                        self._clients,
+                        generation=next_generation,
+                    )
+                    async with self._lock:
+                        self._generation = next_generation
+                        self._sync_tasks = sync_tasks
+                        self._health_tasks = health_tasks
+                        self.synced.set()
+                    consecutive_sync_failures = 0
+
+                    if started_signalled is not True:
+                        if callable(started_callback):
+                            started_callback()
+                        if callable(healthy_callback):
+                            healthy_callback()
+                        started_signalled = True
+                        runtime_degraded = False
+                    elif runtime_degraded is True and callable(healthy_callback):
+                        healthy_callback()
+                        runtime_degraded = False
+
+                    error = await self._failure_queue.get()
+                    raise error
+                except asyncio.CancelledError:
+                    raise
+                except IPCCriticalDispatchError:
+                    raise
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    auth_failure = (
+                        re.search(
+                            r"(m_unknown_token|unauthorized|forbidden|invalid token|access token)",
+                            str(exc).lower(),
+                        )
+                        is not None
+                    )
+                    if auth_failure:
+                        raise RuntimeError(
+                            "Matrix client authentication failed."
+                        ) from exc
+
+                    async with self._lock:
+                        sync_tasks = self._sync_tasks
+                        health_tasks = self._health_tasks
+                        self._sync_tasks = {}
+                        self._health_tasks = {}
+                        self.synced.clear()
+                    await self._cancel_runtime_tasks(sync_tasks, health_tasks)
+
+                    if consecutive_sync_failures >= max_sync_retries:
+                        raise RuntimeError(
+                            "Matrix client sync failed after max retries."
+                        ) from exc
+
+                    if runtime_degraded is not True and callable(degraded_callback):
+                        degraded_callback(f"{type(exc).__name__}: {exc}")
+                    runtime_degraded = True
+
+                    delay_seconds = min(
+                        backoff_max_seconds,
+                        (backoff_base_seconds * (2**consecutive_sync_failures))
+                        + random.uniform(0, backoff_jitter_seconds),
+                    )
+                    consecutive_sync_failures += 1
+                    await asyncio.sleep(delay_seconds)
+
+    async def reload_profiles(
+        self,
+        config: SimpleNamespace | None = None,
+    ) -> dict[str, list[str]]:
+        next_config = self._root_config if config is None else config
+        next_clients, next_snapshots = self._build_clients(next_config)
+
+        try:
+            if self._entered:
+                await self._enter_clients(next_clients)
+
+            if self._sync_tasks or self._health_tasks:
+                async with self._lock:
+                    next_generation = self._generation + 1
+                next_sync_tasks, next_health_tasks = await self._prepare_client_set(
+                    next_clients,
+                    generation=next_generation,
+                )
+            else:
+                next_generation = self._generation
+                next_sync_tasks = {}
+                next_health_tasks = {}
+        except Exception:
+            await self._cancel_runtime_tasks(
+                locals().get("next_sync_tasks", {}),
+                locals().get("next_health_tasks", {}),
+            )
+            if self._entered:
+                await self._close_clients(next_clients)
+            raise
+
+        async with self._lock:
+            current_clients = self._clients
+            current_snapshots = self._profile_snapshots
+            current_sync_tasks = self._sync_tasks
+            current_health_tasks = self._health_tasks
+            self._root_config = next_config
+            self._clients = next_clients
+            self._profile_snapshots = next_snapshots
+            self._generation = next_generation
+            self._sync_tasks = next_sync_tasks
+            self._health_tasks = next_health_tasks
+            if next_sync_tasks or next_health_tasks:
+                self.synced.set()
+
+        await self._cancel_runtime_tasks(current_sync_tasks, current_health_tasks)
+        if self._entered:
+            await self._close_clients(current_clients)
+
+        before_keys = set(current_snapshots)
+        after_keys = set(next_snapshots)
+        updated = sorted(
+            key
+            for key in (before_keys & after_keys)
+            if current_snapshots.get(key) != next_snapshots.get(key)
+        )
+        unchanged = sorted(
+            key
+            for key in (before_keys & after_keys)
+            if current_snapshots.get(key) == next_snapshots.get(key)
+        )
+        return {
+            "added": sorted(after_keys - before_keys),
+            "removed": sorted(before_keys - after_keys),
+            "updated": updated,
+            "unchanged": unchanged,
+        }
+
+    async def __aenter__(self) -> "MultiProfileMatrixClient":
+        async with self._lock:
+            if self._entered:
+                return self
+            await self._enter_clients(self._clients)
+            self._entered = True
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
+        await self.close()
+        return False
+
+    async def close(self) -> None:
+        async with self._lock:
+            current_sync_tasks = self._sync_tasks
+            current_health_tasks = self._health_tasks
+            current_clients = self._clients
+            self._sync_tasks = {}
+            self._health_tasks = {}
+            self._generation += 1
+            was_entered = self._entered
+            self._entered = False
+            self.synced.clear()
+        await self._cancel_runtime_tasks(current_sync_tasks, current_health_tasks)
+        if was_entered:
+            await self._close_clients(current_clients)
+
+    def _first_client(self) -> DefaultMatrixClient:
+        return next(iter(self._clients.values()))
+
+    async def sync_forever(
+        self,
+        *,
+        since: str | None = None,
+        timeout: int = 100,
+        full_state: bool = True,
+        set_presence: MatrixPresence = "online",
+    ) -> None:
+        _ = since, timeout, full_state, set_presence
+        raise RuntimeError("Use run_profiles_forever() with MultiProfileMatrixClient.")
+
+    async def get_profile(self, user_id: str | None = None) -> MatrixProfile:
+        if user_id is not None:
+            for client in self._clients.values():
+                if client.current_user_id == user_id:
+                    return await client.get_profile(user_id)
+        return await self._first_client().get_profile(user_id)
+
+    async def set_displayname(self, displayname: str) -> None:
+        await asyncio.gather(
+            *(client.set_displayname(displayname) for client in self._clients.values()),
+            return_exceptions=False,
+        )
+
+    async def monitor_runtime_health(self) -> None:
+        error = await self._failure_queue.get()
+        raise error
+
+    async def cleanup_known_user_devices_list(self) -> None:
+        await asyncio.gather(
+            *(
+                client.cleanup_known_user_devices_list()
+                for client in self._clients.values()
+            ),
+            return_exceptions=False,
+        )
+
+    async def trust_known_user_devices(self) -> None:
+        await asyncio.gather(
+            *(client.trust_known_user_devices() for client in self._clients.values()),
+            return_exceptions=False,
+        )
+
+    async def verify_user_devices(self, user_id: str) -> None:
+        await asyncio.gather(
+            *(client.verify_user_devices(user_id) for client in self._clients.values()),
+            return_exceptions=False,
+        )
+
+    @property
+    def current_user_id(self) -> str:
+        return self._first_client().current_user_id
+
+    @property
+    def device_id(self) -> str:
+        return self._first_client().device_id or ""
+
+    def device_ed25519_key(self) -> str:
+        first = self._first_client()
+        method = getattr(first, "device_ed25519_key", None)
+        if callable(method):
+            return str(method())
+        return ""
+
+    async def joined_room_ids(self) -> list[str]:
+        room_ids: list[str] = []
+        for client in self._clients.values():
+            room_ids.extend(await client.joined_room_ids())
+        return sorted({room_id for room_id in room_ids if isinstance(room_id, str)})
+
+    async def joined_member_ids(self, room_id: str) -> list[str]:
+        for client in self._clients.values():
+            room_ids = await client.joined_room_ids()
+            if room_id in room_ids:
+                return await client.joined_member_ids(room_id)
+        return await self._first_client().joined_member_ids(room_id)
+
+    async def room_state_events(self, room_id: str) -> list[dict[str, Any]]:
+        for client in self._clients.values():
+            room_ids = await client.joined_room_ids()
+            if room_id in room_ids:
+                return await client.room_state_events(room_id)
+        return await self._first_client().room_state_events(room_id)
+
+    async def direct_room_ids(self) -> set[str]:
+        direct_ids: set[str] = set()
+        for client in self._clients.values():
+            direct_ids.update(await client.direct_room_ids())
+        return direct_ids
+
+    async def room_kick(self, room_id: str, user_id: str) -> None:
+        for client in self._clients.values():
+            room_ids = await client.joined_room_ids()
+            if room_id in room_ids:
+                await client.room_kick(room_id, user_id)
+                return
+        await self._first_client().room_kick(room_id, user_id)
+
+    async def room_leave(self, room_id: str) -> None:
+        for client in self._clients.values():
+            room_ids = await client.joined_room_ids()
+            if room_id in room_ids:
+                await client.room_leave(room_id)
+                return
+        await self._first_client().room_leave(room_id)

@@ -54,6 +54,7 @@ class IngressRouteResult:
     channel_profile_id: uuid.UUID | None = None
     route_key: str | None = None
     binding_id: uuid.UUID | None = None
+    runtime_profile_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

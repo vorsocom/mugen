@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from mugen.core.plugin.whatsapp.wacapi.api import decorator as whatsapp_decorator
+from mugen.core.utility.platform_runtime_profile import build_config_namespace
 
 
 class _AbortCalled(Exception):
@@ -43,6 +44,22 @@ def _make_config(
     )
 
 
+def _make_multi_profile_config(*, app_secret: str = "app-secret-1") -> SimpleNamespace:
+    return build_config_namespace(
+        {
+            "whatsapp": {
+                "profiles": [
+                    {
+                        "key": "default",
+                        "business": {"phone_number_id": "123456789"},
+                        "app": {"secret": app_secret},
+                    }
+                ]
+            }
+        }
+    )
+
+
 class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
     """Covers platform, signature, and IP allow-list decorators."""
 
@@ -54,6 +71,49 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
         with patch.object(whatsapp_decorator.di, "container", new=container):
             self.assertEqual(whatsapp_decorator._config_provider(), "cfg")
             self.assertEqual(whatsapp_decorator._logger_provider(), "logger")
+
+    async def test_extract_phone_number_id_handles_missing_shapes_and_success(self) -> None:
+        self.assertIsNone(whatsapp_decorator._extract_phone_number_id(None))
+        self.assertIsNone(whatsapp_decorator._extract_phone_number_id({}))
+        self.assertIsNone(
+            whatsapp_decorator._extract_phone_number_id({"entry": ["bad-entry"]})
+        )
+        self.assertIsNone(whatsapp_decorator._extract_phone_number_id({"entry": [{}]}))
+        self.assertIsNone(
+            whatsapp_decorator._extract_phone_number_id(
+                {"entry": [{"changes": ["bad-change"]}]}
+            )
+        )
+        self.assertIsNone(
+            whatsapp_decorator._extract_phone_number_id(
+                {"entry": [{"changes": [{"value": {"metadata": {}}}]}]}
+            )
+        )
+        self.assertIsNone(
+            whatsapp_decorator._extract_phone_number_id(
+                {"entry": [{"changes": [{"value": {"metadata": "bad-metadata"}}]}]}
+            )
+        )
+        self.assertEqual(
+            whatsapp_decorator._extract_phone_number_id(
+                {
+                    "entry": [
+                        {
+                            "changes": [
+                                {
+                                    "value": {
+                                        "metadata": {
+                                            "phone_number_id": " 123456789 ",
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ),
+            "123456789",
+        )
 
     async def test_whatsapp_platform_required_paths(self) -> None:
         logger = Mock()
@@ -193,6 +253,153 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                 )
             )
             self.assertEqual(await guarded_factory(_ok_handler)(), {"ok": True})
+
+        logger = Mock()
+        with patch.object(whatsapp_decorator, "abort", side_effect=_abort_raiser):
+            guarded = whatsapp_decorator.whatsapp_request_signature_verification_required(
+                _ok_handler,
+                config_provider=lambda: _make_multi_profile_config(),
+                logger_provider=lambda: logger,
+            )
+            with patch.object(
+                whatsapp_decorator,
+                "identifier_configured_for_platform",
+                side_effect=RuntimeError("bad config"),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await guarded()
+            self.assertEqual(ex.exception.code, 500)
+            logger.error.assert_called_once_with("WhatsApp app secret not found.")
+
+        profiled_body = (
+            b'{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"123456789"}}}]}]}'
+        )
+        logger = Mock()
+        with (
+            patch.object(whatsapp_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                whatsapp_decorator,
+                "request",
+                new=SimpleNamespace(
+                    headers={"X-Hub-Signature-256": "sha256=deadbeef"},
+                    get_data=AsyncMock(return_value=b"not-json"),
+                ),
+            ),
+        ):
+            guarded = whatsapp_decorator.whatsapp_request_signature_verification_required(
+                _ok_handler,
+                config_provider=lambda: _make_multi_profile_config(),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded()
+            self.assertEqual(ex.exception.code, 400)
+            logger.error.assert_called_once_with(
+                "Could not parse WhatsApp webhook payload."
+            )
+
+        logger = Mock()
+        with (
+            patch.object(whatsapp_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                whatsapp_decorator,
+                "request",
+                new=SimpleNamespace(
+                    headers={"X-Hub-Signature-256": "sha256=deadbeef"},
+                    get_data=AsyncMock(return_value=b'{"entry":[{"changes":[{}]}]}'),
+                ),
+            ),
+        ):
+            guarded = whatsapp_decorator.whatsapp_request_signature_verification_required(
+                _ok_handler,
+                config_provider=lambda: _make_multi_profile_config(),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded()
+            self.assertEqual(ex.exception.code, 400)
+            logger.error.assert_called_once_with(
+                "WhatsApp phone_number_id missing from webhook payload."
+            )
+
+        logger = Mock()
+        with (
+            patch.object(whatsapp_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                whatsapp_decorator,
+                "request",
+                new=SimpleNamespace(
+                    headers={"X-Hub-Signature-256": "sha256=deadbeef"},
+                    get_data=AsyncMock(return_value=profiled_body),
+                ),
+            ),
+        ):
+            guarded = whatsapp_decorator.whatsapp_request_signature_verification_required(
+                _ok_handler,
+                config_provider=lambda: _make_multi_profile_config(),
+                logger_provider=lambda: logger,
+            )
+            with patch.object(
+                whatsapp_decorator,
+                "find_platform_runtime_profile_key",
+                return_value=None,
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await guarded()
+            self.assertEqual(ex.exception.code, 401)
+            logger.error.assert_called_once_with(
+                "WhatsApp phone_number_id verification failed."
+            )
+
+        logger = Mock()
+        with (
+            patch.object(whatsapp_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                whatsapp_decorator,
+                "request",
+                new=SimpleNamespace(
+                    headers={"X-Hub-Signature-256": "sha256=deadbeef"},
+                    get_data=AsyncMock(return_value=profiled_body),
+                ),
+            ),
+            patch.object(
+                whatsapp_decorator,
+                "get_platform_profile_section",
+                side_effect=KeyError("missing"),
+            ),
+        ):
+            guarded = whatsapp_decorator.whatsapp_request_signature_verification_required(
+                _ok_handler,
+                config_provider=lambda: _make_multi_profile_config(),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded()
+            self.assertEqual(ex.exception.code, 500)
+            logger.error.assert_called_once_with("WhatsApp app secret not found.")
+
+        profiled_secret = "profile-secret"
+        profiled_digest = hmac.new(
+            profiled_secret.encode("utf8"),
+            profiled_body,
+            hashlib.sha256,
+        ).hexdigest()
+        with patch.object(
+            whatsapp_decorator,
+            "request",
+            new=SimpleNamespace(
+                headers={"X-Hub-Signature-256": f"sha256={profiled_digest}"},
+                get_data=AsyncMock(return_value=profiled_body),
+            ),
+        ):
+            guarded = whatsapp_decorator.whatsapp_request_signature_verification_required(
+                _ok_handler,
+                config_provider=lambda: _make_multi_profile_config(
+                    app_secret=profiled_secret
+                ),
+                logger_provider=lambda: Mock(),
+            )
+            self.assertEqual(await guarded(), {"ok": True})
 
     async def test_whatsapp_server_ip_allow_list_required_paths(self) -> None:
         async def _ok_handler():

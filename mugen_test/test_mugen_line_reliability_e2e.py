@@ -232,6 +232,7 @@ class TestMugenLineReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
+                        "runtime_profile_key": None,
                         "tenant_resolution": {
                             "mode": "resolved",
                             "reason_code": None,
@@ -309,6 +310,7 @@ class TestMugenLineReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
+                        "runtime_profile_key": None,
                         "tenant_resolution": {
                             "mode": "resolved",
                             "reason_code": None,

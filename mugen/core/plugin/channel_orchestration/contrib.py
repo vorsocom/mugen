@@ -80,8 +80,10 @@ def contribute(
                     "TenantId",
                     "ChannelKey",
                     "ProfileKey",
+                    "RuntimeProfileKey",
                 ),
                 update_schema=(
+                    "RuntimeProfileKey",
                     "DisplayName",
                     "RouteDefaultKey",
                     "PolicyId",

@@ -55,6 +55,49 @@ class TestWeChatRuntimeConfigContract(unittest.TestCase):
         cfg["wechat"]["provider"] = "wecom"
         validate_wechat_enabled_runtime_config(cfg)
 
+    def test_accepts_profiles_and_rejects_duplicate_path_tokens(self) -> None:
+        cfg = _valid_oa_config()
+        cfg["wechat"]["profiles"] = [
+            {
+                "key": "official",
+                "provider": "official_account",
+                "webhook": {
+                    "path_token": "path-token-a",
+                    "signature_token": "signature-token-a",
+                    "aes_enabled": False,
+                    "aes_key": "0123456789abcdef0123456789abcdef0123456789A",
+                },
+                "official_account": {
+                    "app_id": "wx-app-id-a",
+                    "app_secret": "wx-app-secret-a",
+                },
+            },
+            {
+                "key": "corp",
+                "provider": "wecom",
+                "webhook": {
+                    "path_token": "path-token-b",
+                    "signature_token": "signature-token-b",
+                    "aes_enabled": False,
+                    "aes_key": "0123456789abcdef0123456789abcdef0123456789A",
+                },
+                "wecom": {
+                    "corp_id": "corp-id-b",
+                    "corp_secret": "corp-secret-b",
+                    "agent_id": 1000003,
+                },
+            },
+        ]
+        validate_wechat_enabled_runtime_config(cfg)
+
+        cfg = copy.deepcopy(cfg)
+        cfg["wechat"]["profiles"][1]["webhook"]["path_token"] = "path-token-a"
+        with self.assertRaisesRegex(
+            RuntimeError,
+            re.escape("wechat webhook path tokens must be unique"),
+        ):
+            validate_wechat_enabled_runtime_config(cfg)
+
     def test_rejects_invalid_shapes_and_values(self) -> None:
         cases: list[tuple[dict, str]] = []
 

@@ -158,37 +158,37 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
     "matrix_client": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.client.matrix",
-            class_name="DefaultMatrixClient",
+            class_name="MultiProfileMatrixClient",
         ),
     },
     "line_client": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.client.line",
-            class_name="DefaultLineClient",
+            class_name="MultiProfileLineClient",
         ),
     },
     "signal_client": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.client.signal",
-            class_name="DefaultSignalClient",
+            class_name="MultiProfileSignalClient",
         ),
     },
     "telegram_client": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.client.telegram",
-            class_name="DefaultTelegramClient",
+            class_name="MultiProfileTelegramClient",
         ),
     },
     "wechat_client": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.client.wechat",
-            class_name="DefaultWeChatClient",
+            class_name="MultiProfileWeChatClient",
         ),
     },
     "whatsapp_client": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.client.whatsapp",
-            class_name="DefaultWhatsAppClient",
+            class_name="MultiProfileWhatsAppClient",
         ),
     },
     "web_client": {

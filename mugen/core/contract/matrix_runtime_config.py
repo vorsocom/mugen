@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from mugen.core.utility.platform_runtime_profile import get_platform_profile_dicts
 from mugen.core.utility.security import validate_matrix_secret_encryption_key
 
 MATRIX_DEVICE_TRUST_MODE_STRICT_KNOWN = "strict_known"
@@ -112,24 +113,57 @@ def _validate_matrix_device_trust_allowlist(*, allowlist: object) -> None:
         )
 
 
+def _iter_matrix_profile_configs(
+    config: Mapping[str, Any],
+) -> list[tuple[str, Mapping[str, Any]]]:
+    matrix_cfg = _require_table(config.get("matrix"), path="matrix")
+    raw_profiles = matrix_cfg.get("profiles")
+    if isinstance(raw_profiles, list) and not raw_profiles:
+        raise RuntimeError(
+            "Invalid configuration: matrix.profiles must be a non-empty array."
+        )
+
+    profiles_enabled = isinstance(raw_profiles, list) and bool(raw_profiles)
+    profile_keys: set[str] = set()
+    recipient_user_ids: set[str] = set()
+    profile_configs: list[tuple[str, Mapping[str, Any]]] = []
+
+    for index, profile_cfg in enumerate(
+        get_platform_profile_dicts(config, platform="matrix")
+    ):
+        profile_path = f"matrix.profiles[{index}]" if profiles_enabled else "matrix"
+        profile_key = _require_non_empty_string(
+            value=profile_cfg.get("key"),
+            path=f"{profile_path}.key",
+        )
+        if profile_key in profile_keys:
+            raise RuntimeError(
+                "Invalid configuration: matrix profile keys must be unique."
+            )
+        profile_keys.add(profile_key)
+
+        client_cfg = _require_table(
+            profile_cfg.get("client"),
+            path=f"{profile_path}.client",
+        )
+        recipient_user_id = _require_non_empty_string(
+            value=client_cfg.get("user"),
+            path=f"{profile_path}.client.user",
+        )
+        if recipient_user_id in recipient_user_ids:
+            raise RuntimeError(
+                "Invalid configuration: matrix client.user values must be unique."
+            )
+        recipient_user_ids.add(recipient_user_id)
+        profile_configs.append((profile_path, profile_cfg))
+
+    return profile_configs
+
+
 def validate_matrix_enabled_runtime_config(config: Mapping[str, Any]) -> None:
     """Validate strict matrix runtime config when matrix platform is enabled."""
     matrix_cfg = _require_table(config.get("matrix"), path="matrix")
-
-    _require_non_empty_string(
-        value=matrix_cfg.get("homeserver"),
-        path="matrix.homeserver",
-    )
-
-    client_cfg = _require_table(matrix_cfg.get("client"), path="matrix.client")
-    _require_non_empty_string(
-        value=client_cfg.get("user"),
-        path="matrix.client.user",
-    )
-    _require_non_empty_string(
-        value=client_cfg.get("password"),
-        path="matrix.client.password",
-    )
+    profile_configs = _iter_matrix_profile_configs(config)
 
     domains_cfg = _require_table(matrix_cfg.get("domains"), path="matrix.domains")
     _require_non_empty_string_list(
@@ -197,3 +231,17 @@ def validate_matrix_enabled_runtime_config(config: Mapping[str, Any]) -> None:
             "when matrix platform is enabled."
         )
     validate_matrix_secret_encryption_key(encryption_key)
+
+    for profile_path, profile_cfg in profile_configs:
+        _require_non_empty_string(
+            value=profile_cfg.get("homeserver"),
+            path=f"{profile_path}.homeserver",
+        )
+        client_cfg = _require_table(
+            profile_cfg.get("client"),
+            path=f"{profile_path}.client",
+        )
+        _require_non_empty_string(
+            value=client_cfg.get("password"),
+            path=f"{profile_path}.client.password",
+        )

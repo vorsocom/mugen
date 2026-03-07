@@ -83,6 +83,7 @@ def build_ingress_route_context(result: IngressRouteResult) -> dict[str, Any]:
         ),
         "route_key": result.route_key,
         "binding_id": str(result.binding_id) if result.binding_id is not None else None,
+        "runtime_profile_key": result.runtime_profile_key,
     }
 
 
@@ -178,21 +179,26 @@ class DefaultIngressRoutingService(IIngressRoutingService):
         )
         return membership is not None
 
-    async def _resolve_route_key(
+    async def _resolve_channel_profile_route_context(
         self,
         *,
         tenant_id: uuid.UUID,
         binding_row: Mapping[str, Any],
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         attributes = binding_row.get("attributes")
+        configured_route_key = None
         if isinstance(attributes, Mapping):
             configured_route_key = _normalize_optional_text(attributes.get("route_key"))
             if configured_route_key is not None:
-                return configured_route_key
+                route_key = configured_route_key
+            else:
+                route_key = None
+        else:
+            route_key = None
 
         channel_profile_id = _normalize_optional_uuid(binding_row.get("channel_profile_id"))
         if channel_profile_id is None:
-            return None
+            return route_key, None
 
         profile = await self._rsg.get_one(
             _TABLE_CHANNEL_PROFILE,
@@ -201,11 +207,30 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                 "id": channel_profile_id,
                 "is_active": True,
             },
-            columns=("route_default_key",),
+            columns=("route_default_key", "runtime_profile_key"),
         )
         if profile is None:
-            return None
-        return _normalize_optional_text(profile.get("route_default_key"))
+            return route_key, None
+
+        if route_key is None:
+            route_key = _normalize_optional_text(profile.get("route_default_key"))
+        runtime_profile_key = _normalize_optional_text(
+            profile.get("runtime_profile_key")
+        )
+        return route_key, runtime_profile_key
+
+    async def _resolve_route_key(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        binding_row: Mapping[str, Any],
+    ) -> str | None:
+        """Backwards-compatible route-key helper used by older tests/callers."""
+        route_key, _runtime_profile_key = await self._resolve_channel_profile_route_context(
+            tenant_id=tenant_id,
+            binding_row=binding_row,
+        )
+        return route_key
 
     async def _resolve_binding(
         self,
@@ -322,12 +347,16 @@ class DefaultIngressRoutingService(IIngressRoutingService):
             route_key = None
             channel_profile_id = None
             binding_id = None
+            runtime_profile_key = None
             if binding_row is not None:
                 channel_profile_id = _normalize_optional_uuid(
                     binding_row.get("channel_profile_id")
                 )
                 binding_id = _normalize_optional_uuid(binding_row.get("id"))
-                route_key = await self._resolve_route_key(
+                (
+                    route_key,
+                    runtime_profile_key,
+                ) = await self._resolve_channel_profile_route_context(
                     tenant_id=tenant_id,
                     binding_row=binding_row,
                 )
@@ -343,6 +372,7 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                     channel_profile_id=channel_profile_id,
                     route_key=route_key,
                     binding_id=binding_id,
+                    runtime_profile_key=runtime_profile_key,
                 ),
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught

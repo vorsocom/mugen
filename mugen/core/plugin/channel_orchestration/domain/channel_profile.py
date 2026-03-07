@@ -16,6 +16,7 @@ class ChannelProfileDE(BaseDE, TenantScopedDEMixin):
 
     channel_key: str | None = None
     profile_key: str | None = None
+    runtime_profile_key: str | None = None
     display_name: str | None = None
 
     route_default_key: str | None = None

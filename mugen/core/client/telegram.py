@@ -1,6 +1,6 @@
 """Provides an implementation of ITelegramClient."""
 
-__all__ = ["DefaultTelegramClient", "TelegramAPIResponse"]
+__all__ = ["DefaultTelegramClient", "MultiProfileTelegramClient", "TelegramAPIResponse"]
 
 import asyncio
 import fnmatch
@@ -15,6 +15,7 @@ import uuid
 
 import aiohttp
 
+from mugen.core.client.runtime_profile_manager import SimpleProfileClientManager
 from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
@@ -810,3 +811,123 @@ class DefaultTelegramClient(ITelegramClient):
                 f"error_type={type(exc).__name__} error={exc}"
             )
             return None
+
+
+class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
+    """Telegram client manager that multiplexes configured runtime profiles."""
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        config: SimpleNamespace = None,
+        ipc_service: IIPCService = None,
+        keyval_storage_gateway: IKeyValStorageGateway = None,
+        logging_gateway: ILoggingGateway = None,
+        messaging_service: IMessagingService = None,
+        user_service: IUserService = None,
+    ) -> None:
+        super().__init__(
+            platform="telegram",
+            client_cls=DefaultTelegramClient,
+            config=config,
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+
+    async def send_text_message(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_text_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            reply_to_message_id=reply_to_message_id,
+        )
+
+    async def send_audio_message(
+        self,
+        *,
+        chat_id: str,
+        audio: dict[str, Any],
+        reply_to_message_id: int | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_audio_message(
+            chat_id=chat_id,
+            audio=audio,
+            reply_to_message_id=reply_to_message_id,
+        )
+
+    async def send_file_message(
+        self,
+        *,
+        chat_id: str,
+        document: dict[str, Any],
+        reply_to_message_id: int | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_file_message(
+            chat_id=chat_id,
+            document=document,
+            reply_to_message_id=reply_to_message_id,
+        )
+
+    async def send_image_message(
+        self,
+        *,
+        chat_id: str,
+        photo: dict[str, Any],
+        reply_to_message_id: int | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_image_message(
+            chat_id=chat_id,
+            photo=photo,
+            reply_to_message_id=reply_to_message_id,
+        )
+
+    async def send_video_message(
+        self,
+        *,
+        chat_id: str,
+        video: dict[str, Any],
+        reply_to_message_id: int | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_video_message(
+            chat_id=chat_id,
+            video=video,
+            reply_to_message_id=reply_to_message_id,
+        )
+
+    async def answer_callback_query(
+        self,
+        *,
+        callback_query_id: str,
+        text: str | None = None,
+        show_alert: bool | None = None,
+    ) -> dict | None:
+        return await self._client_for().answer_callback_query(
+            callback_query_id=callback_query_id,
+            text=text,
+            show_alert=show_alert,
+        )
+
+    async def emit_processing_signal(
+        self,
+        chat_id: str,
+        *,
+        state: str,
+        message_id: str | None = None,
+    ) -> bool | None:
+        return await self._client_for().emit_processing_signal(
+            chat_id,
+            state=state,
+            message_id=message_id,
+        )
+
+    async def download_media(self, file_id: str) -> dict[str, Any] | None:
+        return await self._client_for().download_media(file_id)

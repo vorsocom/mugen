@@ -1,21 +1,22 @@
 """Provides an implementation of ISignalClient."""
 
-__all__ = ["DefaultSignalClient", "SignalAPIResponse"]
+__all__ = ["DefaultSignalClient", "MultiProfileSignalClient", "SignalAPIResponse"]
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 import fnmatch
 from http import HTTPMethod
 import json
 import mimetypes
 import tempfile
 from types import SimpleNamespace
-from typing import TypedDict
+from typing import Any, TypedDict
 from urllib.parse import quote
 import uuid
 
 import aiohttp
 
+from mugen.core.client.runtime_profile_manager import SimpleProfileClientManager
 from mugen.core.contract.client.signal import ISignalClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
@@ -664,3 +665,223 @@ class DefaultSignalClient(ISignalClient):  # pylint: disable=too-many-instance-a
             }
         except Exception:  # pylint: disable=broad-exception-caught
             return None
+
+
+class _SignalReaderFailure:
+    def __init__(self, *, runtime_profile_key: str, error: BaseException) -> None:
+        self.runtime_profile_key = runtime_profile_key
+        self.error = error
+
+
+class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
+    """Signal client manager that multiplexes configured runtime profiles."""
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        config: SimpleNamespace = None,
+        ipc_service: IIPCService = None,
+        keyval_storage_gateway: IKeyValStorageGateway = None,
+        logging_gateway: ILoggingGateway = None,
+        messaging_service: IMessagingService = None,
+        user_service: IUserService = None,
+    ) -> None:
+        super().__init__(
+            platform="signal",
+            client_cls=DefaultSignalClient,
+            config=config,
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+        self._event_queue: asyncio.Queue = asyncio.Queue()
+        self._reader_tasks: dict[str, asyncio.Task] = {}
+
+    async def _reader_loop(self, runtime_profile_key: str, client: ISignalClient) -> None:
+        try:
+            async for event in client.receive_events():
+                if not isinstance(event, dict):
+                    continue
+                payload = dict(event)
+                payload.setdefault("runtime_profile_key", runtime_profile_key)
+                await self._event_queue.put(payload)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            await self._event_queue.put(
+                _SignalReaderFailure(
+                    runtime_profile_key=runtime_profile_key,
+                    error=exc,
+                )
+            )
+
+    async def _start_reader_tasks_locked(self, clients: Mapping[str, ISignalClient]) -> None:
+        if self._reader_tasks:
+            return
+        self._reader_tasks = {
+            runtime_profile_key: asyncio.create_task(
+                self._reader_loop(runtime_profile_key, client),
+                name=f"mugen.signal.receive.{runtime_profile_key}",
+            )
+            for runtime_profile_key, client in clients.items()
+        }
+
+    async def _stop_reader_tasks_locked(self) -> None:
+        tasks = tuple(self._reader_tasks.values())
+        self._reader_tasks = {}
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def init(self) -> None:
+        await super().init()
+        async with self._lock:
+            await self._start_reader_tasks_locked(self._clients)
+
+    async def close(self) -> None:
+        async with self._lock:
+            await self._stop_reader_tasks_locked()
+        await super().close()
+
+    async def reload_profiles(
+        self,
+        config: Mapping[str, object] | SimpleNamespace | None = None,
+    ) -> dict[str, list[str]]:
+        next_config = self._root_config if config is None else config
+        next_clients, next_snapshots = self._build_profile_clients(next_config)
+
+        try:
+            await self._init_client_map(next_clients)
+            verified = await self._verify_client_map(next_clients)
+            if verified is not True:
+                raise RuntimeError("signal runtime profile startup probe failed.")
+            next_reader_tasks = {
+                runtime_profile_key: asyncio.create_task(
+                    self._reader_loop(runtime_profile_key, client),
+                    name=f"mugen.signal.receive.{runtime_profile_key}",
+                )
+                for runtime_profile_key, client in next_clients.items()
+            }
+        except Exception:
+            await self._close_client_map(next_clients)
+            raise
+
+        async with self._lock:
+            current_clients = self._clients
+            current_snapshots = self._profile_snapshots
+            current_reader_tasks = self._reader_tasks
+            self._root_config = next_config
+            self._clients = next_clients
+            self._profile_snapshots = next_snapshots
+            self._reader_tasks = next_reader_tasks
+            self._initialized = True
+
+        for task in current_reader_tasks.values():
+            task.cancel()
+        await asyncio.gather(*current_reader_tasks.values(), return_exceptions=True)
+        await self._close_client_map(current_clients)
+
+        before_keys = set(current_snapshots)
+        after_keys = set(next_snapshots)
+        updated = sorted(
+            key
+            for key in (before_keys & after_keys)
+            if current_snapshots.get(key) != next_snapshots.get(key)
+        )
+        unchanged = sorted(
+            key
+            for key in (before_keys & after_keys)
+            if current_snapshots.get(key) == next_snapshots.get(key)
+        )
+        return {
+            "added": sorted(after_keys - before_keys),
+            "removed": sorted(before_keys - after_keys),
+            "updated": updated,
+            "unchanged": unchanged,
+        }
+
+    async def receive_events(self) -> AsyncIterator[dict[str, Any]]:
+        await self.init()
+        while True:
+            item = await self._event_queue.get()
+            if isinstance(item, _SignalReaderFailure):
+                raise RuntimeError(
+                    "Signal receive loop failed "
+                    f"(runtime_profile_key={item.runtime_profile_key!r}): "
+                    f"{type(item.error).__name__}: {item.error}"
+                ) from item.error
+            if isinstance(item, dict):
+                yield item
+
+    async def send_text_message(
+        self,
+        *,
+        recipient: str,
+        text: str,
+    ) -> dict | None:
+        return await self._client_for().send_text_message(
+            recipient=recipient,
+            text=text,
+        )
+
+    async def send_media_message(
+        self,
+        *,
+        recipient: str,
+        message: str | None = None,
+        base64_attachments: list[str] | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_media_message(
+            recipient=recipient,
+            message=message,
+            base64_attachments=base64_attachments,
+        )
+
+    async def send_reaction(
+        self,
+        *,
+        recipient: str,
+        reaction: str,
+        target_author: str,
+        timestamp: int,
+        remove: bool = False,
+    ) -> dict | None:
+        return await self._client_for().send_reaction(
+            recipient=recipient,
+            reaction=reaction,
+            target_author=target_author,
+            timestamp=timestamp,
+            remove=remove,
+        )
+
+    async def send_receipt(
+        self,
+        *,
+        recipient: str,
+        receipt_type: str,
+        timestamp: int,
+    ) -> dict | None:
+        return await self._client_for().send_receipt(
+            recipient=recipient,
+            receipt_type=receipt_type,
+            timestamp=timestamp,
+        )
+
+    async def emit_processing_signal(
+        self,
+        recipient: str,
+        *,
+        state: str,
+        message_id: str | None = None,
+    ) -> bool | None:
+        return await self._client_for().emit_processing_signal(
+            recipient,
+            state=state,
+            message_id=message_id,
+        )
+
+    async def download_attachment(self, attachment_id: str) -> dict[str, Any] | None:
+        return await self._client_for().download_attachment(attachment_id)

@@ -27,6 +27,10 @@ from mugen.core.service.context_scope_resolution import (
     ContextScopeResolutionError,
     resolve_ingress_route_context,
 )
+from mugen.core.utility.platform_runtime_profile import (
+    runtime_profile_key_from_ingress_route,
+    runtime_profile_scope,
+)
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
 )
@@ -827,27 +831,30 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
             if ingress_route is None:
                 return
 
-            handled = False
-            message = update.get("message")
-            if isinstance(message, dict):
-                handled = True
-                await self._handle_message_update(
-                    update,
-                    message,
-                    ingress_route,
-                )
+            with runtime_profile_scope(
+                runtime_profile_key_from_ingress_route(ingress_route)
+            ):
+                handled = False
+                message = update.get("message")
+                if isinstance(message, dict):
+                    handled = True
+                    await self._handle_message_update(
+                        update,
+                        message,
+                        ingress_route,
+                    )
 
-            callback_query = update.get("callback_query")
-            if isinstance(callback_query, dict):
-                handled = True
-                await self._handle_callback_query_update(
-                    update,
-                    callback_query,
-                    ingress_route,
-                )
+                callback_query = update.get("callback_query")
+                if isinstance(callback_query, dict):
+                    handled = True
+                    await self._handle_callback_query_update(
+                        update,
+                        callback_query,
+                        ingress_route,
+                    )
 
-            if handled is not True:
-                self._logging_gateway.debug("Unsupported Telegram update payload.")
+                if handled is not True:
+                    self._logging_gateway.debug("Unsupported Telegram update payload.")
         except (KeyError, TypeError):
             self._increment_metric("telegram.ipc.event.malformed")
             self._logging_gateway.error("Malformed Telegram update payload.")

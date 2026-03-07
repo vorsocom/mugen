@@ -8,6 +8,12 @@ from quart import abort, request
 
 from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.utility.platform_runtime_profile import (
+    find_platform_runtime_profile_key,
+    get_platform_profile_section,
+    get_platform_runtime_profile_keys,
+    identifier_configured_for_platform,
+)
 
 
 def _config_provider():
@@ -70,16 +76,26 @@ def telegram_webhook_path_token_required(
                 abort(400)
 
             try:
-                expected_path_token = str(config.telegram.webhook.path_token).strip()
-            except (AttributeError, KeyError):
+                identifier_configured = identifier_configured_for_platform(
+                    config,
+                    platform="telegram",
+                    identifier_type="path_token",
+                )
+                runtime_profile_key = find_platform_runtime_profile_key(
+                    config,
+                    platform="telegram",
+                    identifier_type="path_token",
+                    identifier_value=path_token,
+                )
+            except RuntimeError:
                 logger.error("Telegram webhook path token configuration missing.")
                 abort(500)
 
-            if expected_path_token == "":
+            if identifier_configured is not True:
                 logger.error("Telegram webhook path token configuration missing.")
                 abort(500)
 
-            if hmac.compare_digest(path_token.strip(), expected_path_token) is not True:
+            if runtime_profile_key is None:
                 logger.error("Telegram webhook path token verification failed.")
                 abort(401)
 
@@ -108,8 +124,50 @@ def telegram_webhook_secret_required(
             logger: ILoggingGateway = logger_provider()
 
             try:
-                expected_secret = str(config.telegram.webhook.secret_token)
-            except (AttributeError, KeyError):
+                identifier_configured = identifier_configured_for_platform(
+                    config,
+                    platform="telegram",
+                    identifier_type="path_token",
+                )
+            except RuntimeError:
+                logger.error("Telegram webhook secret configuration missing.")
+                abort(500)
+
+            if identifier_configured is not True:
+                logger.error("Telegram webhook secret configuration missing.")
+                abort(500)
+
+            profile_keys = get_platform_runtime_profile_keys(
+                config,
+                platform="telegram",
+            )
+            path_token = kwargs.get("path_token")
+            runtime_profile_key = None
+            if not isinstance(path_token, str) or path_token.strip() == "":
+                if len(profile_keys) == 1:
+                    runtime_profile_key = profile_keys[0]
+                else:
+                    logger.error("Telegram webhook path token missing.")
+                    abort(400)
+
+            try:
+                if runtime_profile_key is None:
+                    runtime_profile_key = find_platform_runtime_profile_key(
+                        config,
+                        platform="telegram",
+                        identifier_type="path_token",
+                        identifier_value=path_token,
+                    )
+                if runtime_profile_key is None:
+                    logger.error("Telegram webhook path token verification failed.")
+                    abort(401)
+                profile_cfg = get_platform_profile_section(
+                    config,
+                    platform="telegram",
+                    runtime_profile_key=runtime_profile_key,
+                )
+                expected_secret = str(profile_cfg.webhook.secret_token)
+            except (AttributeError, KeyError, RuntimeError):
                 logger.error("Telegram webhook secret configuration missing.")
                 abort(500)
 

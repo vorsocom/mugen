@@ -1,6 +1,6 @@
 """Provides an implementation of IWhatsApp client."""
 
-__all__ = ["DefaultWhatsAppClient", "WhatsAppAPIResponse"]
+__all__ = ["DefaultWhatsAppClient", "MultiProfileWhatsAppClient", "WhatsAppAPIResponse"]
 
 import asyncio
 from collections.abc import Callable
@@ -18,6 +18,7 @@ import uuid
 
 import aiohttp
 
+from mugen.core.client.runtime_profile_manager import SimpleProfileClientManager
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
@@ -964,3 +965,167 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             data=data,
             correlation_id=correlation_id,
         )
+
+
+class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
+    """WhatsApp client manager that multiplexes configured runtime profiles."""
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        config: SimpleNamespace = None,
+        ipc_service: IIPCService = None,
+        keyval_storage_gateway: IKeyValStorageGateway = None,
+        logging_gateway: ILoggingGateway = None,
+        messaging_service: IMessagingService = None,
+        user_service: IUserService = None,
+    ) -> None:
+        super().__init__(
+            platform="whatsapp",
+            client_cls=DefaultWhatsAppClient,
+            config=config,
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+
+    async def delete_media(self, media_id: str) -> dict | None:
+        return await self._client_for().delete_media(media_id)
+
+    async def download_media(self, media_url: str, mimetype: str) -> str | None:
+        return await self._client_for().download_media(media_url, mimetype)
+
+    async def retrieve_media_url(self, media_id: str) -> dict | None:
+        return await self._client_for().retrieve_media_url(media_id)
+
+    async def send_audio_message(
+        self,
+        audio: dict,
+        recipient: str,
+        reply_to: str = None,
+    ) -> dict | None:
+        return await self._client_for().send_audio_message(audio, recipient, reply_to)
+
+    async def send_contacts_message(
+        self,
+        contacts: dict,
+        recipient: str,
+        reply_to: str = None,
+    ) -> dict | None:
+        return await self._client_for().send_contacts_message(
+            contacts,
+            recipient,
+            reply_to,
+        )
+
+    async def send_document_message(
+        self,
+        document: dict,
+        recipient: str,
+        reply_to: str = None,
+    ) -> dict | None:
+        return await self._client_for().send_document_message(
+            document,
+            recipient,
+            reply_to,
+        )
+
+    async def send_image_message(
+        self,
+        image: dict,
+        recipient: str,
+        reply_to: str = None,
+    ) -> dict | None:
+        return await self._client_for().send_image_message(image, recipient, reply_to)
+
+    async def send_interactive_message(
+        self,
+        interactive: dict,
+        recipient: str,
+        reply_to: str = None,
+    ) -> dict | None:
+        return await self._client_for().send_interactive_message(
+            interactive,
+            recipient,
+            reply_to,
+        )
+
+    async def send_location_message(
+        self,
+        location: dict,
+        recipient: str,
+        reply_to: str = None,
+    ) -> dict | None:
+        return await self._client_for().send_location_message(
+            location,
+            recipient,
+            reply_to,
+        )
+
+    async def send_reaction_message(
+        self,
+        reaction: dict,
+        recipient: str,
+    ) -> dict | None:
+        return await self._client_for().send_reaction_message(reaction, recipient)
+
+    async def send_sticker_message(
+        self,
+        sticker: dict,
+        recipient: str,
+        reply_to: str = None,
+    ) -> dict | None:
+        return await self._client_for().send_sticker_message(
+            sticker,
+            recipient,
+            reply_to,
+        )
+
+    async def send_template_message(
+        self,
+        template: dict,
+        recipient: str,
+        reply_to: str = None,
+    ) -> dict | None:
+        return await self._client_for().send_template_message(
+            template,
+            recipient,
+            reply_to,
+        )
+
+    async def send_text_message(
+        self,
+        message: str,
+        recipient: str,
+        reply_to: str = None,
+    ) -> dict | None:
+        return await self._client_for().send_text_message(message, recipient, reply_to)
+
+    async def send_video_message(
+        self,
+        video: dict,
+        recipient: str,
+        reply_to: str = None,
+    ) -> dict | None:
+        return await self._client_for().send_video_message(video, recipient, reply_to)
+
+    async def emit_processing_signal(
+        self,
+        recipient: str,
+        *,
+        state: str,
+        message_id: str | None = None,
+    ) -> bool | None:
+        return await self._client_for().emit_processing_signal(
+            recipient,
+            state=state,
+            message_id=message_id,
+        )
+
+    async def upload_media(
+        self,
+        file_path: str | BytesIO,
+        file_type: str,
+    ) -> dict | None:
+        return await self._client_for().upload_media(file_path, file_type)

@@ -30,6 +30,10 @@ from mugen.core.service.context_scope_resolution import (
     context_scope_from_ingress_route,
     resolve_ingress_route_context,
 )
+from mugen.core.utility.platform_runtime_profile import (
+    runtime_profile_key_from_ingress_route,
+    runtime_profile_scope,
+)
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
 )
@@ -972,26 +976,28 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                     if ingress_route is None:
                         continue
                     self._active_ingress_route = ingress_route
+                    with runtime_profile_scope(
+                        runtime_profile_key_from_ingress_route(ingress_route)
+                    ):
+                        messages = event_value.get("messages")
+                        if isinstance(messages, list):
+                            for message in messages:
+                                if not isinstance(message, dict):
+                                    self._logging_gateway.error(
+                                        "Malformed WhatsApp message payload."
+                                    )
+                                    continue
+                                await self._process_message_event(event_value, message)
 
-                    messages = event_value.get("messages")
-                    if isinstance(messages, list):
-                        for message in messages:
-                            if not isinstance(message, dict):
-                                self._logging_gateway.error(
-                                    "Malformed WhatsApp message payload."
-                                )
-                                continue
-                            await self._process_message_event(event_value, message)
-
-                    statuses = event_value.get("statuses")
-                    if isinstance(statuses, list):
-                        for status in statuses:
-                            if not isinstance(status, dict):
-                                self._logging_gateway.error(
-                                    "Malformed WhatsApp status payload."
-                                )
-                                continue
-                            await self._process_status_event(status)
+                        statuses = event_value.get("statuses")
+                        if isinstance(statuses, list):
+                            for status in statuses:
+                                if not isinstance(status, dict):
+                                    self._logging_gateway.error(
+                                        "Malformed WhatsApp status payload."
+                                    )
+                                    continue
+                                await self._process_status_event(status)
                     self._active_ingress_route = None
 
             if not found_event_payload:

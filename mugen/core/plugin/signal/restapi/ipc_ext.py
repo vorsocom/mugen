@@ -28,6 +28,11 @@ from mugen.core.service.context_scope_resolution import (
     ContextScopeResolutionError,
     resolve_ingress_route_context,
 )
+from mugen.core.utility.platform_runtime_profile import (
+    get_platform_profile_section,
+    runtime_profile_key_from_ingress_route,
+    runtime_profile_scope,
+)
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
 )
@@ -272,8 +277,20 @@ class SignalRestAPIIPCExtension(IIPCExtension):
             return value.strip()
         return None
 
-    def _signal_account_number(self) -> str | None:
+    def _signal_account_number(
+        self,
+        runtime_profile_key: str | None = None,
+    ) -> str | None:
         signal_cfg = getattr(self._config, "signal", SimpleNamespace())
+        if runtime_profile_key is not None:
+            try:
+                signal_cfg = get_platform_profile_section(
+                    self._config,
+                    platform="signal",
+                    runtime_profile_key=runtime_profile_key,
+                )
+            except KeyError:
+                return None
         account_cfg = getattr(signal_cfg, "account", SimpleNamespace())
         return self._coerce_nonempty_string(getattr(account_cfg, "number", None))
 
@@ -746,8 +763,11 @@ class SignalRestAPIIPCExtension(IIPCExtension):
             )
             return
 
+        runtime_profile_key = self._coerce_nonempty_string(
+            payload.get("runtime_profile_key")
+        )
         ingress_route = await self._resolve_ingress_route(
-            account_number=self._signal_account_number(),
+            account_number=self._signal_account_number(runtime_profile_key),
             webhook_payload=payload,
         )
         if ingress_route is None:
@@ -759,15 +779,18 @@ class SignalRestAPIIPCExtension(IIPCExtension):
             return
 
         try:
-            if event_type in {"message", "reaction"}:
-                await self._handle_message_event(
-                    envelope,
-                    ingress_route,
-                )
-            elif event_type == "receipt":
-                self._logging_gateway.debug("Signal receipt event observed.")
-            else:
-                self._logging_gateway.debug("Signal event ignored (unsupported type).")
+            with runtime_profile_scope(
+                runtime_profile_key_from_ingress_route(ingress_route)
+            ):
+                if event_type in {"message", "reaction"}:
+                    await self._handle_message_event(
+                        envelope,
+                        ingress_route,
+                    )
+                elif event_type == "receipt":
+                    self._logging_gateway.debug("Signal receipt event observed.")
+                else:
+                    self._logging_gateway.debug("Signal event ignored (unsupported type).")
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._increment_metric("signal.ipc.event.processed_failed")
             await self._record_dead_letter(

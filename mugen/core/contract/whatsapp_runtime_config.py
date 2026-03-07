@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from mugen.core.utility.platform_runtime_profile import get_platform_profile_dicts
+
 
 def _require_table(parent: object, *, path: str) -> Mapping[str, Any]:
     if not isinstance(parent, Mapping):
@@ -101,40 +103,66 @@ def _beta_is_active(config: Mapping[str, Any]) -> bool:
     return beta_cfg.get("active") is True
 
 
+def _iter_whatsapp_profile_configs(
+    config: Mapping[str, Any],
+) -> list[tuple[str, Mapping[str, Any]]]:
+    whatsapp_cfg = _require_table(config.get("whatsapp"), path="whatsapp")
+    raw_profiles = whatsapp_cfg.get("profiles")
+    if isinstance(raw_profiles, list) and not raw_profiles:
+        raise RuntimeError(
+            "Invalid configuration: whatsapp.profiles must be a non-empty array."
+        )
+
+    profiles_enabled = isinstance(raw_profiles, list) and bool(raw_profiles)
+    profile_keys: set[str] = set()
+    phone_number_ids: set[str] = set()
+    profile_configs: list[tuple[str, Mapping[str, Any]]] = []
+
+    for index, profile_cfg in enumerate(
+        get_platform_profile_dicts(config, platform="whatsapp")
+    ):
+        profile_path = (
+            f"whatsapp.profiles[{index}]"
+            if profiles_enabled
+            else "whatsapp"
+        )
+        profile_key = _require_non_empty_string(
+            value=profile_cfg.get("key"),
+            path=f"{profile_path}.key",
+        )
+        if profile_key in profile_keys:
+            raise RuntimeError(
+                "Invalid configuration: whatsapp profile keys must be unique."
+            )
+        profile_keys.add(profile_key)
+
+        business_cfg = _require_table(
+            profile_cfg.get("business"),
+            path=f"{profile_path}.business",
+        )
+        phone_number_id = _require_non_empty_string(
+            value=business_cfg.get("phone_number_id"),
+            path=f"{profile_path}.business.phone_number_id",
+        )
+        if phone_number_id in phone_number_ids:
+            raise RuntimeError(
+                "Invalid configuration: whatsapp business.phone_number_id values "
+                "must be unique."
+            )
+        phone_number_ids.add(phone_number_id)
+        profile_configs.append((profile_path, profile_cfg))
+
+    return profile_configs
+
+
 def validate_whatsapp_enabled_runtime_config(config: Mapping[str, Any]) -> None:
     """Validate strict whatsapp runtime config when whatsapp platform is enabled."""
     whatsapp_cfg = _require_table(config.get("whatsapp"), path="whatsapp")
-
-    app_cfg = _require_table(whatsapp_cfg.get("app"), path="whatsapp.app")
-    _require_non_empty_string(
-        value=app_cfg.get("secret"),
-        path="whatsapp.app.secret",
-    )
-
-    business_cfg = _require_table(
-        whatsapp_cfg.get("business"),
-        path="whatsapp.business",
-    )
-    _require_non_empty_string(
-        value=business_cfg.get("phone_number_id"),
-        path="whatsapp.business.phone_number_id",
-    )
+    profile_configs = _iter_whatsapp_profile_configs(config)
 
     graphapi_cfg = _require_table(
         whatsapp_cfg.get("graphapi"),
         path="whatsapp.graphapi",
-    )
-    _require_non_empty_string(
-        value=graphapi_cfg.get("access_token"),
-        path="whatsapp.graphapi.access_token",
-    )
-    _require_non_empty_string(
-        value=graphapi_cfg.get("base_url"),
-        path="whatsapp.graphapi.base_url",
-    )
-    _require_non_empty_string(
-        value=graphapi_cfg.get("version"),
-        path="whatsapp.graphapi.version",
     )
     _require_positive_number(
         value=graphapi_cfg.get("timeout_seconds"),
@@ -200,4 +228,31 @@ def validate_whatsapp_enabled_runtime_config(config: Mapping[str, Any]) -> None:
         _require_string_list(
             value=beta_cfg.get("users"),
             path="whatsapp.beta.users",
+        )
+
+    for profile_path, profile_cfg in profile_configs:
+        app_cfg = _require_table(
+            profile_cfg.get("app"),
+            path=f"{profile_path}.app",
+        )
+        _require_non_empty_string(
+            value=app_cfg.get("secret"),
+            path=f"{profile_path}.app.secret",
+        )
+
+        profile_graphapi_cfg = _require_table(
+            profile_cfg.get("graphapi"),
+            path=f"{profile_path}.graphapi",
+        )
+        _require_non_empty_string(
+            value=profile_graphapi_cfg.get("access_token"),
+            path=f"{profile_path}.graphapi.access_token",
+        )
+        _require_non_empty_string(
+            value=profile_graphapi_cfg.get("base_url"),
+            path=f"{profile_path}.graphapi.base_url",
+        )
+        _require_non_empty_string(
+            value=profile_graphapi_cfg.get("version"),
+            path=f"{profile_path}.graphapi.version",
         )

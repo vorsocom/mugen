@@ -1382,6 +1382,15 @@ async def run_matrix_client(
     backoff_max_seconds = 30.0
     backoff_jitter_seconds = 0.25
 
+    multi_profile_runner = getattr(matrix_client, "run_profiles_forever", None)
+    if callable(multi_profile_runner):
+        await multi_profile_runner(
+            started_callback=started_callback,
+            degraded_callback=degraded_callback,
+            healthy_callback=healthy_callback,
+        )
+        return
+
     # Initialise matrix client.
     async with matrix_client as client:
         started_signalled = False

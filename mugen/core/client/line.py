@@ -1,6 +1,6 @@
 """Provides an implementation of ILineClient."""
 
-__all__ = ["DefaultLineClient", "LineAPIResponse"]
+__all__ = ["DefaultLineClient", "LineAPIResponse", "MultiProfileLineClient"]
 
 import asyncio
 import fnmatch
@@ -15,6 +15,7 @@ import uuid
 
 import aiohttp
 
+from mugen.core.client.runtime_profile_manager import SimpleProfileClientManager
 from mugen.core.contract.client.line import ILineClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
@@ -947,3 +948,163 @@ class DefaultLineClient(ILineClient):
             f"recipient={recipient} response={response}."
         )
         return False
+
+
+class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
+    """LINE client manager that multiplexes configured runtime profiles."""
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        config: SimpleNamespace = None,
+        ipc_service: IIPCService = None,
+        keyval_storage_gateway: IKeyValStorageGateway = None,
+        logging_gateway: ILoggingGateway = None,
+        messaging_service: IMessagingService = None,
+        user_service: IUserService = None,
+    ) -> None:
+        super().__init__(
+            platform="line",
+            client_cls=DefaultLineClient,
+            config=config,
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+
+    async def reply_messages(
+        self,
+        *,
+        reply_token: str,
+        messages: list[dict[str, Any]],
+    ) -> dict | None:
+        return await self._client_for().reply_messages(
+            reply_token=reply_token,
+            messages=messages,
+        )
+
+    async def push_messages(
+        self,
+        *,
+        to: str,
+        messages: list[dict[str, Any]],
+    ) -> dict | None:
+        return await self._client_for().push_messages(
+            to=to,
+            messages=messages,
+        )
+
+    async def multicast_messages(
+        self,
+        *,
+        to: list[str],
+        messages: list[dict[str, Any]],
+    ) -> dict | None:
+        return await self._client_for().multicast_messages(
+            to=to,
+            messages=messages,
+        )
+
+    async def send_text_message(
+        self,
+        *,
+        recipient: str,
+        text: str,
+        reply_token: str | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_text_message(
+            recipient=recipient,
+            text=text,
+            reply_token=reply_token,
+        )
+
+    async def send_image_message(
+        self,
+        *,
+        recipient: str,
+        image: dict[str, Any],
+        reply_token: str | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_image_message(
+            recipient=recipient,
+            image=image,
+            reply_token=reply_token,
+        )
+
+    async def send_audio_message(
+        self,
+        *,
+        recipient: str,
+        audio: dict[str, Any],
+        reply_token: str | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_audio_message(
+            recipient=recipient,
+            audio=audio,
+            reply_token=reply_token,
+        )
+
+    async def send_video_message(
+        self,
+        *,
+        recipient: str,
+        video: dict[str, Any],
+        reply_token: str | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_video_message(
+            recipient=recipient,
+            video=video,
+            reply_token=reply_token,
+        )
+
+    async def send_file_message(
+        self,
+        *,
+        recipient: str,
+        file: dict[str, Any],
+        reply_token: str | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_file_message(
+            recipient=recipient,
+            file=file,
+            reply_token=reply_token,
+        )
+
+    async def send_raw_message(
+        self,
+        *,
+        op: str,
+        payload: dict[str, Any],
+    ) -> dict | None:
+        return await self._client_for().send_raw_message(
+            op=op,
+            payload=payload,
+        )
+
+    async def download_media(
+        self,
+        *,
+        message_id: str,
+    ) -> dict[str, Any] | None:
+        return await self._client_for().download_media(message_id=message_id)
+
+    async def get_profile(
+        self,
+        *,
+        user_id: str,
+    ) -> dict | None:
+        return await self._client_for().get_profile(user_id=user_id)
+
+    async def emit_processing_signal(
+        self,
+        recipient: str,
+        *,
+        state: str,
+        message_id: str | None = None,
+    ) -> bool | None:
+        return await self._client_for().emit_processing_signal(
+            recipient,
+            state=state,
+            message_id=message_id,
+        )
