@@ -6,6 +6,7 @@ from functools import wraps
 import hashlib
 import hmac
 import ipaddress
+import json
 import os
 from types import SimpleNamespace
 
@@ -14,6 +15,11 @@ from quart import abort, request
 
 from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.utility.platform_runtime_profile import (
+    find_platform_runtime_profile_key,
+    get_platform_profile_section,
+    identifier_configured_for_platform,
+)
 
 
 def _config_provider():
@@ -22,6 +28,33 @@ def _config_provider():
 
 def _logger_provider():
     return di.container.logging_gateway
+
+
+def _extract_phone_number_id(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    entries = payload.get("entry")
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        changes = entry.get("changes")
+        if not isinstance(changes, list):
+            continue
+        for change in changes:
+            if not isinstance(change, dict):
+                continue
+            value = change.get("value")
+            if not isinstance(value, dict):
+                continue
+            metadata = value.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            phone_number_id = metadata.get("phone_number_id")
+            if isinstance(phone_number_id, str) and phone_number_id.strip() != "":
+                return phone_number_id.strip()
+    return None
 
 
 def whatsapp_platform_required(
@@ -71,18 +104,60 @@ def whatsapp_request_signature_verification_required(
             logger: ILoggingGateway = logger_provider()
 
             try:
-                app_secret = config.whatsapp.app.secret
-            except (AttributeError, KeyError):
+                identifier_configured = identifier_configured_for_platform(
+                    config,
+                    platform="whatsapp",
+                    identifier_type="phone_number_id",
+                )
+            except (AttributeError, KeyError, RuntimeError):
                 logger.error("WhatsApp app secret not found.")
                 abort(500)
 
+            if identifier_configured is not True:
+                try:
+                    app_secret = str(config.whatsapp.app.secret)
+                except (AttributeError, KeyError):
+                    logger.error("WhatsApp app secret not found.")
+                    abort(500)
+            else:
+                data = await request.get_data()
+                try:
+                    payload = json.loads(data.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    logger.error("Could not parse WhatsApp webhook payload.")
+                    abort(400)
+
+                phone_number_id = _extract_phone_number_id(payload)
+                if phone_number_id is None:
+                    logger.error("WhatsApp phone_number_id missing from webhook payload.")
+                    abort(400)
+
+                try:
+                    runtime_profile_key = find_platform_runtime_profile_key(
+                        config,
+                        platform="whatsapp",
+                        identifier_type="phone_number_id",
+                        identifier_value=phone_number_id,
+                    )
+                    if runtime_profile_key is None:
+                        logger.error("WhatsApp phone_number_id verification failed.")
+                        abort(401)
+                    profile_cfg = get_platform_profile_section(
+                        config,
+                        platform="whatsapp",
+                        runtime_profile_key=runtime_profile_key,
+                    )
+                    app_secret = str(profile_cfg.app.secret)
+                except (AttributeError, KeyError, RuntimeError):
+                    logger.error("WhatsApp app secret not found.")
+                    abort(500)
+
+            data = await request.get_data()
             try:
                 xhubsig = request.headers["X-Hub-Signature-256"].removeprefix("sha256=")
             except KeyError:
                 logger.error("Could not get request hash.")
                 abort(400)
-
-            data = await request.get_data()
 
             hexdigest = hmac.new(
                 app_secret.encode("utf8"),

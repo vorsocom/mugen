@@ -27,6 +27,10 @@ from mugen.core.service.context_scope_resolution import (
     ContextScopeResolutionError,
     resolve_ingress_route_context,
 )
+from mugen.core.utility.platform_runtime_profile import (
+    runtime_profile_key_from_ingress_route,
+    runtime_profile_scope,
+)
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
 )
@@ -647,11 +651,14 @@ class WeChatIPCExtension(IIPCExtension):
             if ingress_route is None:
                 return
 
-            await self._process_inbound_message(
-                provider=provider,
-                payload=payload,
-                ingress_route=ingress_route,
-            )
+            with runtime_profile_scope(
+                runtime_profile_key_from_ingress_route(ingress_route)
+            ):
+                await self._process_inbound_message(
+                    provider=provider,
+                    payload=payload,
+                    ingress_route=ingress_route,
+                )
         except (KeyError, TypeError):
             self._logging_gateway.error("Malformed WeChat event payload.")
             await self._record_dead_letter(

@@ -1,6 +1,6 @@
 """Provides an implementation of IWeChatClient."""
 
-__all__ = ["DefaultWeChatClient", "WeChatAPIResponse"]
+__all__ = ["DefaultWeChatClient", "MultiProfileWeChatClient", "WeChatAPIResponse"]
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -16,6 +16,7 @@ import uuid
 
 import aiohttp
 
+from mugen.core.client.runtime_profile_manager import SimpleProfileClientManager
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
@@ -794,3 +795,130 @@ class DefaultWeChatClient(IWeChatClient):
         if not isinstance(response, dict):
             return False
         return bool(response.get("ok"))
+
+
+class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
+    """WeChat client manager that multiplexes configured runtime profiles."""
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        config: SimpleNamespace = None,
+        ipc_service: IIPCService = None,
+        keyval_storage_gateway: IKeyValStorageGateway = None,
+        logging_gateway: ILoggingGateway = None,
+        messaging_service: IMessagingService = None,
+        user_service: IUserService = None,
+    ) -> None:
+        super().__init__(
+            platform="wechat",
+            client_cls=DefaultWeChatClient,
+            config=config,
+            ipc_service=ipc_service,
+            keyval_storage_gateway=keyval_storage_gateway,
+            logging_gateway=logging_gateway,
+            messaging_service=messaging_service,
+            user_service=user_service,
+        )
+
+    async def send_text_message(
+        self,
+        *,
+        recipient: str,
+        text: str,
+        reply_to: str | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_text_message(
+            recipient=recipient,
+            text=text,
+            reply_to=reply_to,
+        )
+
+    async def send_audio_message(
+        self,
+        *,
+        recipient: str,
+        audio: dict[str, Any],
+        reply_to: str | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_audio_message(
+            recipient=recipient,
+            audio=audio,
+            reply_to=reply_to,
+        )
+
+    async def send_file_message(
+        self,
+        *,
+        recipient: str,
+        file: dict[str, Any],
+        reply_to: str | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_file_message(
+            recipient=recipient,
+            file=file,
+            reply_to=reply_to,
+        )
+
+    async def send_image_message(
+        self,
+        *,
+        recipient: str,
+        image: dict[str, Any],
+        reply_to: str | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_image_message(
+            recipient=recipient,
+            image=image,
+            reply_to=reply_to,
+        )
+
+    async def send_video_message(
+        self,
+        *,
+        recipient: str,
+        video: dict[str, Any],
+        reply_to: str | None = None,
+    ) -> dict | None:
+        return await self._client_for().send_video_message(
+            recipient=recipient,
+            video=video,
+            reply_to=reply_to,
+        )
+
+    async def send_raw_message(self, *, payload: dict[str, Any]) -> dict | None:
+        return await self._client_for().send_raw_message(payload=payload)
+
+    async def upload_media(
+        self,
+        *,
+        file_path: str | BytesIO,
+        media_type: str,
+    ) -> dict | None:
+        return await self._client_for().upload_media(
+            file_path=file_path,
+            media_type=media_type,
+        )
+
+    async def download_media(
+        self,
+        *,
+        media_id: str,
+        mime_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await self._client_for().download_media(
+            media_id=media_id,
+            mime_type=mime_type,
+        )
+
+    async def emit_processing_signal(
+        self,
+        recipient: str,
+        *,
+        state: str,
+        message_id: str | None = None,
+    ) -> bool | None:
+        return await self._client_for().emit_processing_signal(
+            recipient,
+            state=state,
+            message_id=message_id,
+        )

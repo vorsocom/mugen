@@ -20,6 +20,11 @@ from mugen.core.plugin.wechat.api.decorator import (
     wechat_provider_required,
     wechat_webhook_path_token_required,
 )
+from mugen.core.utility.platform_runtime_profile import (
+    find_platform_runtime_profile_key,
+    get_platform_profile_section,
+    identifier_configured_for_platform,
+)
 
 
 def _config_provider():
@@ -116,28 +121,69 @@ def _parse_xml_payload(xml_text: str) -> dict:
     return payload
 
 
-def _resolve_signature_token(config: SimpleNamespace) -> str:
-    return str(config.wechat.webhook.signature_token)
+def _wechat_profile_config(
+    config: SimpleNamespace,
+    *,
+    path_token: str | None,
+) -> SimpleNamespace:
+    try:
+        identifier_configured = identifier_configured_for_platform(
+            config,
+            platform="wechat",
+            identifier_type="path_token",
+        )
+    except RuntimeError as exc:
+        raise RuntimeError("Unknown WeChat webhook path token.") from exc
+
+    if identifier_configured is not True:
+        profile_cfg = getattr(config, "wechat", None)
+        if isinstance(profile_cfg, SimpleNamespace):
+            return profile_cfg
+        raise RuntimeError("Unknown WeChat webhook path token.")
+
+    runtime_profile_key = find_platform_runtime_profile_key(
+        config,
+        platform="wechat",
+        identifier_type="path_token",
+        identifier_value=_coerce_text(path_token),
+    )
+    if runtime_profile_key is None:
+        raise RuntimeError("Unknown WeChat webhook path token.")
+    profile_cfg = get_platform_profile_section(
+        config,
+        platform="wechat",
+        runtime_profile_key=runtime_profile_key,
+    )
+    return profile_cfg
 
 
-def _resolve_aes_enabled(config: SimpleNamespace) -> bool:
-    return bool(config.wechat.webhook.aes_enabled)
+def _resolve_signature_token(config: SimpleNamespace, *, path_token: str | None) -> str:
+    return str(_wechat_profile_config(config, path_token=path_token).webhook.signature_token)
 
 
-def _resolve_aes_key(config: SimpleNamespace) -> str:
-    return str(config.wechat.webhook.aes_key)
+def _resolve_aes_enabled(config: SimpleNamespace, *, path_token: str | None) -> bool:
+    return bool(_wechat_profile_config(config, path_token=path_token).webhook.aes_enabled)
+
+
+def _resolve_aes_key(config: SimpleNamespace, *, path_token: str | None) -> str:
+    return str(_wechat_profile_config(config, path_token=path_token).webhook.aes_key)
 
 
 def _verify_get_signature_or_abort(
     *,
     config: SimpleNamespace,
     logger: ILoggingGateway,
+    path_token: str | None,
     timestamp: str,
     nonce: str,
     echostr: str,
 ) -> str:
-    signature_token = _resolve_signature_token(config)
-    aes_enabled = _resolve_aes_enabled(config)
+    try:
+        signature_token = _resolve_signature_token(config, path_token=path_token)
+        aes_enabled = _resolve_aes_enabled(config, path_token=path_token)
+    except (AttributeError, KeyError, RuntimeError):
+        logger.error("WeChat webhook configuration missing.")
+        abort(500)
 
     if aes_enabled is True:
         msg_signature = _coerce_text(request.args.get("msg_signature"))
@@ -159,7 +205,7 @@ def _verify_get_signature_or_abort(
         try:
             return _decrypt_wechat_payload(
                 encrypted=echostr,
-                aes_key=_resolve_aes_key(config),
+                aes_key=_resolve_aes_key(config, path_token=path_token),
             )
         except ValueError:
             logger.error("Unable to decrypt WeChat handshake payload.")
@@ -189,6 +235,7 @@ async def _resolve_inbound_payload_or_abort(
     *,
     config: SimpleNamespace,
     logger: ILoggingGateway,
+    path_token: str | None = None,
 ) -> dict:
     timestamp = _required_query_arg("timestamp")
     nonce = _required_query_arg("nonce")
@@ -202,9 +249,13 @@ async def _resolve_inbound_payload_or_abort(
         logger.error("Malformed WeChat XML payload.")
         abort(400)
 
-    signature_token = _resolve_signature_token(config)
+    try:
+        signature_token = _resolve_signature_token(config, path_token=path_token)
+        aes_enabled = _resolve_aes_enabled(config, path_token=path_token)
+    except (AttributeError, KeyError, RuntimeError):
+        logger.error("WeChat webhook configuration missing.")
+        abort(500)
     encrypted = _coerce_text(outer_payload.get("Encrypt"))
-    aes_enabled = _resolve_aes_enabled(config)
 
     if encrypted != "":
         msg_signature = _coerce_text(request.args.get("msg_signature"))
@@ -226,7 +277,7 @@ async def _resolve_inbound_payload_or_abort(
         try:
             body_text = _decrypt_wechat_payload(
                 encrypted=encrypted,
-                aes_key=_resolve_aes_key(config),
+                aes_key=_resolve_aes_key(config, path_token=path_token),
             )
         except ValueError:
             logger.error("Unable to decrypt WeChat encrypted payload.")
@@ -264,6 +315,7 @@ async def _resolve_inbound_payload_or_abort(
 
 async def _handle_get_verification(
     *,
+    path_token: str | None = None,
     config_provider,
     logger_provider,
 ) -> str:
@@ -276,6 +328,7 @@ async def _handle_get_verification(
     return _verify_get_signature_or_abort(
         config=config,
         logger=logger,
+        path_token=path_token,
         timestamp=timestamp,
         nonce=nonce,
         echostr=echostr,
@@ -284,7 +337,7 @@ async def _handle_get_verification(
 
 async def _handle_post_event(
     *,
-    path_token: str,
+    path_token: str | None = None,
     provider: str,
     command: str,
     config_provider,
@@ -298,6 +351,7 @@ async def _handle_post_event(
     payload = await _resolve_inbound_payload_or_abort(
         config=config,
         logger=logger,
+        path_token=path_token,
     )
 
     response = await ipc_svc.handle_ipc_request(
@@ -329,8 +383,8 @@ async def wechat_official_account_subscription(
     logger_provider=_logger_provider,
 ):
     """Official Account URL verification endpoint."""
-    _ = path_token
     return await _handle_get_verification(
+        path_token=path_token,
         config_provider=config_provider,
         logger_provider=logger_provider,
     )
@@ -368,8 +422,8 @@ async def wechat_wecom_subscription(
     logger_provider=_logger_provider,
 ):
     """WeCom callback URL verification endpoint."""
-    _ = path_token
     return await _handle_get_verification(
+        path_token=path_token,
         config_provider=config_provider,
         logger_provider=logger_provider,
     )

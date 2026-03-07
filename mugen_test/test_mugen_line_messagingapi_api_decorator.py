@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from mugen.core.plugin.line.messagingapi.api import decorator as line_decorator
+from mugen.core.utility.platform_runtime_profile import build_config_namespace
 
 
 class _AbortCalled(Exception):
@@ -32,6 +33,27 @@ def _make_config(
             webhook=SimpleNamespace(path_token=path_token),
             channel=SimpleNamespace(secret=channel_secret),
         ),
+    )
+
+
+def _make_multi_profile_config() -> SimpleNamespace:
+    return build_config_namespace(
+        {
+            "line": {
+                "profiles": [
+                    {
+                        "key": "default",
+                        "webhook": {"path_token": "path-token-1"},
+                        "channel": {"secret": "line-secret-1"},
+                    },
+                    {
+                        "key": "secondary",
+                        "webhook": {"path_token": "path-token-2"},
+                        "channel": {"secret": "line-secret-2"},
+                    },
+                ]
+            }
+        }
     )
 
 
@@ -165,6 +187,25 @@ class TestMugenLineMessagingapiDecorator(unittest.IsolatedAsyncioTestCase):
             {"ok": True},
         )
 
+        logger = Mock()
+        with patch.object(line_decorator, "abort", side_effect=_abort_raiser):
+            guarded = line_decorator.line_webhook_path_token_required(
+                _ok_handler,
+                config_provider=lambda: _make_config(path_token="expected"),
+                logger_provider=lambda: logger,
+            )
+            with patch.object(
+                line_decorator,
+                "find_platform_runtime_profile_key",
+                side_effect=RuntimeError("bad config"),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await guarded(path_token="expected")
+            self.assertEqual(ex.exception.code, 500)
+            logger.error.assert_called_once_with(
+                "LINE webhook path token configuration missing."
+            )
+
     async def test_line_webhook_signature_required_paths(self) -> None:
         async def _ok_handler(**_kwargs):
             return {"ok": True}
@@ -254,3 +295,109 @@ class TestMugenLineMessagingapiDecorator(unittest.IsolatedAsyncioTestCase):
                 logger_provider=lambda: Mock(),
             )
             self.assertEqual(await guarded_factory(_ok_handler)(), {"ok": True})
+
+        logger = Mock()
+        with patch.object(line_decorator, "abort", side_effect=_abort_raiser):
+            guarded = line_decorator.line_webhook_signature_required(
+                _ok_handler,
+                config_provider=lambda: _make_config(channel_secret="secret"),
+                logger_provider=lambda: logger,
+            )
+            with patch.object(
+                line_decorator,
+                "identifier_configured_for_platform",
+                side_effect=RuntimeError("bad config"),
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await guarded()
+            self.assertEqual(ex.exception.code, 500)
+            logger.error.assert_called_once_with(
+                "LINE channel secret configuration missing."
+            )
+
+        logger = Mock()
+        with patch.object(line_decorator, "abort", side_effect=_abort_raiser):
+            guarded = line_decorator.line_webhook_signature_required(
+                _ok_handler,
+                config_provider=lambda: _make_multi_profile_config(),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded()
+            self.assertEqual(ex.exception.code, 400)
+            logger.error.assert_called_once_with("LINE webhook path token missing.")
+
+        logger = Mock()
+        with (
+            patch.object(line_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                line_decorator,
+                "request",
+                new=SimpleNamespace(
+                    headers={"X-Line-Signature": "signature"},
+                    get_data=AsyncMock(return_value=body),
+                ),
+            ),
+        ):
+            guarded = line_decorator.line_webhook_signature_required(
+                _ok_handler,
+                config_provider=lambda: _make_multi_profile_config(),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded(path_token="missing")
+            self.assertEqual(ex.exception.code, 401)
+            logger.error.assert_called_once_with(
+                "LINE webhook path token verification failed."
+            )
+
+        logger = Mock()
+        with (
+            patch.object(line_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                line_decorator,
+                "request",
+                new=SimpleNamespace(
+                    headers={"X-Line-Signature": "signature"},
+                    get_data=AsyncMock(return_value=body),
+                ),
+            ),
+            patch.object(
+                line_decorator,
+                "get_platform_profile_section",
+                side_effect=KeyError("missing"),
+            ),
+        ):
+            guarded = line_decorator.line_webhook_signature_required(
+                _ok_handler,
+                config_provider=lambda: _make_multi_profile_config(),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded(path_token="path-token-1")
+            self.assertEqual(ex.exception.code, 500)
+            logger.error.assert_called_once_with(
+                "LINE channel secret configuration missing."
+            )
+
+        body = b'{"events":[{"type":"message"}]}'
+        signature = base64.b64encode(
+            hmac.new(b"line-secret-1", body, hashlib.sha256).digest()
+        ).decode("utf-8")
+        with patch.object(
+            line_decorator,
+            "request",
+            new=SimpleNamespace(
+                headers={"X-Line-Signature": signature},
+                get_data=AsyncMock(return_value=body),
+            ),
+        ):
+            guarded = line_decorator.line_webhook_signature_required(
+                _ok_handler,
+                config_provider=lambda: _make_multi_profile_config(),
+                logger_provider=lambda: Mock(),
+            )
+            self.assertEqual(
+                await guarded(path_token="path-token-1"),
+                {"ok": True},
+            )

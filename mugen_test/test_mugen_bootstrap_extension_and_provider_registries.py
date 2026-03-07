@@ -937,7 +937,9 @@ class TestProviderRegistryResolution(unittest.TestCase):
     def test_wechat_client_provider_token_resolves(self) -> None:
         with patch(
             "mugen.core.di.provider_registry.importlib.import_module",
-            return_value=SimpleNamespace(DefaultWeChatClient=_DummyWeChatClient),
+            return_value=SimpleNamespace(
+                MultiProfileWeChatClient=_DummyWeChatClient
+            ),
         ):
             resolved = provider_registry.resolve_provider_class(
                 provider_name="wechat_client",
@@ -949,7 +951,7 @@ class TestProviderRegistryResolution(unittest.TestCase):
     def test_line_client_provider_token_resolves(self) -> None:
         with patch(
             "mugen.core.di.provider_registry.importlib.import_module",
-            return_value=SimpleNamespace(DefaultLineClient=_DummyLineClient),
+            return_value=SimpleNamespace(MultiProfileLineClient=_DummyLineClient),
         ):
             resolved = provider_registry.resolve_provider_class(
                 provider_name="line_client",
@@ -961,7 +963,9 @@ class TestProviderRegistryResolution(unittest.TestCase):
     def test_signal_client_provider_token_resolves(self) -> None:
         with patch(
             "mugen.core.di.provider_registry.importlib.import_module",
-            return_value=SimpleNamespace(DefaultSignalClient=_DummySignalClient),
+            return_value=SimpleNamespace(
+                MultiProfileSignalClient=_DummySignalClient
+            ),
         ):
             resolved = provider_registry.resolve_provider_class(
                 provider_name="signal_client",

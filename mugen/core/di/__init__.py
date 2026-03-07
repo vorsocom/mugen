@@ -68,11 +68,11 @@ from mugen.core.contract.service.nlp import INLPService
 from mugen.core.contract.service.platform import IPlatformService
 from mugen.core.contract.service.user import IUserService
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
-from mugen.core.utility.collection.namespace import NamespaceConfig, to_namespace
 from mugen.core.utility.config_value import (
     parse_nonnegative_finite_float,
     parse_optional_positive_finite_float,
 )
+from mugen.core.utility.platform_runtime_profile import build_config_namespace
 from mugen.core.utility.platforms import normalize_platforms, unknown_platforms
 from mugen.core.utility.rdbms_schema import resolve_core_rdbms_schema
 
@@ -84,13 +84,6 @@ EXT_SERVICE_ADMIN_SANDBOX_ENFORCER = "admin_sandbox_enforcer"
 EXT_SERVICE_ADMIN_SVC_JWT = "admin_svc_jwt"
 EXT_SERVICE_ADMIN_SVC_AUTH = "admin_svc_auth"
 EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY = "context_component_registry"
-
-_CONFIG_NAMESPACE_CONVERSION = NamespaceConfig(
-    keep_raw=True,
-    raw_attr="dict",
-    add_aliases=False,
-)
-
 
 class ContainerBootstrapError(RuntimeError):
     """Raised when DI container bootstrap configuration is invalid."""
@@ -146,7 +139,7 @@ def _nested_namespace_from_dict(items: dict, ns: SimpleNamespace) -> None:
         raise TypeError("Configuration root must be a dict.")
     if not isinstance(ns, SimpleNamespace):
         raise TypeError("Target namespace must be SimpleNamespace.")
-    converted = to_namespace(items, cfg=_CONFIG_NAMESPACE_CONVERSION)
+    converted = build_config_namespace(items)
     if isinstance(converted, SimpleNamespace):
         ns.__dict__.update(converted.__dict__)
 

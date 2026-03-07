@@ -402,13 +402,9 @@ api.read_timeout_seconds = 30.0
 [matrix]
 assistant.name = ""
 beta.users = []
-client.device = "mugen"
-client.password = "<matrix-password>"
-client.user = ""
 domain = ""
 domains.allowed = []
 domains.denied = []
-homeserver = ""
 invites.direct_only = true
 media.allowed_mimetypes = [
   "audio/*",
@@ -426,18 +422,20 @@ security.device_trust.mode = "strict_known"
 # device_ids = ["DEVICEID1", "DEVICEID2"]
 storage.olm.path = "/absolute/path/to/data/.olmstore"
 
+# Repeat one [[matrix.profiles]] block per Matrix runtime profile.
+[[matrix.profiles]]
+key = "default"
+homeserver = ""
+client.device = "mugen"
+client.password = "<matrix-password>"
+client.user = ""
+
 [security.secrets]
 # Required whenever Matrix platform is enabled.
 encryption_key = "<set-secret-encryption-key>"
 
 # === LINE ===
 [line]
-# Static channel access token for Messaging API requests.
-channel.access_token = "<line-channel-access-token>"
-# Used to verify webhook signatures.
-channel.secret = "<line-channel-secret>"
-# Fixed path token for webhook endpoint: /api/line/messagingapi/webhook/<path_token>
-webhook.path_token = "<line-webhook-path-token>"
 # Dedupe retention window for webhook event keys.
 webhook.dedupe_ttl_seconds = 86400
 api.base_url = "https://api.line.me"
@@ -455,14 +453,18 @@ media.max_download_bytes = 20_971_520   # 20 MiB
 # Enables best-effort LINE loading indicator signaling.
 typing.enabled = true
 
+# Repeat one [[line.profiles]] block per LINE runtime profile.
+[[line.profiles]]
+key = "default"
+# Static channel access token for Messaging API requests.
+channel.access_token = "<line-channel-access-token>"
+# Used to verify webhook signatures.
+channel.secret = "<line-channel-secret>"
+# Fixed path token for webhook endpoint: /api/line/messagingapi/webhook/<path_token>
+webhook.path_token = "<line-webhook-path-token>"
+
 # === Telegram ===
 [telegram]
-# Telegram Bot API token.
-bot.token = "<telegram-bot-token>"
-# Fixed path token for webhook endpoint: /api/telegram/botapi/webhook/<path_token>
-webhook.path_token = "<telegram-webhook-path-token>"
-# Value expected in X-Telegram-Bot-Api-Secret-Token.
-webhook.secret_token = "<telegram-webhook-secret-token>"
 # Dedupe retention window for webhook event keys.
 webhook.dedupe_ttl_seconds = 86400
 api.base_url = "https://api.telegram.org"
@@ -480,14 +482,18 @@ media.max_download_bytes = 20_971_520   # 20 MiB
 # Enables best-effort typing indicators for processing messages.
 typing.enabled = true
 
+# Repeat one [[telegram.profiles]] block per Telegram runtime profile.
+[[telegram.profiles]]
+key = "default"
+# Telegram Bot API token.
+bot.token = "<telegram-bot-token>"
+# Fixed path token for webhook endpoint: /api/telegram/botapi/webhook/<path_token>
+webhook.path_token = "<telegram-webhook-path-token>"
+# Value expected in X-Telegram-Bot-Api-Secret-Token.
+webhook.secret_token = "<telegram-webhook-secret-token>"
+
 # === Signal ===
 [signal]
-# Phone number for the linked signal-cli account.
-account.number = "+15550000001"
-# Authenticated signal-cli-rest-api base URL.
-api.base_url = "http://127.0.0.1:8080"
-# Bearer token expected by the gateway/proxy.
-api.bearer_token = "<signal-rest-api-bearer-token>"
 api.timeout_seconds = 10.0
 api.max_api_retries = 2
 api.retry_backoff_seconds = 0.5
@@ -508,9 +514,31 @@ media.max_download_bytes = 20_971_520   # 20 MiB
 # Enables best-effort typing indicators for processing messages.
 typing.enabled = true
 
+# Repeat one [[signal.profiles]] block per Signal runtime profile.
+[[signal.profiles]]
+key = "default"
+# Phone number for the linked signal-cli account.
+account.number = "+15550000001"
+# Authenticated signal-cli-rest-api base URL.
+api.base_url = "http://127.0.0.1:8080"
+# Bearer token expected by the gateway/proxy.
+api.bearer_token = "<signal-rest-api-bearer-token>"
+
 # === WeChat ===
 [wechat]
-# One active provider per deployment: official_account | wecom.
+# Dedupe retention window for webhook event keys.
+webhook.dedupe_ttl_seconds = 86400
+api.timeout_seconds = 10.0
+api.max_api_retries = 2
+api.retry_backoff_seconds = 0.5
+api.max_download_bytes = 20_971_520   # 20 MiB
+# Enables best-effort typing indicators for processing messages.
+typing.enabled = true
+
+# Repeat one [[wechat.profiles]] block per WeChat runtime profile.
+[[wechat.profiles]]
+key = "default"
+# One active provider per runtime profile: official_account | wecom.
 provider = "official_account"
 # Fixed path token for webhook endpoints:
 # - /api/wechat/official_account/webhook/<path_token>
@@ -522,14 +550,6 @@ webhook.signature_token = "<wechat-webhook-signature-token>"
 webhook.aes_enabled = false
 # WeChat EncodingAESKey (43-char base64url payload).
 webhook.aes_key = "<wechat-webhook-encoding-aes-key>"
-# Dedupe retention window for webhook event keys.
-webhook.dedupe_ttl_seconds = 86400
-api.timeout_seconds = 10.0
-api.max_api_retries = 2
-api.retry_backoff_seconds = 0.5
-api.max_download_bytes = 20_971_520   # 20 MiB
-# Enables best-effort typing indicators for processing messages.
-typing.enabled = true
 
 # Official Account credentials (required when provider=official_account).
 official_account.app_id = "<wechat-official-account-app-id>"
@@ -748,11 +768,7 @@ hf.home = "/absolute/path/to/hf/cache"
 
 # === WhatsApp ===
 [whatsapp]
-app.id = "<whatsapp-app-id>"
-app.secret = "<whatsapp-app-secret>"
 beta.users = []
-business.phone_number_id = ""
-graphapi.access_token = "<whatsapp-graph-access-token>"
 graphapi.base_url = "https://graph.facebook.com"
 graphapi.version = "v20.0"
 # Graph API request timeout in seconds.
@@ -772,6 +788,14 @@ servers.trust_forwarded_for = false
 webhook.verification_token = "<whatsapp-webhook-verification-token>"
 # Dedupe retention window for webhook event keys.
 webhook.dedupe_ttl_seconds = 86400
+
+# Repeat one [[whatsapp.profiles]] block per WhatsApp runtime profile.
+[[whatsapp.profiles]]
+key = "default"
+app.id = "<whatsapp-app-id>"
+app.secret = "<whatsapp-app-secret>"
+business.phone_number_id = ""
+graphapi.access_token = "<whatsapp-graph-access-token>"
 
 # === Web ===
 [web]

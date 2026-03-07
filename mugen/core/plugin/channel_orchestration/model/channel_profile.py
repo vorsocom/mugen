@@ -38,6 +38,12 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    runtime_profile_key: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+
     display_name: Mapped[str | None] = mapped_column(
         CITEXT(255),
         nullable=True,
@@ -81,6 +87,10 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
             name="ck_chorch_profile__profile_key_nonempty",
         ),
         CheckConstraint(
+            "runtime_profile_key IS NULL OR length(btrim(runtime_profile_key)) > 0",
+            name="ck_chorch_profile__runtime_profile_nonempty_if_set",
+        ),
+        CheckConstraint(
             "display_name IS NULL OR length(btrim(display_name)) > 0",
             name="ck_chorch_profile__display_name_nonempty_if_set",
         ),
@@ -104,6 +114,12 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
             "tenant_id",
             "channel_key",
             "is_active",
+        ),
+        Index(
+            "ix_chorch_profile__tenant_channel_runtime_profile",
+            "tenant_id",
+            "channel_key",
+            "runtime_profile_key",
         ),
         {"schema": "mugen"},
     )

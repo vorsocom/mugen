@@ -237,7 +237,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             base_init.call_args.kwargs["store_path"],
-            "/tmp/olm",
+            "/tmp/olm/default",
         )
         self.assertIs(
             client._ipc_service, ipc_service
@@ -2450,6 +2450,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._messaging_service.handle_image_message.assert_awaited()
         client._messaging_service.handle_text_message.assert_awaited()
         client._messaging_service.handle_video_message.assert_awaited()
+        resolve_request = client._ingress_routing_service.resolve.await_args.args[0]
+        self.assertEqual(resolve_request.identifier_type, "recipient_user_id")
+        self.assertEqual(
+            resolve_request.identifier_value,
+            "@assistant:example.com",
+        )
         audio_kwargs = client._messaging_service.handle_audio_message.await_args.kwargs
         self.assertEqual(audio_kwargs["scope"].tenant_id, str(tenant_id))
         self.assertEqual(
@@ -2552,23 +2558,33 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_cb_room_message_blank_room_id_falls_back_to_global(self) -> None:
+    async def test_cb_room_message_blank_room_id_still_routes_by_recipient(self) -> None:
         client = self._client()
         room = SimpleNamespace(room_id=" ")
         client._validate_message = AsyncMock(return_value=True)
         client._process_message_responses = AsyncMock(return_value=None)
         client._messaging_service.handle_text_message = AsyncMock(return_value=[])
-        client._ingress_routing_service = SimpleNamespace(resolve=AsyncMock())
+        client._ingress_routing_service = SimpleNamespace(
+            resolve=AsyncMock(
+                return_value=IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                )
+            )
+        )
 
         with patch.object(matrix_mod, "RoomMessageText", _FakeTextMessage):
             await client._cb_room_message(room, _FakeTextMessage(body="hello"))
 
-        client._ingress_routing_service.resolve.assert_not_awaited()
+        client._ingress_routing_service.resolve.assert_awaited_once()
+        resolve_request = client._ingress_routing_service.resolve.await_args.args[0]
+        self.assertEqual(resolve_request.identifier_type, "recipient_user_id")
+        self.assertEqual(resolve_request.identifier_value, "@assistant:example.com")
         kwargs = client._messaging_service.handle_text_message.await_args.kwargs
         self.assertEqual(kwargs["scope"].tenant_id, str(GLOBAL_TENANT_ID))
         self.assertEqual(
             kwargs["ingress_metadata"]["tenant_resolution"]["reason_code"],
-            IngressRouteReason.MISSING_IDENTIFIER.value,
+            IngressRouteReason.MISSING_BINDING.value,
         )
 
     async def test_cb_room_message_media_without_download_and_unknown_type(
@@ -3211,3 +3227,33 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             "next-token",
         )
         self.assertEqual(client.sync_token, "next-token")
+
+    async def test_runtime_profile_and_ingress_helpers_cover_default_fallbacks(
+        self,
+    ) -> None:
+        client = self._client()
+        client._config.matrix.runtime_profile_key = "   "
+        client._config.matrix.storage.olm.path = "   "
+        client.user_id = None
+        client._ingress_routing_service = SimpleNamespace(resolve=AsyncMock())
+
+        self.assertEqual(
+            client._resolve_runtime_profile_key(),  # pylint: disable=protected-access
+            "default",
+        )
+        self.assertEqual(
+            client._resolve_olm_store_path(),  # pylint: disable=protected-access
+            "/tmp/.olmstore/default",
+        )
+
+        scope, ingress_metadata = await client._resolve_message_ingress(  # pylint: disable=protected-access
+            room=SimpleNamespace(room_id="!room:test"),
+            message=_FakeTextMessage(body="hello"),
+        )
+
+        self.assertEqual(scope.tenant_id, str(GLOBAL_TENANT_ID))
+        self.assertEqual(
+            ingress_metadata["tenant_resolution"]["reason_code"],
+            IngressRouteReason.MISSING_IDENTIFIER.value,
+        )
+        client._ingress_routing_service.resolve.assert_not_called()

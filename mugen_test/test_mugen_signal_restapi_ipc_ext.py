@@ -20,6 +20,7 @@ from mugen.core.contract.service.ingress_routing import (
 from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.signal.restapi import ipc_ext
 from mugen.core.plugin.signal.restapi.ipc_ext import SignalRestAPIIPCExtension
+from mugen.core.utility.platform_runtime_profile import build_config_namespace
 
 
 def _make_config(*, typing_enabled: bool = True, dedupe_ttl: int = 86400) -> SimpleNamespace:
@@ -224,6 +225,30 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ipc_ext._messaging_service_provider(), "ms")
             self.assertEqual(ipc_ext._user_service_provider(), "us")
         self.assertIsNone(SignalRestAPIIPCExtension._coerce_nonempty_string(123))  # pylint: disable=protected-access
+
+    async def test_signal_account_number_supports_profile_lookup_and_missing_profile(
+        self,
+    ) -> None:
+        config = build_config_namespace(
+            {
+                "signal": {
+                    "profiles": [
+                        {
+                            "key": "default",
+                            "account": {"number": "+15550000001"},
+                        }
+                    ]
+                }
+            }
+        )
+        extension = _new_extension(config=config)
+        self.assertEqual(
+            extension._signal_account_number("default"),  # pylint: disable=protected-access
+            "+15550000001",
+        )
+        self.assertIsNone(
+            extension._signal_account_number("missing")  # pylint: disable=protected-access
+        )
 
     async def test_properties_and_process_command_dispatch(self) -> None:
         ext = _new_extension(config=_make_config())

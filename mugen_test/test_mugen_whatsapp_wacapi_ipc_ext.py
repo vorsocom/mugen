@@ -1950,6 +1950,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
+                        "runtime_profile_key": None,
                         "tenant_resolution": {
                             "mode": "fallback_global",
                             "reason_code": "no_ingress_route",

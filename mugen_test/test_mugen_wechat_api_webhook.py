@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from mugen.core.contract.service.ipc import IPCAggregateError, IPCAggregateResult
 from mugen.core.plugin.wechat.api import webhook
+from mugen.core.utility.platform_runtime_profile import build_config_namespace
 
 
 class _AbortCalled(Exception):
@@ -29,6 +30,27 @@ def _make_config(*, aes_enabled: bool = False) -> SimpleNamespace:
                 aes_key="0123456789abcdef0123456789abcdef0123456789A",
             )
         )
+    )
+
+
+def _make_multi_profile_config(*, aes_enabled: bool = False) -> SimpleNamespace:
+    return build_config_namespace(
+        {
+            "wechat": {
+                "profiles": [
+                    {
+                        "key": "default",
+                        "provider": "official_account",
+                        "webhook": {
+                            "path_token": "path-token-1",
+                            "signature_token": "signature-token-1",
+                            "aes_enabled": aes_enabled,
+                            "aes_key": "0123456789abcdef0123456789abcdef0123456789A",
+                        },
+                    }
+                ]
+            }
+        }
     )
 
 
@@ -66,6 +88,39 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
         xml_payload = webhook._parse_xml_payload("<xml><MsgType>text</MsgType></xml>")  # pylint: disable=protected-access
         self.assertEqual(xml_payload["MsgType"], "text")
         self.assertEqual(webhook._coerce_text(None), "")  # pylint: disable=protected-access
+
+    async def test_wechat_profile_config_supports_legacy_fallback_and_error_paths(
+        self,
+    ) -> None:
+        legacy_config = _make_config(aes_enabled=False)
+        profile = webhook._wechat_profile_config(  # pylint: disable=protected-access
+            legacy_config,
+            path_token=None,
+        )
+        self.assertIs(profile, legacy_config.wechat)
+
+        with self.assertRaises(RuntimeError):
+            webhook._wechat_profile_config(  # pylint: disable=protected-access
+                SimpleNamespace(),
+                path_token=None,
+            )
+
+        with patch.object(
+            webhook,
+            "identifier_configured_for_platform",
+            side_effect=RuntimeError("bad config"),
+        ):
+            with self.assertRaises(RuntimeError):
+                webhook._wechat_profile_config(  # pylint: disable=protected-access
+                    _make_multi_profile_config(),
+                    path_token="path-token-1",
+                )
+
+        with self.assertRaises(RuntimeError):
+            webhook._wechat_profile_config(  # pylint: disable=protected-access
+                _make_multi_profile_config(),
+                path_token="missing-token",
+            )
 
     async def test_required_query_arg_missing_aborts(self) -> None:
         with (
@@ -265,6 +320,28 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                     logger_provider=lambda: logger,
                 )
             self.assertEqual(ex.exception.code, 400)
+
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(
+                    args={
+                        "timestamp": "1",
+                        "nonce": "2",
+                        "echostr": "echo",
+                        "signature": "sig",
+                    }
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await webhook._handle_get_verification(  # pylint: disable=protected-access
+                    config_provider=lambda: SimpleNamespace(),
+                    logger_provider=lambda: logger,
+                )
+            self.assertEqual(ex.exception.code, 500)
 
     async def test_get_verification_signature_edge_cases(self) -> None:
         logger = Mock()
@@ -587,6 +664,56 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                     config=config_plain,
                     logger=logger,
+                )
+            self.assertEqual(ex.exception.code, 400)
+
+    async def test_post_payload_rejects_missing_configuration_and_plaintext_for_aes_profile(
+        self,
+    ) -> None:
+        logger = Mock()
+        body_xml = b"<xml><MsgType>text</MsgType></xml>"
+        signature = webhook._compute_signature(  # pylint: disable=protected-access
+            token="signature-token-1",
+            timestamp="1",
+            nonce="2",
+            encrypted=None,
+        )
+
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(
+                    args={"timestamp": "1", "nonce": "2", "signature": signature},
+                    get_data=AsyncMock(return_value=body_xml),
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
+                    config=SimpleNamespace(),
+                    logger=logger,
+                    path_token="path-token-1",
+                )
+            self.assertEqual(ex.exception.code, 500)
+
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(
+                    args={"timestamp": "1", "nonce": "2", "signature": signature},
+                    get_data=AsyncMock(return_value=body_xml),
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
+                    config=_make_multi_profile_config(aes_enabled=True),
+                    logger=logger,
+                    path_token="path-token-1",
                 )
             self.assertEqual(ex.exception.code, 400)
 

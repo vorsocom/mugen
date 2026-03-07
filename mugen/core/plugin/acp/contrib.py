@@ -413,6 +413,13 @@ def contribute(
             "allow_delete": False,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "actions": {
+                "reloadPlatformProfiles": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": NoValidationSchema,
+                    "is_admin_action": True,
+                },
+            },
         },
         {
             "set": "Tenants",

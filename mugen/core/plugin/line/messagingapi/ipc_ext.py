@@ -29,6 +29,10 @@ from mugen.core.service.context_scope_resolution import (
     context_scope_from_ingress_route,
     resolve_ingress_route_context,
 )
+from mugen.core.utility.platform_runtime_profile import (
+    runtime_profile_key_from_ingress_route,
+    runtime_profile_scope,
+)
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
 )
@@ -1096,35 +1100,38 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
             if ingress_route is None:
                 return
 
-            for event in events:
-                if not isinstance(event, dict):
-                    self._increment_metric("line.ipc.event.malformed")
-                    self._logging_gateway.error("Malformed LINE event payload.")
-                    await self._record_dead_letter(
-                        event_type="event",
-                        event_payload={"event": event},
-                        reason_code="malformed_payload",
-                        error_message="Malformed LINE event payload.",
-                    )
-                    continue
+            with runtime_profile_scope(
+                runtime_profile_key_from_ingress_route(ingress_route)
+            ):
+                for event in events:
+                    if not isinstance(event, dict):
+                        self._increment_metric("line.ipc.event.malformed")
+                        self._logging_gateway.error("Malformed LINE event payload.")
+                        await self._record_dead_letter(
+                            event_type="event",
+                            event_payload={"event": event},
+                            reason_code="malformed_payload",
+                            error_message="Malformed LINE event payload.",
+                        )
+                        continue
 
-                try:
-                    await self._process_single_event(
-                        event=event,
-                        ingress_route=ingress_route,
-                    )
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    self._increment_metric("line.ipc.event.processed_failed")
-                    self._logging_gateway.error(
-                        "Unhandled LINE event processing failure."
-                        f" error={type(exc).__name__}: {exc}"
-                    )
-                    await self._record_dead_letter(
-                        event_type=str(event.get("type") or "event"),
-                        event_payload=event,
-                        reason_code="processing_exception",
-                        error_message=f"{type(exc).__name__}: {exc}",
-                    )
+                    try:
+                        await self._process_single_event(
+                            event=event,
+                            ingress_route=ingress_route,
+                        )
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        self._increment_metric("line.ipc.event.processed_failed")
+                        self._logging_gateway.error(
+                            "Unhandled LINE event processing failure."
+                            f" error={type(exc).__name__}: {exc}"
+                        )
+                        await self._record_dead_letter(
+                            event_type=str(event.get("type") or "event"),
+                            event_payload=event,
+                            reason_code="processing_exception",
+                            error_message=f"{type(exc).__name__}: {exc}",
+                        )
             self._increment_metric("line.ipc.event.processed_ok")
         except (KeyError, TypeError):
             self._increment_metric("line.ipc.event.malformed")

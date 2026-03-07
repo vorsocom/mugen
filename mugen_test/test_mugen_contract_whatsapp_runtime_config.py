@@ -69,6 +69,50 @@ class TestWhatsAppRuntimeConfigContract(unittest.TestCase):
         del cfg["whatsapp"]["graphapi"]["retry_backoff_seconds"]
         validate_whatsapp_enabled_runtime_config(cfg)
 
+    def test_accepts_profiles_and_rejects_duplicate_phone_number_ids(self) -> None:
+        cfg = _valid_config()
+        cfg["whatsapp"]["profiles"] = [
+            {
+                "key": "default",
+                "app": {
+                    "secret": "whatsapp-app-secret-a",
+                },
+                "business": {
+                    "phone_number_id": "phone-number-id-a",
+                },
+                "graphapi": {
+                    "access_token": "graph-token-a",
+                    "base_url": "https://graph.facebook.com",
+                    "version": "v20.0",
+                },
+            },
+            {
+                "key": "secondary",
+                "app": {
+                    "secret": "whatsapp-app-secret-b",
+                },
+                "business": {
+                    "phone_number_id": "phone-number-id-b",
+                },
+                "graphapi": {
+                    "access_token": "graph-token-b",
+                    "base_url": "https://graph.facebook.com",
+                    "version": "v20.0",
+                },
+            },
+        ]
+        validate_whatsapp_enabled_runtime_config(cfg)
+
+        cfg = copy.deepcopy(cfg)
+        cfg["whatsapp"]["profiles"][1]["business"]["phone_number_id"] = (
+            "phone-number-id-a"
+        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            re.escape("whatsapp business.phone_number_id values must be unique"),
+        ):
+            validate_whatsapp_enabled_runtime_config(cfg)
+
     def test_rejects_invalid_shapes_and_values(self) -> None:
         cases: list[tuple[dict, str]] = []
 

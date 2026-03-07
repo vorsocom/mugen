@@ -97,6 +97,7 @@ def _default_ingress_route(
         "channel_profile_id": None,
         "route_key": None,
         "binding_id": None,
+        "runtime_profile_key": None,
     }
 
 
