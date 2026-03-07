@@ -105,26 +105,60 @@ class TestMugenWeChatDecorator(unittest.IsolatedAsyncioTestCase):
             logger.error.assert_called_once_with("WeChat webhook path token missing.")
 
         logger = Mock()
-        guarded = wechat_decorator.wechat_webhook_path_token_required(
-            _ok_handler,
-            config_provider=lambda: SimpleNamespace(wechat=SimpleNamespace()),
-            logger_provider=lambda: logger,
-        )
-        self.assertEqual(await guarded(path_token="path"), {"ok": True})
+        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+            guarded = wechat_decorator.wechat_webhook_path_token_required(
+                _ok_handler,
+                config_provider=lambda: SimpleNamespace(wechat=SimpleNamespace()),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded(path_token="path")
+            self.assertEqual(ex.exception.code, 500)
+            logger.error.assert_called_once_with(
+                "WeChat webhook path token configuration missing."
+            )
+
+        logger = Mock()
+        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+            guarded = wechat_decorator.wechat_webhook_path_token_required(
+                _ok_handler,
+                config_provider=lambda: _make_config(path_token="expected"),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded(path_token="bad")
+            self.assertEqual(ex.exception.code, 401)
+            logger.error.assert_called_once_with(
+                "WeChat webhook path token verification failed."
+            )
+
+        logger = Mock()
+        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+            guarded = wechat_decorator.wechat_webhook_path_token_required(
+                _ok_handler,
+                config_provider=lambda: _make_config(path_token="   "),
+                logger_provider=lambda: logger,
+            )
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded(path_token="expected")
+            self.assertEqual(ex.exception.code, 500)
+            logger.error.assert_called_once_with(
+                "WeChat webhook path token configuration missing."
+            )
 
         guarded = wechat_decorator.wechat_webhook_path_token_required(
             _ok_handler,
             config_provider=lambda: _make_config(path_token="expected"),
             logger_provider=lambda: Mock(),
         )
-        self.assertEqual(await guarded(path_token="bad"), {"ok": True})
+        self.assertEqual(await guarded(path_token="expected"), {"ok": True})
 
         guarded_factory = wechat_decorator.wechat_webhook_path_token_required(
             config_provider=lambda: _make_config(path_token="expected"),
             logger_provider=lambda: Mock(),
         )
         self.assertEqual(
-            await guarded_factory(_ok_handler)(path_token="any-token"),
+            await guarded_factory(_ok_handler)(path_token="expected"),
             {"ok": True},
         )
 

@@ -345,6 +345,7 @@ class SignalRestAPIIPCExtension(IIPCExtension):
                 routing=resolution,
                 source="signal.ingress_routing",
                 identifier_claims=claims,
+                global_fallback_reasons=(),
             )
         except ContextScopeResolutionError as exc:
             self._increment_metric("signal.ipc.route.unresolved")
@@ -360,13 +361,6 @@ class SignalRestAPIIPCExtension(IIPCExtension):
                 f"reason_code={reason_code} account_number={account_number!r}."
             )
             return None
-
-        if resolution.ok is not True:
-            self._increment_metric("signal.ipc.route.fallback_global")
-            self._logging_gateway.warning(
-                "Using global tenant fallback for Signal ingress "
-                f"(reason_code={resolution.reason_code} account_number={account_number!r})."
-            )
         return ingress_route
 
     @staticmethod

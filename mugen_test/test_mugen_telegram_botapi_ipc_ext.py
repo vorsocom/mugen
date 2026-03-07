@@ -860,7 +860,7 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(merged["metadata"]["ingress_route"]["tenant_slug"], "tenant-a")
 
-    async def test_missing_binding_route_falls_back_to_global_tenant(self) -> None:
+    async def test_missing_binding_route_is_dead_lettered_and_dropped(self) -> None:
         class _FallbackRouter:
             async def resolve(self, request):  # noqa: ARG002
                 return IngressRouteResolution(
@@ -895,23 +895,19 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        messaging.handle_text_message.assert_awaited_once()
-        kwargs = messaging.handle_text_message.await_args.kwargs
-        self.assertEqual(kwargs["room_id"], "2001")
-        self.assertEqual(kwargs["sender"], "3001")
-        self.assertEqual(kwargs["message"], "hello")
+        messaging.handle_text_message.assert_not_awaited()
         self.assertEqual(
-            kwargs["message_context"][-1]["content"]["tenant_resolution"],
-            {
-                "mode": "fallback_global",
-                "reason_code": "missing_binding",
-                "source": "telegram.ingress_routing",
-            },
+            ext._metrics.get("telegram.ipc.route.unresolved"),  # pylint: disable=protected-access
+            2,
         )
-        self.assertEqual(relational.dead_letters, [])
+        self.assertEqual(len(relational.dead_letters), 2)
+        self.assertEqual(relational.dead_letters[0]["reason_code"], "route_unresolved")
+        self.assertEqual(relational.dead_letters[0]["error_message"], "missing_binding")
+        self.assertEqual(relational.dead_letters[1]["reason_code"], "route_unresolved")
+        self.assertEqual(relational.dead_letters[1]["error_message"], "missing_binding")
         logger.warning.assert_any_call(
-            "Using global tenant fallback for Telegram ingress "
-            "(reason_code=missing_binding path_token='telegram-path-token')."
+            "Dropped Telegram webhook due to unresolved ingress route "
+            "reason_code=missing_binding path_token='telegram-path-token'."
         )
 
         class _UnresolvedWithDetailRouter:

@@ -334,6 +334,7 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
                 routing=resolution,
                 source="telegram.ingress_routing",
                 identifier_claims=claims,
+                global_fallback_reasons=(),
             )
         except ContextScopeResolutionError as exc:
             self._increment_metric("telegram.ipc.route.unresolved")
@@ -349,13 +350,6 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
                 f"reason_code={reason_code} path_token={path_token!r}."
             )
             return None
-
-        if resolution.ok is not True:
-            self._increment_metric("telegram.ipc.route.fallback_global")
-            self._logging_gateway.warning(
-                "Using global tenant fallback for Telegram ingress "
-                f"(reason_code={resolution.reason_code} path_token={path_token!r})."
-            )
         return ingress_route
 
     async def _emit_processing_signal(

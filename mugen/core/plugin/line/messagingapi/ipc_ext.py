@@ -307,6 +307,7 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                 routing=resolution,
                 source="line.ingress_routing",
                 identifier_claims=claims,
+                global_fallback_reasons=(),
             )
         except ContextScopeResolutionError as exc:
             self._increment_metric("line.ipc.route.unresolved")
@@ -323,13 +324,6 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                 f"reason_code={reason_code} path_token={path_token!r}."
             )
             return None
-
-        if resolution.ok is not True:
-            self._increment_metric("line.ipc.route.fallback_global")
-            self._logging_gateway.warning(
-                "Using global tenant fallback for LINE ingress "
-                f"(reason_code={resolution.reason_code} path_token={path_token!r})."
-            )
         return ingress_route
 
     @staticmethod

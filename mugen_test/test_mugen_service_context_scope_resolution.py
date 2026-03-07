@@ -81,6 +81,39 @@ class TestContextScopeResolution(unittest.TestCase):
             self.assertEqual(resolved.tenant_resolution["mode"], "fallback_global")
             self.assertEqual(resolved.tenant_resolution["reason_code"], reason)
 
+    def test_empty_global_fallback_policy_fails_closed(self) -> None:
+        for reason in (
+            IngressRouteReason.MISSING_BINDING.value,
+            IngressRouteReason.MISSING_IDENTIFIER.value,
+        ):
+            with self.assertRaises(ContextScopeResolutionError):
+                resolve_context_ingress(
+                    platform="telegram",
+                    channel_key="telegram",
+                    room_id="room-1",
+                    sender_id="user-1",
+                    routing=IngressRouteResolution(ok=False, reason_code=reason),
+                    source="telegram.ipc",
+                    global_fallback_reasons=(),
+                )
+
+    def test_custom_global_fallback_policy_normalizes_reason_codes(self) -> None:
+        resolved = resolve_context_ingress(
+            platform="telegram",
+            channel_key="telegram",
+            room_id="room-1",
+            sender_id="user-1",
+            routing=IngressRouteResolution(
+                ok=False,
+                reason_code=IngressRouteReason.MISSING_BINDING.value,
+            ),
+            source="telegram.ipc",
+            global_fallback_reasons=(" missing_binding ", "   "),
+        )
+
+        self.assertEqual(resolved.scope.tenant_id, str(GLOBAL_TENANT_ID))
+        self.assertEqual(resolved.tenant_resolution["reason_code"], "missing_binding")
+
     def test_fail_closed_reasons_raise(self) -> None:
         for reason in (
             IngressRouteReason.INACTIVE_BINDING.value,
@@ -131,6 +164,19 @@ class TestContextScopeResolution(unittest.TestCase):
 
         self.assertEqual(route["tenant_id"], str(GLOBAL_TENANT_ID))
         self.assertEqual(route["tenant_resolution"]["mode"], "fallback_global")
+
+    def test_resolve_ingress_route_context_with_empty_fallback_policy_raises(self) -> None:
+        with self.assertRaises(ContextScopeResolutionError):
+            resolve_ingress_route_context(
+                platform="wechat",
+                channel_key="wechat",
+                routing=IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.MISSING_BINDING.value,
+                ),
+                source="wechat.ipc",
+                global_fallback_reasons=(),
+            )
 
     def test_context_scope_from_ingress_route_defaults_missing_route_to_global(self) -> None:
         resolved = context_scope_from_ingress_route(

@@ -309,6 +309,7 @@ class WeChatIPCExtension(IIPCExtension):
                 routing=resolution,
                 source="wechat.ingress_routing",
                 identifier_claims=claims,
+                global_fallback_reasons=(),
             )
         except ContextScopeResolutionError as exc:
             await self._record_dead_letter(
@@ -322,12 +323,6 @@ class WeChatIPCExtension(IIPCExtension):
                 f"reason_code={exc.reason_code} path_token={path_token!r}."
             )
             return None
-
-        if resolution.ok is not True:
-            self._logging_gateway.warning(
-                "Using global tenant fallback for WeChat ingress "
-                f"(reason_code={resolution.reason_code} path_token={path_token!r})."
-            )
         return ingress_route
 
     async def _emit_processing_signal(
