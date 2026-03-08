@@ -522,7 +522,10 @@ class TestImportLegacyRuntimeConfig(unittest.TestCase):
         }
 
         stdout = StringIO()
-        with redirect_stdout(stdout):
+        with (
+            patch.object(import_mod, "_load_config", return_value=config),
+            redirect_stdout(stdout),
+        ):
             self.assertEqual(
                 import_mod.import_runtime_config(
                     config_path=Path("mugen.toml"),
