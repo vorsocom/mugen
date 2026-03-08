@@ -16,6 +16,7 @@ import os
 import random
 import re
 import tempfile
+import textwrap
 import traceback
 from types import SimpleNamespace
 from typing import Any, Coroutine
@@ -573,6 +574,31 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if not isinstance(raw_key, str) or raw_key == "":
             return ""
         return raw_key
+
+    def device_verification_data(self) -> dict[str, str]:
+        """Return formatted device verification data for this runtime client."""
+        public_name = getattr(
+            getattr(getattr(self._config, "matrix", SimpleNamespace()), "client", None),
+            "device",
+            "",
+        )
+        return {
+            "client_profile_id": str(self._resolve_client_profile_id()),
+            "client_profile_key": self._resolve_client_profile_key(),
+            "recipient_user_id": str(self.current_user_id or ""),
+            "public_name": str(public_name or ""),
+            "session_id": str(self.device_id or ""),
+            "session_key": self._format_device_verification_key(
+                self.device_ed25519_key()
+            ),
+        }
+
+    @staticmethod
+    def _format_device_verification_key(raw_key: Any) -> str:
+        """Group one device verification key for operator readability."""
+        if not isinstance(raw_key, str) or raw_key == "":
+            return ""
+        return " ".join(textwrap.wrap(raw_key, 4))
 
     def _matrix_secrets_encryption_required(self) -> bool:
         platforms = normalize_platforms(
@@ -2828,6 +2854,30 @@ class MultiProfileMatrixClient(IMatrixClient):
     def managed_clients(self) -> dict[str, DefaultMatrixClient]:
         """Return active managed Matrix clients keyed by client profile id."""
         return dict(self._clients)
+
+    async def active_device_verification_data(
+        self,
+        *,
+        client_profile_id: object | None = None,
+    ) -> list[dict[str, str]]:
+        """Return device verification data for active Matrix runtime profiles."""
+        await self.init()
+        normalized_client_profile_id = normalize_client_profile_id(client_profile_id)
+        entries: list[dict[str, str]] = []
+        for active_client_profile_id, client in self._clients.items():
+            if (
+                normalized_client_profile_id is not None
+                and active_client_profile_id != str(normalized_client_profile_id)
+            ):
+                continue
+            entries.append(client.device_verification_data())
+        entries.sort(
+            key=lambda entry: (
+                entry.get("client_profile_key", ""),
+                entry.get("client_profile_id", ""),
+            )
+        )
+        return entries
 
     @property
     def sync_token(self) -> str:

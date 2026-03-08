@@ -70,6 +70,7 @@ class TestACPDiRuntimeRegression(unittest.IsolatedAsyncioTestCase):
             "mugen.core.plugin.acp.api.decorator.rgql",
             "mugen.core.plugin.acp.api.func_auth",
             "mugen.core.plugin.acp.api.func_ipc",
+            "mugen.core.plugin.acp.api.func_runtime_matrix",
             "mugen.core.plugin.acp.fw_ext",
             "mugen.core.plugin.acp.service.authorization",
             "mugen.core.plugin.acp.service.jwt_eddsa",
