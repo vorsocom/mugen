@@ -2859,6 +2859,7 @@ class MultiProfileMatrixClient(IMatrixClient):
         self,
         *,
         client_profile_id: object | None = None,
+        include_internal: bool = False,
     ) -> list[dict[str, str]]:
         """Return device verification data for active Matrix runtime profiles."""
         await self.init()
@@ -2870,7 +2871,13 @@ class MultiProfileMatrixClient(IMatrixClient):
                 and active_client_profile_id != str(normalized_client_profile_id)
             ):
                 continue
-            entries.append(client.device_verification_data())
+            entry = client.device_verification_data()
+            if include_internal:
+                snapshot = self._profile_snapshots.get(active_client_profile_id, {})
+                tenant_id = snapshot.get("tenant_id")
+                if tenant_id not in [None, ""]:
+                    entry["tenant_id"] = str(tenant_id)
+            entries.append(entry)
         entries.sort(
             key=lambda entry: (
                 entry.get("client_profile_key", ""),

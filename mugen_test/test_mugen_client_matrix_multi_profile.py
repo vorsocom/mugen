@@ -15,6 +15,7 @@ from mugen.core.plugin.acp.service.messaging_client_profile import (
 from mugen.core.utility.platform_runtime_profile import build_config_namespace
 
 _TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000111")
+_OTHER_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000222")
 _DEFAULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _SECONDARY_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _TERTIARY_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -32,6 +33,7 @@ def _root_config() -> SimpleNamespace:
 def _matrix_spec(
     *,
     client_profile_id: uuid.UUID,
+    tenant_id: uuid.UUID = _TENANT_ID,
     profile_key: str,
     user: str,
     device: str | None = None,
@@ -62,7 +64,7 @@ def _matrix_spec(
         settings["close_error"] = close_error
     return RuntimeMessagingClientProfileSpec(
         client_profile_id=client_profile_id,
-        tenant_id=_TENANT_ID,
+        tenant_id=tenant_id,
         platform_key="matrix",
         profile_key=profile_key,
         config=build_config_namespace(
@@ -73,6 +75,7 @@ def _matrix_spec(
         ),
         snapshot={
             "id": str(client_profile_id),
+            "tenant_id": str(tenant_id),
             "profile_key": profile_key,
             "room_id": settings["room_id"],
             "device": settings["client"]["device"],
@@ -331,6 +334,29 @@ class TestMuGenMultiProfileMatrixClient(unittest.IsolatedAsyncioTestCase):
                     }
                 ],
             )
+            self.assertEqual(
+                await client.active_device_verification_data(include_internal=True),
+                [
+                    {
+                        "client_profile_id": str(_DEFAULT_ID),
+                        "client_profile_key": "default",
+                        "recipient_user_id": "@bot-default:example.com",
+                        "public_name": "device-default",
+                        "session_id": "device-default",
+                        "session_key": "key-default",
+                        "tenant_id": str(_TENANT_ID),
+                    },
+                    {
+                        "client_profile_id": str(_SECONDARY_ID),
+                        "client_profile_key": "secondary",
+                        "recipient_user_id": "@bot-secondary:example.com",
+                        "public_name": "device-secondary",
+                        "session_id": "device-secondary",
+                        "session_key": "key-secondary",
+                        "tenant_id": str(_TENANT_ID),
+                    },
+                ],
+            )
             first.device_ed25519_key = "not-callable"
             self.assertEqual(client.device_ed25519_key(), "")
 
@@ -389,6 +415,101 @@ class TestMuGenMultiProfileMatrixClient(unittest.IsolatedAsyncioTestCase):
             second.room_leave.assert_awaited_once_with("!secondary:test")
             await client.room_leave("!missing:test")
             first.room_leave.assert_awaited_once_with("!missing:test")
+
+    async def test_active_device_verification_data_internal_filter_carries_tenant_id(
+        self,
+    ) -> None:
+        service = _MessagingClientProfileServiceStub(
+            (
+                _matrix_spec(
+                    client_profile_id=_DEFAULT_ID,
+                    tenant_id=_TENANT_ID,
+                    profile_key="default",
+                    user="@bot-default:example.com",
+                    device="device-default",
+                ),
+                _matrix_spec(
+                    client_profile_id=_SECONDARY_ID,
+                    tenant_id=_OTHER_TENANT_ID,
+                    profile_key="secondary",
+                    user="@bot-secondary:example.com",
+                    device="device-secondary",
+                ),
+            )
+        )
+        with (
+            patch.object(
+                matrix_mod,
+                "MessagingClientProfileService",
+                return_value=service,
+            ),
+            patch.object(matrix_mod, "DefaultMatrixClient", _FakeManagedMatrixClient),
+        ):
+            client = matrix_mod.MultiProfileMatrixClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+
+            self.assertEqual(
+                await client.active_device_verification_data(
+                    client_profile_id=str(_SECONDARY_ID),
+                    include_internal=True,
+                ),
+                [
+                    {
+                        "client_profile_id": str(_SECONDARY_ID),
+                        "client_profile_key": "secondary",
+                        "recipient_user_id": "@bot-secondary:example.com",
+                        "public_name": "device-secondary",
+                        "session_id": "device-secondary",
+                        "session_key": "key-secondary",
+                        "tenant_id": str(_OTHER_TENANT_ID),
+                    }
+                ],
+            )
+
+    async def test_active_device_verification_data_skips_missing_snapshot_tenant_id(
+        self,
+    ) -> None:
+        service = _MessagingClientProfileServiceStub(
+            (
+                _matrix_spec(
+                    client_profile_id=_DEFAULT_ID,
+                    tenant_id=_TENANT_ID,
+                    profile_key="default",
+                    user="@bot-default:example.com",
+                    device="device-default",
+                ),
+            )
+        )
+        with (
+            patch.object(
+                matrix_mod,
+                "MessagingClientProfileService",
+                return_value=service,
+            ),
+            patch.object(matrix_mod, "DefaultMatrixClient", _FakeManagedMatrixClient),
+        ):
+            client = matrix_mod.MultiProfileMatrixClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            await client.init()
+            client._profile_snapshots[str(_DEFAULT_ID)] = {}  # pylint: disable=protected-access
+
+            self.assertEqual(
+                await client.active_device_verification_data(include_internal=True),
+                [
+                    {
+                        "client_profile_id": str(_DEFAULT_ID),
+                        "client_profile_key": "default",
+                        "recipient_user_id": "@bot-default:example.com",
+                        "public_name": "device-default",
+                        "session_id": "device-default",
+                        "session_key": "key-default",
+                    }
+                ],
+            )
 
             with self.assertRaisesRegex(RuntimeError, "run_profiles_forever"):
                 await client.sync_forever()
