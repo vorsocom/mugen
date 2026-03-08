@@ -192,6 +192,16 @@ class _FakeManagedMatrixClient:
     def device_ed25519_key(self) -> str:
         return f"ed25519-{self.client_profile_key}"
 
+    def device_verification_data(self) -> dict[str, str]:
+        return {
+            "client_profile_id": self.client_profile_id,
+            "client_profile_key": self.client_profile_key,
+            "recipient_user_id": self.current_user_id,
+            "public_name": self.device_id,
+            "session_id": self.device_id,
+            "session_key": f"key-{self.client_profile_key}",
+        }
+
 
 class TestMuGenMultiProfileMatrixClient(unittest.IsolatedAsyncioTestCase):
     """Covers Matrix multi-profile lifecycle, routing, and recovery logic."""
@@ -285,6 +295,42 @@ class TestMuGenMultiProfileMatrixClient(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(client.current_user_id, "@bot-default:example.com")
             self.assertEqual(client.device_id, "device-default")
             self.assertEqual(client.device_ed25519_key(), "ed25519-default")
+            self.assertEqual(
+                await client.active_device_verification_data(),
+                [
+                    {
+                        "client_profile_id": str(_DEFAULT_ID),
+                        "client_profile_key": "default",
+                        "recipient_user_id": "@bot-default:example.com",
+                        "public_name": "device-default",
+                        "session_id": "device-default",
+                        "session_key": "key-default",
+                    },
+                    {
+                        "client_profile_id": str(_SECONDARY_ID),
+                        "client_profile_key": "secondary",
+                        "recipient_user_id": "@bot-secondary:example.com",
+                        "public_name": "device-secondary",
+                        "session_id": "device-secondary",
+                        "session_key": "key-secondary",
+                    },
+                ],
+            )
+            self.assertEqual(
+                await client.active_device_verification_data(
+                    client_profile_id=str(_SECONDARY_ID)
+                ),
+                [
+                    {
+                        "client_profile_id": str(_SECONDARY_ID),
+                        "client_profile_key": "secondary",
+                        "recipient_user_id": "@bot-secondary:example.com",
+                        "public_name": "device-secondary",
+                        "session_id": "device-secondary",
+                        "session_key": "key-secondary",
+                    }
+                ],
+            )
             first.device_ed25519_key = "not-callable"
             self.assertEqual(client.device_ed25519_key(), "")
 

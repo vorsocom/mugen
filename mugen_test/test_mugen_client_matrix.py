@@ -919,6 +919,30 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.olm = SimpleNamespace(account=SimpleNamespace(identity_keys=None))
         self.assertEqual(client.device_ed25519_key(), "")
 
+    def test_device_verification_data_formats_runtime_profile_payload(self) -> None:
+        client = self._client()
+        client._vendor_client.device_id = "DEV-1234"  # pylint: disable=protected-access
+        client.olm = SimpleNamespace(
+            account=SimpleNamespace(identity_keys={"ed25519": "ABCD1234EFGH5678"})
+        )
+
+        self.assertEqual(
+            client.device_verification_data(),
+            {
+                "client_profile_id": str(_CLIENT_PROFILE_ID),
+                "client_profile_key": "default",
+                "recipient_user_id": "@assistant:example.com",
+                "public_name": "device",
+                "session_id": "DEV-1234",
+                "session_key": "ABCD 1234 EFGH 5678",
+            },
+        )
+        self.assertEqual(client._format_device_verification_key(""), "")  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            client._format_device_verification_key(None),
+            "",
+        )
+
     async def test_send_wrapper_raises_when_vendor_send_missing(self) -> None:
         client = self._client()
         client._vendor_client = SimpleNamespace()  # pylint: disable=protected-access
