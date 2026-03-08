@@ -323,6 +323,14 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cases.append((cfg, "gateway.email must be a token"))
 
         cfg = _valid_core_config()
+        cfg["mugen"]["modules"]["core"]["gateway"]["sms"] = ""
+        cases.append((cfg, "gateway.sms must be a token string"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["modules"]["core"]["gateway"]["sms"] = "mod:Cls"
+        cases.append((cfg, "gateway.sms must be a token"))
+
+        cfg = _valid_core_config()
         cfg["mugen"]["modules"]["core"]["extensions"] = {}
         cases.append((cfg, "core.extensions must be an array"))
 
@@ -383,6 +391,10 @@ class TestDISchemaValidationBranches(unittest.TestCase):
                 }
             ]
             di._validate_core_module_schema(cfg)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["modules"]["core"]["gateway"]["sms"] = "twilio"
+        di._validate_core_module_schema(cfg)
 
     def test_core_schema_validates_required_runtime_shutdown_timeouts(self) -> None:
         cfg = _valid_core_config()

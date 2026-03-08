@@ -40,6 +40,7 @@ class _FakeManagedMatrixClient:
         self.closed = False
         self.fail_before_sync = bool(getattr(matrix_cfg, "fail_before_sync", False))
         self.health_fail = bool(getattr(matrix_cfg, "health_fail", False))
+        self.close_error = getattr(matrix_cfg, "close_error", None)
         self.displayname = str(getattr(matrix_cfg, "profile_displayname", ""))
         room_id = str(getattr(matrix_cfg, "room_id", f"!{self.runtime_profile_key}:test"))
         self.rooms = [room_id]
@@ -59,6 +60,8 @@ class _FakeManagedMatrixClient:
     async def close(self) -> None:
         self.closed = True
         self._stop.set()
+        if isinstance(self.close_error, str) and self.close_error:
+            raise RuntimeError(self.close_error)
 
     async def sync_forever(self, **_kwargs) -> None:
         if self.fail_before_sync:
@@ -619,6 +622,40 @@ class TestMuGenMultiProfileMatrixClient(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(RuntimeError, "reload failed"):
                     await not_entered_client.reload_profiles(next_config)
             await not_entered_client.close()
+
+            cleanup_failure_client = matrix_mod.MultiProfileMatrixClient(config=config)
+            await cleanup_failure_client.__aenter__()
+            cleanup_failure_client._sync_tasks = {  # pylint: disable=protected-access
+                "default": asyncio.create_task(asyncio.Event().wait())
+            }
+            cleanup_failure_client._health_tasks = {  # pylint: disable=protected-access
+                "default": asyncio.create_task(asyncio.Event().wait())
+            }
+            failing_reload_config = _matrix_config(
+                {
+                    "key": "default",
+                    "client": {"user": "@bot-default:example.com"},
+                    "profile_displayname": "",
+                    "room_id": "!default-updated:test",
+                    "close_error": "candidate cleanup failed",
+                }
+            )
+            with patch.object(
+                cleanup_failure_client,
+                "_prepare_client_set",
+                new=AsyncMock(side_effect=RuntimeError("reload failed")),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    (
+                        "matrix runtime profile reload failed after RuntimeError: "
+                        "reload failed; cleanup failed: "
+                        "matrix runtime profile cleanup failed: "
+                        "default=RuntimeError: candidate cleanup failed"
+                    ),
+                ):
+                    await cleanup_failure_client.reload_profiles(failing_reload_config)
+            await cleanup_failure_client.close()
 
             retry_client = matrix_mod.MultiProfileMatrixClient(config=config)
             real_sleep = asyncio.sleep

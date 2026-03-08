@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__all__ = ["SimpleProfileClientManager"]
+__all__ = ["MultiProfileClientCloseError", "SimpleProfileClientManager"]
 
 import asyncio
 from collections.abc import Mapping
@@ -17,6 +17,55 @@ from mugen.core.utility.platform_runtime_profile import (
     get_platform_runtime_profile_keys,
     normalize_runtime_profile_key,
 )
+
+
+class MultiProfileClientCloseError(RuntimeError):
+    """Raised when one or more managed profile clients fail cleanup."""
+
+    def __init__(
+        self,
+        *,
+        platform: str,
+        failures: Mapping[str, str],
+    ) -> None:
+        self.platform = str(platform).strip().lower()
+        self.failures = dict(failures)
+        details = "; ".join(
+            f"{runtime_profile_key}={message}"
+            for runtime_profile_key, message in sorted(self.failures.items())
+        )
+        super().__init__(
+            f"{self.platform} runtime profile cleanup failed: {details}"
+        )
+
+
+def _close_failure_message(result: BaseException) -> str:
+    return f"{type(result).__name__}: {result}"
+
+
+async def _close_clients_fail_closed(
+    *,
+    platform: str,
+    clients: Mapping[str, Any],
+) -> None:
+    if not clients:
+        return
+
+    items = tuple(clients.items())
+    results = await asyncio.gather(
+        *(client.close() for _runtime_profile_key, client in items),
+        return_exceptions=True,
+    )
+    failures = {
+        runtime_profile_key: _close_failure_message(result)
+        for (runtime_profile_key, _client), result in zip(items, results, strict=True)
+        if isinstance(result, BaseException)
+    }
+    if failures:
+        raise MultiProfileClientCloseError(
+            platform=platform,
+            failures=failures,
+        )
 
 
 class SimpleProfileClientManager:
@@ -85,11 +134,9 @@ class SimpleProfileClientManager:
         return all(result is True for result in results)
 
     async def _close_client_map(self, clients: Mapping[str, Any]) -> None:
-        if not clients:
-            return
-        await asyncio.gather(
-            *(client.close() for client in clients.values()),
-            return_exceptions=True,
+        await _close_clients_fail_closed(
+            platform=self._platform,
+            clients=clients,
         )
 
     def _resolve_runtime_profile_key(self, runtime_profile_key: str | None = None) -> str:
@@ -151,8 +198,14 @@ class SimpleProfileClientManager:
                 raise RuntimeError(
                     f"{self._platform} runtime profile startup probe failed."
                 )
-        except Exception:
-            await self._close_client_map(next_clients)
+        except Exception as exc:
+            try:
+                await self._close_client_map(next_clients)
+            except MultiProfileClientCloseError as close_exc:
+                raise RuntimeError(
+                    f"{self._platform} runtime profile reload failed after "
+                    f"{type(exc).__name__}: {exc}; cleanup failed: {close_exc}"
+                ) from close_exc
             raise
 
         async with self._lock:
