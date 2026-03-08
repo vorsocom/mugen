@@ -152,19 +152,19 @@ The default configurations can be used initially. However, you must configure ac
 
 [Hypercorn](https://github.com/pgjones/hypercorn/) is an ASGI server that runs asynchronous web frameworks like Quart, which muGen is built upon. It can handle concurrent requests efficiently and supports modern web technologies, including HTTP/2 and WebSockets.
 
-To configure Hypercorn, create a `hypercorn.toml` file:
+To configure Hypercorn, create a `hypercorn.toml` file from the sample:
 
 ```shell
-~$ touch hypercorn.toml
+~$ cp conf/hypercorn.toml.sample hypercorn.toml
 ```
 
-Set a bind address to tell Hypercorn where to listen for incoming connections. Edit `hypercorn.toml` and add the following line:
+For a local TLS listener, edit `hypercorn.toml` and set the bind address to:
 
 ```toml
-bind = "127.0.0.1:8081"
+bind = "0.0.0.0:8443"
 ```
 
-This configuration specifies that Hypercorn will listen on your local machine (localhost) at port 8081. You can change the address or port later to meet your deployment requirements.
+Also configure `certfile` and `keyfile` for your local certificate. With that setup, local ACP and web endpoints are served over `https` on port `8443`. You can change the address or port later to meet your deployment requirements.
 
 ### Step 7: Initialize the Python Environment
 

@@ -93,7 +93,10 @@ To quickly set up and evaluate a muGen environment, follow these steps:
 ~$ cd mugen
 
 # Create a Hypercorn config file in the root folder.
-~$ echo 'bind = "127.0.0.1:8081"' > hypercorn.toml
+~$ cp conf/hypercorn.toml.sample hypercorn.toml
+
+# For local TLS, set bind = "0.0.0.0:8443" and configure
+# certfile/keyfile in hypercorn.toml.
 
 # Copy the app configuration sample to the root folder.
 ~$ cp conf/mugen.toml.sample mugen.toml
