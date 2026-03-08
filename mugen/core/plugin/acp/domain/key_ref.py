@@ -30,4 +30,9 @@ class KeyRefDE(BaseDE):
     destroyed_by_user_id: uuid.UUID | None = None
     destroy_reason: str | None = None
 
+    encrypted_secret: str | None = None
+    has_material: bool | None = None
+    material_last_set_at: datetime | None = None
+    material_last_set_by_user_id: uuid.UUID | None = None
+
     attributes: dict[str, Any] | None = None

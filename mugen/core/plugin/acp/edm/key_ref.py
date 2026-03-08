@@ -31,6 +31,19 @@ key_ref_type = EdmType(
             TypeRef("Edm.Guid"),
         ),
         "DestroyReason": EdmProperty("DestroyReason", TypeRef("Edm.String")),
+        "HasMaterial": EdmProperty(
+            "HasMaterial",
+            TypeRef("Edm.Boolean"),
+            nullable=False,
+        ),
+        "MaterialLastSetAt": EdmProperty(
+            "MaterialLastSetAt",
+            TypeRef("Edm.DateTimeOffset"),
+        ),
+        "MaterialLastSetByUserId": EdmProperty(
+            "MaterialLastSetByUserId",
+            TypeRef("Edm.Guid"),
+        ),
         "Attributes": EdmProperty(
             "Attributes",
             TypeRef("Edm.String"),

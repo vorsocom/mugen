@@ -96,3 +96,16 @@ def validate_matrix_secret_encryption_key(
         path="matrix.security.credentials.encryption_key",
         min_length=min_length,
     )
+
+
+def validate_acp_managed_secret_encryption_key(
+    value: object,
+    *,
+    min_length: int = _DEFAULT_MIN_SECRET_KEY_LENGTH,
+) -> str:
+    """Validate ACP managed-secret encryption root key quality."""
+    return _validate_secret_value(
+        value,
+        path="acp.key_management.providers.managed.encryption_key",
+        min_length=min_length,
+    )

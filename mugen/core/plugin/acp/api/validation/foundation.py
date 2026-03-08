@@ -288,6 +288,7 @@ class KeyRefRotateValidation(IValidationBase):
     purpose: str
     key_id: str
     provider: str = "local"
+    secret_value: str | None = Field(default=None, exclude=True, repr=False)
     attributes: dict[str, Any] | None = None
 
     @model_validator(mode="after")
@@ -303,6 +304,8 @@ class KeyRefRotateValidation(IValidationBase):
         self.provider = (self.provider or "local").strip()
         if self.provider == "":
             self.provider = "local"
+        if self.secret_value is not None:
+            self.secret_value = self.secret_value
         return self
 
 

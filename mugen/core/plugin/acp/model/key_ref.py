@@ -8,10 +8,12 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
+    Text,
     UniqueConstraint,
     Uuid,
 )
@@ -111,6 +113,29 @@ class KeyRef(ModelBase):
     destroy_reason: Mapped[str | None] = mapped_column(
         CITEXT(255),
         nullable=True,
+    )
+
+    encrypted_secret: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    has_material: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=sa_text("false"),
+        index=True,
+    )
+
+    material_last_set_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    material_last_set_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
     )
 
     attributes: Mapped[dict[str, Any] | None] = mapped_column(

@@ -30,6 +30,7 @@ def _args(*, sample: Path, output: Path, enable_web_platform: bool) -> SimpleNam
         jwt_issuer="mugen-ci",
         jwt_audience="mugen-ci",
         acp_secret_key="ci-acp-secret-key",
+        acp_managed_secret_encryption_key="ci-acp-managed-secret-root-key-0123456789",
         refresh_token_pepper="ci-refresh-pepper",
         quart_secret_key="ci-quart-secret-key-0123456789abcdef",
         web_media_storage_path=".tmp/ci/web_media",
@@ -54,6 +55,10 @@ class TestPrepareCiConfig(unittest.TestCase):
         self.assertEqual(args.sample, "conf/mugen.toml.sample")
         self.assertEqual(args.output, "mugen.toml")
         self.assertEqual(args.aws_region, "us-east-1")
+        self.assertEqual(
+            args.acp_managed_secret_encryption_key,
+            "ci-acp-managed-secret-root-key-0123456789",
+        )
         self.assertFalse(args.enable_web_platform)
 
     def test_ensure_platform_enabled_appends_only_once(self) -> None:
@@ -362,6 +367,12 @@ contrib = "legacy.web.contrib"
                 ),
                 0,
             )
+            self.assertEqual(
+                rendered["acp"]["key_management"]["providers"]["managed"][
+                    "encryption_key"
+                ],
+                "ci-acp-managed-secret-root-key-0123456789",
+            )
 
     def test_main_writes_ci_config_with_web_platform_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -425,6 +436,12 @@ contrib = "legacy.web.contrib"
                     ]
                 ),
                 1,
+            )
+            self.assertEqual(
+                rendered["acp"]["key_management"]["providers"]["managed"][
+                    "encryption_key"
+                ],
+                "ci-acp-managed-secret-root-key-0123456789",
             )
             self.assertEqual(
                 len(

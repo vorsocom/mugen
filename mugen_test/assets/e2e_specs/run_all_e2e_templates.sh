@@ -374,6 +374,7 @@ declare -a FULL_SPECS=(
   "mugen_test/assets/e2e_specs/acp/acp-tenant-invitation-redeem.template.json"
   "mugen_test/assets/e2e_specs/acp/acp-e2e-dedup-ledger.template.json"
   "mugen_test/assets/e2e_specs/acp/acp-e2e-schema-registry.template.json"
+  "mugen_test/assets/e2e_specs/acp/acp-e2e-runtime-config-cutover.template.json"
   "mugen_test/assets/e2e_specs/audit/audit-e2e-correlation-observability.template.json"
   "mugen_test/assets/e2e_specs/ops_case/ops-case-e2e-lifecycle.template.json"
   "mugen_test/assets/e2e_specs/ops_sla/ops-sla-e2e-clock-lifecycle.template.json"

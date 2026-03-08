@@ -1,0 +1,137 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "__ACP_USERNAME__",
+    "password": "__ACP_PASSWORD__"
+  },
+  "tenant_id": "00000000-0000-0000-0000-000000000000",
+  "entity_set": "KeyRefs",
+  "skip_create": true,
+  "create_payload": {},
+  "lookup": {
+    "field": "Purpose",
+    "value": "kms.runtime.__CODE__"
+  },
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "rotate",
+      "target": "entity_set",
+      "expect_code": 200,
+      "payload": {
+        "Purpose": "kms.runtime.__CODE__",
+        "KeyId": "default",
+        "Provider": "managed",
+        "SecretValue": "managed-secret-__TRACKED_REF__"
+      },
+      "capture_entity_id_field": "Id",
+      "refresh_entity_after_action": true
+    },
+    {
+      "name": "rotate",
+      "target": "entity_set",
+      "expect_code": 200,
+      "payload": {
+        "Purpose": "kms.runtime.__CODE__",
+        "KeyId": "default",
+        "Provider": "managed",
+        "SecretValue": "managed-secret-rotated-__TRACKED_REF__"
+      },
+      "capture_entity_id_field": "Id",
+      "refresh_entity_after_action": true
+    },
+    {
+      "name": "destroy",
+      "target": "entity",
+      "expect_code": 200,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Reason": "cleanup managed key after e2e validation"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": "destroyed",
+    "event_entity_set": "AuditEvents",
+    "event_entity_id_field": "EntityId",
+    "event_type_field": "Operation",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [
+    {
+      "name": "managed_key_ref_create_rejected",
+      "entity_set": "KeyRefs",
+      "expect_code": 400,
+      "payload": {
+        "Purpose": "kms.runtime.create.__CODE__",
+        "KeyId": "default",
+        "Provider": "managed"
+      }
+    },
+    {
+      "name": "runtime_config_invalid_matrix_path",
+      "entity_set": "RuntimeConfigProfiles",
+      "expect_code": 400,
+      "payload": {
+        "TenantId": "__TENANT_ID__",
+        "Category": "messaging.platform_defaults",
+        "ProfileKey": "matrix",
+        "DisplayName": "Invalid runtime defaults __TRACKED_REF__",
+        "IsActive": true,
+        "SettingsJson": {
+          "Webhook": {
+            "PathToken": "blocked"
+          }
+        },
+        "Attributes": {}
+      }
+    }
+  ],
+  "positive_creates": [
+    {
+      "name": "runtime_config_valid_matrix_defaults",
+      "entity_set": "RuntimeConfigProfiles",
+      "expect_code": 201,
+      "payload": {
+        "TenantId": "__TENANT_ID__",
+        "Category": "messaging.platform_defaults",
+        "ProfileKey": "matrix",
+        "DisplayName": "Matrix runtime defaults __TRACKED_REF__",
+        "IsActive": true,
+        "SettingsJson": {
+          "Homeserver": "https://matrix.example.com",
+          "Client": {
+            "Device": "e2e-device"
+          }
+        },
+        "Attributes": {}
+      }
+    },
+    {
+      "name": "runtime_config_valid_ops_defaults",
+      "entity_set": "RuntimeConfigProfiles",
+      "expect_code": 201,
+      "payload": {
+        "TenantId": "__TENANT_ID__",
+        "Category": "ops_connector.defaults",
+        "ProfileKey": "default",
+        "DisplayName": "Ops runtime defaults __TRACKED_REF__",
+        "IsActive": true,
+        "SettingsJson": {
+          "Timeout_Seconds_Default": 12.5,
+          "Retry_Status_Codes_Default": [
+            429,
+            503
+          ]
+        },
+        "Attributes": {}
+      }
+    }
+  ]
+}

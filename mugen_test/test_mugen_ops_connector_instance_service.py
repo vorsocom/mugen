@@ -1,6 +1,7 @@
 """Focused behavior tests for ops_connector ConnectorInstanceService actions."""
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 import uuid
 
@@ -22,7 +23,11 @@ class TestConnectorInstanceService(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def _service() -> ConnectorInstanceService:
-        return ConnectorInstanceService(table="ops_connector_instance", rsg=Mock())
+        service = ConnectorInstanceService(table="ops_connector_instance", rsg=Mock())
+        service._runtime_config_profile_service = SimpleNamespace(
+            resolve_active_settings=AsyncMock(return_value={})
+        )
+        return service
 
     @staticmethod
     def _instance() -> ConnectorInstanceDE:
