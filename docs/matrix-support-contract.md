@@ -37,6 +37,9 @@ Homeserver URLs, Matrix users, device ids, and credentials are owned by ACP
 `MessagingClientProfiles` plus `KeyRef` secrets. Zero active client profiles is
 valid at startup.
 
+Matrix account display names are also owned by
+`MessagingClientProfiles.display_name`, not root config.
+
 ## Message Routing Contract
 
 - Ingress routing uses:

@@ -23,6 +23,13 @@ def _sync_signal(wait_side_effect=None) -> SimpleNamespace:
     )
 
 
+def _matrix_config(profile_displayname: str | None = "Test Agent") -> SimpleNamespace:
+    payload: dict[str, object] = {}
+    if profile_displayname is not None:
+        payload["profile_displayname"] = profile_displayname
+    return SimpleNamespace(matrix=SimpleNamespace(**payload))
+
+
 class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
     """Unit tests for mugen.run_matrix_client."""
 
@@ -53,13 +60,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClientNormal:
             """Dummy matrix client."""
@@ -100,13 +101,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClientNormal:
             """Dummy matrix client."""
@@ -139,15 +134,45 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(logger.output[0], "DEBUG:test_app:Matrix client started.")
 
-    async def test_started_callback_is_invoked_after_first_sync(self) -> None:
+    async def test_normal_run_ignores_legacy_root_assistant_name(self) -> None:
         app = Quart("test_app")
         config = SimpleNamespace(
             matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
+                assistant=SimpleNamespace(name="Legacy Agent"),
             )
         )
+
+        class DummyMatrixClientNormal:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock()
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        await run_matrix_client(
+            config_provider=lambda: config,
+            logger_provider=lambda: app.logger,
+            matrix_provider=DummyMatrixClientNormal,
+        )
+
+        DummyMatrixClientNormal.set_displayname.assert_not_awaited()
+
+    async def test_started_callback_is_invoked_after_first_sync(self) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
         started = unittest.mock.Mock()
 
         class DummyMatrixClient:
@@ -180,13 +205,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_signal_clear_awaitable_is_awaited(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
         clear_mock = unittest.mock.AsyncMock()
 
         class DummyMatrixClient:
@@ -221,13 +240,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_signal_without_clear_is_supported(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClient:
             synced = SimpleNamespace(wait=unittest.mock.AsyncMock())
@@ -261,13 +274,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClient:
             """Dummy matrix client."""
@@ -311,13 +318,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
     async def test_sync_transient_error_retries_and_recovers(self) -> None:
         """Retry after transient sync failure and recover."""
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClient:
             synced = _sync_signal()
@@ -363,13 +364,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_runtime_health_monitor_critical_failure_fails_closed(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
         degraded = unittest.mock.Mock()
 
         async def _sync_forever(*, since=None, timeout=100, full_state=True, set_presence="online"):
@@ -421,13 +416,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_transient_error_emits_runtime_health_callbacks(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
         degraded = unittest.mock.Mock()
         healthy = unittest.mock.Mock()
 
@@ -474,13 +463,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_transient_failures_before_sync_emit_degraded_once(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
         degraded = unittest.mock.Mock()
 
         async def _wait_never() -> None:
@@ -526,13 +509,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_recovery_resets_retry_budget(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClient:
             synced = _sync_signal()
@@ -584,13 +561,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
     async def test_sync_authentication_failure_stops_without_retry(self) -> None:
         """Auth-like sync failures should shut down immediately."""
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClient:
             synced = _sync_signal()
@@ -641,13 +612,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
     async def test_sync_failure_stops_after_retry_budget(self) -> None:
         """Repeated transient failures should stop after max retries."""
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
         wait_call_count = 0
 
         async def _wait_once_then_block() -> None:
@@ -706,13 +671,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         async def _sync_forever(
             *,
@@ -778,13 +737,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_runtime_health_failure_handles_already_completed_sync_task(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClient:
             synced = _sync_signal()
@@ -828,13 +781,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         async def _wait_never():
             await asyncio.Future()
@@ -879,13 +826,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_matrix_client_handles_pre_completed_health_task_branch(self) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         async def _wait_never():
             await asyncio.Future()
@@ -935,13 +876,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = Quart("test_app")
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         monitor_runtime_health = unittest.mock.AsyncMock(
             side_effect=[
