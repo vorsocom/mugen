@@ -82,6 +82,7 @@ _LEGACY_PLATFORM_FIELD_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
         ("webhook", "path_token"),
     ),
     "matrix": (
+        ("assistant", "name"),
         ("client",),
         ("homeserver",),
         ("profile_displayname",),
@@ -436,6 +437,13 @@ class MessagingClientProfileService(
                     key_ref_id=key_ref_id,
                 ),
             )
+
+        if platform_key == "matrix":
+            self._delete_nested(merged, ("assistant", "name"))
+            self._delete_nested(merged, ("profile_displayname",))
+            display_name = self._normalize_optional_text(client_profile.display_name)
+            if display_name is not None:
+                merged["profile_displayname"] = display_name
 
         merged["key"] = str(client_profile.profile_key or "").strip()
         merged["client_profile_id"] = str(client_profile.id)

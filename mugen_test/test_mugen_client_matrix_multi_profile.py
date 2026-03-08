@@ -24,9 +24,7 @@ def _root_config() -> SimpleNamespace:
     return build_config_namespace(
         {
             "basedir": "/tmp/mugen",
-            "matrix": {
-                "assistant": {"name": "Assistant"},
-            },
+            "matrix": {},
         }
     )
 
@@ -45,7 +43,6 @@ def _matrix_spec(
     close_error: str | None = None,
 ) -> RuntimeMessagingClientProfileSpec:
     settings = {
-        "assistant": {"name": "Assistant"},
         "client": {
             "user": user,
             "device": device or f"device-{profile_key}",
@@ -172,6 +169,13 @@ class _FakeManagedMatrixClient:
 
     async def _set_displayname(self, displayname: str) -> None:
         self.displayname = displayname
+
+    def _resolve_profile_display_name(self) -> str | None:
+        value = getattr(self._config.matrix, "profile_displayname", None)
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     async def joined_room_ids(self) -> list[str]:
         return list(self.rooms)
@@ -407,7 +411,7 @@ class TestMuGenMultiProfileMatrixClient(unittest.IsolatedAsyncioTestCase):
                 set(health_tasks.keys()),
                 {str(_DEFAULT_ID), str(_SECONDARY_ID)},
             )
-            self.assertEqual(current_clients[0].set_displayname.await_count, 1)
+            self.assertEqual(current_clients[0].set_displayname.await_count, 0)
             self.assertEqual(current_clients[1].set_displayname.await_count, 0)
 
             client._generation = 1  # pylint: disable=protected-access
@@ -426,6 +430,40 @@ class TestMuGenMultiProfileMatrixClient(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result)
             self.assertFalse(client._entered)  # pylint: disable=protected-access
             await client.close()
+
+    async def test_prepare_client_set_applies_profile_display_name_from_acp(self) -> None:
+        service = _MessagingClientProfileServiceStub(
+            (
+                _matrix_spec(
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                    user="@bot-default:example.com",
+                    displayname="Assistant",
+                ),
+            )
+        )
+        with (
+            patch.object(
+                matrix_mod,
+                "MessagingClientProfileService",
+                return_value=service,
+            ),
+            patch.object(matrix_mod, "DefaultMatrixClient", _FakeManagedMatrixClient),
+        ):
+            client = matrix_mod.MultiProfileMatrixClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            await client.init()
+            managed = client.managed_clients()[str(_DEFAULT_ID)]
+            managed.displayname = ""
+
+            await client._prepare_client_set(  # pylint: disable=protected-access
+                client._clients,  # pylint: disable=protected-access
+                generation=1,
+            )
+
+            managed.set_displayname.assert_awaited_once_with("Assistant")
 
     async def test_bind_runtime_task_callbacks_and_async_clear_branch(self) -> None:
         service = _MessagingClientProfileServiceStub(

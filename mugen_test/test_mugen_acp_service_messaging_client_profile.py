@@ -368,6 +368,66 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(section["client_profile_key"], "support")
         self.assertNotIn("profiles", section)
 
+        matrix_section = await svc.build_runtime_platform_section(
+            config={
+                "matrix": {
+                    "assistant": {"name": "Legacy Root Name"},
+                    "profile_displayname": "legacy-root-name",
+                }
+            },
+            client_profile=_profile(
+                platform_key="matrix",
+                profile_key="default",
+                display_name="Profile Display Name",
+                settings={
+                    "assistant": {"name": "settings-name"},
+                    "profile_displayname": "settings-display-name",
+                    "client": {"device": "device-default"},
+                },
+                secret_refs={},
+                path_token=None,
+                recipient_user_id="@bot:example.com",
+            ),
+        )
+        self.assertEqual(matrix_section["client"]["user"], "@bot:example.com")
+        self.assertEqual(matrix_section["client"]["device"], "device-default")
+        self.assertEqual(
+            matrix_section["profile_displayname"],
+            "Profile Display Name",
+        )
+        self.assertNotIn("assistant", matrix_section)
+
+        matrix_section_without_display_name = await svc.build_runtime_platform_section(
+            config={
+                "matrix": {
+                    "assistant": {"name": "Legacy Root Name"},
+                    "profile_displayname": "legacy-root-name",
+                }
+            },
+            client_profile=_profile(
+                platform_key="matrix",
+                profile_key="default",
+                display_name=None,
+                settings={
+                    "assistant": {"name": "settings-name"},
+                    "profile_displayname": "settings-display-name",
+                    "client": {"device": "device-default"},
+                },
+                secret_refs={},
+                path_token=None,
+                recipient_user_id="@bot:example.com",
+            ),
+        )
+        self.assertEqual(
+            matrix_section_without_display_name["client"]["user"],
+            "@bot:example.com",
+        )
+        self.assertNotIn("assistant", matrix_section_without_display_name)
+        self.assertNotIn(
+            "profile_displayname",
+            matrix_section_without_display_name,
+        )
+
         wechat_section = await svc.build_runtime_platform_section(
             config={"wechat": {}},
             client_profile=_profile(

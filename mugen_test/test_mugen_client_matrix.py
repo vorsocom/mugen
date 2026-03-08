@@ -335,6 +335,30 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(os.path.isdir(expected_path))
             self.assertEqual(base_init.call_args.kwargs["store_path"], expected_path)
 
+    def test_resolve_profile_display_name_normalizes_blank_and_non_string(self) -> None:
+        client = object.__new__(DefaultMatrixClient)
+        client._config = SimpleNamespace(  # pylint: disable=protected-access
+            matrix=SimpleNamespace(profile_displayname="  Assistant  ")
+        )
+        self.assertEqual(
+            client._resolve_profile_display_name(),  # pylint: disable=protected-access
+            "Assistant",
+        )
+
+        client._config = SimpleNamespace(  # pylint: disable=protected-access
+            matrix=SimpleNamespace(profile_displayname="  ")
+        )
+        self.assertIsNone(
+            client._resolve_profile_display_name()  # pylint: disable=protected-access
+        )
+
+        client._config = SimpleNamespace(  # pylint: disable=protected-access
+            matrix=SimpleNamespace(profile_displayname=123)
+        )
+        self.assertIsNone(
+            client._resolve_profile_display_name()  # pylint: disable=protected-access
+        )
+
     def test_init_raises_when_olm_store_directory_creation_fails(self) -> None:
         config = SimpleNamespace(
             basedir="/tmp",

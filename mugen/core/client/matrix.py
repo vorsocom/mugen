@@ -858,6 +858,15 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             return "default"
         return raw_value.strip()
 
+    def _resolve_profile_display_name(self) -> str | None:
+        return self._coerce_optional_string(
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()),
+                "profile_displayname",
+                None,
+            )
+        )
+
     def _resolve_olm_store_path(self) -> str:
         relative_path = str(
             getattr(self._config.matrix.storage.olm, "path", "")
@@ -2975,16 +2984,14 @@ class MultiProfileMatrixClient(IMatrixClient):
     ) -> None:
         for client in clients.values():
             profile = await client.get_profile()
-            assistant_display_name = getattr(
-                client._config.matrix.assistant,  # pylint: disable=protected-access
-                "name",
-                None,
+            profile_display_name = (
+                client._resolve_profile_display_name()  # pylint: disable=protected-access
             )
             if (
-                assistant_display_name is not None
-                and profile.displayname != assistant_display_name
+                profile_display_name is not None
+                and profile.displayname != profile_display_name
             ):
-                await client.set_displayname(assistant_display_name)
+                await client.set_displayname(profile_display_name)
             await client.trust_known_user_devices()
 
     async def run_profiles_forever(
