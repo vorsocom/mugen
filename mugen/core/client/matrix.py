@@ -166,10 +166,11 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         user_service: IUserService = None,
     ):
         self._config = config
+        olm_store_path = self._ensure_olm_store_path()
         self._vendor_client = AsyncClient(
             homeserver=self._config.matrix.homeserver,
             user=self._config.matrix.client.user,
-            store_path=self._resolve_olm_store_path(),
+            store_path=olm_store_path,
         )
         self.synced = getattr(self._vendor_client, "synced", asyncio.Event())
         self._ipc_service = ipc_service
@@ -868,6 +869,17 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             relative_path,
             str(self._resolve_client_profile_id()),
         )
+
+    def _ensure_olm_store_path(self) -> str:
+        store_path = self._resolve_olm_store_path()
+        try:
+            os.makedirs(store_path, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                "Unable to initialize Matrix OLM store path: "
+                f"{store_path}"
+            ) from exc
+        return store_path
 
     def _keyval_key(self, key_name: str) -> str:
         return f"{self._credentials_key_prefix}:{key_name}"

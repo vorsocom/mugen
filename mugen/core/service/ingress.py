@@ -10,7 +10,9 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
+from sqlalchemy import bindparam
 from sqlalchemy import text as sa_text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -69,6 +71,14 @@ class DefaultMessagingIngressService(IMessagingIngressService):
 
     def _schema_sql(self, statement: str):
         return sa_text(statement.replace("mugen.", f"{self._core_schema}."))
+
+    def _jsonb_sql(self, statement: str, *parameter_names: str):
+        clause = self._schema_sql(statement)
+        if not parameter_names:
+            return clause
+        return clause.bindparams(
+            *(bindparam(name, type_=JSONB) for name in parameter_names)
+        )
 
     def _ingress_config(self) -> SimpleNamespace:
         cfg = getattr(self._config, "ingress", None)
@@ -330,7 +340,7 @@ class DefaultMessagingIngressService(IMessagingIngressService):
     ) -> None:
         event = entry.event
         await session.execute(
-            self._schema_sql(
+            self._jsonb_sql(
                 "INSERT INTO mugen.messaging_ingress_event ("
                 "version, platform, client_profile_id, ipc_command, source_mode, "
                 "event_type, event_id, dedupe_key, identifier_type, identifier_value, "
@@ -339,7 +349,9 @@ class DefaultMessagingIngressService(IMessagingIngressService):
                 ":version, :platform, :client_profile_id, :ipc_command, :source_mode, "
                 ":event_type, :event_id, :dedupe_key, :identifier_type, :identifier_value, "
                 ":room_id, :sender, :payload, :provider_context, :received_at, 'queued', 0"
-                ")"
+                ")",
+                "payload",
+                "provider_context",
             ),
             {
                 "version": event.version,
@@ -367,7 +379,7 @@ class DefaultMessagingIngressService(IMessagingIngressService):
         checkpoint: MessagingIngressCheckpointUpdate,
     ) -> None:
         await session.execute(
-            self._schema_sql(
+            self._jsonb_sql(
                 "INSERT INTO mugen.messaging_ingress_checkpoint ("
                 "platform, client_profile_id, checkpoint_key, checkpoint_value, "
                 "provider_context, observed_at"
@@ -381,7 +393,8 @@ class DefaultMessagingIngressService(IMessagingIngressService):
                 "provider_context = EXCLUDED.provider_context, "
                 "observed_at = EXCLUDED.observed_at, "
                 "updated_at = now(), "
-                "row_version = mugen.messaging_ingress_checkpoint.row_version + 1"
+                "row_version = mugen.messaging_ingress_checkpoint.row_version + 1",
+                "provider_context",
             ),
             {
                 "platform": checkpoint.platform,
@@ -526,7 +539,7 @@ class DefaultMessagingIngressService(IMessagingIngressService):
         async with self._session_provider() as session:
             if attempts >= self._max_attempts:
                 await session.execute(
-                    self._schema_sql(
+                    self._jsonb_sql(
                         "INSERT INTO mugen.messaging_ingress_dead_letter ("
                         "source_event_id, version, platform, client_profile_id, ipc_command, "
                         "source_mode, event_type, event_id, dedupe_key, identifier_type, "
@@ -539,7 +552,9 @@ class DefaultMessagingIngressService(IMessagingIngressService):
                         ":identifier_type, :identifier_value, :room_id, :sender, :payload, "
                         ":provider_context, :received_at, :reason_code, :error_message, "
                         "'queued', :attempts, :first_failed_at, :last_failed_at"
-                        ")"
+                        ")",
+                        "payload",
+                        "provider_context",
                     ),
                     {
                         "source_event_id": row.get("id"),

@@ -10,6 +10,8 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 import uuid
 
+from sqlalchemy.dialects.postgresql import JSONB
+
 from mugen.core.contract.service.ingress import (
     MessagingIngressCheckpointUpdate,
     MessagingIngressEvent,
@@ -484,13 +486,30 @@ class TestMugenServiceIngress(unittest.IsolatedAsyncioTestCase):
         await service._upsert_checkpoint_row(session, checkpoint=checkpoint)  # pylint: disable=protected-access
 
         self.assertEqual(len(session.execute_calls), 2)
-        event_params = session.execute_calls[0][1]
-        checkpoint_params = session.execute_calls[1][1]
+        event_stmt, event_params = session.execute_calls[0]
+        checkpoint_stmt, checkpoint_params = session.execute_calls[1]
         self.assertEqual(event_params["ipc_command"], "matrix_ingress_event")
         self.assertEqual(event_params["payload"], {"body": "hello"})
         self.assertEqual(event_params["provider_context"], {"sync_batch": "s1"})
         self.assertEqual(checkpoint_params["checkpoint_key"], "sync_token")
         self.assertEqual(checkpoint_params["provider_context"], {"source": "sync"})
+        self.assertIsInstance(event_stmt._bindparams["payload"].type, JSONB)  # pylint: disable=protected-access
+        self.assertIsInstance(  # pylint: disable=protected-access
+            event_stmt._bindparams["provider_context"].type,
+            JSONB,
+        )
+        self.assertIsInstance(  # pylint: disable=protected-access
+            checkpoint_stmt._bindparams["provider_context"].type,
+            JSONB,
+        )
+
+    def test_jsonb_sql_without_parameter_names_returns_plain_clause(self) -> None:
+        service, _, _, _, _ = _make_service()
+
+        clause = service._jsonb_sql("SELECT 1")  # pylint: disable=protected-access
+
+        self.assertEqual(str(clause), "SELECT 1")
+        self.assertEqual(clause._bindparams, {})  # pylint: disable=protected-access
 
     async def test_worker_loop_sleeps_when_empty_and_logs_dispatch_failure(self) -> None:
         service, _, _, logging_gateway, _ = _make_service()
@@ -637,13 +656,21 @@ class TestMugenServiceIngress(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(session.execute_calls), 2)
-        dead_letter_params = session.execute_calls[0][1]
+        dead_letter_stmt, dead_letter_params = session.execute_calls[0]
         failed_params = session.execute_calls[1][1]
         self.assertEqual(dead_letter_params["source_event_id"], 55)
         self.assertEqual(dead_letter_params["payload"], {})
         self.assertEqual(dead_letter_params["provider_context"], {})
         self.assertEqual(dead_letter_params["first_failed_at"], fixed_now)
         self.assertEqual(dead_letter_params["last_failed_at"], fixed_now)
+        self.assertIsInstance(  # pylint: disable=protected-access
+            dead_letter_stmt._bindparams["payload"].type,
+            JSONB,
+        )
+        self.assertIsInstance(  # pylint: disable=protected-access
+            dead_letter_stmt._bindparams["provider_context"].type,
+            JSONB,
+        )
         self.assertEqual(
             failed_params,
             {

@@ -296,6 +296,70 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(to_device_event_types, expected_to_device_event_types)
 
+    def test_init_creates_olm_store_directory_for_client_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = SimpleNamespace(
+                basedir=tmpdir,
+                mugen=SimpleNamespace(
+                    platforms=[],
+                    runtime=_runtime_settings(),
+                ),
+                matrix=SimpleNamespace(
+                    homeserver="https://matrix.example.com",
+                    client_profile_id=str(_CLIENT_PROFILE_ID),
+                    client=SimpleNamespace(user="@assistant:example.com"),
+                    storage=SimpleNamespace(olm=SimpleNamespace(path="olm")),
+                ),
+            )
+
+            with (
+                patch.object(
+                    matrix_mod.AsyncClient,
+                    "__init__",
+                    autospec=True,
+                    return_value=None,
+                ) as base_init,
+                patch.object(
+                    DefaultMatrixClient, "add_event_callback", autospec=True
+                ),
+                patch.object(
+                    DefaultMatrixClient, "add_to_device_callback", autospec=True
+                ),
+                patch.object(
+                    DefaultMatrixClient, "add_response_callback", autospec=True
+                ),
+            ):
+                DefaultMatrixClient(config=config)
+
+            expected_path = os.path.join(tmpdir, "olm", str(_CLIENT_PROFILE_ID))
+            self.assertTrue(os.path.isdir(expected_path))
+            self.assertEqual(base_init.call_args.kwargs["store_path"], expected_path)
+
+    def test_init_raises_when_olm_store_directory_creation_fails(self) -> None:
+        config = SimpleNamespace(
+            basedir="/tmp",
+            mugen=SimpleNamespace(
+                platforms=[],
+                runtime=_runtime_settings(),
+            ),
+            matrix=SimpleNamespace(
+                homeserver="https://matrix.example.com",
+                client_profile_id=str(_CLIENT_PROFILE_ID),
+                client=SimpleNamespace(user="@assistant:example.com"),
+                storage=SimpleNamespace(olm=SimpleNamespace(path="olm")),
+            ),
+        )
+
+        with patch(
+            "mugen.core.client.matrix.os.makedirs",
+            side_effect=OSError("permission denied"),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Unable to initialize Matrix OLM store path",
+            ):
+                DefaultMatrixClient(config=config)
+
     def test_init_requires_matrix_secret_key_when_encryption_is_required(self) -> None:
         config = SimpleNamespace(
             basedir="/tmp",
