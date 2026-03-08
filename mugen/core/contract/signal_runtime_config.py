@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from mugen.core.utility.platform_runtime_profile import get_platform_profile_dicts
-
 
 def _require_table(parent: object, *, path: str) -> Mapping[str, Any]:
     if not isinstance(parent, Mapping):
@@ -81,59 +79,15 @@ def _require_nonnegative_number(*, value: object, path: str) -> float:
     return number
 
 
-def _iter_signal_profile_configs(
-    config: Mapping[str, Any],
-) -> list[tuple[str, Mapping[str, Any]]]:
-    signal_cfg = _require_table(config.get("signal"), path="signal")
-    raw_profiles = signal_cfg.get("profiles")
-    if isinstance(raw_profiles, list) and not raw_profiles:
-        raise RuntimeError(
-            "Invalid configuration: signal.profiles must be a non-empty array."
-        )
-
-    profiles_enabled = isinstance(raw_profiles, list) and bool(raw_profiles)
-    profile_keys: set[str] = set()
-    account_numbers: set[str] = set()
-    profile_configs: list[tuple[str, Mapping[str, Any]]] = []
-
-    for index, profile_cfg in enumerate(
-        get_platform_profile_dicts(config, platform="signal")
-    ):
-        profile_path = f"signal.profiles[{index}]" if profiles_enabled else "signal"
-        profile_key = _require_non_empty_string(
-            value=profile_cfg.get("key"),
-            path=f"{profile_path}.key",
-        )
-        if profile_key in profile_keys:
-            raise RuntimeError(
-                "Invalid configuration: signal profile keys must be unique."
-            )
-        profile_keys.add(profile_key)
-
-        account_cfg = _require_table(
-            profile_cfg.get("account"),
-            path=f"{profile_path}.account",
-        )
-        account_number = _require_non_empty_string(
-            value=account_cfg.get("number"),
-            path=f"{profile_path}.account.number",
-        )
-        if account_number in account_numbers:
-            raise RuntimeError(
-                "Invalid configuration: signal account numbers must be unique."
-            )
-        account_numbers.add(account_number)
-        profile_configs.append((profile_path, profile_cfg))
-
-    return profile_configs
-
-
 def validate_signal_enabled_runtime_config(config: Mapping[str, Any]) -> None:
     """Validate strict signal runtime config when signal platform is enabled."""
     signal_cfg = _require_table(config.get("signal"), path="signal")
-    profile_configs = _iter_signal_profile_configs(config)
 
     api_cfg = _require_table(signal_cfg.get("api"), path="signal.api")
+    _require_non_empty_string(
+        value=api_cfg.get("base_url"),
+        path="signal.api.base_url",
+    )
     _require_positive_number(
         value=api_cfg.get("timeout_seconds"),
         path="signal.api.timeout_seconds",
@@ -184,17 +138,3 @@ def validate_signal_enabled_runtime_config(config: Mapping[str, Any]) -> None:
         value=typing_cfg.get("enabled"),
         path="signal.typing.enabled",
     )
-
-    for profile_path, profile_cfg in profile_configs:
-        profile_api_cfg = _require_table(
-            profile_cfg.get("api"),
-            path=f"{profile_path}.api",
-        )
-        _require_non_empty_string(
-            value=profile_api_cfg.get("base_url"),
-            path=f"{profile_path}.api.base_url",
-        )
-        _require_non_empty_string(
-            value=profile_api_cfg.get("bearer_token"),
-            path=f"{profile_path}.api.bearer_token",
-        )

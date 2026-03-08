@@ -18,6 +18,8 @@ from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.wechat import ipc_ext
 from mugen.core.plugin.wechat.ipc_ext import WeChatIPCExtension
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000203")
+
 
 def _make_config(*, typing_enabled: bool = True, dedupe_ttl: int = 86400) -> SimpleNamespace:
     return SimpleNamespace(
@@ -120,6 +122,8 @@ class _IngressRoutingStub:
                 tenant_slug="tenant-a",
                 platform="wechat",
                 channel_key="wechat",
+                client_profile_id=_CLIENT_PROFILE_ID,
+                client_profile_key="wechat-a",
                 identifier_claims={
                     "identifier_type": "path_token",
                     "identifier_value": str(identifier_value),
@@ -207,14 +211,14 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
             )
 
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
-            return_value={"runtime_profile_key": "wechat-a", "tenant_id": "tenant-a"}
+            return_value={"client_profile_id": _CLIENT_PROFILE_ID, "tenant_id": "tenant-a"}
         )
         ext._process_inbound_message = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
 
         await ext._wechat_ingress_event(  # pylint: disable=protected-access
             _make_request(
                 {
-                    "runtime_profile_key": "wechat-a",
+                    "client_profile_id": str(_CLIENT_PROFILE_ID),
                     "payload": {"MsgType": "text", "FromUserName": "wechat-user"},
                     "provider_context": {
                         "provider": "official_account",
@@ -250,6 +254,25 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         ext._resolve_ingress_route.assert_awaited_once()  # type: ignore[union-attr]
 
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"tenant_id": "tenant-a"}
+        )
+        ext._process_inbound_message.reset_mock()
+        await ext._wechat_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": {"MsgType": "text", "FromUserName": "wechat-user"},
+                    "provider_context": {
+                        "provider": "official_account",
+                        "path_token": "wechat-path",
+                        "ingress_route": {},
+                    },
+                },
+                command="wechat_ingress_event",
+            )
+        )
+        ext._process_inbound_message.assert_not_awaited()
+
         ext._resolve_ingress_route.reset_mock()  # type: ignore[union-attr]
         await ext._wechat_ingress_event(  # pylint: disable=protected-access
             _make_request(
@@ -258,7 +281,7 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
                     "provider_context": {
                         "provider": "official_account",
                         "path_token": "wechat-path",
-                        "ingress_route": {"runtime_profile_key": "wechat-a"},
+                        "ingress_route": {"client_profile_id": str(_CLIENT_PROFILE_ID)},
                     },
                 },
                 command="wechat_ingress_event",
@@ -825,6 +848,22 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(relational.dead_letters), 2)
+
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"tenant_id": "tenant-a"}
+        )
+        ext._process_inbound_message = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+        await ext._wechat_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "provider": "official_account",
+                    "payload": _make_text_payload(),
+                },
+                command="wechat_official_account_event",
+            ),
+            expected_provider="official_account",
+        )
+        ext._process_inbound_message.assert_not_awaited()
         self.assertEqual(relational.dead_letters[0]["reason_code"], "malformed_payload")
         self.assertEqual(relational.dead_letters[1]["reason_code"], "processing_exception")
 

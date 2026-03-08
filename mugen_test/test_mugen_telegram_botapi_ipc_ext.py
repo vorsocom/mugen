@@ -18,6 +18,8 @@ from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.telegram.botapi import ipc_ext
 from mugen.core.plugin.telegram.botapi.ipc_ext import TelegramBotAPIIPCExtension
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000202")
+
 
 def _make_config(*, typing_enabled: bool = True) -> SimpleNamespace:
     return SimpleNamespace(
@@ -122,6 +124,8 @@ class _IngressRoutingStub:
                 tenant_slug="tenant-a",
                 platform="telegram",
                 channel_key="telegram",
+                client_profile_id=_CLIENT_PROFILE_ID,
+                client_profile_key="telegram-a",
                 identifier_claims={
                     "identifier_type": "path_token",
                     "identifier_value": str(identifier_value),
@@ -264,7 +268,7 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
 
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
-            return_value={"runtime_profile_key": "telegram-a", "tenant_id": "tenant-a"}
+            return_value={"client_profile_id": _CLIENT_PROFILE_ID, "tenant_id": "tenant-a"}
         )
         ext._handle_message_update = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
         ext._handle_callback_query_update = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
@@ -272,7 +276,7 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
         await ext._telegram_ingress_event(  # pylint: disable=protected-access
             _make_request(
                 {
-                    "runtime_profile_key": "telegram-a",
+                    "client_profile_id": str(_CLIENT_PROFILE_ID),
                     "payload": {
                         "update": {"update_id": 1},
                         "message": {"chat": {"id": 1}, "from": {"id": 2}},
@@ -312,7 +316,7 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
         )
         ext._handle_message_update.assert_not_awaited()
-        ext._handle_callback_query_update.assert_awaited_once()
+        ext._handle_callback_query_update.assert_not_awaited()
 
         ext._handle_callback_query_update.reset_mock()
         ext._resolve_ingress_route.reset_mock()  # type: ignore[union-attr]
@@ -325,13 +329,37 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     },
                     "provider_context": {
                         "path_token": "telegram-path",
-                        "ingress_route": {"runtime_profile_key": "telegram-a"},
+                        "ingress_route": {"client_profile_id": str(_CLIENT_PROFILE_ID)},
                     },
                 },
                 command="telegram_ingress_event",
             )
         )
         ext._resolve_ingress_route.assert_not_awaited()  # type: ignore[union-attr]
+
+        ext._handle_message_update.reset_mock()
+        ext._handle_callback_query_update.reset_mock()
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"client_profile_id": _CLIENT_PROFILE_ID, "tenant_id": "tenant-a"}
+        )
+        await ext._telegram_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "client_profile_id": str(_CLIENT_PROFILE_ID),
+                    "payload": {
+                        "update": {"update_id": 4},
+                        "callback_query": {
+                            "id": "cb-only",
+                            "message": {"chat": {"id": 4}},
+                        },
+                    },
+                    "provider_context": {"path_token": "telegram-path", "ingress_route": {}},
+                },
+                command="telegram_ingress_event",
+            )
+        )
+        ext._handle_message_update.assert_not_awaited()
+        ext._handle_callback_query_update.assert_awaited_once()
 
     async def test_text_message_routes_to_text_handler_and_registers_user(self) -> None:
         client = _make_client()
@@ -368,6 +396,19 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
             "2001",
             state="stop",
         )
+
+    async def test_telegram_botapi_update_returns_without_route_client_profile(self) -> None:
+        ext = _new_extension(config=_make_config())
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"tenant_id": "tenant-a"}
+        )
+        ext._handle_message_update = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._telegram_botapi_update(  # pylint: disable=protected-access
+            _make_request(_make_private_text_message_update())
+        )
+
+        ext._handle_message_update.assert_not_awaited()
 
     async def test_slash_command_routes_as_text_with_context(self) -> None:
         messaging_service = _make_messaging_service()

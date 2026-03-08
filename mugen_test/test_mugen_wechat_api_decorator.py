@@ -2,10 +2,9 @@
 
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from mugen.core.plugin.wechat.api import decorator as wechat_decorator
-from mugen.core.utility.platform_runtime_profile import build_config_namespace
 
 
 class _AbortCalled(Exception):
@@ -18,39 +17,24 @@ def _abort_raiser(code: int, *_args, **_kwargs):
     raise _AbortCalled(code)
 
 
-def _make_config(
-    *,
-    platforms: list[str] | None = None,
-    path_token: str = "path-token-1",
-    provider: str = "official_account",
-):
+def _make_config(*, platforms: list[str] | None = None):
     return SimpleNamespace(
         mugen=SimpleNamespace(platforms=list(platforms or ["wechat"])),
-        wechat=SimpleNamespace(
-            provider=provider,
-            webhook=SimpleNamespace(path_token=path_token),
-        ),
+        wechat=SimpleNamespace(),
     )
 
 
-def _make_multi_profile_config() -> SimpleNamespace:
-    return build_config_namespace(
-        {
-            "wechat": {
-                "profiles": [
-                    {
-                        "key": "default",
-                        "provider": "official_account",
-                        "webhook": {"path_token": "path-token-1"},
-                    },
-                    {
-                        "key": "secondary",
-                        "provider": "wecom",
-                        "webhook": {"path_token": "path-token-2"},
-                    },
-                ]
-            }
-        }
+def _make_client_profile(*, path_token: str = "path-token-1") -> SimpleNamespace:
+    return SimpleNamespace(
+        id="00000000-0000-0000-0000-000000000301",
+        platform_key="wechat",
+        path_token=path_token,
+    )
+
+
+def _make_runtime_config(*, provider: str = "official_account") -> SimpleNamespace:
+    return SimpleNamespace(
+        wechat=SimpleNamespace(provider=provider),
     )
 
 
@@ -65,6 +49,24 @@ class TestMugenWeChatDecorator(unittest.IsolatedAsyncioTestCase):
         with patch.object(wechat_decorator.di, "container", new=container):
             self.assertEqual(wechat_decorator._config_provider(), "cfg")
             self.assertEqual(wechat_decorator._logger_provider(), "logger")
+            self.assertIsNone(wechat_decorator._client_profile_service())
+
+        with patch.object(
+            wechat_decorator,
+            "MessagingClientProfileService",
+            return_value="service",
+        ) as service_cls:
+            container = SimpleNamespace(
+                config="cfg",
+                logging_gateway="logger",
+                relational_storage_gateway="rsg",
+            )
+            with patch.object(wechat_decorator.di, "container", new=container):
+                self.assertEqual(wechat_decorator._client_profile_service(), "service")
+        service_cls.assert_called_once_with(
+            table="admin_messaging_client_profile",
+            rsg="rsg",
+        )
 
     async def test_wechat_platform_required_paths(self) -> None:
         logger = Mock()
@@ -127,10 +129,17 @@ class TestMugenWeChatDecorator(unittest.IsolatedAsyncioTestCase):
             logger.error.assert_called_once_with("WeChat webhook path token missing.")
 
         logger = Mock()
-        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+        with (
+            patch.object(wechat_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                wechat_decorator,
+                "_client_profile_service",
+                return_value=None,
+            ),
+        ):
             guarded = wechat_decorator.wechat_webhook_path_token_required(
                 _ok_handler,
-                config_provider=lambda: SimpleNamespace(wechat=SimpleNamespace()),
+                config_provider=lambda: _make_config(),
                 logger_provider=lambda: logger,
             )
             with self.assertRaises(_AbortCalled) as ex:
@@ -141,24 +150,44 @@ class TestMugenWeChatDecorator(unittest.IsolatedAsyncioTestCase):
             )
 
         logger = Mock()
-        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+        service = SimpleNamespace(
+            resolve_active_by_identifier=AsyncMock(return_value=None)
+        )
+        with (
+            patch.object(wechat_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                wechat_decorator,
+                "_client_profile_service",
+                return_value=service,
+            ),
+        ):
             guarded = wechat_decorator.wechat_webhook_path_token_required(
                 _ok_handler,
-                config_provider=lambda: _make_config(path_token="expected"),
+                config_provider=lambda: _make_config(),
                 logger_provider=lambda: logger,
             )
             with self.assertRaises(_AbortCalled) as ex:
-                await guarded(path_token="bad")
+                await guarded(path_token="missing")
             self.assertEqual(ex.exception.code, 401)
             logger.error.assert_called_once_with(
                 "WeChat webhook path token verification failed."
             )
 
         logger = Mock()
-        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+        service = SimpleNamespace(
+            resolve_active_by_identifier=AsyncMock(side_effect=KeyError("missing"))
+        )
+        with (
+            patch.object(wechat_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                wechat_decorator,
+                "_client_profile_service",
+                return_value=service,
+            ),
+        ):
             guarded = wechat_decorator.wechat_webhook_path_token_required(
                 _ok_handler,
-                config_provider=lambda: _make_config(path_token="   "),
+                config_provider=lambda: _make_config(),
                 logger_provider=lambda: logger,
             )
             with self.assertRaises(_AbortCalled) as ex:
@@ -168,39 +197,30 @@ class TestMugenWeChatDecorator(unittest.IsolatedAsyncioTestCase):
                 "WeChat webhook path token configuration missing."
             )
 
-        guarded = wechat_decorator.wechat_webhook_path_token_required(
-            _ok_handler,
-            config_provider=lambda: _make_config(path_token="expected"),
-            logger_provider=lambda: Mock(),
+        service = SimpleNamespace(
+            resolve_active_by_identifier=AsyncMock(
+                return_value=_make_client_profile(path_token="expected")
+            )
         )
-        self.assertEqual(await guarded(path_token="expected"), {"ok": True})
-
-        guarded_factory = wechat_decorator.wechat_webhook_path_token_required(
-            config_provider=lambda: _make_config(path_token="expected"),
-            logger_provider=lambda: Mock(),
-        )
-        self.assertEqual(
-            await guarded_factory(_ok_handler)(path_token="expected"),
-            {"ok": True},
-        )
-
-        logger = Mock()
-        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+        with patch.object(
+            wechat_decorator,
+            "_client_profile_service",
+            return_value=service,
+        ):
             guarded = wechat_decorator.wechat_webhook_path_token_required(
                 _ok_handler,
-                config_provider=lambda: _make_config(path_token="expected"),
-                logger_provider=lambda: logger,
+                config_provider=lambda: _make_config(),
+                logger_provider=lambda: Mock(),
             )
-            with patch.object(
-                wechat_decorator,
-                "find_platform_runtime_profile_key",
-                side_effect=RuntimeError("bad config"),
-            ):
-                with self.assertRaises(_AbortCalled) as ex:
-                    await guarded(path_token="expected")
-            self.assertEqual(ex.exception.code, 500)
-            logger.error.assert_called_once_with(
-                "WeChat webhook path token configuration missing."
+            self.assertEqual(await guarded(path_token="expected"), {"ok": True})
+
+            guarded_factory = wechat_decorator.wechat_webhook_path_token_required(
+                config_provider=lambda: _make_config(),
+                logger_provider=lambda: Mock(),
+            )
+            self.assertEqual(
+                await guarded_factory(_ok_handler)(path_token="expected"),
+                {"ok": True},
             )
 
     async def test_wechat_provider_required_paths(self) -> None:
@@ -208,41 +228,71 @@ class TestMugenWeChatDecorator(unittest.IsolatedAsyncioTestCase):
             return {"ok": True}
 
         logger = Mock()
-        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+        with (
+            patch.object(wechat_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                wechat_decorator,
+                "_client_profile_service",
+                return_value=None,
+            ),
+        ):
             guarded = wechat_decorator.wechat_provider_required(
                 "official_account",
-                config_provider=lambda: SimpleNamespace(wechat=SimpleNamespace()),
+                config_provider=lambda: _make_config(),
                 logger_provider=lambda: logger,
             )(_ok_handler)
             with self.assertRaises(_AbortCalled) as ex:
-                await guarded()
+                await guarded(path_token="expected")
             self.assertEqual(ex.exception.code, 500)
             logger.error.assert_called_once_with("WeChat provider configuration missing.")
 
         logger = Mock()
-        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+        service = SimpleNamespace(
+            resolve_active_by_identifier=AsyncMock(
+                return_value=_make_client_profile(path_token="expected")
+            ),
+            build_runtime_config=AsyncMock(
+                return_value=_make_runtime_config(provider="official_account")
+            ),
+        )
+        with (
+            patch.object(wechat_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                wechat_decorator,
+                "_client_profile_service",
+                return_value=service,
+            ),
+        ):
             guarded = wechat_decorator.wechat_provider_required(
                 "wecom",
-                config_provider=lambda: _make_config(provider="official_account"),
+                config_provider=lambda: _make_config(),
                 logger_provider=lambda: logger,
             )(_ok_handler)
             with self.assertRaises(_AbortCalled) as ex:
-                await guarded()
+                await guarded(path_token="expected")
             self.assertEqual(ex.exception.code, 501)
             logger.error.assert_called_once()
 
-        guarded = wechat_decorator.wechat_provider_required(
-            "official_account",
-            config_provider=lambda: _make_config(provider="official_account"),
-            logger_provider=lambda: Mock(),
-        )(_ok_handler)
-        self.assertEqual(await guarded(), {"ok": True})
-
         logger = Mock()
-        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+        service = SimpleNamespace(
+            resolve_active_by_identifier=AsyncMock(
+                return_value=_make_client_profile(path_token="expected")
+            ),
+            build_runtime_config=AsyncMock(
+                return_value=_make_runtime_config(provider="official_account")
+            ),
+        )
+        with (
+            patch.object(wechat_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                wechat_decorator,
+                "_client_profile_service",
+                return_value=service,
+            ),
+        ):
             guarded = wechat_decorator.wechat_provider_required(
                 "official_account",
-                config_provider=lambda: _make_multi_profile_config(),
+                config_provider=lambda: _make_config(),
                 logger_provider=lambda: logger,
             )(_ok_handler)
             with self.assertRaises(_AbortCalled) as ex:
@@ -251,27 +301,44 @@ class TestMugenWeChatDecorator(unittest.IsolatedAsyncioTestCase):
             logger.error.assert_called_once_with("WeChat webhook path token missing.")
 
         logger = Mock()
-        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+        service = SimpleNamespace(
+            resolve_active_by_identifier=AsyncMock(side_effect=KeyError("missing")),
+            build_runtime_config=AsyncMock(),
+        )
+        with (
+            patch.object(wechat_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                wechat_decorator,
+                "_client_profile_service",
+                return_value=service,
+            ),
+        ):
             guarded = wechat_decorator.wechat_provider_required(
                 "official_account",
-                config_provider=lambda: _make_config(provider="official_account"),
+                config_provider=lambda: _make_config(),
                 logger_provider=lambda: logger,
             )(_ok_handler)
-            with patch.object(
-                wechat_decorator,
-                "identifier_configured_for_platform",
-                side_effect=RuntimeError("bad config"),
-            ):
-                with self.assertRaises(_AbortCalled) as ex:
-                    await guarded()
+            with self.assertRaises(_AbortCalled) as ex:
+                await guarded(path_token="expected")
             self.assertEqual(ex.exception.code, 500)
             logger.error.assert_called_once_with("WeChat provider configuration missing.")
 
         logger = Mock()
-        with patch.object(wechat_decorator, "abort", side_effect=_abort_raiser):
+        service = SimpleNamespace(
+            resolve_active_by_identifier=AsyncMock(return_value=None),
+            build_runtime_config=AsyncMock(),
+        )
+        with (
+            patch.object(wechat_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                wechat_decorator,
+                "_client_profile_service",
+                return_value=service,
+            ),
+        ):
             guarded = wechat_decorator.wechat_provider_required(
                 "official_account",
-                config_provider=lambda: _make_multi_profile_config(),
+                config_provider=lambda: _make_config(),
                 logger_provider=lambda: logger,
             )(_ok_handler)
             with self.assertRaises(_AbortCalled) as ex:
@@ -282,27 +349,46 @@ class TestMugenWeChatDecorator(unittest.IsolatedAsyncioTestCase):
             )
 
         logger = Mock()
+        service = SimpleNamespace(
+            resolve_active_by_identifier=AsyncMock(
+                return_value=_make_client_profile(path_token="expected")
+            ),
+            build_runtime_config=AsyncMock(side_effect=RuntimeError("bad config")),
+        )
         with (
             patch.object(wechat_decorator, "abort", side_effect=_abort_raiser),
             patch.object(
                 wechat_decorator,
-                "get_platform_profile_section",
-                side_effect=KeyError("missing"),
+                "_client_profile_service",
+                return_value=service,
             ),
         ):
             guarded = wechat_decorator.wechat_provider_required(
                 "official_account",
-                config_provider=lambda: _make_multi_profile_config(),
+                config_provider=lambda: _make_config(),
                 logger_provider=lambda: logger,
             )(_ok_handler)
             with self.assertRaises(_AbortCalled) as ex:
-                await guarded(path_token="path-token-1")
+                await guarded(path_token="expected")
             self.assertEqual(ex.exception.code, 500)
             logger.error.assert_called_once_with("WeChat provider configuration missing.")
 
-        guarded = wechat_decorator.wechat_provider_required(
-            "official_account",
-            config_provider=lambda: _make_config(provider="official_account"),
-            logger_provider=lambda: Mock(),
-        )(_ok_handler)
-        self.assertEqual(await guarded(path_token=""), {"ok": True})
+        service = SimpleNamespace(
+            resolve_active_by_identifier=AsyncMock(
+                return_value=_make_client_profile(path_token="expected")
+            ),
+            build_runtime_config=AsyncMock(
+                return_value=_make_runtime_config(provider="official_account")
+            ),
+        )
+        with patch.object(
+            wechat_decorator,
+            "_client_profile_service",
+            return_value=service,
+        ):
+            guarded = wechat_decorator.wechat_provider_required(
+                "official_account",
+                config_provider=lambda: _make_config(),
+                logger_provider=lambda: Mock(),
+            )(_ok_handler)
+            self.assertEqual(await guarded(path_token="expected"), {"ok": True})

@@ -15,11 +15,7 @@ from typing import Any
 from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.di.injector import DependencyInjector
-from mugen.core.utility.platform_runtime_profile import (
-    build_config_namespace,
-    get_platform_profile_dicts,
-    get_platform_runtime_profile_keys,
-)
+from mugen.core.utility.platform_runtime_profile import build_config_namespace
 from mugen.core.utility.platforms import normalize_platforms
 
 PROFILED_RUNTIME_PLATFORMS = (
@@ -115,33 +111,97 @@ def _active_platforms(config: Mapping[str, Any] | SimpleNamespace) -> tuple[str,
     return tuple(normalize_platforms(mugen_cfg.get("platforms", [])))
 
 
+def _platform_config_snapshot(
+    config: Mapping[str, Any] | SimpleNamespace,
+    *,
+    platform: str,
+) -> Any:
+    config_dict = _config_dict(config)
+    return config_dict.get(str(platform).strip().lower())
+
+
 def _profile_config_changed(
     current_config: Mapping[str, Any] | SimpleNamespace,
     next_config: Mapping[str, Any] | SimpleNamespace,
     *,
     platform: str,
 ) -> bool:
-    return get_platform_profile_dicts(
+    return _platform_config_snapshot(
         current_config,
         platform=platform,
-    ) != get_platform_profile_dicts(
+    ) != _platform_config_snapshot(
         next_config,
         platform=platform,
     )
 
 
 def _unchanged_profile_diff(
-    config: Mapping[str, Any] | SimpleNamespace,
+    injector: DependencyInjector | None,
     *,
     platform: str,
 ) -> dict[str, list[str]]:
-    keys = list(get_platform_runtime_profile_keys(config, platform=platform))
+    unchanged: list[str] = []
+    client_attr = _PLATFORM_CLIENT_ATTRS.get(platform)
+    client = getattr(injector, client_attr, None) if client_attr is not None else None
+    configured_ids = getattr(client, "configured_client_profile_ids", None)
+    if callable(configured_ids):
+        result = configured_ids()
+        if isinstance(result, tuple | list):
+            unchanged = [
+                str(item)
+                for item in result
+                if str(item).strip() != ""
+            ]
+    if not unchanged:
+        managed_clients = getattr(client, "managed_clients", None)
+        if callable(managed_clients):
+            managed = managed_clients()
+            if isinstance(managed, Mapping):
+                unchanged = sorted(
+                    str(item)
+                    for item in managed.keys()
+                    if str(item).strip() != ""
+                )
     return {
         "added": [],
         "removed": [],
         "updated": [],
-        "unchanged": keys,
+        "unchanged": unchanged,
     }
+
+
+def _normalize_reload_diff(
+    diff: object,
+    *,
+    injector: DependencyInjector | None,
+    platform: str,
+) -> dict[str, list[str]]:
+    if not isinstance(diff, Mapping):
+        return _unchanged_profile_diff(injector, platform=platform)
+
+    normalized = _unchanged_profile_diff(injector, platform=platform)
+    for key in ("added", "removed", "updated", "unchanged"):
+        values = diff.get(key, normalized[key])
+        if not isinstance(values, Iterable) or isinstance(
+            values,
+            str | bytes | Mapping,
+        ):
+            values = normalized[key]
+        normalized[key] = [str(value) for value in values]
+    return normalized
+
+
+def _normalize_requested_platforms(
+    platforms: Iterable[str] | None,
+) -> set[str] | None:
+    if platforms is None:
+        return None
+    normalized: set[str] = set()
+    for value in platforms:
+        platform = str(value or "").strip().lower()
+        if platform in PROFILED_RUNTIME_PLATFORMS:
+            normalized.add(platform)
+    return normalized
 
 
 def _iter_extension_collections(node: object) -> Iterable[list[Any]]:
@@ -239,6 +299,7 @@ async def reload_platform_runtime_profiles(
     injector: DependencyInjector,
     logger: ILoggingGateway | None = None,
     config_file: str | None = None,
+    platforms: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Reload all configured multi-profile platform runtimes in place."""
     if not isinstance(injector, DependencyInjector):
@@ -272,12 +333,37 @@ async def reload_platform_runtime_profiles(
             details={"activation_changes": activation_changes},
         )
 
+    requested_platforms = _normalize_requested_platforms(platforms)
+    if requested_platforms is None:
+        target_platforms = {
+            platform
+            for platform in next_active_platforms
+            if _profile_config_changed(
+                current_config_dict,
+                next_config_dict,
+                platform=platform,
+            )
+        }
+    else:
+        target_platforms = requested_platforms & next_active_platforms
+
     platform_results: dict[str, dict[str, Any]] = {}
     reloaded_platforms: list[str] = []
 
     try:
         for platform in PROFILED_RUNTIME_PLATFORMS:
             if platform not in next_active_platforms:
+                continue
+
+            if platform not in target_platforms:
+                diff = _unchanged_profile_diff(injector, platform=platform)
+                platform_results[platform] = {
+                    "status": "unchanged",
+                    "added": list(diff["added"]),
+                    "removed": list(diff["removed"]),
+                    "updated": list(diff["updated"]),
+                    "unchanged": list(diff["unchanged"]),
+                }
                 continue
 
             client_attr = _PLATFORM_CLIENT_ATTRS[platform]
@@ -288,17 +374,6 @@ async def reload_platform_runtime_profiles(
                     status_code=500,
                 )
 
-            if not _profile_config_changed(
-                current_config,
-                next_config,
-                platform=platform,
-            ):
-                platform_results[platform] = {
-                    "status": "unchanged",
-                    **_unchanged_profile_diff(next_config, platform=platform),
-                }
-                continue
-
             reload_profiles = getattr(client, "reload_profiles", None)
             if not callable(reload_profiles):
                 raise PlatformRuntimeProfileReloadError(
@@ -307,15 +382,27 @@ async def reload_platform_runtime_profiles(
                     status_code=500,
                 )
 
-            diff = await reload_profiles(next_config)
+            diff = _normalize_reload_diff(
+                await reload_profiles(next_config),
+                injector=injector,
+                platform=platform,
+            )
+            status = "reloaded"
+            if (
+                len(diff.get("added", [])) == 0
+                and len(diff.get("removed", [])) == 0
+                and len(diff.get("updated", [])) == 0
+            ):
+                status = "unchanged"
             platform_results[platform] = {
-                "status": "reloaded",
+                "status": status,
                 "added": list(diff.get("added", [])),
                 "removed": list(diff.get("removed", [])),
                 "updated": list(diff.get("updated", [])),
                 "unchanged": list(diff.get("unchanged", [])),
             }
-            reloaded_platforms.append(platform)
+            if status == "reloaded":
+                reloaded_platforms.append(platform)
 
         _refresh_runtime_config_references(injector, config=next_config)
     except Exception as exc:

@@ -16,6 +16,8 @@ from mugen.core.plugin.line.messagingapi.api import webhook
 from mugen.core.plugin.line.messagingapi.ipc_ext import LineMessagingAPIIPCExtension
 from mugen.core.service.ipc import DefaultIPCService
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000201")
+
 
 class _MemoryRelational:
     def __init__(self) -> None:
@@ -95,6 +97,8 @@ class _IngressRoutingStub:
                 tenant_slug="tenant-a",
                 platform="line",
                 channel_key="line",
+                client_profile_id=_CLIENT_PROFILE_ID,
+                client_profile_key="line-a",
                 identifier_claims={
                     "identifier_type": "path_token",
                     "identifier_value": str(identifier_value),
@@ -212,35 +216,21 @@ class TestMugenLineReliabilityE2E(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first, {"response": "OK"})
         self.assertEqual(second, {"response": "OK"})
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "line",
-            room_id="U-1001",
-            sender="U-1001",
-            message="hello",
-            message_context=[
-                {
-                    "type": "ingress_route",
-                    "content": {
-                        "tenant_id": "11111111-1111-1111-1111-111111111111",
-                        "tenant_slug": "tenant-a",
-                        "platform": "line",
-                        "channel_key": "line",
-                        "identifier_claims": {
-                            "identifier_type": "path_token",
-                            "identifier_value": "path-token",
-                        },
-                        "channel_profile_id": None,
-                        "route_key": None,
-                        "binding_id": None,
-                        "runtime_profile_key": None,
-                        "tenant_resolution": {
-                            "mode": "resolved",
-                            "reason_code": None,
-                            "source": "line.ingress_routing",
-                        },
-                    },
-                }
-            ],
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "U-1001")
+        self.assertEqual(kwargs["sender"], "U-1001")
+        self.assertEqual(kwargs["message"], "hello")
+        ingress_route = kwargs["message_context"][-1]["content"]
+        self.assertEqual(ingress_route["tenant_id"], "11111111-1111-1111-1111-111111111111")
+        self.assertEqual(ingress_route["platform"], "line")
+        self.assertEqual(ingress_route["client_profile_id"], str(_CLIENT_PROFILE_ID))
+        self.assertEqual(ingress_route["client_profile_key"], "line-a")
+        self.assertEqual(
+            ingress_route["identifier_claims"],
+            {
+                "identifier_type": "path_token",
+                "identifier_value": "path-token",
+            },
         )
         logger.debug.assert_any_call("Skip duplicate LINE event type=message.")
 
@@ -284,41 +274,20 @@ class TestMugenLineReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response, {"response": "OK"})
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "line",
-            room_id="U-1001",
-            sender="U-1001",
-            message="btn-1",
-            message_context=[
-                {
-                    "type": "line_postback",
-                    "content": {
-                        "postback": {"data": "btn-1"},
-                    },
-                },
-                {
-                    "type": "ingress_route",
-                    "content": {
-                        "tenant_id": "11111111-1111-1111-1111-111111111111",
-                        "tenant_slug": "tenant-a",
-                        "platform": "line",
-                        "channel_key": "line",
-                        "identifier_claims": {
-                            "identifier_type": "path_token",
-                            "identifier_value": "path-token",
-                        },
-                        "channel_profile_id": None,
-                        "route_key": None,
-                        "binding_id": None,
-                        "runtime_profile_key": None,
-                        "tenant_resolution": {
-                            "mode": "resolved",
-                            "reason_code": None,
-                            "source": "line.ingress_routing",
-                        },
-                    },
-                },
-            ],
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "U-1001")
+        self.assertEqual(kwargs["sender"], "U-1001")
+        self.assertEqual(kwargs["message"], "btn-1")
+        self.assertEqual(kwargs["message_context"][0]["type"], "line_postback")
+        ingress_route = kwargs["message_context"][-1]["content"]
+        self.assertEqual(ingress_route["client_profile_id"], str(_CLIENT_PROFILE_ID))
+        self.assertEqual(ingress_route["client_profile_key"], "line-a")
+        self.assertEqual(
+            ingress_route["identifier_claims"],
+            {
+                "identifier_type": "path_token",
+                "identifier_value": "path-token",
+            },
         )
 
     async def test_processing_failure_is_persisted_to_dead_letter(self) -> None:

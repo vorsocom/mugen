@@ -46,39 +46,10 @@ class TestLineRuntimeConfigContract(unittest.TestCase):
         cfg = _valid_config()
         validate_line_enabled_runtime_config(cfg)
 
-    def test_accepts_profiles_and_rejects_duplicate_path_tokens(self) -> None:
+    def test_ignores_legacy_profiles_blocks(self) -> None:
         cfg = _valid_config()
-        cfg["line"]["profiles"] = [
-            {
-                "key": "default",
-                "channel": {
-                    "access_token": "line-token-a",
-                    "secret": "line-secret-a",
-                },
-                "webhook": {
-                    "path_token": "path-token-a",
-                },
-            },
-            {
-                "key": "secondary",
-                "channel": {
-                    "access_token": "line-token-b",
-                    "secret": "line-secret-b",
-                },
-                "webhook": {
-                    "path_token": "path-token-b",
-                },
-            },
-        ]
+        cfg["line"]["profiles"] = []
         validate_line_enabled_runtime_config(cfg)
-
-        cfg = copy.deepcopy(cfg)
-        cfg["line"]["profiles"][1]["webhook"]["path_token"] = "path-token-a"
-        with self.assertRaisesRegex(
-            RuntimeError,
-            re.escape("line webhook path tokens must be unique"),
-        ):
-            validate_line_enabled_runtime_config(cfg)
 
     def test_rejects_invalid_shapes_and_values(self) -> None:
         cases: list[tuple[dict, str]] = []
@@ -86,18 +57,6 @@ class TestLineRuntimeConfigContract(unittest.TestCase):
         cfg = _valid_config()
         cfg["line"] = "invalid"
         cases.append((cfg, "line must be a table"))
-
-        cfg = _valid_config()
-        cfg["line"]["channel"]["access_token"] = ""
-        cases.append((cfg, "line.channel.access_token"))
-
-        cfg = _valid_config()
-        cfg["line"]["channel"]["secret"] = ""
-        cases.append((cfg, "line.channel.secret"))
-
-        cfg = _valid_config()
-        cfg["line"]["webhook"]["path_token"] = ""
-        cases.append((cfg, "line.webhook.path_token"))
 
         cfg = _valid_config()
         cfg["line"]["webhook"]["dedupe_ttl_seconds"] = 0

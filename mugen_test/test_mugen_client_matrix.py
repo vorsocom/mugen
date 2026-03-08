@@ -35,6 +35,8 @@ from mugen.core.contract.service.ipc import (
 )
 from mugen.core.service.ipc import DefaultIPCService
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000206")
+
 
 class _DeviceStore(dict):
     def active_user_devices(self, user_id: str) -> list[SimpleNamespace]:
@@ -196,6 +198,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             ),
             matrix=SimpleNamespace(
                 homeserver="https://matrix.example.com",
+                client_profile_id=str(_CLIENT_PROFILE_ID),
                 client=SimpleNamespace(user="@assistant:example.com"),
                 storage=SimpleNamespace(olm=SimpleNamespace(path="olm")),
             ),
@@ -242,7 +245,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             base_init.call_args.kwargs["store_path"],
-            "/tmp/olm/default",
+            f"/tmp/olm/{_CLIENT_PROFILE_ID}",
         )
         self.assertIs(
             client._ipc_service, ipc_service
@@ -292,6 +295,50 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             call.args[2] for call in add_to_device_callback.call_args_list
         ]
         self.assertEqual(to_device_event_types, expected_to_device_event_types)
+
+    def test_init_requires_matrix_secret_key_when_encryption_is_required(self) -> None:
+        config = SimpleNamespace(
+            basedir="/tmp",
+            mugen=SimpleNamespace(
+                platforms=["matrix"],
+                runtime=_runtime_settings(),
+            ),
+            matrix=SimpleNamespace(
+                homeserver="https://matrix.example.com",
+                client_profile_id=str(_CLIENT_PROFILE_ID),
+                client=SimpleNamespace(user="@assistant:example.com"),
+                storage=SimpleNamespace(olm=SimpleNamespace(path="olm")),
+            ),
+        )
+
+        with (
+            patch.object(
+                matrix_mod.AsyncClient, "__init__", autospec=True, return_value=None
+            ),
+            patch.object(DefaultMatrixClient, "add_event_callback", autospec=True),
+            patch.object(DefaultMatrixClient, "add_to_device_callback", autospec=True),
+            patch.object(DefaultMatrixClient, "add_response_callback", autospec=True),
+            patch.object(
+                DefaultMatrixClient,
+                "_matrix_secrets_encryption_required",
+                return_value=True,
+            ),
+            patch.object(
+                DefaultMatrixClient,
+                "_build_secret_cipher",
+                return_value=None,
+            ),
+            self.assertRaisesRegex(RuntimeError, "Matrix secret encryption key is required"),
+        ):
+            DefaultMatrixClient(
+                config=config,
+                ipc_service=Mock(),
+                keyval_storage_gateway=Mock(),
+                relational_storage_gateway=Mock(),
+                logging_gateway=Mock(),
+                messaging_service=Mock(),
+                user_service=Mock(),
+            )
 
     def test_matrix_secrets_encryption_required_normalizes_platform_names(self) -> None:
         client = object.__new__(DefaultMatrixClient)
@@ -359,6 +406,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             basedir="/tmp",
             matrix=SimpleNamespace(
                 homeserver="https://matrix.example.com",
+                client_profile_id=str(_CLIENT_PROFILE_ID),
                 client=SimpleNamespace(
                     user="@assistant:example.com",
                     password="pw",
@@ -2508,19 +2556,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         with patch.object(matrix_mod, "RoomMessageText", _FakeTextMessage):
             await client._cb_room_message(room, _FakeTextMessage(body="hello"))
 
-        kwargs = client._messaging_service.handle_text_message.await_args.kwargs
-        self.assertEqual(kwargs["scope"].tenant_id, str(GLOBAL_TENANT_ID))
-        self.assertEqual(
-            kwargs["ingress_metadata"]["tenant_resolution"]["mode"],
-            "fallback_global",
-        )
-        self.assertEqual(
-            kwargs["ingress_metadata"]["tenant_resolution"]["reason_code"],
-            IngressRouteReason.MISSING_BINDING.value,
-        )
+        client._messaging_service.handle_text_message.assert_not_awaited()
+        client._process_message_responses.assert_not_awaited()
+        client.room_typing.assert_not_awaited()
         self.assertEqual(
             client._matrix_metrics[
-                "matrix.routing.fallback_global.missing_binding"
+                "matrix.routing.dropped.missing_binding"
             ],  # pylint: disable=protected-access
             1,
         )
@@ -2585,12 +2626,9 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         resolve_request = client._ingress_routing_service.resolve.await_args.args[0]
         self.assertEqual(resolve_request.identifier_type, "recipient_user_id")
         self.assertEqual(resolve_request.identifier_value, "@assistant:example.com")
-        kwargs = client._messaging_service.handle_text_message.await_args.kwargs
-        self.assertEqual(kwargs["scope"].tenant_id, str(GLOBAL_TENANT_ID))
-        self.assertEqual(
-            kwargs["ingress_metadata"]["tenant_resolution"]["reason_code"],
-            IngressRouteReason.MISSING_BINDING.value,
-        )
+        client._messaging_service.handle_text_message.assert_not_awaited()
+        client._process_message_responses.assert_not_awaited()
+        client.room_typing.assert_not_awaited()
 
     async def test_cb_room_message_media_without_download_and_unknown_type(
         self,
@@ -2600,6 +2638,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._validate_message = AsyncMock(return_value=True)
         client._download_file = AsyncMock(return_value=None)
         client._process_message_responses = AsyncMock(return_value=None)
+        client._resolve_message_ingress = AsyncMock(  # pylint: disable=protected-access
+            return_value=(
+                SimpleNamespace(tenant_id=str(GLOBAL_TENANT_ID)),
+                {"ingress_route": {"tenant_id": str(GLOBAL_TENANT_ID)}},
+            )
+        )
         client._messaging_service.handle_audio_message = AsyncMock(return_value=[])
         client._messaging_service.handle_file_message = AsyncMock(return_value=[])
         client._messaging_service.handle_image_message = AsyncMock(return_value=[])
@@ -2636,6 +2680,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client._download_file = AsyncMock(return_value="/tmp/file")
         client._cleanup_temp_file = Mock()
         client._process_message_responses = AsyncMock(return_value=None)
+        client._resolve_message_ingress = AsyncMock(  # pylint: disable=protected-access
+            return_value=(
+                SimpleNamespace(tenant_id=str(GLOBAL_TENANT_ID)),
+                {"ingress_route": {"tenant_id": str(GLOBAL_TENANT_ID)}},
+            )
+        )
         client._messaging_service.handle_audio_message = AsyncMock(
             side_effect=RuntimeError("boom")
         )
@@ -2661,6 +2711,12 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         room = SimpleNamespace(room_id="!room:test")
         client._validate_message = AsyncMock(return_value=True)
         client._process_message_responses = AsyncMock(return_value=None)
+        client._resolve_message_ingress = AsyncMock(  # pylint: disable=protected-access
+            return_value=(
+                SimpleNamespace(tenant_id=str(GLOBAL_TENANT_ID)),
+                {"ingress_route": {"tenant_id": str(GLOBAL_TENANT_ID)}},
+            )
+        )
         client._messaging_service.handle_text_message = AsyncMock(return_value=[])
         client.room_typing = AsyncMock(side_effect=RuntimeError("typing boom"))
 
@@ -3237,30 +3293,26 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         client = self._client()
-        client._config.matrix.runtime_profile_key = "   "
+        client._config.matrix.client_profile_key = "   "
         client._config.matrix.storage.olm.path = "   "
         client.user_id = None
         client._ingress_routing_service = SimpleNamespace(resolve=AsyncMock())
 
         self.assertEqual(
-            client._resolve_runtime_profile_key(),  # pylint: disable=protected-access
+            client._resolve_client_profile_key(),  # pylint: disable=protected-access
             "default",
         )
         self.assertEqual(
             client._resolve_olm_store_path(),  # pylint: disable=protected-access
-            "/tmp/.olmstore/default",
+            f"/tmp/.olmstore/{_CLIENT_PROFILE_ID}",
         )
 
-        scope, ingress_metadata = await client._resolve_message_ingress(  # pylint: disable=protected-access
+        resolved = await client._resolve_message_ingress(  # pylint: disable=protected-access
             room=SimpleNamespace(room_id="!room:test"),
             message=_FakeTextMessage(body="hello"),
         )
 
-        self.assertEqual(scope.tenant_id, str(GLOBAL_TENANT_ID))
-        self.assertEqual(
-            ingress_metadata["tenant_resolution"]["reason_code"],
-            IngressRouteReason.MISSING_IDENTIFIER.value,
-        )
+        self.assertIsNone(resolved)
         client._ingress_routing_service.resolve.assert_not_called()
 
     async def test_matrix_ingress_helper_methods_build_and_queue_entries(self) -> None:
@@ -3303,7 +3355,11 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(non_core_entry.event.sender, "@user:example.com")
         self.assertEqual(
             non_core_entry.event.provider_context,
-            {"callback": "_cb_tag_event", "reason": "unit-test"},
+            {
+                "callback": "_cb_tag_event",
+                "client_profile_key": "default",
+                "reason": "unit-test",
+            },
         )
 
         with patch.object(matrix_mod, "RoomMessageText", _FakeTextMessage):
@@ -3319,7 +3375,10 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(room_entry.event.sender, "@user:example.com")
         self.assertEqual(
             room_entry.event.provider_context,
-            {"ingress_metadata": {"route": "ok"}},
+            {
+                "client_profile_key": "default",
+                "ingress_metadata": {"route": "ok"},
+            },
         )
 
         await client._queue_sync_ingress_entry(non_core_entry)  # pylint: disable=protected-access
@@ -3395,7 +3454,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             event=MessagingIngressEvent(
                 version=1,
                 platform="matrix",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 source_mode="sync_callback",
                 event_type="TagEvent",
                 event_id="$evt",
@@ -3432,7 +3491,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             event=MessagingIngressEvent(
                 version=1,
                 platform="matrix",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 source_mode="sync_room_message",
                 event_type="RoomMessageText",
                 event_id="$event",
@@ -3726,7 +3785,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             event=MessagingIngressEvent(
                 version=1,
                 platform="matrix",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 source_mode="sync_callback",
                 event_type="TagEvent",
                 event_id="$evt",
@@ -3746,7 +3805,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(checkpoints), 1)
         self.assertIsInstance(checkpoints[0], MessagingIngressCheckpointUpdate)
         self.assertEqual(checkpoints[0].platform, "matrix")
-        self.assertEqual(checkpoints[0].runtime_profile_key, "default")
+        self.assertEqual(checkpoints[0].client_profile_id, _CLIENT_PROFILE_ID)
         self.assertEqual(checkpoints[0].checkpoint_key, "sync_token")
         self.assertEqual(checkpoints[0].checkpoint_value, "next-token")
         self.assertEqual(client.sync_token, "next-token")

@@ -27,9 +27,9 @@ from mugen.core.service.context_scope_resolution import (
     ContextScopeResolutionError,
     resolve_ingress_route_context,
 )
-from mugen.core.utility.platform_runtime_profile import (
-    runtime_profile_key_from_ingress_route,
-    runtime_profile_scope,
+from mugen.core.utility.client_profile_runtime import (
+    client_profile_id_from_ingress_route,
+    client_profile_scope,
 )
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
@@ -653,9 +653,10 @@ class WeChatIPCExtension(IIPCExtension):
             if ingress_route is None:
                 return
 
-            with runtime_profile_scope(
-                runtime_profile_key_from_ingress_route(ingress_route)
-            ):
+            route_client_profile_id = client_profile_id_from_ingress_route(ingress_route)
+            if route_client_profile_id is None:
+                return
+            with client_profile_scope(route_client_profile_id):
                 await self._process_inbound_message(
                     provider=provider,
                     payload=payload,
@@ -732,7 +733,7 @@ class WeChatIPCExtension(IIPCExtension):
             raise ValueError("WeChat ingress provider is required.")
         ingress_route = self._normalize_ingress_route(provider_context.get("ingress_route"))
         path_token = self._coerce_nonempty_string(provider_context.get("path_token"))
-        if ingress_route.get("runtime_profile_key") in [None, ""] and path_token is not None:
+        if ingress_route.get("client_profile_id") in [None, ""] and path_token is not None:
             resolved = await self._resolve_ingress_route(
                 path_token=path_token,
                 webhook_payload=event_payload,
@@ -740,10 +741,15 @@ class WeChatIPCExtension(IIPCExtension):
             if resolved is not None:
                 ingress_route = resolved
 
-        runtime_profile_key = self._coerce_nonempty_string(
-            payload.get("runtime_profile_key")
-        ) or runtime_profile_key_from_ingress_route(ingress_route)
-        with runtime_profile_scope(runtime_profile_key):
+        route_client_profile_id = client_profile_id_from_ingress_route(ingress_route)
+        client_profile_id = self._coerce_nonempty_string(
+            payload.get("client_profile_id")
+        ) or self._coerce_nonempty_string(provider_context.get("client_profile_id"))
+        if client_profile_id is None and route_client_profile_id is not None:
+            client_profile_id = str(route_client_profile_id)
+        if client_profile_id is None:
+            return
+        with client_profile_scope(client_profile_id):
             await self._process_inbound_message(
                 provider=provider,
                 payload=event_payload,

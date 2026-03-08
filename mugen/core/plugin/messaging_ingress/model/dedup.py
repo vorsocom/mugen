@@ -3,10 +3,11 @@
 __all__ = ["MessagingIngressDedupRecord"]
 
 from datetime import datetime
+import uuid
 
 from sqlalchemy import CheckConstraint, DateTime, Index, UniqueConstraint
 from sqlalchemy import text as sa_text
-from sqlalchemy.dialects.postgresql import CITEXT
+from sqlalchemy.dialects.postgresql import CITEXT, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
@@ -23,8 +24,8 @@ class MessagingIngressDedupRecord(ModelBase):
         index=True,
     )
 
-    runtime_profile_key: Mapped[str] = mapped_column(
-        CITEXT(128),
+    client_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         nullable=False,
         index=True,
     )
@@ -62,10 +63,6 @@ class MessagingIngressDedupRecord(ModelBase):
     __table_args__ = (
         CheckConstraint("length(btrim(platform)) > 0", name="ck_msg_ingress_dedup_platform_nonempty"),
         CheckConstraint(
-            "length(btrim(runtime_profile_key)) > 0",
-            name="ck_msg_ingress_dedup_runtime_profile_nonempty",
-        ),
-        CheckConstraint(
             "length(btrim(event_type)) > 0",
             name="ck_msg_ingress_dedup_event_type_nonempty",
         ),
@@ -75,14 +72,14 @@ class MessagingIngressDedupRecord(ModelBase):
         ),
         UniqueConstraint(
             "platform",
-            "runtime_profile_key",
+            "client_profile_id",
             "dedupe_key",
             name="ux_msg_ingress_dedup_platform_profile_key",
         ),
         Index(
             "ix_msg_ingress_dedup_expiry",
             "platform",
-            "runtime_profile_key",
+            "client_profile_id",
             "expires_at",
         ),
         {"schema": "mugen"},

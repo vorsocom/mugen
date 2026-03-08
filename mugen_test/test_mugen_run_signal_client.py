@@ -4,11 +4,14 @@ import asyncio
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
+import uuid
 
 from quart import Quart
 
 import mugen as mugen_module
 from mugen import run_signal_client
+
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000205")
 
 
 class _IPCService:
@@ -34,7 +37,7 @@ class TestMuGenInitRunSignalClient(unittest.IsolatedAsyncioTestCase):
             mugen_module._json_hash({"a": 1})  # pylint: disable=protected-access
         )
         self.assertIsNone(
-            mugen_module._signal_envelope({"params": []})  # pylint: disable=protected-access
+            mugen_module.signal_envelope({"params": []})
         )
         envelope = {
             "sourceNumber": "+15550001",
@@ -42,44 +45,79 @@ class TestMuGenInitRunSignalClient(unittest.IsolatedAsyncioTestCase):
             "dataMessage": {"reaction": {"emoji": "👍"}},
         }
         self.assertEqual(
-            mugen_module._signal_envelope({"params": {"envelope": envelope}}),  # pylint: disable=protected-access
+            mugen_module.signal_envelope({"params": {"envelope": envelope}}),
             envelope,
         )
         self.assertEqual(
-            mugen_module._signal_sender({"sourceUuid": "uuid-1"}),  # pylint: disable=protected-access
+            mugen_module.signal_sender({"sourceUuid": "uuid-1"}),
             "uuid-1",
         )
         self.assertIsNone(
-            mugen_module._signal_event_id({"timestamp": True})  # pylint: disable=protected-access
+            mugen_module.signal_event_id({"timestamp": True})
         )
         self.assertIsNone(
-            mugen_module._signal_event_id({"timestamp": "bad"})  # pylint: disable=protected-access
+            mugen_module.signal_event_id({"timestamp": "bad"})
         )
         self.assertEqual(
-            mugen_module._signal_event_id({"timestamp": 5}),  # pylint: disable=protected-access
+            mugen_module.signal_event_id({"timestamp": 5}),
             "5",
         )
         self.assertEqual(
-            mugen_module._signal_event_id(
+            mugen_module.signal_event_id(
                 {"timestamp": 6, "source": "+15550002"}
-            ),  # pylint: disable=protected-access
+            ),
             "+15550002:6",
         )
         self.assertEqual(
-            mugen_module._signal_event_type({"receiptMessage": {}}),  # pylint: disable=protected-access
+            mugen_module.signal_event_type({"receiptMessage": {}}),
             "receipt",
         )
         self.assertEqual(
-            mugen_module._signal_event_type({"typingMessage": {}}),  # pylint: disable=protected-access
+            mugen_module.signal_event_type({"typingMessage": {}}),
             "typing",
         )
         self.assertEqual(
-            mugen_module._signal_event_type({"other": True}),  # pylint: disable=protected-access
+            mugen_module.signal_event_type({"other": True}),
             "event",
         )
         self.assertEqual(
+            mugen_module.resolve_signal_account_number(
+                payload={"account_number": " +15550000009 "},
+                config=None,
+            ),
+            "+15550000009",
+        )
+        self.assertEqual(
+            mugen_module.resolve_signal_account_number(
+                payload={"provider_context": {"account_number": " +15550000010 "}},
+                config=None,
+            ),
+            "+15550000010",
+        )
+        self.assertIsNone(
+            mugen_module.resolve_signal_account_number(
+                payload={},
+                config=None,
+            )
+        )
+        self.assertEqual(
+            mugen_module.resolve_signal_account_number(
+                payload=None,
+                config=SimpleNamespace(
+                    signal=SimpleNamespace(
+                        account=SimpleNamespace(number="+15550000011")
+                    )
+                ),
+            ),
+            "+15550000011",
+        )
+        self.assertEqual(
             mugen_module._extract_signal_stage_entries(  # pylint: disable=protected-access
-                config=SimpleNamespace(signal=SimpleNamespace(account="+15550000001")),
+                config=SimpleNamespace(
+                    signal=SimpleNamespace(
+                        account=SimpleNamespace(number="+15550000001")
+                    )
+                ),
                 payload={"params": {}},
             ),
             [],
@@ -88,11 +126,11 @@ class TestMuGenInitRunSignalClient(unittest.IsolatedAsyncioTestCase):
         entries = mugen_module._extract_signal_stage_entries(  # pylint: disable=protected-access
             config=SimpleNamespace(
                 signal=SimpleNamespace(
-                    account="+15550000001",
+                    account=SimpleNamespace(number="+15550000001"),
                 )
             ),
             payload={
-                "runtime_profile_key": "default",
+                "client_profile_id": str(_CLIENT_PROFILE_ID),
                 "params": {"envelope": envelope},
             },
         )
@@ -103,6 +141,38 @@ class TestMuGenInitRunSignalClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entries[0].event.event_id, "+15550001:123")
         self.assertEqual(entries[0].event.identifier_value, "+15550000001")
         self.assertEqual(entries[0].event.sender, "+15550001")
+        self.assertEqual(entries[0].event.client_profile_id, _CLIENT_PROFILE_ID)
+
+        provider_context_entries = mugen_module._extract_signal_stage_entries(  # pylint: disable=protected-access
+            config=SimpleNamespace(
+                signal=SimpleNamespace(
+                    account=SimpleNamespace(number="+15550000001"),
+                )
+            ),
+            payload={
+                "provider_context": {
+                    "client_profile_id": str(_CLIENT_PROFILE_ID),
+                    "account_number": "+15550000011",
+                },
+                "params": {"envelope": envelope},
+            },
+        )
+        self.assertEqual(len(provider_context_entries), 1)
+        self.assertEqual(
+            provider_context_entries[0].event.identifier_value,
+            "+15550000011",
+        )
+        self.assertEqual(
+            mugen_module._extract_signal_stage_entries(  # pylint: disable=protected-access
+                config=SimpleNamespace(
+                    signal=SimpleNamespace(
+                        account=SimpleNamespace(number="+15550000001")
+                    )
+                ),
+                payload={"params": {"envelope": envelope}},
+            ),
+            [],
+        )
 
     async def test_normal_run_dispatches_ipc_events(self) -> None:
         app = Quart("test_app")
@@ -522,6 +592,7 @@ class TestMuGenInitRunSignalClient(unittest.IsolatedAsyncioTestCase):
 
             async def receive_events(self):
                 yield {
+                    "client_profile_id": str(_CLIENT_PROFILE_ID),
                     "params": {
                         "envelope": {
                             "sourceNumber": "+15550001",

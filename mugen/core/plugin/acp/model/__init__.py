@@ -6,6 +6,7 @@ __all__ = [
     "GlobalRole",
     "GlobalRoleMembership",
     "KeyRef",
+    "MessagingClientProfile",
     "PermissionEntry",
     "PermissionObject",
     "PermissionType",
@@ -29,6 +30,9 @@ from mugen.core.plugin.acp.model.global_permission_entry import GlobalPermission
 from mugen.core.plugin.acp.model.global_role import GlobalRole
 from mugen.core.plugin.acp.model.global_role_membership import GlobalRoleMembership
 from mugen.core.plugin.acp.model.key_ref import KeyRef
+from mugen.core.plugin.acp.model.messaging_client_profile import (
+    MessagingClientProfile,
+)
 from mugen.core.plugin.acp.model.permission_entry import PermissionEntry
 from mugen.core.plugin.acp.model.permission_object import PermissionObject
 from mugen.core.plugin.acp.model.permission_type import PermissionType

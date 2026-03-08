@@ -15,10 +15,8 @@ from quart import abort, request
 
 from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.utility.platform_runtime_profile import (
-    find_platform_runtime_profile_key,
-    get_platform_profile_section,
-    identifier_configured_for_platform,
+from mugen.core.plugin.acp.service.messaging_client_profile import (
+    MessagingClientProfileService,
 )
 
 
@@ -28,6 +26,20 @@ def _config_provider():
 
 def _logger_provider():
     return di.container.logging_gateway
+
+
+def _client_profile_service() -> MessagingClientProfileService | None:
+    relational_storage_gateway = getattr(
+        di.container,
+        "relational_storage_gateway",
+        None,
+    )
+    if relational_storage_gateway is None:
+        return None
+    return MessagingClientProfileService(
+        table="admin_messaging_client_profile",
+        rsg=relational_storage_gateway,
+    )
 
 
 def _extract_phone_number_id(payload: object) -> str | None:
@@ -102,57 +114,55 @@ def whatsapp_request_signature_verification_required(
         async def wrapper(*args, **kwargs):
             config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
-
-            try:
-                identifier_configured = identifier_configured_for_platform(
-                    config,
-                    platform="whatsapp",
-                    identifier_type="phone_number_id",
-                )
-            except (AttributeError, KeyError, RuntimeError):
+            service = _client_profile_service()
+            if service is None:
                 logger.error("WhatsApp app secret not found.")
                 abort(500)
 
-            if identifier_configured is not True:
-                try:
-                    app_secret = str(config.whatsapp.app.secret)
-                except (AttributeError, KeyError):
-                    logger.error("WhatsApp app secret not found.")
-                    abort(500)
-            else:
-                data = await request.get_data()
-                try:
-                    payload = json.loads(data.decode("utf-8"))
-                except (UnicodeDecodeError, ValueError):
-                    logger.error("Could not parse WhatsApp webhook payload.")
-                    abort(400)
+            path_token = kwargs.get("path_token")
+            if not isinstance(path_token, str) or path_token.strip() == "":
+                logger.error("WhatsApp webhook path token missing.")
+                abort(400)
 
-                phone_number_id = _extract_phone_number_id(payload)
-                if phone_number_id is None:
-                    logger.error("WhatsApp phone_number_id missing from webhook payload.")
-                    abort(400)
+            try:
+                client_profile = await service.resolve_active_by_identifier(
+                    platform_key="whatsapp",
+                    identifier_type="path_token",
+                    identifier_value=path_token,
+                )
+            except (KeyError, RuntimeError, TypeError):
+                logger.error("WhatsApp app secret not found.")
+                abort(500)
 
-                try:
-                    runtime_profile_key = find_platform_runtime_profile_key(
-                        config,
-                        platform="whatsapp",
-                        identifier_type="phone_number_id",
-                        identifier_value=phone_number_id,
-                    )
-                    if runtime_profile_key is None:
-                        logger.error("WhatsApp phone_number_id verification failed.")
-                        abort(401)
-                    profile_cfg = get_platform_profile_section(
-                        config,
-                        platform="whatsapp",
-                        runtime_profile_key=runtime_profile_key,
-                    )
-                    app_secret = str(profile_cfg.app.secret)
-                except (AttributeError, KeyError, RuntimeError):
-                    logger.error("WhatsApp app secret not found.")
-                    abort(500)
+            if client_profile is None:
+                logger.error("WhatsApp webhook path token verification failed.")
+                abort(401)
 
             data = await request.get_data()
+            try:
+                payload = json.loads(data.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                logger.error("Could not parse WhatsApp webhook payload.")
+                abort(400)
+
+            phone_number_id = _extract_phone_number_id(payload)
+            if phone_number_id is None:
+                logger.error("WhatsApp phone_number_id missing from webhook payload.")
+                abort(400)
+            if str(client_profile.phone_number_id or "").strip() != phone_number_id:
+                logger.error("WhatsApp phone_number_id verification failed.")
+                abort(401)
+
+            try:
+                runtime_config = await service.build_runtime_config(
+                    config=config,
+                    client_profile=client_profile,
+                )
+                app_secret = str(runtime_config.whatsapp.app.secret)
+            except (AttributeError, KeyError, RuntimeError, TypeError):
+                logger.error("WhatsApp app secret not found.")
+                abort(500)
+
             try:
                 xhubsig = request.headers["X-Hub-Signature-256"].removeprefix("sha256=")
             except KeyError:

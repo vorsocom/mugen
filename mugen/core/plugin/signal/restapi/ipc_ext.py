@@ -28,10 +28,9 @@ from mugen.core.service.context_scope_resolution import (
     ContextScopeResolutionError,
     resolve_ingress_route_context,
 )
-from mugen.core.utility.platform_runtime_profile import (
-    get_platform_profile_section,
-    runtime_profile_key_from_ingress_route,
-    runtime_profile_scope,
+from mugen.core.utility.client_profile_runtime import (
+    client_profile_id_from_ingress_route,
+    client_profile_scope,
 )
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
@@ -41,6 +40,7 @@ from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_STOP,
     normalize_processing_state,
 )
+from mugen.core.utility.signal_ingress import resolve_signal_account_number
 
 
 def _signal_client_provider():
@@ -277,23 +277,6 @@ class SignalRestAPIIPCExtension(IIPCExtension):
         if isinstance(value, str) and value.strip() != "":
             return value.strip()
         return None
-
-    def _signal_account_number(
-        self,
-        runtime_profile_key: str | None = None,
-    ) -> str | None:
-        signal_cfg = getattr(self._config, "signal", SimpleNamespace())
-        if runtime_profile_key is not None:
-            try:
-                signal_cfg = get_platform_profile_section(
-                    self._config,
-                    platform="signal",
-                    runtime_profile_key=runtime_profile_key,
-                )
-            except KeyError:
-                return None
-        account_cfg = getattr(signal_cfg, "account", SimpleNamespace())
-        return self._coerce_nonempty_string(getattr(account_cfg, "number", None))
 
     @staticmethod
     def _compose_message_context(
@@ -764,11 +747,12 @@ class SignalRestAPIIPCExtension(IIPCExtension):
             )
             return
 
-        runtime_profile_key = self._coerce_nonempty_string(
-            payload.get("runtime_profile_key")
+        account_number = resolve_signal_account_number(
+            payload=payload,
+            config=self._config,
         )
         ingress_route = await self._resolve_ingress_route(
-            account_number=self._signal_account_number(runtime_profile_key),
+            account_number=account_number,
             webhook_payload=payload,
         )
         if ingress_route is None:
@@ -780,9 +764,15 @@ class SignalRestAPIIPCExtension(IIPCExtension):
             return
 
         try:
-            with runtime_profile_scope(
-                runtime_profile_key_from_ingress_route(ingress_route)
-            ):
+            route_client_profile_id = client_profile_id_from_ingress_route(ingress_route)
+            client_profile_id = self._coerce_nonempty_string(
+                payload.get("client_profile_id")
+            )
+            if client_profile_id is None and route_client_profile_id is not None:
+                client_profile_id = str(route_client_profile_id)
+            if client_profile_id is None:
+                return
+            with client_profile_scope(client_profile_id):
                 if event_type in {"message", "reaction"}:
                     await self._handle_message_event(
                         envelope,
@@ -812,12 +802,10 @@ class SignalRestAPIIPCExtension(IIPCExtension):
 
         provider_context = payload.get("provider_context")
         provider_context = provider_context if isinstance(provider_context, dict) else {}
-        runtime_profile_key = self._coerce_nonempty_string(
-            payload.get("runtime_profile_key")
-        ) or self._coerce_nonempty_string(provider_context.get("runtime_profile_key"))
-        account_number = self._coerce_nonempty_string(
-            provider_context.get("account_number")
-        ) or self._signal_account_number(runtime_profile_key)
+        account_number = resolve_signal_account_number(
+            payload=payload,
+            config=self._config,
+        )
         ingress_route = None
         if account_number is not None:
             ingress_route = await self._resolve_ingress_route(
@@ -828,11 +816,15 @@ class SignalRestAPIIPCExtension(IIPCExtension):
             ingress_route = provider_context.get("ingress_route")
 
         event_type = str(payload.get("event_type") or self._classify_event_type(envelope))
-        runtime_profile_key = (
-            runtime_profile_key
-            or runtime_profile_key_from_ingress_route(ingress_route)
-        )
-        with runtime_profile_scope(runtime_profile_key):
+        route_client_profile_id = client_profile_id_from_ingress_route(ingress_route)
+        client_profile_id = self._coerce_nonempty_string(
+            payload.get("client_profile_id")
+        ) or self._coerce_nonempty_string(provider_context.get("client_profile_id"))
+        if client_profile_id is None and route_client_profile_id is not None:
+            client_profile_id = str(route_client_profile_id)
+        if client_profile_id is None:
+            return
+        with client_profile_scope(client_profile_id):
             if event_type in {"message", "reaction"}:
                 await self._handle_message_event(
                     envelope,

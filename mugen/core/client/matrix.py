@@ -7,6 +7,7 @@ from io import BytesIO
 import asyncio
 import base64
 import hashlib
+import importlib
 import inspect
 import json
 from math import isfinite
@@ -18,6 +19,7 @@ import tempfile
 import traceback
 from types import SimpleNamespace
 from typing import Any, Coroutine
+import uuid
 
 import aiofiles
 from cryptography.fernet import Fernet, InvalidToken
@@ -99,19 +101,26 @@ from mugen.core.service.context_scope_resolution import (
     resolve_context_ingress,
 )
 from mugen.core.service.ingress_routing import DefaultIngressRoutingService
+from mugen.core.utility.client_profile_runtime import normalize_client_profile_id
 from mugen.core.utility.platforms import normalize_platforms
-from mugen.core.utility.platform_runtime_profile import (
-    DEFAULT_RUNTIME_PROFILE_KEY,
-    clone_config_with_platform_profile,
-    get_platform_profile_dicts,
-    get_platform_runtime_profile_keys,
-)
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
     PROCESSING_STATE_STOP,
     normalize_processing_state,
 )
 from mugen.core.utility.security import validate_matrix_secret_encryption_key
+
+MessagingClientProfileService = None
+
+
+def _messaging_client_profile_service_class():
+    service_class = MessagingClientProfileService
+    if service_class is not None:
+        return service_class
+    module = importlib.import_module(
+        "mugen.core.plugin.acp.service.messaging_client_profile"
+    )
+    return getattr(module, "MessagingClientProfileService")
 
 
 class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
@@ -722,7 +731,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             event=MessagingIngressEvent(
                 version=1,
                 platform="matrix",
-                runtime_profile_key=self._resolve_runtime_profile_key(),
+                client_profile_id=self._resolve_client_profile_id(),
                 source_mode="sync_callback",
                 event_type=event_type,
                 event_id=event_id,
@@ -734,6 +743,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 payload=payload,
                 provider_context={
                     "callback": callback_name,
+                    "client_profile_key": self._resolve_client_profile_key(),
                     "reason": reason,
                 },
             ),
@@ -763,7 +773,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             event=MessagingIngressEvent(
                 version=1,
                 platform="matrix",
-                runtime_profile_key=self._resolve_runtime_profile_key(),
+                client_profile_id=self._resolve_client_profile_id(),
                 source_mode="sync_room_message",
                 event_type=event_type,
                 event_id=event_id,
@@ -774,6 +784,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 sender=self._coerce_optional_string(getattr(message, "sender", None)),
                 payload=payload,
                 provider_context={
+                    "client_profile_key": self._resolve_client_profile_key(),
                     "ingress_metadata": dict(ingress_metadata),
                 },
             ),
@@ -808,12 +819,12 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             SimpleNamespace(),
         )
         client_user = str(getattr(client_cfg, "user", ""))
-        runtime_profile_key = self._resolve_runtime_profile_key()
+        client_profile_id = str(self._resolve_client_profile_id())
         identity_material = "|".join(
             [
                 environment,
                 "matrix",
-                runtime_profile_key,
+                client_profile_id,
                 homeserver.strip().lower(),
                 client_user.strip().lower(),
             ]
@@ -821,14 +832,29 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         digest = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:16]
         return f"matrix:{environment}:{digest}"
 
-    def _resolve_runtime_profile_key(self) -> str:
+    def _resolve_client_profile_id(self) -> uuid.UUID:
         raw_value = getattr(
             getattr(self._config, "matrix", SimpleNamespace()),
-            "runtime_profile_key",
-            DEFAULT_RUNTIME_PROFILE_KEY,
+            "client_profile_id",
+            None,
+        )
+        normalized = normalize_client_profile_id(raw_value)
+        if normalized is None:
+            raise RuntimeError("Matrix client_profile_id is required.")
+        return normalized
+
+    def _resolve_client_profile_key(self) -> str:
+        raw_value = getattr(
+            getattr(self._config, "matrix", SimpleNamespace()),
+            "client_profile_key",
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()),
+                "key",
+                "default",
+            ),
         )
         if not isinstance(raw_value, str) or raw_value.strip() == "":
-            return DEFAULT_RUNTIME_PROFILE_KEY
+            return "default"
         return raw_value.strip()
 
     def _resolve_olm_store_path(self) -> str:
@@ -837,11 +863,10 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         ).strip()
         if relative_path == "":
             relative_path = ".olmstore"
-        runtime_profile_key = self._resolve_runtime_profile_key()
         return os.path.join(
             self._config.basedir,
             relative_path,
-            runtime_profile_key,
+            str(self._resolve_client_profile_id()),
         )
 
     def _keyval_key(self, key_name: str) -> str:
@@ -906,7 +931,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if self._ingress_service is not None:
             checkpoint = await self._ingress_service.get_checkpoint(
                 platform="matrix",
-                runtime_profile_key=self._resolve_runtime_profile_key(),
+                client_profile_id=self._resolve_client_profile_id(),
                 checkpoint_key=self._sync_checkpoint_key,
             )
             if isinstance(checkpoint, str) and checkpoint.strip() != "":
@@ -1504,6 +1529,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 routing=resolution,
                 source="matrix.ingress_routing",
                 identifier_claims=claims,
+                global_fallback_reasons=(),
             )
         except ContextScopeResolutionError as exc:
             reason_code = str(exc.reason_code or "route_unresolved")
@@ -1523,30 +1549,14 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             )
             return None
 
-        if resolution.ok is not True:
-            reason_code = str(resolution.reason_code or "route_unresolved")
-            self._track_matrix_decision(
-                domain="routing",
-                action="fallback_global",
-                reason=reason_code,
-                room_id=room_id,
-                sender=sender_id,
-            )
-            self._logging_gateway.warning(
-                "Using global tenant fallback for Matrix ingress "
-                f"reason_code={reason_code}"
-                f" room_id={room_id!r}"
-                f" sender={sender_id!r}."
-            )
-        else:
-            self._track_matrix_decision(
-                domain="routing",
-                action="resolved",
-                reason="binding_resolved",
-                room_id=room_id,
-                sender=sender_id,
-                tenant_id=resolved.scope.tenant_id,
-            )
+        self._track_matrix_decision(
+            domain="routing",
+            action="resolved",
+            reason="binding_resolved",
+            room_id=room_id,
+            sender=sender_id,
+            tenant_id=resolved.scope.tenant_id,
+        )
 
         return resolved.scope, {
             "ingress_route": dict(resolved.ingress_route),
@@ -2209,10 +2219,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             checkpoints=[
                 MessagingIngressCheckpointUpdate(
                     platform="matrix",
-                    runtime_profile_key=self._resolve_runtime_profile_key(),
+                    client_profile_id=self._resolve_client_profile_id(),
                     checkpoint_key=self._sync_checkpoint_key,
                     checkpoint_value=resp.next_batch,
-                    provider_context={"next_batch": resp.next_batch},
+                    provider_context={
+                        "client_profile_key": self._resolve_client_profile_key(),
+                        "next_batch": resp.next_batch,
+                    },
                 )
             ],
         )
@@ -2741,28 +2754,36 @@ class MultiProfileMatrixClient(IMatrixClient):
         self.synced = asyncio.Event()
         self._entered = False
         self._generation = 0
+        self._initialized = False
         self._failure_queue: asyncio.Queue[BaseException] = asyncio.Queue()
         self._sync_tasks: dict[str, asyncio.Task] = {}
         self._health_tasks: dict[str, asyncio.Task] = {}
-        self._clients, self._profile_snapshots = self._build_clients(config)
+        self._client_profile_service = None
+        if relational_storage_gateway is not None:
+            self._client_profile_service = _messaging_client_profile_service_class()(
+                table="admin_messaging_client_profile",
+                rsg=relational_storage_gateway,
+            )
+        self._clients: dict[str, DefaultMatrixClient] = {}
+        self._profile_snapshots: dict[str, dict[str, Any]] = {}
 
-    def _build_clients(
+    async def _build_clients(
         self,
         config: SimpleNamespace,
     ) -> tuple[dict[str, DefaultMatrixClient], dict[str, dict[str, Any]]]:
         clients: dict[str, DefaultMatrixClient] = {}
         snapshots: dict[str, dict[str, Any]] = {}
-        profile_keys = get_platform_runtime_profile_keys(config, platform="matrix")
-        profile_dicts = get_platform_profile_dicts(config, platform="matrix")
+        if self._client_profile_service is None:
+            return clients, snapshots
+        specs = await self._client_profile_service.list_active_runtime_specs(
+            config=config,
+            platform_key="matrix",
+        )
 
-        for index, runtime_profile_key in enumerate(profile_keys):
-            profile_config = clone_config_with_platform_profile(
-                config,
-                platform="matrix",
-                runtime_profile_key=runtime_profile_key,
-            )
-            clients[runtime_profile_key] = DefaultMatrixClient(
-                config=profile_config,
+        for spec in specs:
+            client_profile_id = str(spec.client_profile_id)
+            clients[client_profile_id] = DefaultMatrixClient(
+                config=spec.config,
                 ipc_service=self._ipc_service,
                 ingress_service=self._ingress_service,
                 keyval_storage_gateway=self._keyval_storage_gateway,
@@ -2771,14 +2792,20 @@ class MultiProfileMatrixClient(IMatrixClient):
                 messaging_service=self._messaging_service,
                 user_service=self._user_service,
             )
-            snapshots[runtime_profile_key] = dict(profile_dicts[index])
-
-        if not clients:
-            raise RuntimeError("No matrix runtime profiles configured.")
+            snapshots[client_profile_id] = dict(spec.snapshot)
         return clients, snapshots
 
+    async def init(self) -> None:
+        async with self._lock:
+            if self._initialized:
+                return
+            self._clients, self._profile_snapshots = await self._build_clients(
+                self._root_config
+            )
+            self._initialized = True
+
     def managed_clients(self) -> dict[str, DefaultMatrixClient]:
-        """Return active managed Matrix clients keyed by runtime profile."""
+        """Return active managed Matrix clients keyed by client profile id."""
         return dict(self._clients)
 
     @property
@@ -2822,7 +2849,7 @@ class MultiProfileMatrixClient(IMatrixClient):
         task: asyncio.Task,
         *,
         generation: int,
-        runtime_profile_key: str,
+        client_profile_id: str,
         kind: str,
     ) -> None:
         def _callback(done: asyncio.Task) -> None:
@@ -2837,7 +2864,7 @@ class MultiProfileMatrixClient(IMatrixClient):
             if error is None:
                 error = RuntimeError(
                     "Matrix runtime task exited unexpectedly "
-                    f"(runtime_profile_key={runtime_profile_key!r} kind={kind})."
+                    f"(client_profile_id={client_profile_id!r} kind={kind})."
                 )
             self._failure_queue.put_nowait(error)
 
@@ -2853,7 +2880,11 @@ class MultiProfileMatrixClient(IMatrixClient):
         sync_tasks: dict[str, asyncio.Task] = {}
         health_tasks: dict[str, asyncio.Task] = {}
 
-        for runtime_profile_key, client in clients.items():
+        if not clients:
+            self.synced.set()
+            return sync_tasks, health_tasks
+
+        for client_profile_id, client in clients.items():
             clear_sync_signal = getattr(getattr(client, "synced", None), "clear", None)
             if callable(clear_sync_signal):
                 result = clear_sync_signal()
@@ -2867,26 +2898,26 @@ class MultiProfileMatrixClient(IMatrixClient):
                     full_state=True,
                     set_presence="online",
                 ),
-                name=f"mugen.matrix.sync_forever.{runtime_profile_key}",
+                name=f"mugen.matrix.sync_forever.{client_profile_id}",
             )
             health_task = asyncio.create_task(
                 client.monitor_runtime_health(),
-                name=f"mugen.matrix.runtime_health.{runtime_profile_key}",
+                name=f"mugen.matrix.runtime_health.{client_profile_id}",
             )
             self._bind_runtime_task(
                 sync_task,
                 generation=generation,
-                runtime_profile_key=runtime_profile_key,
+                client_profile_id=client_profile_id,
                 kind="sync",
             )
             self._bind_runtime_task(
                 health_task,
                 generation=generation,
-                runtime_profile_key=runtime_profile_key,
+                client_profile_id=client_profile_id,
                 kind="health",
             )
-            sync_tasks[runtime_profile_key] = sync_task
-            health_tasks[runtime_profile_key] = health_task
+            sync_tasks[client_profile_id] = sync_task
+            health_tasks[client_profile_id] = health_task
 
         async def _wait_until_all_synced() -> None:
             await asyncio.gather(*(client.synced.wait() for client in clients.values()))
@@ -2962,6 +2993,21 @@ class MultiProfileMatrixClient(IMatrixClient):
         async with self:
             while True:
                 try:
+                    if not self._clients:
+                        if started_signalled is not True:
+                            if callable(started_callback):
+                                started_callback()
+                            if callable(healthy_callback):
+                                healthy_callback()
+                            started_signalled = True
+                            runtime_degraded = False
+                        elif runtime_degraded is True and callable(healthy_callback):
+                            healthy_callback()
+                            runtime_degraded = False
+                        self.synced.set()
+                        await asyncio.sleep(1.0)
+                        continue
+
                     async with self._lock:
                         next_generation = self._generation + 1
                     sync_tasks, health_tasks = await self._prepare_client_set(
@@ -3035,13 +3081,13 @@ class MultiProfileMatrixClient(IMatrixClient):
         config: SimpleNamespace | None = None,
     ) -> dict[str, list[str]]:
         next_config = self._root_config if config is None else config
-        next_clients, next_snapshots = self._build_clients(next_config)
+        next_clients, next_snapshots = await self._build_clients(next_config)
 
         try:
             if self._entered:
                 await self._enter_clients(next_clients)
 
-            if self._sync_tasks or self._health_tasks:
+            if self._entered and next_clients:
                 async with self._lock:
                     next_generation = self._generation + 1
                 next_sync_tasks, next_health_tasks = await self._prepare_client_set(
@@ -3078,6 +3124,7 @@ class MultiProfileMatrixClient(IMatrixClient):
             self._generation = next_generation
             self._sync_tasks = next_sync_tasks
             self._health_tasks = next_health_tasks
+            self._initialized = True
             if next_sync_tasks or next_health_tasks:
                 self.synced.set()
 
@@ -3105,6 +3152,7 @@ class MultiProfileMatrixClient(IMatrixClient):
         }
 
     async def __aenter__(self) -> "MultiProfileMatrixClient":
+        await self.init()
         async with self._lock:
             if self._entered:
                 return self
@@ -3132,7 +3180,10 @@ class MultiProfileMatrixClient(IMatrixClient):
             await self._close_clients(current_clients)
 
     def _first_client(self) -> DefaultMatrixClient:
-        return next(iter(self._clients.values()))
+        first = next(iter(self._clients.values()), None)
+        if first is None:
+            raise RuntimeError("No active client profiles configured for matrix.")
+        return first
 
     async def sync_forever(
         self,
@@ -3146,6 +3197,7 @@ class MultiProfileMatrixClient(IMatrixClient):
         raise RuntimeError("Use run_profiles_forever() with MultiProfileMatrixClient.")
 
     async def get_profile(self, user_id: str | None = None) -> MatrixProfile:
+        await self.init()
         if user_id is not None:
             for client in self._clients.values():
                 if client.current_user_id == user_id:
@@ -3153,6 +3205,7 @@ class MultiProfileMatrixClient(IMatrixClient):
         return await self._first_client().get_profile(user_id)
 
     async def set_displayname(self, displayname: str) -> None:
+        await self.init()
         await asyncio.gather(
             *(client.set_displayname(displayname) for client in self._clients.values()),
             return_exceptions=False,
@@ -3163,6 +3216,7 @@ class MultiProfileMatrixClient(IMatrixClient):
         raise error
 
     async def cleanup_known_user_devices_list(self) -> None:
+        await self.init()
         await asyncio.gather(
             *(
                 client.cleanup_known_user_devices_list()
@@ -3172,23 +3226,26 @@ class MultiProfileMatrixClient(IMatrixClient):
         )
 
     async def trust_known_user_devices(self) -> None:
+        await self.init()
         await asyncio.gather(
             *(client.trust_known_user_devices() for client in self._clients.values()),
             return_exceptions=False,
         )
 
     async def verify_user_devices(self, user_id: str) -> None:
+        await self.init()
         await asyncio.gather(
             *(client.verify_user_devices(user_id) for client in self._clients.values()),
             return_exceptions=False,
         )
 
     async def process_ingress_event(self, event: dict[str, Any]) -> None:
-        runtime_profile_key = ""
+        await self.init()
+        client_profile_id = None
         if isinstance(event, dict):
-            runtime_profile_key = str(event.get("runtime_profile_key") or "").strip()
-        if runtime_profile_key != "" and runtime_profile_key in self._clients:
-            await self._clients[runtime_profile_key].process_ingress_event(event)
+            client_profile_id = normalize_client_profile_id(event.get("client_profile_id"))
+        if client_profile_id is not None and str(client_profile_id) in self._clients:
+            await self._clients[str(client_profile_id)].process_ingress_event(event)
             return
         await self._first_client().process_ingress_event(event)
 
@@ -3198,6 +3255,7 @@ class MultiProfileMatrixClient(IMatrixClient):
         *,
         state: str,
     ) -> None:
+        await self.init()
         await self._first_client().emit_ingress_processing_signal(room_id, state=state)
 
     async def send_ingress_responses(
@@ -3205,41 +3263,55 @@ class MultiProfileMatrixClient(IMatrixClient):
         room_id: str,
         responses: list[dict[str, Any]],
     ) -> None:
+        await self.init()
         await self._first_client().send_ingress_responses(room_id, responses)
 
     async def download_ingress_media(
         self,
         event: dict[str, Any],
     ) -> dict[str, Any] | None:
-        runtime_profile_key = ""
+        await self.init()
+        client_profile_id = None
         if isinstance(event, dict):
-            runtime_profile_key = str(event.get("runtime_profile_key") or "").strip()
-        if runtime_profile_key != "" and runtime_profile_key in self._clients:
-            return await self._clients[runtime_profile_key].download_ingress_media(event)
+            client_profile_id = normalize_client_profile_id(event.get("client_profile_id"))
+        if client_profile_id is not None and str(client_profile_id) in self._clients:
+            return await self._clients[str(client_profile_id)].download_ingress_media(
+                event
+            )
         return await self._first_client().download_ingress_media(event)
 
     @property
     def current_user_id(self) -> str:
-        return self._first_client().current_user_id
+        first = next(iter(self._clients.values()), None)
+        if first is None:
+            return ""
+        return first.current_user_id
 
     @property
     def device_id(self) -> str:
-        return self._first_client().device_id or ""
+        first = next(iter(self._clients.values()), None)
+        if first is None:
+            return ""
+        return first.device_id or ""
 
     def device_ed25519_key(self) -> str:
-        first = self._first_client()
+        first = next(iter(self._clients.values()), None)
+        if first is None:
+            return ""
         method = getattr(first, "device_ed25519_key", None)
         if callable(method):
             return str(method())
         return ""
 
     async def joined_room_ids(self) -> list[str]:
+        await self.init()
         room_ids: list[str] = []
         for client in self._clients.values():
             room_ids.extend(await client.joined_room_ids())
         return sorted({room_id for room_id in room_ids if isinstance(room_id, str)})
 
     async def joined_member_ids(self, room_id: str) -> list[str]:
+        await self.init()
         for client in self._clients.values():
             room_ids = await client.joined_room_ids()
             if room_id in room_ids:
@@ -3247,6 +3319,7 @@ class MultiProfileMatrixClient(IMatrixClient):
         return await self._first_client().joined_member_ids(room_id)
 
     async def room_state_events(self, room_id: str) -> list[dict[str, Any]]:
+        await self.init()
         for client in self._clients.values():
             room_ids = await client.joined_room_ids()
             if room_id in room_ids:

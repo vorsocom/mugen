@@ -27,9 +27,16 @@ from mugen.core.service.context_scope_resolution import (
     resolve_ingress_route_context,
 )
 from mugen.core.service.ingress_routing import DefaultIngressRoutingService
-from mugen.core.utility.platform_runtime_profile import (
-    DEFAULT_RUNTIME_PROFILE_KEY,
-    get_platform_profile_section,
+from mugen.core.utility.client_profile_runtime import (
+    client_profile_id_from_ingress_route,
+    normalize_client_profile_id,
+)
+from mugen.core.utility.signal_ingress import (
+    resolve_signal_account_number,
+    signal_envelope,
+    signal_event_id,
+    signal_event_type,
+    signal_sender,
 )
 
 
@@ -94,12 +101,23 @@ async def _resolve_ingress_route(
         return None
 
 
-def _runtime_profile_key_from_route(route: dict[str, Any] | None) -> str:
-    if isinstance(route, dict):
-        runtime_profile_key = _nonempty_text(route.get("runtime_profile_key"))
-        if runtime_profile_key is not None:
-            return runtime_profile_key
-    return DEFAULT_RUNTIME_PROFILE_KEY
+def _resolved_client_profile_id(
+    *,
+    ingress_route: dict[str, Any] | None,
+    logging_gateway: ILoggingGateway,
+    platform: str,
+    identifier_type: str,
+    identifier_value: str | None,
+):
+    client_profile_id = client_profile_id_from_ingress_route(ingress_route)
+    if client_profile_id is not None:
+        return client_profile_id
+    logging_gateway.warning(
+        "Dropping staged ingress event without resolved client profile "
+        f"(platform={platform} identifier_type={identifier_type} "
+        f"identifier_value={identifier_value!r})."
+    )
+    return None
 
 
 async def extract_line_stage_entries(
@@ -121,7 +139,15 @@ async def extract_line_stage_entries(
         relational_storage_gateway=relational_storage_gateway,
         logging_gateway=logging_gateway,
     )
-    runtime_profile_key = _runtime_profile_key_from_route(ingress_route)
+    client_profile_id = _resolved_client_profile_id(
+        ingress_route=ingress_route,
+        logging_gateway=logging_gateway,
+        platform="line",
+        identifier_type="path_token",
+        identifier_value=path_token,
+    )
+    if client_profile_id is None:
+        return []
     entries: list[MessagingIngressStageEntry] = []
     for event in events:
         if not isinstance(event, dict):
@@ -139,7 +165,7 @@ async def extract_line_stage_entries(
                 event=MessagingIngressEvent(
                     version=1,
                     platform="line",
-                    runtime_profile_key=runtime_profile_key,
+                    client_profile_id=client_profile_id,
                     source_mode="webhook",
                     event_type=event_type,
                     event_id=event_id,
@@ -151,6 +177,10 @@ async def extract_line_stage_entries(
                     payload=event,
                     provider_context={
                         "ingress_route": ingress_route or {},
+                        "client_profile_id": str(client_profile_id),
+                        "client_profile_key": _nonempty_text(
+                            (ingress_route or {}).get("client_profile_key")
+                        ),
                         "path_token": path_token,
                     },
                 ),
@@ -175,7 +205,15 @@ async def extract_telegram_stage_entries(
         relational_storage_gateway=relational_storage_gateway,
         logging_gateway=logging_gateway,
     )
-    runtime_profile_key = _runtime_profile_key_from_route(ingress_route)
+    client_profile_id = _resolved_client_profile_id(
+        ingress_route=ingress_route,
+        logging_gateway=logging_gateway,
+        platform="telegram",
+        identifier_type="path_token",
+        identifier_value=path_token,
+    )
+    if client_profile_id is None:
+        return []
     update_id = payload.get("update_id")
     update_id_text = str(update_id) if update_id is not None else None
     entries: list[MessagingIngressStageEntry] = []
@@ -194,7 +232,7 @@ async def extract_telegram_stage_entries(
                 event=MessagingIngressEvent(
                     version=1,
                     platform="telegram",
-                    runtime_profile_key=runtime_profile_key,
+                    client_profile_id=client_profile_id,
                     source_mode="webhook",
                     event_type="message",
                     event_id=update_id_text,
@@ -206,6 +244,10 @@ async def extract_telegram_stage_entries(
                     payload={"update": payload, "message": message},
                     provider_context={
                         "ingress_route": ingress_route or {},
+                        "client_profile_id": str(client_profile_id),
+                        "client_profile_key": _nonempty_text(
+                            (ingress_route or {}).get("client_profile_key")
+                        ),
                         "path_token": path_token,
                     },
                 ),
@@ -228,7 +270,7 @@ async def extract_telegram_stage_entries(
                 event=MessagingIngressEvent(
                     version=1,
                     platform="telegram",
-                    runtime_profile_key=runtime_profile_key,
+                    client_profile_id=client_profile_id,
                     source_mode="webhook",
                     event_type="callback_query",
                     event_id=callback_id,
@@ -240,6 +282,10 @@ async def extract_telegram_stage_entries(
                     payload={"update": payload, "callback_query": callback_query},
                     provider_context={
                         "ingress_route": ingress_route or {},
+                        "client_profile_id": str(client_profile_id),
+                        "client_profile_key": _nonempty_text(
+                            (ingress_route or {}).get("client_profile_key")
+                        ),
                         "path_token": path_token,
                     },
                 ),
@@ -266,7 +312,15 @@ async def extract_wechat_stage_entries(
         relational_storage_gateway=relational_storage_gateway,
         logging_gateway=logging_gateway,
     )
-    runtime_profile_key = _runtime_profile_key_from_route(ingress_route)
+    client_profile_id = _resolved_client_profile_id(
+        ingress_route=ingress_route,
+        logging_gateway=logging_gateway,
+        platform="wechat",
+        identifier_type="path_token",
+        identifier_value=path_token,
+    )
+    if client_profile_id is None:
+        return []
     sender = _nonempty_text(payload.get("FromUserName"))
     event_id = _nonempty_text(payload.get("MsgId"))
     event_type = f"{provider}:event"
@@ -276,7 +330,7 @@ async def extract_wechat_stage_entries(
             event=MessagingIngressEvent(
                 version=1,
                 platform="wechat",
-                runtime_profile_key=runtime_profile_key,
+                client_profile_id=client_profile_id,
                 source_mode="webhook",
                 event_type=event_type,
                 event_id=event_id,
@@ -288,6 +342,10 @@ async def extract_wechat_stage_entries(
                 payload=dict(payload),
                 provider_context={
                     "ingress_route": ingress_route or {},
+                    "client_profile_id": str(client_profile_id),
+                    "client_profile_key": _nonempty_text(
+                        (ingress_route or {}).get("client_profile_key")
+                    ),
                     "path_token": path_token,
                     "provider": provider,
                 },
@@ -298,6 +356,7 @@ async def extract_wechat_stage_entries(
 
 async def extract_whatsapp_stage_entries(
     *,
+    path_token: str,
     payload: dict[str, Any],
     relational_storage_gateway: IRelationalStorageGateway,
     logging_gateway: ILoggingGateway,
@@ -322,16 +381,27 @@ async def extract_whatsapp_stage_entries(
             phone_number_id = None
             if isinstance(metadata, dict):
                 phone_number_id = _nonempty_text(metadata.get("phone_number_id"))
+            claims = {"path_token": path_token}
+            if phone_number_id is not None:
+                claims["phone_number_id"] = phone_number_id
             ingress_route = await _resolve_ingress_route(
                 platform="whatsapp",
                 channel_key="whatsapp",
                 identifier_type="phone_number_id",
                 identifier_value=phone_number_id,
-                claims={"phone_number_id": phone_number_id} if phone_number_id else {},
+                claims=claims,
                 relational_storage_gateway=relational_storage_gateway,
                 logging_gateway=logging_gateway,
             )
-            runtime_profile_key = _runtime_profile_key_from_route(ingress_route)
+            client_profile_id = _resolved_client_profile_id(
+                ingress_route=ingress_route,
+                logging_gateway=logging_gateway,
+                platform="whatsapp",
+                identifier_type="phone_number_id",
+                identifier_value=phone_number_id,
+            )
+            if client_profile_id is None:
+                continue
             contacts = event_value.get("contacts")
             messages = event_value.get("messages")
             if isinstance(messages, list):
@@ -354,7 +424,7 @@ async def extract_whatsapp_stage_entries(
                             event=MessagingIngressEvent(
                                 version=1,
                                 platform="whatsapp",
-                                runtime_profile_key=runtime_profile_key,
+                                client_profile_id=client_profile_id,
                                 source_mode="webhook",
                                 event_type="message",
                                 event_id=message_id,
@@ -366,6 +436,11 @@ async def extract_whatsapp_stage_entries(
                                 payload={"event_value": event_value, "message": message},
                                 provider_context={
                                     "ingress_route": ingress_route or {},
+                                    "client_profile_id": str(client_profile_id),
+                                    "client_profile_key": _nonempty_text(
+                                        (ingress_route or {}).get("client_profile_key")
+                                    ),
+                                    "path_token": path_token,
                                     "phone_number_id": phone_number_id,
                                 },
                             ),
@@ -384,7 +459,7 @@ async def extract_whatsapp_stage_entries(
                             event=MessagingIngressEvent(
                                 version=1,
                                 platform="whatsapp",
-                                runtime_profile_key=runtime_profile_key,
+                                client_profile_id=client_profile_id,
                                 source_mode="webhook",
                                 event_type="status",
                                 event_id=status_id,
@@ -396,6 +471,11 @@ async def extract_whatsapp_stage_entries(
                                 payload={"event_value": event_value, "status": status},
                                 provider_context={
                                     "ingress_route": ingress_route or {},
+                                    "client_profile_id": str(client_profile_id),
+                                    "client_profile_key": _nonempty_text(
+                                        (ingress_route or {}).get("client_profile_key")
+                                    ),
+                                    "path_token": path_token,
                                     "phone_number_id": phone_number_id,
                                 },
                             ),
@@ -404,75 +484,39 @@ async def extract_whatsapp_stage_entries(
     return entries
 
 
-def _signal_envelope(payload: dict[str, Any]) -> dict[str, Any] | None:
-    params = payload.get("params")
-    if not isinstance(params, dict):
-        return None
-    envelope = params.get("envelope")
-    return envelope if isinstance(envelope, dict) else None
-
-
-def _signal_sender(envelope: dict[str, Any]) -> str | None:
-    for key in ("sourceNumber", "sourceUuid", "source"):
-        sender = _nonempty_text(envelope.get(key))
-        if sender is not None:
-            return sender
-    return None
-
-
-def _signal_event_id(envelope: dict[str, Any]) -> str | None:
-    timestamp = envelope.get("timestamp")
-    if isinstance(timestamp, bool):
-        return None
-    if not isinstance(timestamp, (int, float)):
-        return None
-    source = _signal_sender(envelope)
-    if source is not None:
-        return f"{source}:{int(timestamp)}"
-    return str(int(timestamp))
-
-
-def _signal_event_type(envelope: dict[str, Any]) -> str:
-    data_message = envelope.get("dataMessage")
-    receipt_message = envelope.get("receiptMessage")
-    typing_message = envelope.get("typingMessage")
-    if isinstance(data_message, dict):
-        if isinstance(data_message.get("reaction"), dict):
-            return "reaction"
-        return "message"
-    if isinstance(receipt_message, dict):
-        return "receipt"
-    if isinstance(typing_message, dict):
-        return "typing"
-    return "event"
-
-
 def extract_signal_stage_entries(
     *,
     config: SimpleNamespace,
     payload: dict[str, Any],
 ) -> list[MessagingIngressStageEntry]:
-    envelope = _signal_envelope(payload)
+    envelope = signal_envelope(payload)
     if envelope is None:
         return []
-    runtime_profile_key = _nonempty_text(payload.get("runtime_profile_key")) or DEFAULT_RUNTIME_PROFILE_KEY
-    signal_cfg = get_platform_profile_section(
-        config,
-        platform="signal",
-        runtime_profile_key=runtime_profile_key,
+    client_profile_id = normalize_client_profile_id(payload.get("client_profile_id"))
+    if client_profile_id is None:
+        provider_context = payload.get("provider_context")
+        if isinstance(provider_context, dict):
+            client_profile_id = normalize_client_profile_id(
+                provider_context.get("client_profile_id")
+            )
+    if client_profile_id is None:
+        return []
+    account_number = resolve_signal_account_number(
+        payload=payload,
+        config=config,
     )
-    account_number = _nonempty_text(getattr(signal_cfg, "account", None))
-    event_type = _signal_event_type(envelope)
-    event_id = _signal_event_id(envelope)
-    sender = _signal_sender(envelope)
+    event_type = signal_event_type(envelope)
+    event_id = signal_event_id(envelope)
+    sender = signal_sender(envelope)
     room_id = sender
+    client_profile_key = _nonempty_text(payload.get("client_profile_key"))
     return [
         MessagingIngressStageEntry(
             ipc_command="signal_ingress_event",
             event=MessagingIngressEvent(
                 version=1,
                 platform="signal",
-                runtime_profile_key=runtime_profile_key,
+                client_profile_id=client_profile_id,
                 source_mode="receive_loop",
                 event_type=event_type,
                 event_id=event_id,
@@ -483,7 +527,8 @@ def extract_signal_stage_entries(
                 sender=sender,
                 payload=dict(payload),
                 provider_context={
-                    "runtime_profile_key": runtime_profile_key,
+                    "client_profile_id": str(client_profile_id),
+                    "client_profile_key": client_profile_key,
                     "account_number": account_number,
                 },
             ),

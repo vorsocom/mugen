@@ -17,6 +17,8 @@ from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.whatsapp.wacapi import ipc_ext
 from mugen.core.plugin.whatsapp.wacapi.ipc_ext import WhatsAppWACAPIIPCExtension
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000204")
+
 
 def _make_config(
     *, beta_active: bool, beta_users=None, beta_message: str = "Beta only"
@@ -188,6 +190,8 @@ class _IngressRoutingStub:
                 tenant_slug="tenant-a",
                 platform="whatsapp",
                 channel_key="whatsapp",
+                client_profile_id=_CLIENT_PROFILE_ID,
+                client_profile_key="whatsapp-a",
                 identifier_claims={
                     "identifier_type": "phone_number_id",
                     "identifier_value": str(identifier_value),
@@ -286,7 +290,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
 
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
-            return_value={"runtime_profile_key": "whatsapp-a", "tenant_id": "tenant-a"}
+            return_value={"client_profile_id": _CLIENT_PROFILE_ID, "tenant_id": "tenant-a"}
         )
         ext._process_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
         ext._process_status_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
@@ -294,7 +298,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         await ext._whatsapp_ingress_event(  # pylint: disable=protected-access
             _make_request(
                 {
-                    "runtime_profile_key": "whatsapp-a",
+                    "client_profile_id": str(_CLIENT_PROFILE_ID),
                     "payload": {
                         "event_value": {"messages": [{"id": "wamid-1"}]},
                         "message": {"id": "wamid-1", "from": "15550001"},
@@ -309,7 +313,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         await ext._whatsapp_ingress_event(  # pylint: disable=protected-access
             _make_request(
                 {
-                    "runtime_profile_key": "whatsapp-a",
+                    "client_profile_id": str(_CLIENT_PROFILE_ID),
                     "payload": {
                         "status": {"id": "status-1", "recipient_id": "15550002"},
                     },
@@ -319,6 +323,21 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
         )
         ext._process_status_event.assert_awaited_once()
+
+        ext._process_message_event.reset_mock()
+        ext._process_status_event.reset_mock()
+        await ext._whatsapp_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "client_profile_id": str(_CLIENT_PROFILE_ID),
+                    "payload": {"event_value": {}},
+                    "provider_context": {"phone_number_id": "phone-1", "ingress_route": {}},
+                },
+                command="whatsapp_ingress_event",
+            )
+        )
+        ext._process_message_event.assert_not_awaited()
+        ext._process_status_event.assert_not_awaited()
 
         ext._process_message_event.reset_mock()
         ext._process_status_event.reset_mock()
@@ -348,7 +367,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     },
                     "provider_context": {
                         "phone_number_id": "phone-1",
-                        "ingress_route": {"runtime_profile_key": "whatsapp-a"},
+                        "ingress_route": {"client_profile_id": str(_CLIENT_PROFILE_ID)},
                     },
                 },
                 command="whatsapp_ingress_event",
@@ -1629,6 +1648,33 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
 
         logging_gateway.error.assert_not_called()
 
+    async def test_wacapi_event_skips_routes_without_client_profile_id(self) -> None:
+        ext = _new_extension(config=_make_config(beta_active=False))
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"tenant_id": "tenant-a"}
+        )
+        ext._process_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+        payload = _make_request(
+            {
+                "entry": [
+                    {
+                        "changes": [
+                            {
+                                "value": {
+                                    "metadata": {"phone_number_id": "pnid-1"},
+                                    "messages": [{"id": "wamid-1", "from": "15550001"}],
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        )
+
+        await ext._wacapi_event(payload)  # pylint: disable=protected-access
+
+        ext._process_message_event.assert_not_awaited()
+
     async def test_wacapi_event_logs_malformed_status_item_and_continues(self) -> None:
         logging_gateway = Mock()
         ext = _new_extension(
@@ -2044,9 +2090,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                         "channel_key": "whatsapp",
                         "identifier_claims": {},
                         "channel_profile_id": None,
+                        "client_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
-                        "runtime_profile_key": None,
+                        "client_profile_key": None,
                         "tenant_resolution": {
                             "mode": "fallback_global",
                             "reason_code": "no_ingress_route",

@@ -19,6 +19,9 @@ import aiohttp
 from mugen.core.client.runtime_profile_manager import SimpleProfileClientManager
 from mugen.core.contract.client.signal import ISignalClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import (
+    IRelationalStorageGateway,
+)
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
@@ -668,8 +671,8 @@ class DefaultSignalClient(ISignalClient):  # pylint: disable=too-many-instance-a
 
 
 class _SignalReaderFailure:
-    def __init__(self, *, runtime_profile_key: str, error: BaseException) -> None:
-        self.runtime_profile_key = runtime_profile_key
+    def __init__(self, *, client_profile_id: str, error: BaseException) -> None:
+        self.client_profile_id = client_profile_id
         self.error = error
 
 
@@ -681,6 +684,7 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway | None = None,
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
@@ -691,6 +695,7 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
             config=config,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
+            relational_storage_gateway=relational_storage_gateway,
             logging_gateway=logging_gateway,
             messaging_service=messaging_service,
             user_service=user_service,
@@ -698,20 +703,30 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
         self._event_queue: asyncio.Queue = asyncio.Queue()
         self._reader_tasks: dict[str, asyncio.Task] = {}
 
-    async def _reader_loop(self, runtime_profile_key: str, client: ISignalClient) -> None:
+    async def _reader_loop(self, client_profile_id: str, client: ISignalClient) -> None:
         try:
             async for event in client.receive_events():
                 if not isinstance(event, dict):
                     continue
                 payload = dict(event)
-                payload.setdefault("runtime_profile_key", runtime_profile_key)
+                payload.setdefault("client_profile_id", client_profile_id)
+                account_number = getattr(client, "_account_number", None)
+                if isinstance(account_number, str) and account_number.strip() != "":
+                    payload.setdefault("account_number", account_number.strip())
+                profile_key = getattr(
+                    getattr(getattr(client, "_config", None), "signal", None),
+                    "client_profile_key",
+                    None,
+                )
+                if isinstance(profile_key, str) and profile_key.strip() != "":
+                    payload.setdefault("client_profile_key", profile_key.strip())
                 await self._event_queue.put(payload)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pylint: disable=broad-exception-caught
             await self._event_queue.put(
                 _SignalReaderFailure(
-                    runtime_profile_key=runtime_profile_key,
+                    client_profile_id=client_profile_id,
                     error=exc,
                 )
             )
@@ -720,11 +735,11 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
         if self._reader_tasks:
             return
         self._reader_tasks = {
-            runtime_profile_key: asyncio.create_task(
-                self._reader_loop(runtime_profile_key, client),
-                name=f"mugen.signal.receive.{runtime_profile_key}",
+            client_profile_id: asyncio.create_task(
+                self._reader_loop(client_profile_id, client),
+                name=f"mugen.signal.receive.{client_profile_id}",
             )
-            for runtime_profile_key, client in clients.items()
+            for client_profile_id, client in clients.items()
         }
 
     async def _stop_reader_tasks_locked(self) -> None:
@@ -751,19 +766,19 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
         config: Mapping[str, object] | SimpleNamespace | None = None,
     ) -> dict[str, list[str]]:
         next_config = self._root_config if config is None else config
-        next_clients, next_snapshots = self._build_profile_clients(next_config)
+        next_clients, next_snapshots = await self._build_profile_clients(next_config)
 
         try:
             await self._init_client_map(next_clients)
             verified = await self._verify_client_map(next_clients)
             if verified is not True:
-                raise RuntimeError("signal runtime profile startup probe failed.")
+                raise RuntimeError("signal client profile startup probe failed.")
             next_reader_tasks = {
-                runtime_profile_key: asyncio.create_task(
-                    self._reader_loop(runtime_profile_key, client),
-                    name=f"mugen.signal.receive.{runtime_profile_key}",
+                client_profile_id: asyncio.create_task(
+                    self._reader_loop(client_profile_id, client),
+                    name=f"mugen.signal.receive.{client_profile_id}",
                 )
-                for runtime_profile_key, client in next_clients.items()
+                for client_profile_id, client in next_clients.items()
             }
         except Exception:
             await self._close_client_map(next_clients)
@@ -810,7 +825,7 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
             if isinstance(item, _SignalReaderFailure):
                 raise RuntimeError(
                     "Signal receive loop failed "
-                    f"(runtime_profile_key={item.runtime_profile_key!r}): "
+                    f"(client_profile_id={item.client_profile_id!r}): "
                     f"{type(item.error).__name__}: {item.error}"
                 ) from item.error
             if isinstance(item, dict):
@@ -822,6 +837,7 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
         recipient: str,
         text: str,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_text_message(
             recipient=recipient,
             text=text,
@@ -834,6 +850,7 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
         message: str | None = None,
         base64_attachments: list[str] | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_media_message(
             recipient=recipient,
             message=message,
@@ -849,6 +866,7 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
         timestamp: int,
         remove: bool = False,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_reaction(
             recipient=recipient,
             reaction=reaction,
@@ -864,6 +882,7 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
         receipt_type: str,
         timestamp: int,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_receipt(
             recipient=recipient,
             receipt_type=receipt_type,
@@ -877,6 +896,7 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
         state: str,
         message_id: str | None = None,
     ) -> bool | None:
+        await self.init()
         return await self._client_for().emit_processing_signal(
             recipient,
             state=state,
@@ -884,4 +904,5 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
         )
 
     async def download_attachment(self, attachment_id: str) -> dict[str, Any] | None:
+        await self.init()
         return await self._client_for().download_attachment(attachment_id)

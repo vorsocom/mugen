@@ -4,10 +4,11 @@ __all__ = ["MessagingIngressCheckpointRecord"]
 
 from datetime import datetime
 from typing import Any
+import uuid
 
 from sqlalchemy import CheckConstraint, DateTime, Index, UniqueConstraint
 from sqlalchemy import text as sa_text
-from sqlalchemy.dialects.postgresql import CITEXT, JSONB
+from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
@@ -24,8 +25,8 @@ class MessagingIngressCheckpointRecord(ModelBase):
         index=True,
     )
 
-    runtime_profile_key: Mapped[str] = mapped_column(
-        CITEXT(128),
+    client_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         nullable=False,
         index=True,
     )
@@ -59,10 +60,6 @@ class MessagingIngressCheckpointRecord(ModelBase):
             name="ck_msg_ingress_checkpoint_platform_nonempty",
         ),
         CheckConstraint(
-            "length(btrim(runtime_profile_key)) > 0",
-            name="ck_msg_ingress_checkpoint_runtime_profile_nonempty",
-        ),
-        CheckConstraint(
             "length(btrim(checkpoint_key)) > 0",
             name="ck_msg_ingress_checkpoint_key_nonempty",
         ),
@@ -72,14 +69,14 @@ class MessagingIngressCheckpointRecord(ModelBase):
         ),
         UniqueConstraint(
             "platform",
-            "runtime_profile_key",
+            "client_profile_id",
             "checkpoint_key",
             name="ux_msg_ingress_checkpoint_platform_profile_key",
         ),
         Index(
             "ix_msg_ingress_checkpoint_platform_profile",
             "platform",
-            "runtime_profile_key",
+            "client_profile_id",
         ),
         {"schema": "mugen"},
     )

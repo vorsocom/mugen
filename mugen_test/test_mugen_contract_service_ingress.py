@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import unittest
+import uuid
 
 from mugen.core.contract.service.ingress import (
     MessagingIngressCheckpointUpdate,
     MessagingIngressEvent,
     MessagingIngressStageEntry,
 )
+
+_CLIENT_PROFILE_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
 
 class TestMugenContractServiceIngress(unittest.TestCase):
@@ -19,7 +22,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
         event = MessagingIngressEvent(
             version="1",
             platform=" matrix ",
-            runtime_profile_key=" default ",
+            client_profile_id=f" {_CLIENT_PROFILE_ID} ",
             source_mode=" sync_room_message ",
             event_type=" RoomMessageText ",
             event_id="   ",
@@ -35,7 +38,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
 
         self.assertEqual(event.version, 1)
         self.assertEqual(event.platform, "matrix")
-        self.assertEqual(event.runtime_profile_key, "default")
+        self.assertEqual(event.client_profile_id, _CLIENT_PROFILE_ID)
         self.assertEqual(event.source_mode, "sync_room_message")
         self.assertEqual(event.event_type, "RoomMessageText")
         self.assertIsNone(event.event_id)
@@ -55,7 +58,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
         auto_now_event = MessagingIngressEvent(
             version=1,
             platform="matrix",
-            runtime_profile_key="default",
+            client_profile_id=_CLIENT_PROFILE_ID,
             source_mode="sync_room_message",
             event_type="message",
             event_id=None,
@@ -73,7 +76,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
             MessagingIngressEvent(
                 version=0,
                 platform="matrix",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 source_mode="sync_room_message",
                 event_type="message",
                 event_id=None,
@@ -88,7 +91,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
             MessagingIngressEvent(
                 version=1,
                 platform=object(),
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 source_mode="sync_room_message",
                 event_type="message",
                 event_id=None,
@@ -98,12 +101,12 @@ class TestMugenContractServiceIngress(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ValueError,
-            "MessagingIngressEvent.runtime_profile_key is required",
+            "MessagingIngressEvent.client_profile_id is required",
         ):
             MessagingIngressEvent(
                 version=1,
                 platform="matrix",
-                runtime_profile_key="  ",
+                client_profile_id="  ",
                 source_mode="sync_room_message",
                 event_type="message",
                 event_id=None,
@@ -118,7 +121,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
             MessagingIngressEvent(
                 version=1,
                 platform="matrix",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 source_mode="sync_room_message",
                 event_type="message",
                 event_id=1,
@@ -133,7 +136,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
             MessagingIngressEvent(
                 version=1,
                 platform="matrix",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 source_mode="sync_room_message",
                 event_type="message",
                 event_id=None,
@@ -149,7 +152,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
             MessagingIngressEvent(
                 version=1,
                 platform="matrix",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 source_mode="sync_room_message",
                 event_type="message",
                 event_id=None,
@@ -165,7 +168,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
             MessagingIngressEvent(
                 version=1,
                 platform="matrix",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 source_mode="sync_room_message",
                 event_type="message",
                 event_id=None,
@@ -178,7 +181,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
         event = MessagingIngressEvent(
             version=1,
             platform="matrix",
-            runtime_profile_key="default",
+            client_profile_id=_CLIENT_PROFILE_ID,
             source_mode="sync_room_message",
             event_type="message",
             event_id="$event",
@@ -216,7 +219,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
     def test_checkpoint_update_normalizes_and_validates(self) -> None:
         checkpoint = MessagingIngressCheckpointUpdate(
             platform=" matrix ",
-            runtime_profile_key=" default ",
+            client_profile_id=f" {_CLIENT_PROFILE_ID} ",
             checkpoint_key=" sync_token ",
             checkpoint_value=" next-batch ",
             provider_context=None,
@@ -224,7 +227,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
         )
 
         self.assertEqual(checkpoint.platform, "matrix")
-        self.assertEqual(checkpoint.runtime_profile_key, "default")
+        self.assertEqual(checkpoint.client_profile_id, _CLIENT_PROFILE_ID)
         self.assertEqual(checkpoint.checkpoint_key, "sync_token")
         self.assertEqual(checkpoint.checkpoint_value, "next-batch")
         self.assertEqual(checkpoint.provider_context, {})
@@ -236,7 +239,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
         ):
             MessagingIngressCheckpointUpdate(
                 platform="",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 checkpoint_key="sync_token",
                 checkpoint_value="next-batch",
             )
@@ -247,7 +250,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
         ):
             MessagingIngressCheckpointUpdate(
                 platform="matrix",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 checkpoint_key="sync_token",
                 checkpoint_value="next-batch",
                 provider_context=[],
@@ -259,7 +262,7 @@ class TestMugenContractServiceIngress(unittest.TestCase):
         ):
             MessagingIngressCheckpointUpdate(
                 platform="matrix",
-                runtime_profile_key="default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 checkpoint_key="sync_token",
                 checkpoint_value="next-batch",
                 observed_at="bad",

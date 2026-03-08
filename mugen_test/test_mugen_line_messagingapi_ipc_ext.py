@@ -17,6 +17,8 @@ from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.line.messagingapi import ipc_ext
 from mugen.core.plugin.line.messagingapi.ipc_ext import LineMessagingAPIIPCExtension
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000201")
+
 
 def _make_config(*, typing_enabled: bool = True, dedupe_ttl: int = 86400) -> SimpleNamespace:
     return SimpleNamespace(
@@ -119,6 +121,8 @@ class _IngressRoutingStub:
                 tenant_slug="tenant-a",
                 platform="line",
                 channel_key="line",
+                client_profile_id=_CLIENT_PROFILE_ID,
+                client_profile_key="line-a",
                 identifier_claims={
                     "identifier_type": "path_token",
                     "identifier_value": str(identifier_value),
@@ -248,14 +252,14 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
 
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
-            return_value={"runtime_profile_key": "line-a", "tenant_id": "tenant-a"}
+            return_value={"client_profile_id": _CLIENT_PROFILE_ID, "tenant_id": "tenant-a"}
         )
         ext._process_single_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
 
         await ext._line_ingress_event(  # pylint: disable=protected-access
             _make_request(
                 {
-                    "runtime_profile_key": "line-a",
+                    "client_profile_id": str(_CLIENT_PROFILE_ID),
                     "payload": _message_event(),
                     "provider_context": {
                         "path_token": "line-path-token",
@@ -269,7 +273,7 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
         ext._process_single_event.assert_awaited_once()
         kwargs = ext._process_single_event.await_args.kwargs  # type: ignore[union-attr]
         self.assertTrue(kwargs["skip_dedupe"])
-        self.assertEqual(kwargs["ingress_route"]["runtime_profile_key"], "line-a")
+        self.assertEqual(kwargs["ingress_route"]["client_profile_id"], _CLIENT_PROFILE_ID)
 
         ext._process_single_event.reset_mock()
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
@@ -297,7 +301,7 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     "payload": _message_event(),
                     "provider_context": {
                         "path_token": "line-path-token",
-                        "ingress_route": {"runtime_profile_key": "line-a"},
+                        "ingress_route": {"client_profile_id": str(_CLIENT_PROFILE_ID)},
                     },
                 },
                 command="line_ingress_event",
@@ -1346,6 +1350,28 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             ext._metrics.get("line.ipc.event.processed_ok")  # pylint: disable=protected-access
         )
+
+    async def test_line_messagingapi_event_skips_routes_without_client_profile_id(
+        self,
+    ) -> None:
+        ext = _new_extension(config=_make_config())
+        with (
+            patch.object(
+                ext,
+                "_resolve_ingress_route",
+                new=AsyncMock(return_value={"tenant_id": "tenant-a"}),
+            ),
+            patch.object(
+                ext,
+                "_process_single_event",
+                new=AsyncMock(),
+            ) as process_single_event,
+        ):
+            await ext._line_messagingapi_event(  # pylint: disable=protected-access
+                _make_request({"events": [_message_event()]})
+            )
+
+        process_single_event.assert_not_awaited()
 
     async def test_line_messagingapi_event_process_exception_records_dead_letter(self) -> None:
         logger = Mock()

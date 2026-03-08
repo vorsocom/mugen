@@ -106,7 +106,50 @@ class TestMugenServicePlatformRuntimeReload(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             reload_mod._unchanged_profile_diff(  # pylint: disable=protected-access
-                current_config,
+                injector,
+                platform="line",
+            ),
+            {
+                "added": [],
+                "removed": [],
+                "updated": [],
+                "unchanged": [],
+            },
+        )
+        self.assertEqual(
+            reload_mod._unchanged_profile_diff(  # pylint: disable=protected-access
+                None,
+                platform="signal",
+            ),
+            {
+                "added": [],
+                "removed": [],
+                "updated": [],
+                "unchanged": [],
+            },
+        )
+        self.assertEqual(
+            reload_mod._normalize_reload_diff(  # pylint: disable=protected-access
+                "invalid",
+                injector=injector,
+                platform="line",
+            ),
+            {
+                "added": [],
+                "removed": [],
+                "updated": [],
+                "unchanged": [],
+            },
+        )
+        self.assertEqual(
+            reload_mod._normalize_reload_diff(  # pylint: disable=protected-access
+                {
+                    "added": "skip",
+                    "removed": b"skip",
+                    "updated": {"a": 1},
+                    "unchanged": ["default"],
+                },
+                injector=injector,
                 platform="line",
             ),
             {
@@ -115,6 +158,48 @@ class TestMugenServicePlatformRuntimeReload(unittest.IsolatedAsyncioTestCase):
                 "updated": [],
                 "unchanged": ["default"],
             },
+        )
+        self.assertEqual(
+            reload_mod._normalize_requested_platforms(  # pylint: disable=protected-access
+                [" line ", None, "unsupported", "telegram"]
+            ),
+            {"line", "telegram"},
+        )
+
+        injector.line_client = SimpleNamespace(
+            configured_client_profile_ids=Mock(return_value=("line-a", " line-b ", "")),
+        )
+        self.assertEqual(
+            reload_mod._unchanged_profile_diff(  # pylint: disable=protected-access
+                injector,
+                platform="line",
+            )["unchanged"],
+            ["line-a", " line-b "],
+        )
+
+        injector.matrix_client = SimpleNamespace(
+            managed_clients=Mock(
+                return_value={"cp-b": object(), " ": object(), "cp-a": object()}
+            ),
+        )
+        self.assertEqual(
+            reload_mod._unchanged_profile_diff(  # pylint: disable=protected-access
+                injector,
+                platform="matrix",
+            )["unchanged"],
+            ["cp-a", "cp-b"],
+        )
+
+        injector.telegram_client = SimpleNamespace(
+            configured_client_profile_ids=Mock(return_value={"telegram-a"}),
+            managed_clients=Mock(return_value=["telegram-a"]),
+        )
+        self.assertEqual(
+            reload_mod._unchanged_profile_diff(  # pylint: disable=protected-access
+                injector,
+                platform="telegram",
+            )["unchanged"],
+            [],
         )
 
         refreshed_children: list[SimpleNamespace] = []
@@ -554,3 +639,39 @@ class TestMugenServicePlatformRuntimeReload(unittest.IsolatedAsyncioTestCase):
             result["platforms"]["telegram"]["status"],
             "unchanged",
         )
+
+    async def test_reload_platform_runtime_profiles_requested_subset_can_remain_unchanged(
+        self,
+    ) -> None:
+        current_dict = _current_config()
+        current_config = build_config_namespace(current_dict)
+        line_client = SimpleNamespace(reload_profiles=AsyncMock())
+        telegram_client = SimpleNamespace(
+            reload_profiles=AsyncMock(
+                return_value={
+                    "added": [],
+                    "removed": [],
+                    "updated": [],
+                    "unchanged": ["default"],
+                }
+            )
+        )
+        injector = DependencyInjector(
+            config=current_config,
+            line_client=line_client,
+            telegram_client=telegram_client,
+        )
+
+        with (
+            patch.object(reload_mod.di, "_load_config", return_value=current_dict),
+            patch.object(reload_mod.di, "_validate_core_module_schema"),
+        ):
+            result = await reload_mod.reload_platform_runtime_profiles(
+                injector=injector,
+                platforms=[" telegram ", "unsupported"],
+            )
+
+        line_client.reload_profiles.assert_not_awaited()
+        telegram_client.reload_profiles.assert_awaited_once()
+        self.assertEqual(result["platforms"]["telegram"]["status"], "unchanged")
+        self.assertEqual(result["platforms"]["line"]["status"], "unchanged")

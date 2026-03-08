@@ -18,6 +18,9 @@ import aiohttp
 from mugen.core.client.runtime_profile_manager import SimpleProfileClientManager
 from mugen.core.contract.client.line import ILineClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import (
+    IRelationalStorageGateway,
+)
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
@@ -958,6 +961,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway | None = None,
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
@@ -968,6 +972,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
             config=config,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
+            relational_storage_gateway=relational_storage_gateway,
             logging_gateway=logging_gateway,
             messaging_service=messaging_service,
             user_service=user_service,
@@ -979,6 +984,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         reply_token: str,
         messages: list[dict[str, Any]],
     ) -> dict | None:
+        await self.init()
         return await self._client_for().reply_messages(
             reply_token=reply_token,
             messages=messages,
@@ -990,6 +996,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         to: str,
         messages: list[dict[str, Any]],
     ) -> dict | None:
+        await self.init()
         return await self._client_for().push_messages(
             to=to,
             messages=messages,
@@ -1001,6 +1008,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         to: list[str],
         messages: list[dict[str, Any]],
     ) -> dict | None:
+        await self.init()
         return await self._client_for().multicast_messages(
             to=to,
             messages=messages,
@@ -1013,6 +1021,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         text: str,
         reply_token: str | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_text_message(
             recipient=recipient,
             text=text,
@@ -1026,6 +1035,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         image: dict[str, Any],
         reply_token: str | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_image_message(
             recipient=recipient,
             image=image,
@@ -1039,6 +1049,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         audio: dict[str, Any],
         reply_token: str | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_audio_message(
             recipient=recipient,
             audio=audio,
@@ -1052,6 +1063,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         video: dict[str, Any],
         reply_token: str | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_video_message(
             recipient=recipient,
             video=video,
@@ -1065,6 +1077,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         file: dict[str, Any],
         reply_token: str | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_file_message(
             recipient=recipient,
             file=file,
@@ -1077,6 +1090,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         op: str,
         payload: dict[str, Any],
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_raw_message(
             op=op,
             payload=payload,
@@ -1087,6 +1101,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         *,
         message_id: str,
     ) -> dict[str, Any] | None:
+        await self.init()
         return await self._client_for().download_media(message_id=message_id)
 
     async def get_profile(
@@ -1094,6 +1109,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         *,
         user_id: str,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().get_profile(user_id=user_id)
 
     async def emit_processing_signal(
@@ -1103,6 +1119,7 @@ class MultiProfileLineClient(SimpleProfileClientManager, ILineClient):
         state: str,
         message_id: str | None = None,
     ) -> bool | None:
+        await self.init()
         return await self._client_for().emit_processing_signal(
             recipient,
             state=state,

@@ -38,8 +38,12 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
         index=True,
     )
 
-    runtime_profile_key: Mapped[str | None] = mapped_column(
-        CITEXT(128),
+    client_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "mugen.admin_messaging_client_profile.id",
+            ondelete="SET NULL",
+        ),
         nullable=True,
         index=True,
     )
@@ -87,10 +91,6 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
             name="ck_chorch_profile__profile_key_nonempty",
         ),
         CheckConstraint(
-            "runtime_profile_key IS NULL OR length(btrim(runtime_profile_key)) > 0",
-            name="ck_chorch_profile__runtime_profile_nonempty_if_set",
-        ),
-        CheckConstraint(
             "display_name IS NULL OR length(btrim(display_name)) > 0",
             name="ck_chorch_profile__display_name_nonempty_if_set",
         ),
@@ -116,10 +116,10 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
             "is_active",
         ),
         Index(
-            "ix_chorch_profile__tenant_channel_runtime_profile",
+            "ix_chorch_profile__tenant_channel_client_profile",
             "tenant_id",
             "channel_key",
-            "runtime_profile_key",
+            "client_profile_id",
         ),
         {"schema": "mugen"},
     )

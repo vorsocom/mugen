@@ -22,6 +22,8 @@ from mugen.core.plugin.signal.restapi import ipc_ext
 from mugen.core.plugin.signal.restapi.ipc_ext import SignalRestAPIIPCExtension
 from mugen.core.utility.platform_runtime_profile import build_config_namespace
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000205")
+
 
 def _make_config(*, typing_enabled: bool = True, dedupe_ttl: int = 86400) -> SimpleNamespace:
     return SimpleNamespace(
@@ -137,6 +139,8 @@ class _IngressRoutingStub:
                 tenant_slug="tenant-a",
                 platform="signal",
                 channel_key="signal",
+                client_profile_id=_CLIENT_PROFILE_ID,
+                client_profile_key="signal-a",
                 identifier_claims={
                     "identifier_type": "account_number",
                     "identifier_value": str(identifier_value),
@@ -234,14 +238,14 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
 
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
-            return_value={"runtime_profile_key": "signal-a", "tenant_id": "tenant-a"}
+            return_value={"client_profile_id": _CLIENT_PROFILE_ID, "tenant_id": "tenant-a"}
         )
         ext._handle_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
 
         await ext._signal_ingress_event(  # pylint: disable=protected-access
             _make_request(
                 {
-                    "runtime_profile_key": "signal-a",
+                    "client_profile_id": str(_CLIENT_PROFILE_ID),
                     "payload": _receive_payload(_text_envelope()),
                     "provider_context": {"account_number": "+15550000001"},
                 },
@@ -275,7 +279,6 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(SignalRestAPIIPCExtension._coerce_nonempty_string(123))  # pylint: disable=protected-access
 
-        ext._signal_account_number = Mock(return_value=None)  # type: ignore[method-assign]  # pylint: disable=protected-access
         ext._resolve_ingress_route.reset_mock()  # type: ignore[union-attr]
         await ext._signal_ingress_event(  # pylint: disable=protected-access
             _make_request(
@@ -283,7 +286,7 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     "payload": _receive_payload(_text_envelope()),
                     "provider_context": {
                         "ingress_route": {
-                            "runtime_profile_key": "signal-fallback",
+                            "client_profile_id": str(_CLIENT_PROFILE_ID),
                             "tenant_id": "tenant-a",
                         }
                     },
@@ -291,30 +294,120 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 command="signal_ingress_event",
             )
         )
-        ext._resolve_ingress_route.assert_not_awaited()  # type: ignore[union-attr]
+        ext._resolve_ingress_route.assert_awaited_once()  # type: ignore[union-attr]
 
-    async def test_signal_account_number_supports_profile_lookup_and_missing_profile(
+    async def test_signal_ingress_event_uses_provider_context_route_and_missing_client_id(
+        self,
+    ) -> None:
+        ext = _new_extension(config=_make_config(), logging_gateway=Mock())
+        ext._resolve_ingress_route = AsyncMock(return_value=None)  # type: ignore[method-assign]  # pylint: disable=protected-access
+        ext._handle_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._signal_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": _receive_payload(_text_envelope()),
+                    "provider_context": {
+                        "ingress_route": {
+                            "client_profile_id": str(_CLIENT_PROFILE_ID),
+                            "tenant_id": "tenant-a",
+                        },
+                        "client_profile_id": str(_CLIENT_PROFILE_ID),
+                    },
+                },
+                command="signal_ingress_event",
+            )
+        )
+        ext._handle_message_event.assert_awaited_once()
+
+        ext._handle_message_event.reset_mock()
+        await ext._signal_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": _receive_payload(_text_envelope()),
+                    "provider_context": {},
+                },
+                command="signal_ingress_event",
+            )
+        )
+        ext._handle_message_event.assert_not_awaited()
+
+    async def test_signal_ingress_event_returns_without_client_profile(self) -> None:
+        ext = _new_extension(config=_make_config(), logging_gateway=Mock())
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"tenant_id": "tenant-a"}
+        )
+        ext._handle_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._signal_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": _receive_payload(_text_envelope()),
+                    "provider_context": {"account_number": "+15550000001"},
+                },
+                command="signal_ingress_event",
+            )
+        )
+        ext._handle_message_event.assert_not_awaited()
+
+    async def test_signal_ingress_event_uses_provider_context_route_without_account_number(
+        self,
+    ) -> None:
+        ext = _new_extension(
+            config=build_config_namespace({"signal": {}}),
+            logging_gateway=Mock(),
+        )
+        ext._resolve_ingress_route = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+        ext._handle_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._signal_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": _receive_payload(_text_envelope()),
+                    "provider_context": {
+                        "ingress_route": {
+                            "client_profile_id": str(_CLIENT_PROFILE_ID),
+                            "tenant_id": "tenant-a",
+                        }
+                    },
+                },
+                command="signal_ingress_event",
+            )
+        )
+
+        ext._resolve_ingress_route.assert_not_awaited()  # type: ignore[union-attr]
+        ext._handle_message_event.assert_awaited_once()
+
+    async def test_signal_account_number_uses_payload_context_then_config(
         self,
     ) -> None:
         config = build_config_namespace(
             {
                 "signal": {
-                    "profiles": [
-                        {
-                            "key": "default",
-                            "account": {"number": "+15550000001"},
-                        }
-                    ]
+                    "account": {"number": "+15550000001"},
                 }
             }
         )
         extension = _new_extension(config=config)
         self.assertEqual(
-            extension._signal_account_number("default"),  # pylint: disable=protected-access
+            ipc_ext.resolve_signal_account_number(
+                payload={"provider_context": {"account_number": "+15550000002"}},
+                config=config,
+            ),
+            "+15550000002",
+        )
+        self.assertEqual(
+            ipc_ext.resolve_signal_account_number(
+                payload={},
+                config=config,
+            ),
             "+15550000001",
         )
         self.assertIsNone(
-            extension._signal_account_number("missing")  # pylint: disable=protected-access
+            ipc_ext.resolve_signal_account_number(
+                payload={},
+                config=build_config_namespace({"signal": {}}),
+            )
         )
 
     async def test_properties_and_process_command_dispatch(self) -> None:
@@ -531,6 +624,21 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
 
         messaging.handle_text_message.assert_not_awaited()
+
+    async def test_signal_restapi_event_returns_without_client_profile_id(
+        self,
+    ) -> None:
+        ext = _new_extension(config=_make_config(), logging_gateway=Mock())
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"tenant_id": "tenant-a"}
+        )
+        ext._handle_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._signal_restapi_event(  # pylint: disable=protected-access
+            _make_request(_receive_payload(_text_envelope(text="hello")))
+        )
+
+        ext._handle_message_event.assert_not_awaited()
 
     async def test_text_message_routes_and_registers_user(self) -> None:
         client = _make_client()

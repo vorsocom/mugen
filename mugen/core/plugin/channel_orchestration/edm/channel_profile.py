@@ -24,9 +24,9 @@ channel_profile_type = EdmType(
         "TenantId": EdmProperty("TenantId", TypeRef("Edm.Guid"), nullable=False),
         "ChannelKey": EdmProperty("ChannelKey", TypeRef("Edm.String"), nullable=False),
         "ProfileKey": EdmProperty("ProfileKey", TypeRef("Edm.String"), nullable=False),
-        "RuntimeProfileKey": EdmProperty(
-            "RuntimeProfileKey",
-            TypeRef("Edm.String"),
+        "ClientProfileId": EdmProperty(
+            "ClientProfileId",
+            TypeRef("Edm.Guid"),
         ),
         "DisplayName": EdmProperty("DisplayName", TypeRef("Edm.String")),
         "RouteDefaultKey": EdmProperty("RouteDefaultKey", TypeRef("Edm.String")),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 import unittest
+from unittest import mock
 import uuid
 
 from mugen.core.contract.service.ingress_routing import (
@@ -66,7 +67,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
     def _resolver(rows: dict[str, list[dict[str, Any]]], *, logger=None):
         return DefaultIngressRoutingService(
             relational_storage_gateway=_FakeRsg(rows),
-            logging_gateway=logger or unittest.mock.Mock(),
+            logging_gateway=logger or mock.Mock(),
         )
 
     async def test_ingress_route_context_builders_and_metadata_merging(self) -> None:
@@ -77,15 +78,20 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
             channel_key="line",
             identifier_claims={"identifier_type": "path_token", "identifier_value": "tok"},
             channel_profile_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            client_profile_id=uuid.UUID("44444444-4444-4444-4444-444444444444"),
             route_key="queue.line",
             binding_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
-            runtime_profile_key="default",
+            client_profile_key="default",
         )
 
         context = build_ingress_route_context(result)
         self.assertEqual(context["tenant_slug"], "tenant-a")
         self.assertEqual(context["route_key"], "queue.line")
-        self.assertEqual(context["runtime_profile_key"], "default")
+        self.assertEqual(
+            context["client_profile_id"],
+            "44444444-4444-4444-4444-444444444444",
+        )
+        self.assertEqual(context["client_profile_key"], "default")
 
         item = build_ingress_route_message_context_item(result)
         self.assertEqual(item["type"], "ingress_route")
@@ -121,7 +127,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
         fake_rsg = _FakeRsg({"admin_tenant_membership": []})
         resolver = DefaultIngressRoutingService(
             relational_storage_gateway=fake_rsg,
-            logging_gateway=unittest.mock.Mock(),
+            logging_gateway=mock.Mock(),
         )
         allowed = await resolver._has_active_membership(  # pylint: disable=protected-access
             tenant_id=GLOBAL_TENANT_ID,
@@ -132,6 +138,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_success_returns_tenant_and_route(self) -> None:
         tenant_id = uuid.uuid4()
         channel_profile_id = uuid.uuid4()
+        client_profile_id = uuid.uuid4()
         binding_id = uuid.uuid4()
         rows = {
             "admin_tenant": [
@@ -155,13 +162,21 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
                     "tenant_id": tenant_id,
                     "is_active": True,
                     "route_default_key": "queue.default",
-                    "runtime_profile_key": "profile-a",
+                    "client_profile_id": client_profile_id,
+                }
+            ],
+            "admin_messaging_client_profile": [
+                {
+                    "id": client_profile_id,
+                    "tenant_id": tenant_id,
+                    "is_active": True,
+                    "profile_key": "profile-a",
                 }
             ],
         }
         resolver = DefaultIngressRoutingService(
             relational_storage_gateway=_FakeRsg(rows),
-            logging_gateway=unittest.mock.Mock(),
+            logging_gateway=mock.Mock(),
         )
 
         resolved = await resolver.resolve(
@@ -181,8 +196,9 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved.result.tenant_slug, "tenant-a")
         self.assertEqual(resolved.result.route_key, "queue.line")
         self.assertEqual(resolved.result.channel_profile_id, channel_profile_id)
+        self.assertEqual(resolved.result.client_profile_id, client_profile_id)
         self.assertEqual(resolved.result.binding_id, binding_id)
-        self.assertEqual(resolved.result.runtime_profile_key, "profile-a")
+        self.assertEqual(resolved.result.client_profile_key, "profile-a")
 
     async def test_resolve_success_uses_profile_route_key_when_binding_attrs_missing(self) -> None:
         tenant_id = uuid.uuid4()
@@ -217,7 +233,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
         )
         resolver = DefaultIngressRoutingService(
             relational_storage_gateway=fake_rsg,
-            logging_gateway=unittest.mock.Mock(),
+            logging_gateway=mock.Mock(),
         )
 
         resolved = await resolver.resolve(
@@ -238,6 +254,55 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
             tenant_id,
             {where.get("tenant_id") for where in fake_rsg.find_many_wheres},
         )
+
+    async def test_resolve_success_handles_missing_client_profile_lookup(self) -> None:
+        tenant_id = uuid.uuid4()
+        channel_profile_id = uuid.uuid4()
+        binding_id = uuid.uuid4()
+        resolver = self._resolver(
+            {
+                "admin_tenant": [
+                    {"id": tenant_id, "slug": "tenant-a", "status": "active"},
+                ],
+                "channel_orchestration_ingress_binding": [
+                    {
+                        "id": binding_id,
+                        "tenant_id": tenant_id,
+                        "channel_profile_id": channel_profile_id,
+                        "channel_key": "line",
+                        "identifier_type": "path_token",
+                        "identifier_value": "token-a",
+                        "is_active": True,
+                        "attributes": {},
+                    }
+                ],
+                "channel_orchestration_channel_profile": [
+                    {
+                        "id": channel_profile_id,
+                        "tenant_id": tenant_id,
+                        "is_active": True,
+                        "route_default_key": "queue.default",
+                        "client_profile_id": uuid.uuid4(),
+                    }
+                ],
+            }
+        )
+
+        resolved = await resolver.resolve(
+            IngressRouteRequest(
+                platform="line",
+                channel_key="line",
+                identifier_type="path_token",
+                identifier_value="token-a",
+                tenant_slug="tenant-a",
+                require_active_binding=True,
+            )
+        )
+
+        self.assertTrue(resolved.ok)
+        assert resolved.result is not None
+        self.assertIsNotNone(resolved.result.client_profile_id)
+        self.assertIsNone(resolved.result.client_profile_key)
 
     async def test_resolve_profile_lookup_missing_returns_none_route_key(self) -> None:
         tenant_id = uuid.uuid4()
@@ -288,7 +353,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
                     "channel_orchestration_ingress_binding": [],
                 }
             ),
-            logging_gateway=unittest.mock.Mock(),
+            logging_gateway=mock.Mock(),
         )
 
         resolved = await resolver.resolve(
@@ -336,7 +401,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
                     ],
                 }
             ),
-            logging_gateway=unittest.mock.Mock(),
+            logging_gateway=mock.Mock(),
         )
 
         resolved = await resolver.resolve(
@@ -432,7 +497,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
                     ],
                 }
             ),
-            logging_gateway=unittest.mock.Mock(),
+            logging_gateway=mock.Mock(),
         )
 
         resolved = await resolver.resolve(
@@ -518,7 +583,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
                     "admin_tenant_membership": [],
                 }
             ),
-            logging_gateway=unittest.mock.Mock(),
+            logging_gateway=mock.Mock(),
         )
 
         resolved = await resolver.resolve(
@@ -663,7 +728,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_defensive_missing_binding_result_and_resolution_error(self) -> None:
         resolver = self._resolver({})
-        resolver._resolve_binding = unittest.mock.AsyncMock(return_value=(None, None))  # type: ignore[attr-defined]
+        resolver._resolve_binding = mock.AsyncMock(return_value=(None, None))  # type: ignore[attr-defined]
         resolved_missing = await resolver.resolve(
             IngressRouteRequest(
                 platform="line",
@@ -680,10 +745,10 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
         )
 
         exploding_rsg = _FakeRsg({})
-        exploding_rsg.get_one = unittest.mock.AsyncMock(  # type: ignore[method-assign]
+        exploding_rsg.get_one = mock.AsyncMock(  # type: ignore[method-assign]
             side_effect=RuntimeError("boom")
         )
-        logger = unittest.mock.Mock()
+        logger = mock.Mock()
         exploding_resolver = DefaultIngressRoutingService(
             relational_storage_gateway=exploding_rsg,
             logging_gateway=logger,

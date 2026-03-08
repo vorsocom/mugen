@@ -27,8 +27,42 @@ def _make_config(verification_token: str = "token-1"):
     )
 
 
+class _ClientProfileServiceStub:
+    def __init__(
+        self,
+        *,
+        accepted_tokens: tuple[str, ...] = ("path-token", "whatsapp-path-token"),
+    ) -> None:
+        self._accepted_tokens = {token for token in accepted_tokens if token}
+
+    async def resolve_active_by_identifier(self, **kwargs):
+        identifier_value = kwargs.get("identifier_value")
+        if identifier_value not in self._accepted_tokens:
+            return None
+        return SimpleNamespace(
+            id="00000000-0000-0000-0000-000000000208",
+            tenant_id="11111111-1111-1111-1111-111111111111",
+            platform_key="whatsapp",
+            profile_key="whatsapp-a",
+            path_token=identifier_value,
+        )
+
+    async def build_runtime_config(self, *, config, client_profile):  # noqa: ARG002
+        return config
+
+
 class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
     """Covers webhook subscription and event endpoint branches."""
+
+    def setUp(self) -> None:
+        self._real_client_profile_service = webhook._client_profile_service
+        self._client_profile_patch = patch.object(
+            webhook,
+            "_client_profile_service",
+            return_value=_ClientProfileServiceStub(),
+        )
+        self._client_profile_patch.start()
+        self.addCleanup(self._client_profile_patch.stop)
 
     async def test_provider_helpers_return_from_di_container(self) -> None:
         container = SimpleNamespace(
@@ -45,6 +79,28 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(webhook._logger_provider(), "logger")
             self.assertEqual(webhook._relational_storage_gateway_provider(), "rsg")
 
+        with patch.object(
+            webhook,
+            "_client_profile_service",
+            new=self._real_client_profile_service,
+        ):
+            container = SimpleNamespace(relational_storage_gateway=None)
+            with patch.object(webhook.di, "container", new=container):
+                self.assertIsNone(webhook._client_profile_service())
+
+            with patch.object(
+                webhook,
+                "MessagingClientProfileService",
+                return_value="service",
+            ) as service_cls:
+                container = SimpleNamespace(relational_storage_gateway="rsg")
+                with patch.object(webhook.di, "container", new=container):
+                    self.assertEqual(webhook._client_profile_service(), "service")
+        service_cls.assert_called_once_with(
+            table="admin_messaging_client_profile",
+            rsg="rsg",
+        )
+
     async def test_subscription_validation_paths(self) -> None:
         endpoint = unwrap(webhook.whatsapp_wacapi_subscription)
         logger = Mock()
@@ -55,6 +111,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await endpoint(
+                    path_token="path-token",
                     config_provider=lambda: _make_config(),
                     logger_provider=lambda: logger,
                 )
@@ -72,6 +129,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await endpoint(
+                    path_token="path-token",
                     config_provider=lambda: _make_config(),
                     logger_provider=lambda: logger,
                 )
@@ -79,6 +137,58 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             logger.error.assert_called_once_with(
                 "hub.verify_token not supplied or is empty."
             )
+
+        logger = Mock()
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(
+                    args={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "expected",
+                        "hub.challenge": "1234",
+                    }
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    path_token="path-token",
+                    config_provider=lambda: _make_config(verification_token="expected"),
+                    logger_provider=lambda: logger,
+                    client_profile_service_provider=lambda: None,
+                )
+            self.assertEqual(ex.exception.code, 500)
+            logger.error.assert_called_once_with("Could not get verification token.")
+
+        logger = Mock()
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(
+                    args={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "expected",
+                        "hub.challenge": "1234",
+                    }
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    path_token="missing-path-token",
+                    config_provider=lambda: _make_config(verification_token="expected"),
+                    logger_provider=lambda: logger,
+                    client_profile_service_provider=lambda: _ClientProfileServiceStub(
+                        accepted_tokens=("path-token",)
+                    ),
+                )
+            self.assertEqual(ex.exception.code, 401)
+            logger.error.assert_called_once_with("Incorrect verification token.")
 
         logger = Mock()
         with (
@@ -97,6 +207,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await endpoint(
+                    path_token="path-token",
                     config_provider=lambda: _make_config(verification_token="expected"),
                     logger_provider=lambda: logger,
                 )
@@ -120,6 +231,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await endpoint(
+                    path_token="path-token",
                     config_provider=lambda: SimpleNamespace(whatsapp=SimpleNamespace()),
                     logger_provider=lambda: logger,
                 )
@@ -142,6 +254,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await endpoint(
+                    path_token="path-token",
                     config_provider=lambda: _make_config(verification_token="expected"),
                     logger_provider=lambda: logger,
                 )
@@ -164,6 +277,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             response = await endpoint(
+                path_token="path-token",
                 config_provider=lambda: _make_config(verification_token="expected"),
                 logger_provider=lambda: Mock(),
             )
@@ -184,6 +298,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await endpoint(
+                    path_token="path-token",
                     ipc_provider=lambda: ipc_service,
                     logger_provider=lambda: logger,
                 )
@@ -211,6 +326,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
         ):
             response = await endpoint(
+                path_token="path-token",
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: Mock(),
             )
@@ -220,7 +336,13 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
         request_payload = ipc_service.handle_ipc_request.await_args.args[0]
         self.assertEqual(request_payload.platform, "whatsapp")
         self.assertEqual(request_payload.command, "whatsapp_wacapi_event")
-        self.assertEqual(request_payload.data, {"entry": []})
+        self.assertEqual(
+            request_payload.data,
+            {
+                "path_token": "path-token",
+                "payload": {"entry": []},
+            },
+        )
 
     async def test_event_returns_ok_and_logs_when_ipc_has_errors(self) -> None:
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
@@ -250,6 +372,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
         ):
             response = await endpoint(
+                path_token="path-token",
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
             )
@@ -275,6 +398,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             ) as extractor,
         ):
             response = await endpoint(
+                path_token="path-token",
                 ingress_provider=lambda: ingress_service,
                 relational_storage_gateway_provider=lambda: "rsg",
                 logger_provider=lambda: logger,
@@ -303,6 +427,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await endpoint(
+                    path_token="path-token",
                     ingress_provider=lambda: SimpleNamespace(stage=AsyncMock()),
                     relational_storage_gateway_provider=lambda: "rsg",
                     logger_provider=lambda: logger,

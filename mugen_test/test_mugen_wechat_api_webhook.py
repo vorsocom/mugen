@@ -54,8 +54,43 @@ def _make_multi_profile_config(*, aes_enabled: bool = False) -> SimpleNamespace:
     )
 
 
+class _ClientProfileServiceStub:
+    def __init__(
+        self,
+        *,
+        accepted_tokens: tuple[str, ...] = ("path-token", "path-token-1"),
+    ) -> None:
+        self._accepted_tokens = {token for token in accepted_tokens if token}
+
+    async def resolve_active_by_identifier(self, **kwargs):
+        identifier_value = kwargs.get("identifier_value")
+        if identifier_value not in self._accepted_tokens:
+            return None
+        return SimpleNamespace(
+            id="00000000-0000-0000-0000-000000000207",
+            tenant_id="11111111-1111-1111-1111-111111111111",
+            platform_key="wechat",
+            profile_key="wechat-a",
+            path_token=identifier_value,
+            provider="official_account",
+        )
+
+    async def build_runtime_config(self, *, config, client_profile):  # noqa: ARG002
+        return config
+
+
 class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
     """Covers webhook helper, verification, and endpoint dispatch branches."""
+
+    def setUp(self) -> None:
+        self._real_client_profile_service = webhook._client_profile_service
+        self._client_profile_patch = patch.object(
+            webhook,
+            "_client_profile_service",
+            return_value=_ClientProfileServiceStub(),
+        )
+        self._client_profile_patch.start()
+        self.addCleanup(self._client_profile_patch.stop)
 
     async def test_provider_helpers_return_from_di_container(self) -> None:
         container = SimpleNamespace(
@@ -71,6 +106,28 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(webhook._ipc_provider(), "ipc")
             self.assertEqual(webhook._logger_provider(), "logger")
             self.assertEqual(webhook._relational_storage_gateway_provider(), "rsg")
+
+        with patch.object(
+            webhook,
+            "_client_profile_service",
+            new=self._real_client_profile_service,
+        ):
+            container = SimpleNamespace(relational_storage_gateway=None)
+            with patch.object(webhook.di, "container", new=container):
+                self.assertIsNone(webhook._client_profile_service())
+
+            with patch.object(
+                webhook,
+                "MessagingClientProfileService",
+                return_value="service",
+            ) as service_cls:
+                container = SimpleNamespace(relational_storage_gateway="rsg")
+                with patch.object(webhook.di, "container", new=container):
+                    self.assertEqual(webhook._client_profile_service(), "service")
+        service_cls.assert_called_once_with(
+            table="admin_messaging_client_profile",
+            rsg="rsg",
+        )
 
     async def test_signature_and_xml_helpers(self) -> None:
         signature = webhook._compute_signature(  # pylint: disable=protected-access
@@ -93,38 +150,47 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(xml_payload["MsgType"], "text")
         self.assertEqual(webhook._coerce_text(None), "")  # pylint: disable=protected-access
 
-    async def test_wechat_profile_config_supports_legacy_fallback_and_error_paths(
+    async def test_wechat_profile_config_resolves_via_client_profile_service_and_errors(
         self,
     ) -> None:
-        legacy_config = _make_config(aes_enabled=False)
-        profile = webhook._wechat_profile_config(  # pylint: disable=protected-access
-            legacy_config,
-            path_token=None,
+        config = _make_config(aes_enabled=False)
+        profile = await webhook._wechat_profile_config(  # pylint: disable=protected-access
+            config,
+            path_token="path-token-1",
+            client_profile_service=_ClientProfileServiceStub(),
         )
-        self.assertIs(profile, legacy_config.wechat)
+        self.assertIs(profile, config.wechat)
 
         with self.assertRaises(RuntimeError):
-            webhook._wechat_profile_config(  # pylint: disable=protected-access
+            await webhook._wechat_profile_config(  # pylint: disable=protected-access
                 SimpleNamespace(),
                 path_token=None,
+                client_profile_service=_ClientProfileServiceStub(),
+            )
+
+        with self.assertRaises(RuntimeError):
+            await webhook._wechat_profile_config(  # pylint: disable=protected-access
+                config,
+                path_token="missing-token",
+                client_profile_service=_ClientProfileServiceStub(),
             )
 
         with patch.object(
             webhook,
-            "identifier_configured_for_platform",
-            side_effect=RuntimeError("bad config"),
+            "_client_profile_service",
+            new=self._real_client_profile_service,
         ):
-            with self.assertRaises(RuntimeError):
-                webhook._wechat_profile_config(  # pylint: disable=protected-access
-                    _make_multi_profile_config(),
-                    path_token="path-token-1",
-                )
-
-        with self.assertRaises(RuntimeError):
-            webhook._wechat_profile_config(  # pylint: disable=protected-access
-                _make_multi_profile_config(),
-                path_token="missing-token",
-            )
+            with patch.object(
+                webhook.di,
+                "container",
+                new=SimpleNamespace(relational_storage_gateway=None),
+            ):
+                with self.assertRaises(RuntimeError):
+                    await webhook._wechat_profile_config(  # pylint: disable=protected-access
+                        config,
+                        path_token="path-token-1",
+                        client_profile_service=None,
+                    )
 
     async def test_required_query_arg_missing_aborts(self) -> None:
         with (
@@ -235,6 +301,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             response = await webhook._handle_get_verification(  # pylint: disable=protected-access
+                path_token="path-token-1",
                 config_provider=lambda: config,
                 logger_provider=lambda: logger,
             )
@@ -264,6 +331,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             response = await webhook._handle_get_verification(  # pylint: disable=protected-access
+                path_token="path-token-1",
                 config_provider=lambda: config_aes,
                 logger_provider=lambda: logger,
             )
@@ -289,6 +357,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await webhook._handle_get_verification(  # pylint: disable=protected-access
+                    path_token="path-token-1",
                     config_provider=lambda: config,
                     logger_provider=lambda: logger,
                 )
@@ -320,6 +389,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await webhook._handle_get_verification(  # pylint: disable=protected-access
+                    path_token="path-token-1",
                     config_provider=lambda: config_aes,
                     logger_provider=lambda: logger,
                 )
@@ -342,6 +412,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await webhook._handle_get_verification(  # pylint: disable=protected-access
+                    path_token="path-token-1",
                     config_provider=lambda: SimpleNamespace(),
                     logger_provider=lambda: logger,
                 )
@@ -367,6 +438,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await webhook._handle_get_verification(  # pylint: disable=protected-access
+                    path_token="path-token-1",
                     config_provider=lambda: config_aes,
                     logger_provider=lambda: logger,
                 )
@@ -389,6 +461,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await webhook._handle_get_verification(  # pylint: disable=protected-access
+                    path_token="path-token-1",
                     config_provider=lambda: config_aes,
                     logger_provider=lambda: logger,
                 )
@@ -414,6 +487,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             response = await webhook._handle_get_verification(  # pylint: disable=protected-access
+                path_token="path-token-1",
                 config_provider=lambda: config_plain,
                 logger_provider=lambda: logger,
             )
@@ -435,6 +509,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await webhook._handle_get_verification(  # pylint: disable=protected-access
+                    path_token="path-token-1",
                     config_provider=lambda: config_plain,
                     logger_provider=lambda: logger,
                 )
@@ -468,6 +543,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
             payload = await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                 config=config,
                 logger=logger,
+                path_token="path-token-1",
             )
         self.assertEqual(payload["MsgType"], "text")
         self.assertIn("_received_at", payload)
@@ -498,6 +574,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
             payload = await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                 config=config_aes,
                 logger=logger,
+                path_token="path-token-1",
             )
         self.assertEqual(payload["FromUserName"], "user-1")
 
@@ -520,6 +597,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                     config=config,
                     logger=logger,
+                    path_token="path-token-1",
                 )
             self.assertEqual(ex.exception.code, 400)
 
@@ -544,6 +622,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                     config=config_aes,
                     logger=logger,
+                    path_token="path-token-1",
                 )
             self.assertEqual(ex.exception.code, 400)
 
@@ -566,6 +645,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                     config=config_aes,
                     logger=logger,
+                    path_token="path-token-1",
                 )
             self.assertEqual(ex.exception.code, 401)
 
@@ -591,6 +671,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                     config=config_aes,
                     logger=logger,
+                    path_token="path-token-1",
                 )
             self.assertEqual(ex.exception.code, 400)
 
@@ -611,6 +692,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                     config=config_aes,
                     logger=logger,
+                    path_token="path-token-1",
                 )
             self.assertEqual(ex.exception.code, 400)
 
@@ -631,6 +713,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                     config=config_plain,
                     logger=logger,
+                    path_token="path-token-1",
                 )
             self.assertEqual(ex.exception.code, 401)
 
@@ -650,6 +733,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                     config=config_aes,
                     logger=logger,
+                    path_token="path-token-1",
                 )
             self.assertEqual(ex.exception.code, 400)
 
@@ -668,6 +752,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
                     config=config_plain,
                     logger=logger,
+                    path_token="path-token-1",
                 )
             self.assertEqual(ex.exception.code, 400)
 
@@ -715,7 +800,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(_AbortCalled) as ex:
                 await webhook._resolve_inbound_payload_or_abort(  # pylint: disable=protected-access
-                    config=_make_multi_profile_config(aes_enabled=True),
+                    config=_make_config(aes_enabled=True),
                     logger=logger,
                     path_token="path-token-1",
                 )
@@ -765,6 +850,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 config_provider=lambda: config,
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
+                client_profile_service_provider=lambda: _ClientProfileServiceStub(),
             )
 
         self.assertEqual(response, "success")
@@ -823,6 +909,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 config_provider=lambda: config,
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
+                client_profile_service_provider=lambda: _ClientProfileServiceStub(),
             )
 
         self.assertEqual(response, "success")
@@ -918,6 +1005,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 path_token="path-token",
                 config_provider=lambda: config,
                 logger_provider=lambda: logger,
+                client_profile_service_provider=lambda: _ClientProfileServiceStub(),
             )
         self.assertEqual(official_response, "echo-1")
 
@@ -926,5 +1014,6 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 path_token="path-token",
                 config_provider=lambda: config,
                 logger_provider=lambda: logger,
+                client_profile_service_provider=lambda: _ClientProfileServiceStub(),
             )
         self.assertEqual(wecom_response, "echo-1")

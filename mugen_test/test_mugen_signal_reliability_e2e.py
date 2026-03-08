@@ -15,6 +15,8 @@ from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.signal.restapi.ipc_ext import SignalRestAPIIPCExtension
 from mugen.core.service.ipc import DefaultIPCService
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000205")
+
 
 class _MemoryRelational:
     def __init__(self) -> None:
@@ -91,6 +93,8 @@ class _IngressRoutingStub:
                 tenant_slug="tenant-a",
                 platform="signal",
                 channel_key="signal",
+                client_profile_id=_CLIENT_PROFILE_ID,
+                client_profile_key="signal-a",
                 identifier_claims={
                     "identifier_type": "account_number",
                     "identifier_value": str(identifier_value),
@@ -205,7 +209,8 @@ class TestMugenSignalReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
-                        "runtime_profile_key": None,
+                        "client_profile_id": str(_CLIENT_PROFILE_ID),
+                        "client_profile_key": "signal-a",
                         "tenant_resolution": {
                             "mode": "resolved",
                             "reason_code": None,

@@ -129,9 +129,13 @@ from mugen.core.utility.platforms import (
     normalize_platforms,
     unknown_platforms,
 )
-from mugen.core.utility.platform_runtime_profile import (
-    DEFAULT_RUNTIME_PROFILE_KEY,
-    get_platform_profile_section,
+from mugen.core.utility.client_profile_runtime import normalize_client_profile_id
+from mugen.core.utility.signal_ingress import (
+    resolve_signal_account_number,
+    signal_envelope,
+    signal_event_id,
+    signal_event_type,
+    signal_sender,
 )
 
 _WHATSAPP_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
@@ -246,77 +250,38 @@ def _json_hash(payload: object) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _signal_envelope(payload: dict[str, object]) -> dict[str, object] | None:
-    params = payload.get("params")
-    if not isinstance(params, dict):
-        return None
-    envelope = params.get("envelope")
-    return envelope if isinstance(envelope, dict) else None
-
-
-def _signal_sender(envelope: dict[str, object]) -> str | None:
-    for key in ("sourceNumber", "sourceUuid", "source"):
-        sender = _nonempty_text(envelope.get(key))
-        if sender is not None:
-            return sender
-    return None
-
-
-def _signal_event_id(envelope: dict[str, object]) -> str | None:
-    timestamp = envelope.get("timestamp")
-    if isinstance(timestamp, bool):
-        return None
-    if not isinstance(timestamp, (int, float)):
-        return None
-    source = _signal_sender(envelope)
-    if source is not None:
-        return f"{source}:{int(timestamp)}"
-    return str(int(timestamp))
-
-
-def _signal_event_type(envelope: dict[str, object]) -> str:
-    data_message = envelope.get("dataMessage")
-    receipt_message = envelope.get("receiptMessage")
-    typing_message = envelope.get("typingMessage")
-    if isinstance(data_message, dict):
-        if isinstance(data_message.get("reaction"), dict):
-            return "reaction"
-        return "message"
-    if isinstance(receipt_message, dict):
-        return "receipt"
-    if isinstance(typing_message, dict):
-        return "typing"
-    return "event"
-
-
 def _extract_signal_stage_entries(
     *,
     config: SimpleNamespace,
     payload: dict[str, object],
 ) -> list[MessagingIngressStageEntry]:
-    envelope = _signal_envelope(payload)
+    envelope = signal_envelope(payload)
     if envelope is None:
         return []
-    runtime_profile_key = (
-        _nonempty_text(payload.get("runtime_profile_key"))
-        or DEFAULT_RUNTIME_PROFILE_KEY
+    client_profile_id = normalize_client_profile_id(payload.get("client_profile_id"))
+    if client_profile_id is None:
+        provider_context = payload.get("provider_context")
+        if isinstance(provider_context, dict):
+            client_profile_id = normalize_client_profile_id(
+                provider_context.get("client_profile_id")
+            )
+    if client_profile_id is None:
+        return []
+    account_number = resolve_signal_account_number(
+        payload=payload,
+        config=config,
     )
-    signal_cfg = get_platform_profile_section(
-        config,
-        platform="signal",
-        runtime_profile_key=runtime_profile_key,
-    )
-    account_number = _nonempty_text(getattr(signal_cfg, "account", None))
-    event_type = _signal_event_type(envelope)
-    event_id = _signal_event_id(envelope)
-    sender = _signal_sender(envelope)
+    event_type = signal_event_type(envelope)
+    event_id = signal_event_id(envelope)
+    sender = signal_sender(envelope)
+    client_profile_key = _nonempty_text(payload.get("client_profile_key"))
     return [
         MessagingIngressStageEntry(
             ipc_command="signal_ingress_event",
             event=MessagingIngressEvent(
                 version=1,
                 platform="signal",
-                runtime_profile_key=runtime_profile_key,
+                client_profile_id=client_profile_id,
                 source_mode="receive_loop",
                 event_type=event_type,
                 event_id=event_id,
@@ -331,7 +296,8 @@ def _extract_signal_stage_entries(
                 sender=sender,
                 payload=dict(payload),
                 provider_context={
-                    "runtime_profile_key": runtime_profile_key,
+                    "client_profile_id": str(client_profile_id),
+                    "client_profile_key": client_profile_key,
                     "account_number": account_number,
                 },
             ),

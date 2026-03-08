@@ -8,6 +8,7 @@ __all__ = [
     "global_role_type",
     "global_role_membership_type",
     "key_ref_type",
+    "messaging_client_profile_type",
     "permission_entry_type",
     "permission_object_type",
     "permission_type_type",
@@ -35,6 +36,9 @@ from mugen.core.plugin.acp.edm.global_role_membership import (
     global_role_membership_type,
 )
 from mugen.core.plugin.acp.edm.key_ref import key_ref_type
+from mugen.core.plugin.acp.edm.messaging_client_profile import (
+    messaging_client_profile_type,
+)
 from mugen.core.plugin.acp.edm.permission_entry import permission_entry_type
 from mugen.core.plugin.acp.edm.permission_object import permission_object_type
 from mugen.core.plugin.acp.edm.permission_type import permission_type_type

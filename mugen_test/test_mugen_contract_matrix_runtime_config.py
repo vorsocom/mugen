@@ -70,35 +70,10 @@ class TestMatrixRuntimeConfigContract(unittest.TestCase):
         ]
         validate_matrix_enabled_runtime_config(cfg)
 
-    def test_accepts_profiles_and_rejects_duplicate_client_users(self) -> None:
+    def test_ignores_legacy_profiles_blocks(self) -> None:
         cfg = _valid_config()
-        cfg["matrix"]["profiles"] = [
-            {
-                "key": "default",
-                "homeserver": "https://matrix-a.example.com",
-                "client": {
-                    "user": "@assistant-a:example.com",
-                    "password": "pw-a",
-                },
-            },
-            {
-                "key": "secondary",
-                "homeserver": "https://matrix-b.example.com",
-                "client": {
-                    "user": "@assistant-b:example.com",
-                    "password": "pw-b",
-                },
-            },
-        ]
+        cfg["matrix"]["profiles"] = []
         validate_matrix_enabled_runtime_config(cfg)
-
-        cfg = copy.deepcopy(cfg)
-        cfg["matrix"]["profiles"][1]["client"]["user"] = "@assistant-a:example.com"
-        with self.assertRaisesRegex(
-            RuntimeError,
-            re.escape("matrix client.user values must be unique"),
-        ):
-            validate_matrix_enabled_runtime_config(cfg)
 
     def test_rejects_invalid_shapes_and_values(self) -> None:
         cases: list[tuple[dict, str]] = []
@@ -106,22 +81,6 @@ class TestMatrixRuntimeConfigContract(unittest.TestCase):
         cfg = _valid_config()
         cfg["matrix"] = "invalid"
         cases.append((cfg, "matrix must be a table"))
-
-        cfg = _valid_config()
-        cfg["matrix"]["homeserver"] = "   "
-        cases.append((cfg, "matrix.homeserver"))
-
-        cfg = _valid_config()
-        cfg["matrix"]["client"] = "invalid"
-        cases.append((cfg, "matrix.client must be a table"))
-
-        cfg = _valid_config()
-        cfg["matrix"]["client"]["user"] = ""
-        cases.append((cfg, "matrix.client.user"))
-
-        cfg = _valid_config()
-        cfg["matrix"]["client"]["password"] = ""
-        cases.append((cfg, "matrix.client.password"))
 
         cfg = _valid_config()
         cfg["matrix"]["domains"] = "invalid"
