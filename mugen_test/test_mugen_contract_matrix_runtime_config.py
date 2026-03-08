@@ -34,13 +34,11 @@ def _valid_config() -> dict:
                 "device_trust": {
                     "mode": "strict_known",
                     "allowlist": [],
-                }
+                },
+                "credentials": {
+                    "encryption_key": "0123456789abcdef0123456789abcdef",
+                },
             },
-        },
-        "security": {
-            "secrets": {
-                "encryption_key": "0123456789abcdef0123456789abcdef",
-            }
         },
     }
 
@@ -196,30 +194,42 @@ class TestMatrixRuntimeConfigContract(unittest.TestCase):
         cases.append((cfg, "allowlist[0].device_ids[1] must be a non-empty string"))
 
         cfg = _valid_config()
-        cfg["security"] = "invalid"
+        cfg["matrix"]["security"]["credentials"] = "invalid"
         cases.append(
             (
                 cfg,
-                "security.secrets.encryption_key is required when matrix platform is enabled",
+                "matrix.security.credentials.encryption_key is required when matrix platform is enabled",
             )
         )
 
         cfg = _valid_config()
-        cfg["security"] = {"secrets": {"encryption_key": "   "}}
+        cfg["matrix"]["security"]["credentials"] = {"encryption_key": "   "}
         cases.append(
             (
                 cfg,
-                "security.secrets.encryption_key must be non-empty",
+                "matrix.security.credentials.encryption_key must be non-empty",
             )
         )
 
         cfg = _valid_config()
-        cfg["security"] = {"secrets": {"encryption_key": "short"}}
-        cases.append((cfg, "security.secrets.encryption_key must contain at least 32 characters"))
+        cfg["matrix"]["security"]["credentials"] = {"encryption_key": "short"}
+        cases.append(
+            (
+                cfg,
+                "matrix.security.credentials.encryption_key must contain at least 32 characters",
+            )
+        )
 
         cfg = _valid_config()
-        cfg["security"] = {"secrets": {"encryption_key": "<set-secret-encryption-key>"}}
-        cases.append((cfg, "security.secrets.encryption_key must not use placeholder values"))
+        cfg["matrix"]["security"]["credentials"] = {
+            "encryption_key": "<set-secret-encryption-key>"
+        }
+        cases.append(
+            (
+                cfg,
+                "matrix.security.credentials.encryption_key must not use placeholder values",
+            )
+        )
 
         for candidate, pattern in cases:
             with self.subTest(pattern=pattern):

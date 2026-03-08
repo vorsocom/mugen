@@ -164,20 +164,20 @@ def validate_matrix_enabled_runtime_config(config: Mapping[str, Any]) -> None:
             allowlist=device_trust_cfg.get("allowlist"),
         )
 
-    security_cfg = config.get("security")
-    secrets_cfg = (
-        security_cfg.get("secrets")
-        if isinstance(security_cfg, Mapping)
+    credentials_cfg = (
+        matrix_security_cfg.get("credentials")
+        if isinstance(matrix_security_cfg, Mapping)
         else None
     )
     encryption_key = (
-        secrets_cfg.get("encryption_key")
-        if isinstance(secrets_cfg, Mapping)
+        credentials_cfg.get("encryption_key")
+        if isinstance(credentials_cfg, Mapping)
         else None
     )
     if encryption_key in [None, ""]:
         raise RuntimeError(
-            "Invalid configuration: security.secrets.encryption_key is required "
+            "Invalid configuration: matrix.security.credentials.encryption_key is "
+            "required "
             "when matrix platform is enabled."
         )
     validate_matrix_secret_encryption_key(encryption_key)

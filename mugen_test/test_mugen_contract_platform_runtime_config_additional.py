@@ -67,7 +67,10 @@ def _valid_matrix_config() -> dict:
             "security": {
                 "device_trust": {
                     "mode": "strict_known",
-                }
+                },
+                "credentials": {
+                    "encryption_key": "0123456789abcdef0123456789abcdef",
+                },
             },
             "profiles": [
                 {
@@ -79,11 +82,6 @@ def _valid_matrix_config() -> dict:
                     },
                 }
             ],
-        },
-        "security": {
-            "secrets": {
-                "encryption_key": "0123456789abcdef0123456789abcdef",
-            }
         },
     }
 
