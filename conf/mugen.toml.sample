@@ -435,10 +435,8 @@ security.device_trust.mode = "strict_known"
 storage.olm.path = "/absolute/path/to/data/.olmstore"
 # Matrix homeserver, user, device, and credentials are managed through ACP
 # MessagingClientProfiles and KeyRefs.
-
-[security.secrets]
 # Required whenever Matrix platform is enabled.
-encryption_key = "<set-secret-encryption-key>"
+security.credentials.encryption_key = "<set-secret-encryption-key>"
 
 # === LINE ===
 [line]

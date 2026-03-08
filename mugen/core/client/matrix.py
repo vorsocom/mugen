@@ -204,7 +204,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if self._matrix_secrets_encryption_required() and self._secret_cipher is None:
             raise RuntimeError(
                 "Matrix secret encryption key is required when matrix platform is enabled. "
-                "Set security.secrets.encryption_key."
+                "Set matrix.security.credentials.encryption_key."
             )
 
         ## Callbacks
@@ -607,10 +607,19 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         return "matrix" in platforms
 
     def _build_secret_cipher(self) -> Fernet | None:
-        security_cfg = getattr(
-            getattr(self._config, "security", SimpleNamespace()), "secrets", None
+        raw_key = getattr(
+            getattr(
+                getattr(
+                    getattr(self._config, "matrix", SimpleNamespace()),
+                    "security",
+                    SimpleNamespace(),
+                ),
+                "credentials",
+                None,
+            ),
+            "encryption_key",
+            None,
         )
-        raw_key = getattr(security_cfg, "encryption_key", None)
         if not isinstance(raw_key, str) or raw_key.strip() == "":
             return None
         if self._matrix_secrets_encryption_required():
@@ -627,7 +636,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if cipher is None:
             raise RuntimeError(
                 f"Cannot persist {field_name}: "
-                "security.secrets.encryption_key is not configured."
+                "matrix.security.credentials.encryption_key is not configured."
             )
         if not isinstance(value, str):
             raise RuntimeError(f"Expected string value for {field_name}.")
@@ -644,13 +653,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             raise RuntimeError(
                 f"Persisted value for {field_name} must be encrypted. "
                 "Clear stored matrix credentials and restart with "
-                "security.secrets.encryption_key configured."
+                "matrix.security.credentials.encryption_key configured."
             )
         cipher = getattr(self, "_secret_cipher", None)
         if cipher is None:
             raise RuntimeError(
                 f"Encrypted persisted value for {field_name} cannot be decrypted: "
-                "security.secrets.encryption_key is not configured. "
+                "matrix.security.credentials.encryption_key is not configured. "
                 "Configure the matching key or clear stored matrix credentials."
             )
 
@@ -660,7 +669,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         except InvalidToken as exc:
             raise RuntimeError(
                 f"Encrypted persisted value for {field_name} could not be decrypted "
-                "with the configured security.secrets.encryption_key. "
+                "with the configured matrix.security.credentials.encryption_key. "
                 "Use the original key or clear stored matrix credentials."
             ) from exc
         return decoded.decode("utf-8")

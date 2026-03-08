@@ -93,6 +93,6 @@ def validate_matrix_secret_encryption_key(
     """Validate Matrix secret-encryption key quality for safe deployments."""
     return _validate_secret_value(
         value,
-        path="security.secrets.encryption_key",
+        path="matrix.security.credentials.encryption_key",
         min_length=min_length,
     )

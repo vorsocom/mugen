@@ -90,7 +90,10 @@ def _valid_core_config() -> dict:
                 "device_trust": {
                     "mode": "strict_known",
                     "allowlist": [],
-                }
+                },
+                "credentials": {
+                    "encryption_key": "0123456789abcdef0123456789abcdef",
+                },
             },
         },
         "telegram": {
@@ -174,11 +177,6 @@ def _valid_core_config() -> dict:
                 "verification_token": "verification-token",
                 "dedupe_ttl_seconds": 86400,
             },
-        },
-        "security": {
-            "secrets": {
-                "encryption_key": "0123456789abcdef0123456789abcdef",
-            }
         },
         "line": {
             "channel": {
@@ -475,21 +473,41 @@ class TestDISchemaValidationBranches(unittest.TestCase):
     def test_core_schema_requires_matrix_encryption_key_when_matrix_enabled(
         self,
     ) -> None:
-        for mutate in (
-            lambda cfg: cfg.update({"security": "invalid-shape"}),
-            lambda cfg: cfg.update({"security": {}}),
-            lambda cfg: cfg.update({"security": {"secrets": {}}}),
-            lambda cfg: cfg.update(
-                {"security": {"secrets": {"encryption_key": "   "}}}
+        for mutate, pattern in (
+            (
+                lambda cfg: cfg["matrix"].update({"security": "invalid-shape"}),
+                "matrix.security",
+            ),
+            (
+                lambda cfg: cfg["matrix"].update({"security": {}}),
+                "matrix.security.device_trust",
+            ),
+            (
+                lambda cfg: cfg["matrix"]["security"].update({"credentials": {}}),
+                "matrix.security.credentials.encryption_key",
+            ),
+            (
+                lambda cfg: cfg.update(
+                    {
+                        "matrix": {
+                            **cfg["matrix"],
+                            "security": {
+                                **cfg["matrix"]["security"],
+                                "credentials": {"encryption_key": "   "},
+                            },
+                        }
+                    }
+                ),
+                "matrix.security.credentials.encryption_key",
             ),
         ):
             cfg = _valid_core_config()
             cfg["mugen"]["platforms"] = ["matrix"]
             mutate(cfg)
-            with self.subTest(security=cfg.get("security")):
+            with self.subTest(security=cfg.get("matrix", {}).get("security")):
                 with self.assertRaisesRegex(
                     RuntimeError,
-                    "security.secrets.encryption_key",
+                    pattern,
                 ):
                     di._validate_core_module_schema(cfg)
 
