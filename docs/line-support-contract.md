@@ -13,8 +13,19 @@ This document defines the v1 LINE Messaging API platform contract in muGen.
 - Chat scope: user 1:1 events only (`source.type == "user"`).
 - Supported inbound event families:
   - Direct AI routing: `message`, `postback`
-  - Hook-only lifecycle: `follow`, `unfollow`, `accountLink`, `beacon`
+- Hook-only lifecycle: `follow`, `unfollow`, `accountLink`, `beacon`
 - Group and room events are ignored in v1.
+
+## Shared Ingress Foundation
+
+LINE transport ingress uses the shared durable ingress service described in
+[Messaging Ingress Contract](./messaging-ingress-contract.md).
+
+That means:
+
+- webhook verification still happens at the HTTP edge;
+- accepted events are durably staged before business processing;
+- webhook success acknowledges committed staging, not completed handler work.
 
 ## Strict Startup Contract
 
@@ -58,10 +69,23 @@ Any verification failure is rejected before IPC dispatch.
 
 ## Reliability Contract
 
-- Durable dedupe table: `line_messagingapi_event_dedup`.
-- Durable dead-letter table: `line_messagingapi_event_dead_letter`.
-- Duplicate webhook events are ignored after first successful dedupe insert.
-- Malformed payloads and unhandled processing failures are written to dead-letter persistence.
+- Each accepted LINE event becomes one canonical ingress row with:
+  - `platform="line"`
+  - `source_mode="webhook"`
+  - `identifier_type="path_token"`
+  - `ipc_command="line_ingress_event"`
+- Shared reliability tables are:
+  - `messaging_ingress_event`
+  - `messaging_ingress_dedup`
+  - `messaging_ingress_dead_letter`
+- HTTP success is returned only after the staging transaction commits.
+- Duplicate deliveries are absorbed by shared dedupe on
+  `platform + runtime_profile_key + dedupe_key`.
+- IPC/handler failures are retried by the shared worker and dead-lettered after
+  the shared attempt budget.
+- Older LINE-specific reliability tables and the raw
+  `line_messagingapi_event` ingress command are not part of the current runtime
+  contract.
 
 ## Outbound Response Contract
 

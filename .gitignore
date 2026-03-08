@@ -188,7 +188,7 @@ data/*.db
 data/*.sqlite
 data/*.sqlite3
 data/web_media/
-data/.olmstore/@*
+data/.olmstore/*
 
 _dev*
 .tmp/

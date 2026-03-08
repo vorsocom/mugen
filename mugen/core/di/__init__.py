@@ -62,6 +62,7 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
+from mugen.core.contract.service.ingress import IMessagingIngressService
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.nlp import INLPService
@@ -432,7 +433,15 @@ def _validate_core_module_schema(config: dict) -> None:
         ),
         (
             "service",
-            {"context_engine", "ipc", "messaging", "nlp", "platform", "user"},
+            {
+                "context_engine",
+                "ingress",
+                "ipc",
+                "messaging",
+                "nlp",
+                "platform",
+                "user",
+            },
         ),
     ):
         section = core_cfg.get(section_name)
@@ -788,6 +797,19 @@ _PROVIDER_SPECS = {
             ("logging_gateway", "logging_gateway"),
         ),
     ),
+    "ingress_service": _ProviderSpec(
+        provider_name="ingress_service",
+        injector_attr="ingress_service",
+        interface=IMessagingIngressService,
+        module_path=("mugen", "modules", "core", "service", "ingress"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+            ("relational_runtime", "relational_runtime"),
+            ("ipc_service", "ipc_service"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+    ),
     "keyval_storage_gateway": _ProviderSpec(
         provider_name="keyval_storage_gateway",
         injector_attr="keyval_storage_gateway",
@@ -909,6 +931,7 @@ _PROVIDER_SPECS = {
         constructor_bindings=(
             ("config", "config"),
             ("ipc_service", "ipc_service"),
+            ("ingress_service", "ingress_service"),
             ("keyval_storage_gateway", "keyval_storage_gateway"),
             ("relational_storage_gateway", "relational_storage_gateway"),
             ("logging_gateway", "logging_gateway"),
@@ -1029,6 +1052,7 @@ _PROVIDER_BUILD_ORDER = (
     "email_gateway",
     "sms_gateway",
     "ipc_service",
+    "ingress_service",
     "keyval_storage_gateway",
     "media_storage_gateway",
     "relational_storage_gateway",
@@ -1058,6 +1082,10 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
     settings = parse_runtime_bootstrap_settings(config)
     active_platforms = list(settings.active_platforms)
     web_active = "web" in active_platforms
+    external_messaging_active = any(
+        platform in {"line", "matrix", "signal", "telegram", "wechat", "whatsapp"}
+        for platform in active_platforms
+    )
 
     readiness_provider_names: list[str] = [
         "completion_gateway",
@@ -1088,6 +1116,9 @@ def _resolve_readiness_provider_names(config: dict) -> list[str]:
     relational_required = relational_configured is True or web_active
     if relational_required:
         readiness_provider_names.append("relational_storage_gateway")
+
+    if external_messaging_active:
+        readiness_provider_names.append("ingress_service")
 
     if web_active:
         readiness_provider_names.append("web_runtime_store")

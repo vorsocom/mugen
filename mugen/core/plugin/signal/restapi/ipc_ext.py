@@ -112,6 +112,7 @@ class SignalRestAPIIPCExtension(IIPCExtension):
     @property
     def ipc_commands(self) -> list[str]:
         return [
+            "signal_ingress_event",
             "signal_restapi_event",
         ]
 
@@ -803,9 +804,54 @@ class SignalRestAPIIPCExtension(IIPCExtension):
 
         self._increment_metric("signal.ipc.event.processed_ok")
 
+    async def _signal_ingress_event(self, request: IPCCommandRequest) -> None:
+        payload = request.data if isinstance(request.data, dict) else {}
+        envelope = self._extract_envelope(payload.get("payload")) if isinstance(payload.get("payload"), dict) else None
+        if envelope is None:
+            raise TypeError("Signal ingress payload.event must include params.envelope.")
+
+        provider_context = payload.get("provider_context")
+        provider_context = provider_context if isinstance(provider_context, dict) else {}
+        runtime_profile_key = self._coerce_nonempty_string(
+            payload.get("runtime_profile_key")
+        ) or self._coerce_nonempty_string(provider_context.get("runtime_profile_key"))
+        account_number = self._coerce_nonempty_string(
+            provider_context.get("account_number")
+        ) or self._signal_account_number(runtime_profile_key)
+        ingress_route = None
+        if account_number is not None:
+            ingress_route = await self._resolve_ingress_route(
+                account_number=account_number,
+                webhook_payload=payload,
+            )
+        if ingress_route is None and isinstance(provider_context.get("ingress_route"), dict):
+            ingress_route = provider_context.get("ingress_route")
+
+        event_type = str(payload.get("event_type") or self._classify_event_type(envelope))
+        runtime_profile_key = (
+            runtime_profile_key
+            or runtime_profile_key_from_ingress_route(ingress_route)
+        )
+        with runtime_profile_scope(runtime_profile_key):
+            if event_type in {"message", "reaction"}:
+                await self._handle_message_event(
+                    envelope,
+                    ingress_route,
+                )
+            elif event_type == "receipt":
+                self._logging_gateway.debug("Signal receipt event observed.")
+            else:
+                self._logging_gateway.debug("Signal event ignored (unsupported type).")
+
     async def process_ipc_command(self, request: IPCCommandRequest) -> IPCHandlerResult:
         handler_name = type(self).__name__
         match request.command:
+            case "signal_ingress_event":
+                await self._signal_ingress_event(request)
+                return IPCHandlerResult(
+                    handler=handler_name,
+                    response={"response": "OK"},
+                )
             case "signal_restapi_event":
                 await self._signal_restapi_event(request)
                 return IPCHandlerResult(

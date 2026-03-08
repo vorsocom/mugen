@@ -1,7 +1,7 @@
 # Working with muGen Services
 
 Status: Draft
-Last Updated: 2026-02-25
+Last Updated: 2026-03-08
 Audience: Core and downstream plugin teams
 
 ## Purpose
@@ -19,6 +19,32 @@ The following layer rules are considered hard constraints for `mugen/core`:
 - Adapter layers (clients/gateways) cannot import the API layer.
 
 These rules are enforced by architecture-boundary tests and should be preserved during service changes.
+
+## Shared Messaging Ingress Service
+
+External messaging platforms now share one durable ingress foundation instead of
+each platform owning its own inbox/dedup/dead-letter runtime.
+
+The `ingress` service is responsible for:
+
+- normalizing transport-specific payloads into one canonical ingress envelope;
+- staging inbound rows durably before business processing;
+- maintaining shared dedupe, dead-letter, and checkpoint tables;
+- leasing and dispatching queued ingress work through normalized IPC commands.
+
+This applies to:
+
+- Matrix
+- LINE
+- Signal
+- Telegram
+- WeChat
+- WhatsApp
+
+It does not apply to `web`, which keeps its existing queue/stream contract.
+
+See [Messaging Ingress Contract](./messaging-ingress-contract.md) for the
+shared envelope, table, worker, and replay semantics.
 
 ## ACP as the Control Plane
 

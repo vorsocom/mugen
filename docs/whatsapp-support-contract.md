@@ -19,6 +19,17 @@ This document defines the v1 WhatsApp Cloud API platform contract in muGen.
   - Direct AI routing: `text`, `interactive`, `button`, `audio`, `document`, `image`, `video`
   - Hook/fallback only: other message types
 
+## Shared Ingress Foundation
+
+WhatsApp transport ingress uses the shared durable ingress service described in
+[Messaging Ingress Contract](./messaging-ingress-contract.md).
+
+That means:
+
+- webhook verification still happens at the HTTP edge;
+- accepted events are staged durably before business processing;
+- webhook success acknowledges committed staging, not completed handler work.
+
 ## Strict Startup Contract
 
 When `"whatsapp"` is enabled in `mugen.platforms`, startup is fail-closed unless all requirements below are met:
@@ -77,15 +88,29 @@ Any verification failure is rejected before IPC dispatch.
 
 ## Reliability Contract
 
-- Durable dedupe table: `whatsapp_wacapi_event_dedup`.
-- Durable dead-letter table: `whatsapp_wacapi_event_dead_letter`.
-- Dedupe key is deterministic: `<event_type>:<sha256(normalized_payload)>`.
-- Duplicate `message` and `status` events are ignored after first successful dedupe insert.
-- Malformed webhook payloads and unhandled processing failures are written to dead-letter persistence.
+- Each accepted `messages[]` or `statuses[]` element becomes one canonical
+  ingress row with:
+  - `platform="whatsapp"`
+  - `source_mode="webhook"`
+  - `identifier_type="phone_number_id"`
+  - `ipc_command="whatsapp_ingress_event"`
+- Runtime profile selection is resolved from
+  `entry[].changes[].value.metadata.phone_number_id` before staging.
+- Shared reliability tables are:
+  - `messaging_ingress_event`
+  - `messaging_ingress_dedup`
+  - `messaging_ingress_dead_letter`
+- Dedupe remains deterministic through the canonical `dedupe_key`.
+- HTTP success is returned only after the staging transaction commits.
+- IPC/handler failures are retried by the shared worker and dead-lettered after
+  the shared attempt budget.
+- Older WhatsApp-specific reliability tables and the raw
+  `whatsapp_wacapi_event` ingress command are not part of the current runtime
+  contract.
 
 ## IPC Contract
 
-- Webhook dispatches `platform="whatsapp"`, `command="whatsapp_wacapi_event"`.
+- Shared ingress dispatches `platform="whatsapp"`, `command="whatsapp_ingress_event"`.
 - Runtime profile selection is resolved from
   `entry[].changes[].value.metadata.phone_number_id`.
 - `value.messages[]` are processed as message events.

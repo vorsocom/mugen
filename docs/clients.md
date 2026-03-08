@@ -1,6 +1,7 @@
 # Working with muGen Clients
 
 - [Platform Runtime Profiles](./platform-runtime-profiles.md)
+- [Messaging Ingress Contract](./messaging-ingress-contract.md)
 - [Matrix Support Contract](./matrix-support-contract.md)
 - [LINE Support Contract](./line-support-contract.md)
 - [Signal Support Contract](./signal-support-contract.md)

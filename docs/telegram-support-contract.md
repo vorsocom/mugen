@@ -17,6 +17,17 @@ This document defines the v1 Telegram platform contract in muGen.
 - Slash commands are treated as standard text input.
 - Callback queries are always acknowledged first, then routed through text handling.
 
+## Shared Ingress Foundation
+
+Telegram transport ingress uses the shared durable ingress service described in
+[Messaging Ingress Contract](./messaging-ingress-contract.md).
+
+That means:
+
+- webhook verification still happens at the HTTP edge;
+- accepted updates are staged durably before business processing;
+- webhook success acknowledges committed staging, not completed handler work.
+
 ## Strict Startup Contract
 
 When `"telegram"` is enabled in `mugen.platforms`, startup is fail-closed unless all requirements below are met:
@@ -92,10 +103,24 @@ curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/deleteWebhook"
 
 ## Reliability Contract
 
-- Durable dedupe table: `telegram_botapi_event_dedup`.
-- Durable dead-letter table: `telegram_botapi_event_dead_letter`.
-- Duplicate message/callback events are ignored after first successful dedupe insert.
-- Malformed payloads and unhandled processing failures are written to dead-letter persistence.
+- Each accepted Telegram logical update becomes one canonical ingress row with:
+  - `platform="telegram"`
+  - `source_mode="webhook"`
+  - `identifier_type="path_token"`
+  - `ipc_command="telegram_ingress_event"`
+- `message` and `callback_query` updates are staged independently when present.
+- Shared reliability tables are:
+  - `messaging_ingress_event`
+  - `messaging_ingress_dedup`
+  - `messaging_ingress_dead_letter`
+- HTTP success is returned only after the staging transaction commits.
+- Duplicate deliveries are absorbed by shared dedupe on
+  `platform + runtime_profile_key + dedupe_key`.
+- IPC/handler failures are retried by the shared worker and dead-lettered after
+  the shared attempt budget.
+- Older Telegram-specific reliability tables and the raw
+  `telegram_botapi_update` ingress command are not part of the current runtime
+  contract.
 
 ## Outbound Response Contract
 

@@ -14,11 +14,16 @@ from quart import abort, request
 from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
+from mugen.core.contract.service.ingress import IMessagingIngressService
 from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
 from mugen.core.plugin.wechat.api.decorator import (
     wechat_platform_required,
     wechat_provider_required,
     wechat_webhook_path_token_required,
+)
+from mugen.core.service.messaging_ingress_extractors import (
+    extract_wechat_stage_entries,
 )
 from mugen.core.utility.platform_runtime_profile import (
     find_platform_runtime_profile_key,
@@ -31,8 +36,16 @@ def _config_provider():
     return di.container.config
 
 
+def _ingress_provider():
+    return di.container.ingress_service
+
+
 def _ipc_provider():
     return di.container.ipc_service
+
+
+def _relational_storage_gateway_provider():
+    return di.container.relational_storage_gateway
 
 
 def _logger_provider():
@@ -342,10 +355,11 @@ async def _handle_post_event(
     command: str,
     config_provider,
     ipc_provider,
+    ingress_provider,
+    relational_storage_gateway_provider,
     logger_provider,
 ) -> str:
     config: SimpleNamespace = config_provider()
-    ipc_svc: IIPCService = ipc_provider()
     logger: ILoggingGateway = logger_provider()
 
     payload = await _resolve_inbound_payload_or_abort(
@@ -354,22 +368,45 @@ async def _handle_post_event(
         path_token=path_token,
     )
 
-    response = await ipc_svc.handle_ipc_request(
-        IPCCommandRequest(
-            platform="wechat",
-            command=command,
-            data={
-                "path_token": path_token,
-                "provider": provider,
-                "payload": payload,
-            },
+    ipc_svc: IIPCService | None = ipc_provider() if callable(ipc_provider) else None
+    if ipc_svc is not None:
+        response = await ipc_svc.handle_ipc_request(
+            IPCCommandRequest(
+                platform="wechat",
+                command=command,
+                data={
+                    "path_token": path_token,
+                    "provider": provider,
+                    "payload": payload,
+                },
+            )
         )
+        if response.errors:
+            logger.warning(
+                "WeChat webhook processed with IPC errors "
+                f"command={command} error_count={len(response.errors)}"
+            )
+        return "success"
+
+    ingress_svc: IMessagingIngressService = ingress_provider()
+    relational_storage_gateway: IRelationalStorageGateway = (
+        relational_storage_gateway_provider()
     )
-    if response.errors:
-        logger.warning(
-            "WeChat webhook processed with IPC errors "
-            f"command={command} error_count={len(response.errors)}"
+    try:
+        entries = await extract_wechat_stage_entries(
+            path_token=path_token or "",
+            provider=provider,
+            payload=payload,
+            relational_storage_gateway=relational_storage_gateway,
+            logging_gateway=logger,
         )
+        await ingress_svc.stage(entries)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.error(
+            "WeChat webhook staging failed "
+            f"error_type={type(exc).__name__} error={exc}"
+        )
+        abort(500)
     return "success"
 
 
@@ -397,7 +434,9 @@ async def wechat_official_account_subscription(
 async def wechat_official_account_event(
     path_token: str,
     config_provider=_config_provider,
-    ipc_provider=_ipc_provider,
+    ipc_provider=None,
+    ingress_provider=_ingress_provider,
+    relational_storage_gateway_provider=_relational_storage_gateway_provider,
     logger_provider=_logger_provider,
 ):
     """Official Account webhook event endpoint."""
@@ -408,6 +447,8 @@ async def wechat_official_account_event(
         command="wechat_official_account_event",
         config_provider=config_provider,
         ipc_provider=ipc_provider,
+        ingress_provider=ingress_provider,
+        relational_storage_gateway_provider=relational_storage_gateway_provider,
         logger_provider=logger_provider,
     )
 
@@ -436,7 +477,9 @@ async def wechat_wecom_subscription(
 async def wechat_wecom_event(
     path_token: str,
     config_provider=_config_provider,
-    ipc_provider=_ipc_provider,
+    ipc_provider=None,
+    ingress_provider=_ingress_provider,
+    relational_storage_gateway_provider=_relational_storage_gateway_provider,
     logger_provider=_logger_provider,
 ):
     """WeCom callback event endpoint."""
@@ -447,5 +490,7 @@ async def wechat_wecom_event(
         command="wechat_wecom_event",
         config_provider=config_provider,
         ipc_provider=ipc_provider,
+        ingress_provider=ingress_provider,
+        relational_storage_gateway_provider=relational_storage_gateway_provider,
         logger_provider=logger_provider,
     )

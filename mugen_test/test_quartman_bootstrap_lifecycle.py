@@ -1123,6 +1123,49 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
         self.assertIn("container shutdown failed", state[quartman.PHASE_B_ERROR_KEY])
 
+    async def test_shutdown_skips_runner_shutdown_when_only_registered_tasks_exist(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+        state = quartman._bootstrap_state()
+        state[quartman.PHASE_B_PLATFORM_TASKS_KEY] = {"web": asyncio.create_task(asyncio.sleep(60))}
+
+        try:
+            with (
+                unittest.mock.patch.object(
+                    quartman,
+                    "_resolve_shutdown_timeout_seconds",
+                    return_value=0.01,
+                ),
+                unittest.mock.patch.object(
+                    quartman,
+                    "cancel_registered_platform_tasks",
+                    new=unittest.mock.AsyncMock(),
+                ) as cancel_tasks,
+                unittest.mock.patch.object(
+                    quartman,
+                    "shutdown_phase_b_runner_task",
+                    new=unittest.mock.AsyncMock(),
+                ) as shutdown_runner,
+                unittest.mock.patch.object(
+                    quartman,
+                    "_shutdown_container",
+                    new=unittest.mock.AsyncMock(),
+                ),
+            ):
+                await quartman.shutdown()
+
+            cancel_tasks.assert_awaited_once()
+            shutdown_runner.assert_not_awaited()
+        finally:
+            for task in state[quartman.PHASE_B_PLATFORM_TASKS_KEY].values():
+                task.cancel()
+            await asyncio.gather(
+                *state[quartman.PHASE_B_PLATFORM_TASKS_KEY].values(),
+                return_exceptions=True,
+            )
+
     async def test_runtime_controls_return_empty_critical_list_for_non_list_platforms(
         self,
     ) -> None:

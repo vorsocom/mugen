@@ -16,6 +16,11 @@ from nio import LocalProtocolError
 from mugen.core.client import matrix as matrix_mod
 from mugen.core.client.matrix import DefaultMatrixClient
 from mugen.core.constants import GLOBAL_TENANT_ID
+from mugen.core.contract.service.ingress import (
+    MessagingIngressCheckpointUpdate,
+    MessagingIngressEvent,
+    MessagingIngressStageEntry,
+)
 from mugen.core.contract.service.ingress_routing import (
     IngressRouteReason,
     IngressRouteResolution,
@@ -3257,3 +3262,492 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             IngressRouteReason.MISSING_IDENTIFIER.value,
         )
         client._ingress_routing_service.resolve.assert_not_called()
+
+    async def test_matrix_ingress_helper_methods_build_and_queue_entries(self) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        callback_event = SimpleNamespace(
+            sender="@user:example.com",
+            content={"body": "hello"},
+            source={"unsigned": {"age": 1}},
+            event_id=" $event ",
+        )
+
+        self.assertEqual(
+            client._build_ingress_dedupe_key(  # pylint: disable=protected-access
+                "message",
+                " $event ",
+                {"body": "hello"},
+            ),
+            "message:$event",
+        )
+        self.assertTrue(
+            client._build_ingress_dedupe_key(  # pylint: disable=protected-access
+                "message",
+                None,
+                {"body": "hello"},
+            ).startswith("message:")
+        )
+
+        non_core_entry = client._build_non_core_ingress_entry(  # pylint: disable=protected-access
+            callback_name="_cb_tag_event",
+            event=callback_event,
+            room=room,
+            reason="unit-test",
+        )
+        self.assertEqual(non_core_entry.ipc_command, "matrix_ingress_event")
+        self.assertEqual(non_core_entry.event.source_mode, "sync_callback")
+        self.assertEqual(non_core_entry.event.event_type, "SimpleNamespace")
+        self.assertEqual(non_core_entry.event.event_id, "$event")
+        self.assertEqual(non_core_entry.event.room_id, "!room:test")
+        self.assertEqual(non_core_entry.event.sender, "@user:example.com")
+        self.assertEqual(
+            non_core_entry.event.provider_context,
+            {"callback": "_cb_tag_event", "reason": "unit-test"},
+        )
+
+        with patch.object(matrix_mod, "RoomMessageText", _FakeTextMessage):
+            room_entry = client._build_room_message_ingress_entry(  # pylint: disable=protected-access
+                room=room,
+                message=_FakeTextMessage(body="hello"),
+                ingress_metadata={"route": "ok"},
+            )
+        self.assertEqual(room_entry.event.source_mode, "sync_room_message")
+        self.assertEqual(room_entry.event.event_type, "RoomMessageText")
+        self.assertEqual(room_entry.event.event_id, "$event")
+        self.assertEqual(room_entry.event.room_id, "!room:test")
+        self.assertEqual(room_entry.event.sender, "@user:example.com")
+        self.assertEqual(
+            room_entry.event.provider_context,
+            {"ingress_metadata": {"route": "ok"}},
+        )
+
+        await client._queue_sync_ingress_entry(non_core_entry)  # pylint: disable=protected-access
+        self.assertEqual(
+            client._pending_sync_ingress,  # pylint: disable=protected-access
+            [non_core_entry],
+        )
+
+    async def test_matrix_message_class_and_sync_checkpoint_helpers(self) -> None:
+        client = self._client()
+
+        with (
+            patch.object(matrix_mod, "RoomEncryptedAudio", _FakeEncryptedAudio),
+            patch.object(matrix_mod, "RoomEncryptedFile", _FakeEncryptedFile),
+            patch.object(matrix_mod, "RoomEncryptedImage", _FakeEncryptedImage),
+            patch.object(matrix_mod, "RoomEncryptedVideo", _FakeEncryptedVideo),
+            patch.object(matrix_mod, "RoomMessageText", _FakeTextMessage),
+        ):
+            self.assertEqual(
+                client._matrix_message_event_class(_FakeEncryptedAudio()),  # pylint: disable=protected-access
+                "RoomEncryptedAudio",
+            )
+            self.assertEqual(
+                client._matrix_message_event_class(_FakeEncryptedFile()),  # pylint: disable=protected-access
+                "RoomEncryptedFile",
+            )
+            self.assertEqual(
+                client._matrix_message_event_class(_FakeEncryptedImage()),  # pylint: disable=protected-access
+                "RoomEncryptedImage",
+            )
+            self.assertEqual(
+                client._matrix_message_event_class(_FakeEncryptedVideo()),  # pylint: disable=protected-access
+                "RoomEncryptedVideo",
+            )
+            self.assertEqual(
+                client._matrix_message_event_class(_FakeTextMessage()),  # pylint: disable=protected-access
+                "RoomMessageText",
+            )
+
+        self.assertEqual(
+            client._matrix_message_event_class(SimpleNamespace()),  # pylint: disable=protected-access
+            "SimpleNamespace",
+        )
+
+        client._ingress_service = SimpleNamespace(
+            get_checkpoint=AsyncMock(return_value="next-token")
+        )
+        self.assertEqual(
+            await client._load_sync_checkpoint(),  # pylint: disable=protected-access
+            "next-token",
+        )
+
+        client._ingress_service = SimpleNamespace(
+            get_checkpoint=AsyncMock(return_value="  ")
+        )
+        client._keyval_storage_gateway.get_text = AsyncMock(return_value="fallback-token")
+        self.assertEqual(
+            await client._load_sync_checkpoint(),  # pylint: disable=protected-access
+            "fallback-token",
+        )
+
+        client._keyval_storage_gateway = None
+        self.assertIsNone(
+            await client._load_sync_checkpoint()  # pylint: disable=protected-access
+        )
+
+    async def test_handle_non_core_event_callback_queues_when_ingress_enabled(
+        self,
+    ) -> None:
+        client = self._client()
+        entry = MessagingIngressStageEntry(
+            ipc_command="matrix_ingress_event",
+            event=MessagingIngressEvent(
+                version=1,
+                platform="matrix",
+                runtime_profile_key="default",
+                source_mode="sync_callback",
+                event_type="TagEvent",
+                event_id="$evt",
+                dedupe_key="TagEvent:$evt",
+                identifier_type="recipient_user_id",
+                identifier_value="@assistant:example.com",
+            ),
+        )
+        client._ingress_service = object()
+        client._queue_sync_ingress_entry = AsyncMock()  # pylint: disable=protected-access
+        client._build_non_core_ingress_entry = Mock(  # pylint: disable=protected-access
+            return_value=entry
+        )
+        client._dispatch_matrix_event_hook = AsyncMock()  # pylint: disable=protected-access
+
+        await client._handle_non_core_event_callback(  # pylint: disable=protected-access
+            callback_name="_cb_tag_event",
+            event=SimpleNamespace(sender="@user:example.com"),
+            room=SimpleNamespace(room_id="!room:test"),
+            reason="unit-test",
+        )
+
+        client._queue_sync_ingress_entry.assert_awaited_once_with(entry)  # pylint: disable=protected-access
+        client._dispatch_matrix_event_hook.assert_not_awaited()  # pylint: disable=protected-access
+
+    async def test_cb_room_message_queues_ingress_entry_when_ingress_enabled(
+        self,
+    ) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        message = _FakeTextMessage(body="hello")
+        entry = MessagingIngressStageEntry(
+            ipc_command="matrix_ingress_event",
+            event=MessagingIngressEvent(
+                version=1,
+                platform="matrix",
+                runtime_profile_key="default",
+                source_mode="sync_room_message",
+                event_type="RoomMessageText",
+                event_id="$event",
+                dedupe_key="RoomMessageText:$event",
+                identifier_type="recipient_user_id",
+                identifier_value="@assistant:example.com",
+                room_id="!room:test",
+                sender="@user:example.com",
+            ),
+        )
+        client._ingress_service = object()
+        client._validate_message = AsyncMock(return_value=True)  # pylint: disable=protected-access
+        client._resolve_message_ingress = AsyncMock(  # pylint: disable=protected-access
+            return_value=(SimpleNamespace(tenant_id=str(GLOBAL_TENANT_ID)), {"route": "ok"})
+        )
+        client._build_room_message_ingress_entry = Mock(  # pylint: disable=protected-access
+            return_value=entry
+        )
+        client._queue_sync_ingress_entry = AsyncMock()  # pylint: disable=protected-access
+
+        await client._cb_room_message(room, message)  # pylint: disable=protected-access
+
+        client._queue_sync_ingress_entry.assert_awaited_once_with(entry)  # pylint: disable=protected-access
+        client._messaging_service.handle_text_message.assert_not_called()  # pylint: disable=protected-access
+
+    async def test_ingress_wrapper_methods_and_media_download_guards(self) -> None:
+        client = self._client()
+        client._emit_room_processing_signal = AsyncMock()  # pylint: disable=protected-access
+        client._process_message_responses = AsyncMock()  # pylint: disable=protected-access
+        client._download_file = AsyncMock(return_value={"path": "/tmp/file"})  # pylint: disable=protected-access
+
+        await client.emit_ingress_processing_signal("!room:test", state="start")
+        client._emit_room_processing_signal.assert_awaited_once_with(  # pylint: disable=protected-access
+            room_id="!room:test",
+            state="start",
+        )
+
+        await client.send_ingress_responses("!room:test", [{"type": "text"}])
+        client._process_message_responses.assert_awaited_once_with(  # pylint: disable=protected-access
+            room_id="!room:test",
+            message_responses=[{"type": "text"}],
+        )
+
+        self.assertIsNone(await client.download_ingress_media({}))
+        self.assertIsNone(await client.download_ingress_media({"payload": []}))
+        self.assertIsNone(await client.download_ingress_media({"payload": {"source": []}}))
+        self.assertIsNone(
+            await client.download_ingress_media({"payload": {"source": {"content": []}}})
+        )
+        self.assertIsNone(
+            await client.download_ingress_media(
+                {"payload": {"source": {"content": {"file": {}, "info": []}}}}
+            )
+        )
+
+        event = {
+            "payload": {
+                "source": {
+                    "content": {
+                        "file": {"url": "mxc://example/file"},
+                        "info": {"mimetype": "text/plain"},
+                    }
+                }
+            }
+        }
+        self.assertEqual(
+            await client.download_ingress_media(event),
+            {"path": "/tmp/file"},
+        )
+        client._download_file.assert_awaited_once_with(  # pylint: disable=protected-access
+            {"url": "mxc://example/file"},
+            {"mimetype": "text/plain"},
+        )
+
+    async def test_process_ingress_event_validates_text_flow_and_media_variants(
+        self,
+    ) -> None:
+        client = self._client()
+        client.emit_ingress_processing_signal = AsyncMock()
+        client.send_ingress_responses = AsyncMock()
+        client.download_ingress_media = AsyncMock(return_value={"path": "/tmp/media"})
+        client._cleanup_temp_file = Mock()  # pylint: disable=protected-access
+        client._messaging_service.handle_text_message = AsyncMock(
+            return_value=[{"type": "text"}]
+        )
+        client._messaging_service.handle_audio_message = AsyncMock(
+            return_value=[{"type": "audio"}]
+        )
+        client._messaging_service.handle_file_message = AsyncMock(
+            return_value=[{"type": "file"}]
+        )
+        client._messaging_service.handle_image_message = AsyncMock(
+            return_value=[{"type": "image"}]
+        )
+        client._messaging_service.handle_video_message = AsyncMock(
+            return_value=[{"type": "video"}]
+        )
+
+        resolved_ingress = SimpleNamespace(
+            scope=SimpleNamespace(tenant_id=str(GLOBAL_TENANT_ID)),
+            ingress_route={"binding": "ok"},
+            tenant_resolution={"tenant_id": str(GLOBAL_TENANT_ID)},
+        )
+
+        with self.assertRaisesRegex(TypeError, "must be a dict"):
+            await client.process_ingress_event("bad")
+
+        await client.process_ingress_event({"source_mode": "sync_callback"})
+
+        with self.assertRaisesRegex(TypeError, "payload must be a dict"):
+            await client.process_ingress_event(
+                {
+                    "source_mode": "sync_room_message",
+                    "payload": [],
+                }
+            )
+
+        with self.assertRaisesRegex(ValueError, "room_id and sender are required"):
+            await client.process_ingress_event(
+                {
+                    "source_mode": "sync_room_message",
+                    "payload": {},
+                    "room_id": None,
+                    "sender": None,
+                }
+            )
+
+        with patch.object(
+            matrix_mod,
+            "context_scope_from_ingress_route",
+            return_value=resolved_ingress,
+        ):
+            text_event = {
+                "source_mode": "sync_room_message",
+                "room_id": "!room:test",
+                "sender": "@user:example.com",
+                "payload": {
+                    "event_class": "RoomMessageText",
+                    "body": "hello",
+                },
+                "provider_context": {
+                    "ingress_metadata": {"ingress_route": {"binding": "ok"}}
+                },
+            }
+            await client.process_ingress_event(text_event)
+
+            self.assertEqual(
+                client.emit_ingress_processing_signal.await_args_list[0].args,
+                ("!room:test",),
+            )
+            self.assertEqual(
+                client.emit_ingress_processing_signal.await_args_list[0].kwargs,
+                {"state": "start"},
+            )
+            self.assertEqual(
+                client.emit_ingress_processing_signal.await_args_list[1].kwargs,
+                {"state": "stop"},
+            )
+            client._messaging_service.handle_text_message.assert_awaited_once()
+            client.send_ingress_responses.assert_awaited_once_with(
+                "!room:test",
+                [{"type": "text"}],
+            )
+
+            client.emit_ingress_processing_signal.reset_mock()
+            client.send_ingress_responses.reset_mock()
+
+            media_handlers = [
+                ("RoomEncryptedAudio", client._messaging_service.handle_audio_message, {"type": "audio"}),
+                ("RoomEncryptedFile", client._messaging_service.handle_file_message, {"type": "file"}),
+                ("RoomEncryptedImage", client._messaging_service.handle_image_message, {"type": "image"}),
+                ("RoomEncryptedVideo", client._messaging_service.handle_video_message, {"type": "video"}),
+            ]
+            for event_class, handler, expected_response in media_handlers:
+                await client.process_ingress_event(
+                    {
+                        "source_mode": "sync_room_message",
+                        "room_id": "!room:test",
+                        "sender": "@user:example.com",
+                        "payload": {"event_class": event_class},
+                        "provider_context": {
+                            "ingress_metadata": {"ingress_route": {"binding": "ok"}}
+                        },
+                    }
+                )
+                handler.assert_awaited()
+                client.send_ingress_responses.assert_awaited_with(
+                    "!room:test",
+                    [expected_response],
+                )
+
+        self.assertEqual(client._cleanup_temp_file.call_count, 4)  # pylint: disable=protected-access
+
+    async def test_process_ingress_event_branch_fallbacks_send_empty_responses(
+        self,
+    ) -> None:
+        client = self._client()
+        client.emit_ingress_processing_signal = AsyncMock()
+        client.send_ingress_responses = AsyncMock()
+        client.download_ingress_media = AsyncMock(return_value=None)
+        client._messaging_service.handle_text_message = AsyncMock(
+            return_value={"type": "text"}
+        )
+        client._messaging_service.handle_audio_message = AsyncMock(
+            return_value={"type": "audio"}
+        )
+
+        resolved_ingress = SimpleNamespace(
+            scope=SimpleNamespace(tenant_id=str(GLOBAL_TENANT_ID)),
+            ingress_route={"binding": "ok"},
+            tenant_resolution={"tenant_id": str(GLOBAL_TENANT_ID)},
+        )
+
+        with patch.object(
+            matrix_mod,
+            "context_scope_from_ingress_route",
+            return_value=resolved_ingress,
+        ):
+            await client.process_ingress_event(
+                {
+                    "source_mode": "sync_room_message",
+                    "room_id": "!room:test",
+                    "sender": "@user:example.com",
+                    "payload": {
+                        "event_class": "RoomMessageText",
+                        "body": 1,
+                    },
+                }
+            )
+            client.send_ingress_responses.assert_awaited_with("!room:test", [])
+
+            client.send_ingress_responses.reset_mock()
+            await client.process_ingress_event(
+                {
+                    "source_mode": "sync_room_message",
+                    "room_id": "!room:test",
+                    "sender": "@user:example.com",
+                    "payload": {
+                        "event_class": "RoomMessageText",
+                        "body": "hello",
+                    },
+                }
+            )
+            client.send_ingress_responses.assert_awaited_with("!room:test", [])
+
+            client.send_ingress_responses.reset_mock()
+            await client.process_ingress_event(
+                {
+                    "source_mode": "sync_room_message",
+                    "room_id": "!room:test",
+                    "sender": "@user:example.com",
+                    "payload": {
+                        "event_class": "UnknownEvent",
+                    },
+                }
+            )
+            client.send_ingress_responses.assert_awaited_with("!room:test", [])
+
+            client.send_ingress_responses.reset_mock()
+            await client.process_ingress_event(
+                {
+                    "source_mode": "sync_room_message",
+                    "room_id": "!room:test",
+                    "sender": "@user:example.com",
+                    "payload": {
+                        "event_class": "RoomEncryptedAudio",
+                    },
+                }
+            )
+            client.send_ingress_responses.assert_awaited_with("!room:test", [])
+
+            client.download_ingress_media = AsyncMock(return_value={"path": "/tmp/media"})
+            client.send_ingress_responses.reset_mock()
+            await client.process_ingress_event(
+                {
+                    "source_mode": "sync_room_message",
+                    "room_id": "!room:test",
+                    "sender": "@user:example.com",
+                    "payload": {
+                        "event_class": "RoomEncryptedAudio",
+                    },
+                }
+            )
+            client.send_ingress_responses.assert_awaited_with("!room:test", [])
+
+    async def test_cb_sync_response_stages_pending_ingress_and_checkpoint(self) -> None:
+        client = self._client()
+        client._ingress_service = SimpleNamespace(stage=AsyncMock())
+        entry = MessagingIngressStageEntry(
+            ipc_command="matrix_ingress_event",
+            event=MessagingIngressEvent(
+                version=1,
+                platform="matrix",
+                runtime_profile_key="default",
+                source_mode="sync_callback",
+                event_type="TagEvent",
+                event_id="$evt",
+                dedupe_key="TagEvent:$evt",
+                identifier_type="recipient_user_id",
+                identifier_value="@assistant:example.com",
+            ),
+        )
+        await client._queue_sync_ingress_entry(entry)  # pylint: disable=protected-access
+
+        await client._cb_sync_response(SimpleNamespace(next_batch="next-token"))  # pylint: disable=protected-access
+
+        client._ingress_service.stage.assert_awaited_once()  # type: ignore[union-attr]
+        stage_call = client._ingress_service.stage.await_args  # type: ignore[union-attr]
+        self.assertEqual(stage_call.args[0], [entry])
+        checkpoints = stage_call.kwargs["checkpoints"]
+        self.assertEqual(len(checkpoints), 1)
+        self.assertIsInstance(checkpoints[0], MessagingIngressCheckpointUpdate)
+        self.assertEqual(checkpoints[0].platform, "matrix")
+        self.assertEqual(checkpoints[0].runtime_profile_key, "default")
+        self.assertEqual(checkpoints[0].checkpoint_key, "sync_token")
+        self.assertEqual(checkpoints[0].checkpoint_value, "next-token")
+        self.assertEqual(client.sync_token, "next-token")
+        self.assertEqual(client._pending_sync_ingress, [])  # pylint: disable=protected-access

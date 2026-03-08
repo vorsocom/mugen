@@ -108,7 +108,7 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
 
     @property
     def ipc_commands(self) -> list[str]:
-        return ["line_messagingapi_event"]
+        return ["line_ingress_event", "line_messagingapi_event"]
 
     @property
     def platforms(self) -> list[str]:
@@ -980,6 +980,8 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
         self,
         event: dict,
         ingress_route: dict[str, Any] | None = None,
+        *,
+        skip_dedupe: bool = False,
     ) -> None:
         ingress_route = self._normalize_ingress_route(ingress_route)
         source = event.get("source")
@@ -1005,7 +1007,7 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
             self._logging_gateway.error("Malformed LINE event payload.")
             return
 
-        if await self._is_duplicate_event(event_type, event):
+        if skip_dedupe is not True and await self._is_duplicate_event(event_type, event):
             self._logging_gateway.debug(
                 f"Skip duplicate LINE event type={event_type}."
             )
@@ -1063,6 +1065,12 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
             f" {request.command}"
         )
         match request.command:
+            case "line_ingress_event":
+                await self._line_ingress_event(request)
+                return IPCHandlerResult(
+                    handler=handler_name,
+                    response={"response": "OK"},
+                )
             case "line_messagingapi_event":
                 await self._line_messagingapi_event(request)
                 return IPCHandlerResult(
@@ -1076,6 +1084,34 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
                     code="not_found",
                     error="Unsupported IPC command.",
                 )
+
+    async def _line_ingress_event(self, request: IPCCommandRequest) -> None:
+        payload = request.data if isinstance(request.data, dict) else {}
+        event = payload.get("payload")
+        if not isinstance(event, dict):
+            raise TypeError("LINE ingress payload.event must be a dict.")
+
+        provider_context = payload.get("provider_context")
+        provider_context = provider_context if isinstance(provider_context, dict) else {}
+        ingress_route = self._normalize_ingress_route(provider_context.get("ingress_route"))
+        path_token = self._coerce_nonempty_string(provider_context.get("path_token"))
+        if ingress_route.get("runtime_profile_key") in [None, ""] and path_token is not None:
+            resolved = await self._resolve_ingress_route(
+                path_token=path_token,
+                webhook_payload=event,
+            )
+            if resolved is not None:
+                ingress_route = resolved
+
+        runtime_profile_key = self._coerce_nonempty_string(
+            payload.get("runtime_profile_key")
+        ) or runtime_profile_key_from_ingress_route(ingress_route)
+        with runtime_profile_scope(runtime_profile_key):
+            await self._process_single_event(
+                event,
+                ingress_route=ingress_route,
+                skip_dedupe=True,
+            )
 
     async def _line_messagingapi_event(self, request: IPCCommandRequest) -> None:
         started = time.perf_counter()

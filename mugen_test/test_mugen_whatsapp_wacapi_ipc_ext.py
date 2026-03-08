@@ -238,9 +238,21 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         ext = _new_extension(config=_make_config(beta_active=False))
 
         self.assertEqual(ext.platforms, ["whatsapp"])
-        self.assertEqual(ext.ipc_commands, ["whatsapp_wacapi_event"])
+        self.assertEqual(
+            ext.ipc_commands,
+            ["whatsapp_ingress_event", "whatsapp_wacapi_event"],
+        )
 
-        with patch.object(ext, "_wacapi_event", new=AsyncMock()) as event_handler:
+        with (
+            patch.object(ext, "_whatsapp_ingress_event", new=AsyncMock()) as ingress_handler,
+            patch.object(ext, "_wacapi_event", new=AsyncMock()) as event_handler,
+        ):
+            handled_ingress = await ext.process_ipc_command(
+                _make_request(
+                    {},
+                    command="whatsapp_ingress_event",
+                )
+            )
             handled = await ext.process_ipc_command(
                 _make_request(
                     {},
@@ -254,11 +266,95 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
+        ingress_handler.assert_awaited_once()
         event_handler.assert_awaited_once()
+        self.assertEqual(handled_ingress.response, {"response": "OK"})
+        self.assertTrue(handled_ingress.ok)
         self.assertEqual(handled.response, {"response": "OK"})
         self.assertTrue(handled.ok)
         self.assertFalse(unknown.ok)
         self.assertEqual(unknown.code, "not_found")
+
+    async def test_whatsapp_ingress_event_validates_and_dispatches_message_and_status(
+        self,
+    ) -> None:
+        ext = _new_extension(config=_make_config(beta_active=False))
+
+        with self.assertRaisesRegex(TypeError, "payload.event must be a dict"):
+            await ext._whatsapp_ingress_event(  # pylint: disable=protected-access
+                _make_request({"payload": []}, command="whatsapp_ingress_event")
+            )
+
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"runtime_profile_key": "whatsapp-a", "tenant_id": "tenant-a"}
+        )
+        ext._process_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+        ext._process_status_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._whatsapp_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "runtime_profile_key": "whatsapp-a",
+                    "payload": {
+                        "event_value": {"messages": [{"id": "wamid-1"}]},
+                        "message": {"id": "wamid-1", "from": "15550001"},
+                    },
+                    "provider_context": {"phone_number_id": "phone-1", "ingress_route": {}},
+                },
+                command="whatsapp_ingress_event",
+            )
+        )
+        ext._process_message_event.assert_awaited_once()
+
+        await ext._whatsapp_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "runtime_profile_key": "whatsapp-a",
+                    "payload": {
+                        "status": {"id": "status-1", "recipient_id": "15550002"},
+                    },
+                    "provider_context": {"phone_number_id": "phone-1", "ingress_route": {}},
+                },
+                command="whatsapp_ingress_event",
+            )
+        )
+        ext._process_status_event.assert_awaited_once()
+
+        ext._process_message_event.reset_mock()
+        ext._process_status_event.reset_mock()
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value=None
+        )
+        await ext._whatsapp_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": {
+                        "event_value": {},
+                    },
+                    "provider_context": {"phone_number_id": "phone-1", "ingress_route": {}},
+                },
+                command="whatsapp_ingress_event",
+            )
+        )
+        ext._process_message_event.assert_not_awaited()
+        ext._process_status_event.assert_not_awaited()
+
+        ext._resolve_ingress_route.reset_mock()  # type: ignore[union-attr]
+        await ext._whatsapp_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": {
+                        "status": {"id": "status-2", "recipient_id": "15550003"},
+                    },
+                    "provider_context": {
+                        "phone_number_id": "phone-1",
+                        "ingress_route": {"runtime_profile_key": "whatsapp-a"},
+                    },
+                },
+                command="whatsapp_ingress_event",
+            )
+        )
+        ext._resolve_ingress_route.assert_not_awaited()  # type: ignore[union-attr]
 
     async def test_provider_helpers_return_from_di_container_and_emit_skip_branch(
         self,

@@ -72,6 +72,12 @@ from mugen.core.contract.client.matrix_types import (
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
+from mugen.core.contract.service.ingress import (
+    IMessagingIngressService,
+    MessagingIngressCheckpointUpdate,
+    MessagingIngressEvent,
+    MessagingIngressStageEntry,
+)
 from mugen.core.contract.service.ingress_routing import (
     IIngressRoutingService,
     IngressRouteReason,
@@ -89,6 +95,7 @@ from mugen.core.contract.service.user import IUserService
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.service.context_scope_resolution import (
     ContextScopeResolutionError,
+    context_scope_from_ingress_route,
     resolve_context_ingress,
 )
 from mugen.core.service.ingress_routing import DefaultIngressRoutingService
@@ -127,12 +134,14 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     _known_devices_list_key: str = "known_devices_list"
 
     _matrix_event_hook_command: str = "matrix_event"
+    _matrix_ingress_command: str = "matrix_ingress_event"
 
     _matrix_event_hook_payload_version: int = 1
 
     _default_matrix_ipc_queue_size: int = 256
 
     _sync_key: str = "matrix_client_sync_next_batch"
+    _sync_checkpoint_key: str = "sync_token"
     _encrypted_secret_prefix: str = "enc:v1:"
 
     # pylint: disable=too-many-arguments
@@ -140,6 +149,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self,
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
+        ingress_service: IMessagingIngressService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
         relational_storage_gateway: IRelationalStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
@@ -154,12 +164,15 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         )
         self.synced = getattr(self._vendor_client, "synced", asyncio.Event())
         self._ipc_service = ipc_service
+        self._ingress_service = ingress_service
         self._keyval_storage_gateway = keyval_storage_gateway
         self._relational_storage_gateway = relational_storage_gateway
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._user_service = user_service
         self._ingress_routing_service: IIngressRoutingService | None = None
+        self._pending_sync_ingress: list[MessagingIngressStageEntry] = []
+        self._pending_sync_lock = asyncio.Lock()
         self._direct_room_ids: set[str] = set()
         self._matrix_ipc_queue_size = self._resolve_matrix_ipc_queue_size()
         self._matrix_ipc_queue: asyncio.Queue | None = None
@@ -365,9 +378,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                     self.device_id = resp.device_id
                     self.user_id = resp.user_id
                     self.load_store()
-                    self._sync_token = await self._keyval_storage_gateway.get_text(
-                        self._sync_key
-                    )
+                    self._sync_token = await self._load_sync_checkpoint()
                     return self
                 self._logging_gateway.error("Password login failed.")
                 raise RuntimeError("Matrix password login failed.")
@@ -384,9 +395,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 await self._keyval_storage_gateway.get_text(self._client_user_id_key),
                 field_name="client_user_id",
             )
-            self._sync_token = await self._keyval_storage_gateway.get_text(
-                self._sync_key
-            )
+            self._sync_token = await self._load_sync_checkpoint()
             self.load_store()
             return self
         except Exception:
@@ -682,6 +691,102 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         )
         return payload.to_dict()
 
+    @staticmethod
+    def _build_ingress_dedupe_key(event_type: str, event_id: str | None, payload: dict[str, Any]) -> str:
+        if isinstance(event_id, str) and event_id.strip() != "":
+            return f"{event_type}:{event_id.strip()}"
+        normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        payload_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return f"{event_type}:{payload_hash}"
+
+    def _build_non_core_ingress_entry(
+        self,
+        *,
+        callback_name: str,
+        event: object = None,
+        room: MatrixRoom | MatrixInvitedRoom | None = None,
+        reason: str = _callback_skip_reason_dm_scope,
+    ) -> MessagingIngressStageEntry:
+        payload = self._build_matrix_event_hook_payload(
+            callback_name=callback_name,
+            event=event,
+            room=room,
+            reason=reason,
+        )
+        event_type = str(payload.get("event_type", "UnknownEvent"))
+        event_id = self._coerce_optional_string(payload.get("event_id"))
+        room_id = self._coerce_optional_string(payload.get("room_id"))
+        sender = self._coerce_optional_string(payload.get("sender"))
+        return MessagingIngressStageEntry(
+            ipc_command=self._matrix_ingress_command,
+            event=MessagingIngressEvent(
+                version=1,
+                platform="matrix",
+                runtime_profile_key=self._resolve_runtime_profile_key(),
+                source_mode="sync_callback",
+                event_type=event_type,
+                event_id=event_id,
+                dedupe_key=self._build_ingress_dedupe_key(event_type, event_id, payload),
+                identifier_type="recipient_user_id",
+                identifier_value=self.current_user_id,
+                room_id=room_id,
+                sender=sender,
+                payload=payload,
+                provider_context={
+                    "callback": callback_name,
+                    "reason": reason,
+                },
+            ),
+        )
+
+    def _build_room_message_ingress_entry(
+        self,
+        *,
+        room: MatrixRoom,
+        message: RoomMessage,
+        ingress_metadata: dict[str, Any],
+    ) -> MessagingIngressStageEntry:
+        event_class = self._matrix_message_event_class(message)
+        payload = {
+            "event_class": event_class,
+            "room_id": room.room_id,
+            "sender": getattr(message, "sender", None),
+            "body": getattr(message, "body", None),
+            "content": self._normalize_event_dict(getattr(message, "content", None)) or {},
+            "source": self._normalize_event_dict(getattr(message, "source", None)) or {},
+            "event_id": getattr(message, "event_id", None),
+        }
+        event_type = event_class
+        event_id = self._coerce_optional_string(payload.get("event_id"))
+        return MessagingIngressStageEntry(
+            ipc_command=self._matrix_ingress_command,
+            event=MessagingIngressEvent(
+                version=1,
+                platform="matrix",
+                runtime_profile_key=self._resolve_runtime_profile_key(),
+                source_mode="sync_room_message",
+                event_type=event_type,
+                event_id=event_id,
+                dedupe_key=self._build_ingress_dedupe_key(event_type, event_id, payload),
+                identifier_type="recipient_user_id",
+                identifier_value=self.current_user_id,
+                room_id=room.room_id,
+                sender=self._coerce_optional_string(getattr(message, "sender", None)),
+                payload=payload,
+                provider_context={
+                    "ingress_metadata": dict(ingress_metadata),
+                },
+            ),
+        )
+
+    async def _queue_sync_ingress_entry(
+        self,
+        entry: MessagingIngressStageEntry,
+    ) -> None:
+        self._ensure_ingress_runtime_state()
+        async with self._pending_sync_lock:
+            self._pending_sync_ingress.append(entry)
+
     def _resolve_credentials_key_prefix(self) -> str:
         environment = (
             str(
@@ -756,6 +861,32 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if "_client_user_id_key" not in self.__dict__:
             self._client_user_id_key = self._keyval_key("client_user_id")
 
+    def _ensure_ingress_runtime_state(self) -> None:
+        if "_ingress_service" not in self.__dict__:
+            self._ingress_service = None
+        if "_pending_sync_ingress" not in self.__dict__:
+            self._pending_sync_ingress = []
+        if "_pending_sync_lock" not in self.__dict__:
+            self._pending_sync_lock = asyncio.Lock()
+
+    def _matrix_ingress_enabled(self) -> bool:
+        self._ensure_ingress_runtime_state()
+        return self._ingress_service is not None
+
+    @staticmethod
+    def _matrix_message_event_class(message: RoomMessage) -> str:
+        if isinstance(message, RoomEncryptedAudio):
+            return "RoomEncryptedAudio"
+        if isinstance(message, RoomEncryptedFile):
+            return "RoomEncryptedFile"
+        if isinstance(message, RoomEncryptedImage):
+            return "RoomEncryptedImage"
+        if isinstance(message, RoomEncryptedVideo):
+            return "RoomEncryptedVideo"
+        if isinstance(message, RoomMessageText):
+            return "RoomMessageText"
+        return type(message).__name__
+
     def _resolve_matrix_ipc_queue_size(self) -> int:
         raw_value = getattr(
             getattr(getattr(self._config, "matrix", SimpleNamespace()), "ipc", None),
@@ -769,6 +900,20 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if parsed <= 0:
             return self._default_matrix_ipc_queue_size
         return parsed
+
+    async def _load_sync_checkpoint(self) -> str | None:
+        self._ensure_ingress_runtime_state()
+        if self._ingress_service is not None:
+            checkpoint = await self._ingress_service.get_checkpoint(
+                platform="matrix",
+                runtime_profile_key=self._resolve_runtime_profile_key(),
+                checkpoint_key=self._sync_checkpoint_key,
+            )
+            if isinstance(checkpoint, str) and checkpoint.strip() != "":
+                return checkpoint
+        if self._keyval_storage_gateway is None:
+            return None
+        return await self._keyval_storage_gateway.get_text(self._sync_key)
 
     def _resolve_shutdown_timeout_seconds(self) -> float:
         settings = parse_runtime_bootstrap_settings(self._config)
@@ -1467,11 +1612,21 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             event=event,
             reason=reason,
         )
-        await self._dispatch_matrix_event_hook(
-            callback_name=callback_name,
-            event=event,
-            room=room,
-            reason=reason,
+        if not self._matrix_ingress_enabled():
+            await self._dispatch_matrix_event_hook(
+                callback_name=callback_name,
+                event=event,
+                room=room,
+                reason=reason,
+            )
+            return
+        await self._queue_sync_ingress_entry(
+            self._build_non_core_ingress_entry(
+                callback_name=callback_name,
+                event=event,
+                room=room,
+                reason=reason,
+            )
         )
 
     ## Callbacks.
@@ -1724,6 +1879,17 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         )
         if resolved_ingress is None:
             return
+        if self._matrix_ingress_enabled():
+            _scope, ingress_metadata = resolved_ingress
+            await self._queue_sync_ingress_entry(
+                self._build_room_message_ingress_entry(
+                    room=room,
+                    message=message,
+                    ingress_metadata=ingress_metadata,
+                )
+            )
+            return
+
         scope, ingress_metadata = resolved_ingress
 
         await self._emit_room_processing_signal(
@@ -1733,7 +1899,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         try:
             message_responses: list[dict] = []
 
-            # Handle audio messages.
             if isinstance(message, RoomEncryptedAudio):
                 get_media = await self._download_file(
                     message.source["content"]["file"],
@@ -1756,7 +1921,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                         )
                     finally:
                         self._cleanup_temp_file(get_media)
-            # Handle file messages.
             elif isinstance(message, RoomEncryptedFile):
                 get_media = await self._download_file(
                     message.source["content"]["file"],
@@ -1779,7 +1943,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                         )
                     finally:
                         self._cleanup_temp_file(get_media)
-            # Handle image messages.
             elif isinstance(message, RoomEncryptedImage):
                 get_media = await self._download_file(
                     message.source["content"]["file"],
@@ -1802,7 +1965,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                         )
                     finally:
                         self._cleanup_temp_file(get_media)
-            # Handle text messages.
             elif isinstance(message, RoomMessageText):
                 message_responses = await self._messaging_service.handle_text_message(
                     platform="matrix",
@@ -1812,7 +1974,6 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                     ingress_metadata=ingress_metadata,
                     scope=scope,
                 )
-            # Handle video messages.
             elif isinstance(message, RoomEncryptedVideo):
                 get_media = await self._download_file(
                     message.source["content"]["file"],
@@ -1864,6 +2025,155 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 f"(room_id={room_id} state={state}): {exc}"
             )
 
+    async def emit_ingress_processing_signal(
+        self,
+        room_id: str,
+        *,
+        state: str,
+    ) -> None:
+        await self._emit_room_processing_signal(room_id=room_id, state=state)
+
+    async def send_ingress_responses(
+        self,
+        room_id: str,
+        responses: list[dict[str, Any]],
+    ) -> None:
+        await self._process_message_responses(
+            room_id=room_id,
+            message_responses=responses,
+        )
+
+    async def download_ingress_media(
+        self,
+        event: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        source = payload.get("source")
+        if not isinstance(source, dict):
+            return None
+        content = source.get("content")
+        if not isinstance(content, dict):
+            return None
+        file_info = content.get("file")
+        media_info = content.get("info")
+        if not isinstance(file_info, dict) or not isinstance(media_info, dict):
+            return None
+        return await self._download_file(file_info, media_info)
+
+    async def process_ingress_event(self, event: dict[str, Any]) -> None:
+        if not isinstance(event, dict):
+            raise TypeError("Matrix ingress event must be a dict.")
+        source_mode = str(event.get("source_mode") or "").strip().lower()
+        if source_mode != "sync_room_message":
+            return
+
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            raise TypeError("Matrix ingress event payload must be a dict.")
+
+        room_id = self._coerce_optional_string(event.get("room_id"))
+        sender = self._coerce_optional_string(event.get("sender"))
+        if room_id is None or sender is None:
+            raise ValueError("Matrix ingress room_id and sender are required.")
+
+        provider_context = event.get("provider_context")
+        provider_context = provider_context if isinstance(provider_context, dict) else {}
+        ingress_metadata = provider_context.get("ingress_metadata")
+        ingress_metadata = dict(ingress_metadata) if isinstance(ingress_metadata, dict) else {}
+        resolved_ingress = context_scope_from_ingress_route(
+            platform="matrix",
+            channel_key="matrix",
+            room_id=room_id,
+            sender_id=sender,
+            ingress_route=ingress_metadata.get("ingress_route"),
+            ingress_metadata=ingress_metadata,
+            source="matrix.ingress_worker",
+        )
+        ingress_metadata["ingress_route"] = dict(resolved_ingress.ingress_route)
+        ingress_metadata["tenant_resolution"] = dict(resolved_ingress.tenant_resolution)
+
+        await self.emit_ingress_processing_signal(
+            room_id,
+            state=PROCESSING_STATE_START,
+        )
+        try:
+            responses: list[dict[str, Any]] = []
+            event_class = str(payload.get("event_class") or "")
+            if event_class == "RoomMessageText":
+                text = payload.get("body")
+                if isinstance(text, str):
+                    maybe_responses = await self._messaging_service.handle_text_message(
+                        platform="matrix",
+                        room_id=room_id,
+                        sender=sender,
+                        message=text,
+                        ingress_metadata=ingress_metadata,
+                        scope=resolved_ingress.scope,
+                    )
+                    if isinstance(maybe_responses, list):
+                        responses = maybe_responses
+            elif event_class in {
+                "RoomEncryptedAudio",
+                "RoomEncryptedFile",
+                "RoomEncryptedImage",
+                "RoomEncryptedVideo",
+            }:
+                media = await self.download_ingress_media(event)
+                if media is not None:
+                    try:
+                        message_payload = {
+                            "message": payload,
+                            "file": media,
+                        }
+                        if event_class == "RoomEncryptedAudio":
+                            maybe_responses = await self._messaging_service.handle_audio_message(
+                                platform="matrix",
+                                room_id=room_id,
+                                sender=sender,
+                                message=message_payload,
+                                ingress_metadata=ingress_metadata,
+                                scope=resolved_ingress.scope,
+                            )
+                        elif event_class == "RoomEncryptedFile":
+                            maybe_responses = await self._messaging_service.handle_file_message(
+                                platform="matrix",
+                                room_id=room_id,
+                                sender=sender,
+                                message=message_payload,
+                                ingress_metadata=ingress_metadata,
+                                scope=resolved_ingress.scope,
+                            )
+                        elif event_class == "RoomEncryptedImage":
+                            maybe_responses = await self._messaging_service.handle_image_message(
+                                platform="matrix",
+                                room_id=room_id,
+                                sender=sender,
+                                message=message_payload,
+                                ingress_metadata=ingress_metadata,
+                                scope=resolved_ingress.scope,
+                            )
+                        else:
+                            maybe_responses = await self._messaging_service.handle_video_message(
+                                platform="matrix",
+                                room_id=room_id,
+                                sender=sender,
+                                message=message_payload,
+                                ingress_metadata=ingress_metadata,
+                                scope=resolved_ingress.scope,
+                            )
+                        if isinstance(maybe_responses, list):
+                            responses = maybe_responses
+                    finally:
+                        self._cleanup_temp_file(media)
+            await self.send_ingress_responses(room_id, responses)
+        finally:
+            await self.emit_ingress_processing_signal(
+                room_id,
+                state=PROCESSING_STATE_STOP,
+            )
+
     async def _cb_room_member_event(
         self, _room: MatrixRoom, _event: RoomMemberEvent
     ) -> None:
@@ -1884,7 +2194,28 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     # Responses
     async def _cb_sync_response(self, resp: SyncResponse):
         """Handle SyncResponses."""
-        await self._keyval_storage_gateway.put_text(self._sync_key, resp.next_batch)
+        self._ensure_ingress_runtime_state()
+        if self._ingress_service is None:
+            await self._keyval_storage_gateway.put_text(self._sync_key, resp.next_batch)
+            self._sync_token = resp.next_batch
+            return
+
+        async with self._pending_sync_lock:
+            pending_entries = list(self._pending_sync_ingress)
+            self._pending_sync_ingress.clear()
+
+        await self._ingress_service.stage(
+            pending_entries,
+            checkpoints=[
+                MessagingIngressCheckpointUpdate(
+                    platform="matrix",
+                    runtime_profile_key=self._resolve_runtime_profile_key(),
+                    checkpoint_key=self._sync_checkpoint_key,
+                    checkpoint_value=resp.next_batch,
+                    provider_context={"next_batch": resp.next_batch},
+                )
+            ],
+        )
         self._sync_token = resp.next_batch
 
     ## Utilities.
@@ -2391,6 +2722,7 @@ class MultiProfileMatrixClient(IMatrixClient):
         self,
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
+        ingress_service: IMessagingIngressService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
         relational_storage_gateway: IRelationalStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
@@ -2399,6 +2731,7 @@ class MultiProfileMatrixClient(IMatrixClient):
     ) -> None:
         self._root_config = config
         self._ipc_service = ipc_service
+        self._ingress_service = ingress_service
         self._keyval_storage_gateway = keyval_storage_gateway
         self._relational_storage_gateway = relational_storage_gateway
         self._logging_gateway = logging_gateway
@@ -2431,6 +2764,7 @@ class MultiProfileMatrixClient(IMatrixClient):
             clients[runtime_profile_key] = DefaultMatrixClient(
                 config=profile_config,
                 ipc_service=self._ipc_service,
+                ingress_service=self._ingress_service,
                 keyval_storage_gateway=self._keyval_storage_gateway,
                 relational_storage_gateway=self._relational_storage_gateway,
                 logging_gateway=self._logging_gateway,
@@ -2848,6 +3182,41 @@ class MultiProfileMatrixClient(IMatrixClient):
             *(client.verify_user_devices(user_id) for client in self._clients.values()),
             return_exceptions=False,
         )
+
+    async def process_ingress_event(self, event: dict[str, Any]) -> None:
+        runtime_profile_key = ""
+        if isinstance(event, dict):
+            runtime_profile_key = str(event.get("runtime_profile_key") or "").strip()
+        if runtime_profile_key != "" and runtime_profile_key in self._clients:
+            await self._clients[runtime_profile_key].process_ingress_event(event)
+            return
+        await self._first_client().process_ingress_event(event)
+
+    async def emit_ingress_processing_signal(
+        self,
+        room_id: str,
+        *,
+        state: str,
+    ) -> None:
+        await self._first_client().emit_ingress_processing_signal(room_id, state=state)
+
+    async def send_ingress_responses(
+        self,
+        room_id: str,
+        responses: list[dict[str, Any]],
+    ) -> None:
+        await self._first_client().send_ingress_responses(room_id, responses)
+
+    async def download_ingress_media(
+        self,
+        event: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        runtime_profile_key = ""
+        if isinstance(event, dict):
+            runtime_profile_key = str(event.get("runtime_profile_key") or "").strip()
+        if runtime_profile_key != "" and runtime_profile_key in self._clients:
+            return await self._clients[runtime_profile_key].download_ingress_media(event)
+        return await self._first_client().download_ingress_media(event)
 
     @property
     def current_user_id(self) -> str:

@@ -24,6 +24,86 @@ class _IPCService:
 class TestMuGenInitRunSignalClient(unittest.IsolatedAsyncioTestCase):
     """Unit tests for mugen.run_signal_client."""
 
+    async def test_signal_helper_functions_and_stage_entry_extractor(self) -> None:
+        self.assertIsNone(mugen_module._nonempty_text(1))  # pylint: disable=protected-access
+        self.assertEqual(
+            mugen_module._nonempty_text(" hello "),  # pylint: disable=protected-access
+            "hello",
+        )
+        self.assertTrue(
+            mugen_module._json_hash({"a": 1})  # pylint: disable=protected-access
+        )
+        self.assertIsNone(
+            mugen_module._signal_envelope({"params": []})  # pylint: disable=protected-access
+        )
+        envelope = {
+            "sourceNumber": "+15550001",
+            "timestamp": 123,
+            "dataMessage": {"reaction": {"emoji": "👍"}},
+        }
+        self.assertEqual(
+            mugen_module._signal_envelope({"params": {"envelope": envelope}}),  # pylint: disable=protected-access
+            envelope,
+        )
+        self.assertEqual(
+            mugen_module._signal_sender({"sourceUuid": "uuid-1"}),  # pylint: disable=protected-access
+            "uuid-1",
+        )
+        self.assertIsNone(
+            mugen_module._signal_event_id({"timestamp": True})  # pylint: disable=protected-access
+        )
+        self.assertIsNone(
+            mugen_module._signal_event_id({"timestamp": "bad"})  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            mugen_module._signal_event_id({"timestamp": 5}),  # pylint: disable=protected-access
+            "5",
+        )
+        self.assertEqual(
+            mugen_module._signal_event_id(
+                {"timestamp": 6, "source": "+15550002"}
+            ),  # pylint: disable=protected-access
+            "+15550002:6",
+        )
+        self.assertEqual(
+            mugen_module._signal_event_type({"receiptMessage": {}}),  # pylint: disable=protected-access
+            "receipt",
+        )
+        self.assertEqual(
+            mugen_module._signal_event_type({"typingMessage": {}}),  # pylint: disable=protected-access
+            "typing",
+        )
+        self.assertEqual(
+            mugen_module._signal_event_type({"other": True}),  # pylint: disable=protected-access
+            "event",
+        )
+        self.assertEqual(
+            mugen_module._extract_signal_stage_entries(  # pylint: disable=protected-access
+                config=SimpleNamespace(signal=SimpleNamespace(account="+15550000001")),
+                payload={"params": {}},
+            ),
+            [],
+        )
+
+        entries = mugen_module._extract_signal_stage_entries(  # pylint: disable=protected-access
+            config=SimpleNamespace(
+                signal=SimpleNamespace(
+                    account="+15550000001",
+                )
+            ),
+            payload={
+                "runtime_profile_key": "default",
+                "params": {"envelope": envelope},
+            },
+        )
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].ipc_command, "signal_ingress_event")
+        self.assertEqual(entries[0].event.event_type, "reaction")
+        self.assertEqual(entries[0].event.event_id, "+15550001:123")
+        self.assertEqual(entries[0].event.identifier_value, "+15550000001")
+        self.assertEqual(entries[0].event.sender, "+15550001")
+
     async def test_normal_run_dispatches_ipc_events(self) -> None:
         app = Quart("test_app")
         ipc = _IPCService()
@@ -425,3 +505,129 @@ class TestMuGenInitRunSignalClient(unittest.IsolatedAsyncioTestCase):
             )
 
         degraded.assert_called_once_with("RuntimeError: startup exploded")
+
+    async def test_ingress_mode_stages_events_when_ipc_provider_is_absent(self) -> None:
+        ingress_service = SimpleNamespace(stage=AsyncMock())
+        event_forwarded = asyncio.Event()
+
+        class DummySignalClient:
+            async def init(self) -> None:
+                return None
+
+            async def verify_startup(self) -> bool:
+                return True
+
+            async def close(self) -> None:
+                return None
+
+            async def receive_events(self):
+                yield {
+                    "params": {
+                        "envelope": {
+                            "sourceNumber": "+15550001",
+                            "timestamp": 123,
+                            "dataMessage": {"message": "hello"},
+                        }
+                    }
+                }
+                event_forwarded.set()
+                await asyncio.Event().wait()
+
+        task = asyncio.create_task(
+            run_signal_client(
+                config_provider=lambda: SimpleNamespace(
+                    signal=SimpleNamespace(
+                        account="+15550000001",
+                        receive=SimpleNamespace(),
+                    )
+                ),
+                logger_provider=lambda: Mock(),
+                signal_provider=DummySignalClient,
+                ingress_provider=lambda: ingress_service,
+            )
+        )
+        await asyncio.wait_for(event_forwarded.wait(), timeout=1.0)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+        ingress_service.stage.assert_awaited_once()
+        staged_entries = ingress_service.stage.await_args.args[0]
+        self.assertEqual(len(staged_entries), 1)
+        self.assertEqual(staged_entries[0].ipc_command, "signal_ingress_event")
+
+    async def test_ingress_mode_requires_ingress_service(self) -> None:
+        class DummySignalClient:
+            async def init(self) -> None:
+                return None
+
+            async def verify_startup(self) -> bool:
+                return True
+
+            async def close(self) -> None:
+                return None
+
+            async def receive_events(self):
+                if False:
+                    yield {}
+
+        with self.assertRaisesRegex(RuntimeError, "Signal ingress service unavailable"):
+            await run_signal_client(
+                config_provider=lambda: SimpleNamespace(
+                    signal=SimpleNamespace(
+                        account="+15550000001",
+                        receive=SimpleNamespace(),
+                    )
+                ),
+                logger_provider=lambda: Mock(),
+                signal_provider=DummySignalClient,
+                ingress_provider=lambda: None,
+            )
+
+    async def test_ipc_mode_falls_back_to_empty_config_when_config_provider_raises(
+        self,
+    ) -> None:
+        ipc = _IPCService()
+        handled_event = asyncio.Event()
+
+        async def _handle_request(request):
+            handled_event.set()
+            return SimpleNamespace(errors=[])
+
+        ipc.handle_ipc_request = AsyncMock(side_effect=_handle_request)
+
+        class DummySignalClient:
+            async def init(self) -> None:
+                return None
+
+            async def verify_startup(self) -> bool:
+                return True
+
+            async def close(self) -> None:
+                return None
+
+            async def receive_events(self):
+                yield {
+                    "params": {
+                        "envelope": {
+                            "sourceNumber": "+15550001",
+                            "timestamp": 123,
+                            "dataMessage": {"message": "hello"},
+                        }
+                    }
+                }
+                await asyncio.Event().wait()
+
+        task = asyncio.create_task(
+            run_signal_client(
+                config_provider=Mock(side_effect=RuntimeError("config unavailable")),
+                logger_provider=lambda: Mock(),
+                signal_provider=DummySignalClient,
+                ipc_provider=lambda: ipc,
+            )
+        )
+
+        await asyncio.wait_for(handled_event.wait(), timeout=1.0)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+        ipc.handle_ipc_request.assert_awaited_once()

@@ -109,6 +109,7 @@ class WeChatIPCExtension(IIPCExtension):
     @property
     def ipc_commands(self) -> list[str]:
         return [
+            "wechat_ingress_event",
             "wechat_official_account_event",
             "wechat_wecom_event",
         ]
@@ -503,10 +504,11 @@ class WeChatIPCExtension(IIPCExtension):
         provider: str,
         payload: dict,
         ingress_route: dict[str, Any] | None = None,
+        skip_dedupe: bool = False,
     ) -> None:
         ingress_route = self._normalize_ingress_route(ingress_route)
         event_type = f"{provider}:event"
-        if await self._is_duplicate_event(event_type, payload):
+        if skip_dedupe is not True and await self._is_duplicate_event(event_type, payload):
             self._logging_gateway.debug("Skip duplicate WeChat event.")
             return
 
@@ -691,6 +693,12 @@ class WeChatIPCExtension(IIPCExtension):
         handler_name = type(self).__name__
 
         match request.command:
+            case "wechat_ingress_event":
+                await self._wechat_ingress_event(request)
+                return IPCHandlerResult(
+                    handler=handler_name,
+                    response={"response": "OK"},
+                )
             case "wechat_official_account_event":
                 await self._wechat_event(request, expected_provider="official_account")
                 return IPCHandlerResult(
@@ -710,3 +718,35 @@ class WeChatIPCExtension(IIPCExtension):
                     code="not_found",
                     error="Unsupported IPC command.",
                 )
+
+    async def _wechat_ingress_event(self, request: IPCCommandRequest) -> None:
+        payload = request.data if isinstance(request.data, dict) else {}
+        event_payload = payload.get("payload")
+        if not isinstance(event_payload, dict):
+            raise TypeError("WeChat ingress payload.event must be a dict.")
+
+        provider_context = payload.get("provider_context")
+        provider_context = provider_context if isinstance(provider_context, dict) else {}
+        provider = str(provider_context.get("provider") or "").strip().lower()
+        if provider not in {"official_account", "wecom"}:
+            raise ValueError("WeChat ingress provider is required.")
+        ingress_route = self._normalize_ingress_route(provider_context.get("ingress_route"))
+        path_token = self._coerce_nonempty_string(provider_context.get("path_token"))
+        if ingress_route.get("runtime_profile_key") in [None, ""] and path_token is not None:
+            resolved = await self._resolve_ingress_route(
+                path_token=path_token,
+                webhook_payload=event_payload,
+            )
+            if resolved is not None:
+                ingress_route = resolved
+
+        runtime_profile_key = self._coerce_nonempty_string(
+            payload.get("runtime_profile_key")
+        ) or runtime_profile_key_from_ingress_route(ingress_route)
+        with runtime_profile_scope(runtime_profile_key):
+            await self._process_inbound_message(
+                provider=provider,
+                payload=event_payload,
+                ingress_route=ingress_route,
+                skip_dedupe=True,
+            )

@@ -74,6 +74,22 @@ Conversation identifiers such as `room_id`, chat ids, or sender phone numbers
 still matter, but only as conversation context and reply targets. They are not
 the canonical tenant-owned runtime-profile selector.
 
+## Shared Ingress Persistence
+
+The shared messaging ingress foundation also persists `runtime_profile_key` on
+every canonical ingress row.
+
+Practical consequences:
+
+- dedupe is scoped by `platform + runtime_profile_key + dedupe_key`;
+- dead-letter and replay remain isolated by runtime profile;
+- worker dispatch preserves the runtime profile that received the event;
+- Matrix sync checkpoints are stored per `runtime_profile_key` in
+  `messaging_ingress_checkpoint`.
+
+See [Messaging Ingress Contract](./messaging-ingress-contract.md) for the shared
+inbox, dedupe, dead-letter, and checkpoint model.
+
 ## Outbound Dispatch
 
 Inbound route metadata includes the selected `runtime_profile_key`, and outbound

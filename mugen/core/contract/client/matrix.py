@@ -4,7 +4,7 @@ __all__ = ["IMatrixClient"]
 
 from abc import ABC, abstractmethod
 from types import TracebackType
-from typing import Type
+from typing import Any, Type
 
 from mugen.core.contract.client.matrix_types import (
     IMatrixSyncSignal,
@@ -75,3 +75,31 @@ class IMatrixClient(ABC):
     @abstractmethod
     async def verify_user_devices(self, user_id: str) -> None:
         """Verify all of a user's devices."""
+
+    async def process_ingress_event(self, event: dict[str, Any]) -> None:
+        """Process one canonical Matrix ingress event."""
+        raise NotImplementedError
+
+    async def emit_ingress_processing_signal(
+        self,
+        room_id: str,
+        *,
+        state: str,
+    ) -> None:
+        """Emit a best-effort processing/typing signal for worker-owned ingress."""
+        raise NotImplementedError
+
+    async def send_ingress_responses(
+        self,
+        room_id: str,
+        responses: list[dict[str, Any]],
+    ) -> None:
+        """Deliver normalized response payloads for worker-owned ingress."""
+        raise NotImplementedError
+
+    async def download_ingress_media(
+        self,
+        event: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Download and decrypt inbound media described by a canonical event."""
+        raise NotImplementedError

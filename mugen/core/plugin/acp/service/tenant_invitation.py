@@ -2,6 +2,7 @@
 
 __all__ = ["TenantInvitationService"]
 
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -72,8 +73,17 @@ class TenantInvitationService(
             **kwargs,
         )
 
-        self._config: SimpleNamespace = config_provider()
-        self._logger: ILoggingGateway = logger_provider()
+        try:
+            self._config = config_provider()
+        except Exception:  # pylint: disable=broad-exception-caught
+            self._config = SimpleNamespace()
+        if self._config is None:
+            self._config = SimpleNamespace()
+
+        try:
+            self._logger = logger_provider()
+        except Exception:  # pylint: disable=broad-exception-caught
+            self._logger = logging.getLogger(__name__)
         self._registry_provider = registry_provider
 
         self._tenant_membership_svc: ITenantMembershipService | None = None

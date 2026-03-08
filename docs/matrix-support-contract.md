@@ -13,6 +13,15 @@ muGen core keeps Matrix support intentionally lean:
 - expose extension hooks for non-core behavior instead of expanding
   core complexity.
 
+## Shared Ingress Foundation
+
+Matrix transport ingress uses the shared durable ingress service described in
+[Messaging Ingress Contract](./messaging-ingress-contract.md).
+
+Unlike webhook platforms, Matrix transport still enters through `/sync`, but
+accepted inbound events now follow the same durable staging and worker model as
+the other external messaging platforms.
+
 ## Supported In Core
 
 ### Session and Sync
@@ -85,39 +94,59 @@ supported.
   run.
 - `room_id` remains conversation context and reply destination metadata; it is
   not the tenant-routing identifier.
-- Text messages (`m.text`) routed into messaging service handlers.
+- Accepted room messages are normalized into canonical ingress rows and staged
+  before messaging handlers run.
+- Text messages (`m.text`) are processed through the shared ingress worker.
 - Encrypted media handling for audio/file/image/video:
   - MIME allowlist enforcement,
   - declared/downloaded size checks,
   - decryption failure handling,
   - temporary file cleanup after processing.
 
+### Checkpointing
+
+- Accepted sync work is committed together with Matrix sync checkpoint updates.
+- Shared checkpoint table: `messaging_ingress_checkpoint`.
+- Matrix stores `checkpoint_key = "sync_token"` per `runtime_profile_key`.
+- The old direct sync-token persistence path is no longer the primary runtime
+  contract.
+
 ### Extension Hooks
 
-- Non-core Matrix callbacks are enqueued to a bounded in-memory IPC dispatch
-  queue and forwarded asynchronously to IPC extensions via the `matrix_event`
-  command.
-- The callback hot path is non-blocking: callback handlers enqueue and return
-  without awaiting IPC extension execution.
-- Inline fallback dispatch is not supported in callback handlers. When enqueue
-  cannot be accepted, core drops the event and emits operator-visible warning
-  logs.
-- Queue overflow policy is `drop-new` with warning log emission and an
-  incremented `matrix.ipc.dispatch.queue_full_drop_new` counter.
-- `matrix_event` payloads include `version=1` plus `callback`, `event_type`,
-  `reason`, optional `room_id`, and available `content`/`source` fields.
-- Core skip logging remains reason-coded even when extensions are not present.
+- Built-in durable Matrix ingress processing expects IPC extension token
+  `core.ipc.matrix_ingress`.
+- Accepted room messages are staged with:
+  - `platform="matrix"`
+  - `source_mode="sync_room_message"`
+  - `identifier_type="recipient_user_id"`
+  - `ipc_command="matrix_ingress_event"`
+- Accepted non-core Matrix callbacks are also staged, using
+  `source_mode="sync_callback"` and the same normalized
+  `matrix_ingress_event` command.
+- Canonical Matrix ingress payloads include the shared ingress envelope plus:
+  - room-message payloads with normalized Matrix event data and ingress route
+    metadata;
+  - non-core callback payloads carrying callback name, event type, reason, and
+    available content/source metadata.
+- The old bounded in-memory `matrix_event` runtime contract is no longer the
+  current public ingress contract.
+
+### Worker Adapter Contract
+
+The Matrix client remains responsible for worker-owned Matrix behaviors:
+
+- emitting best-effort processing/typing signals;
+- downloading and decrypting inbound media from canonical ingress payloads;
+- sending normalized response payloads back to Matrix rooms;
+- processing canonical `matrix_ingress_event` rows.
 
 ### IPC Failure Semantics
 
-- Non-critical IPC handler failures are fail-open:
-  - Matrix callback flow continues.
-  - aggregate errors are logged as warnings and tracked via
-    `matrix.ipc.dispatch.non_critical_failure*` metrics.
-- Critical IPC handler failures are fail-closed:
-  - core IPC raises `IPCCriticalDispatchError`,
-  - Matrix runtime health monitor surfaces that failure to orchestration,
-  - phase-B supervision degrades and restarts the Matrix runtime path.
+- Shared ingress worker failures are transport-fail-open but row-fail-closed:
+  - `/sync` callback flow continues after staging;
+  - IPC aggregate errors and exceptions mark the row failed for retry;
+  - rows are requeued until the shared attempt budget is exhausted;
+  - terminal failures are copied to `messaging_ingress_dead_letter`.
 
 ### Observability
 
@@ -125,6 +154,8 @@ supported.
   `domain`, `action`, and `reason`.
 - In-memory counters keyed as:
   - `matrix.<domain>.<action>.<reason>`
+- Durable operator visibility for staged, completed, failed, and dead-lettered
+  Matrix ingress rows is provided by the shared ingress tables.
 
 ## Intentionally Unsupported In Core
 
@@ -138,6 +169,7 @@ downstream via extensions where needed:
 - Business-policy-specific moderation/escalation logic for Matrix events.
 - Automated handling flows for non-core to-device/state events beyond the
   extension-forwarding contract.
+- Native webhook ingress for Matrix transport.
 
 ## Change Policy
 

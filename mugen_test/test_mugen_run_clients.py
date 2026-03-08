@@ -1983,6 +1983,40 @@ class TestMuGenInitRunPlatformClients(unittest.IsolatedAsyncioTestCase):
         self.assertIs(state[mugen_mod.PHASE_A_CAPABILITY_ERRORS_KEY], existing_errors)
         self.assertEqual(existing_statuses["container_readiness"], PHASE_STATUS_HEALTHY)
 
+    async def test_bootstrap_app_starts_ingress_service_when_available(self) -> None:
+        app = Quart("test_app")
+        cfg = _test_config(platforms=[])
+        ingress_service = SimpleNamespace(ensure_started=unittest.mock.AsyncMock())
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.di,
+                "ensure_container_readiness_async",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "register_extensions",
+                new=unittest.mock.AsyncMock(return_value={}),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_messaging_provider",
+                return_value=None,
+            ),
+            unittest.mock.patch.object(
+                mugen_mod,
+                "_ingress_provider",
+                return_value=ingress_service,
+            ),
+        ):
+            await bootstrap_app(
+                app,
+                config_provider=lambda: cfg,
+            )
+
+        ingress_service.ensure_started.assert_awaited_once_with()
+
     async def test_bootstrap_app_handles_non_dict_extension_report_and_non_list_handlers(
         self,
     ) -> None:

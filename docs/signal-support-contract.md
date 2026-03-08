@@ -17,6 +17,18 @@ This document defines the v1 Signal platform contract in muGen.
   - receipt envelopes (observed/logged)
 - No muGen webhook endpoint is exposed for Signal in v1.
 
+## Shared Ingress Foundation
+
+Signal transport ingress uses the shared durable ingress service described in
+[Messaging Ingress Contract](./messaging-ingress-contract.md).
+
+That means:
+
+- the receive websocket stays transport-owned by the Signal client;
+- accepted envelopes are staged durably before business processing;
+- restart/crash recovery is handled through the shared inbox/lease model rather
+  than a Signal-specific reliability queue.
+
 ## Strict Startup Contract
 
 When `"signal"` is enabled in `mugen.platforms`, startup is fail-closed unless all requirements below are met:
@@ -59,12 +71,23 @@ At runtime, client startup verifies:
 
 ## Reliability Contract
 
-- Durable dedupe table: `signal_restapi_event_dedup`.
-- Durable dead-letter table: `signal_restapi_event_dead_letter`.
-- Dedupe key format: `<event_type>:<sha256(normalized_payload)>`.
-- Malformed payloads and unhandled processing failures are written to dead-letter persistence.
-- One receive loop runs per active runtime profile and inbound events retain the
+- Each accepted Signal envelope becomes one canonical ingress row with:
+  - `platform="signal"`
+  - `source_mode="receive_loop"`
+  - `identifier_type="account_number"`
+  - `ipc_command="signal_ingress_event"`
+- Shared reliability tables are:
+  - `messaging_ingress_event`
+  - `messaging_ingress_dedup`
+  - `messaging_ingress_dead_letter`
+- One receive loop runs per active runtime profile and staged rows retain the
   resolved `runtime_profile_key` for outbound reply dispatch.
+- Duplicate deliveries are absorbed by shared dedupe on
+  `platform + runtime_profile_key + dedupe_key`.
+- IPC/handler failures are retried by the shared worker and dead-lettered after
+  the shared attempt budget.
+- Older Signal-specific reliability tables and the raw `signal_restapi_event`
+  ingress command are not part of the current runtime contract.
 
 ## Outbound Response Contract
 

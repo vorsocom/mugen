@@ -165,4 +165,10 @@ def get_plugin_extension_token_registry() -> dict[str, tuple[str, type, str, str
             "mugen.core.plugin.matrix.manager.device_ipc_ext",
             "DeviceManagementIPCExtension",
         ),
+        "core.ipc.matrix_ingress": (
+            "ipc",
+            IIPCExtension,
+            "mugen.core.plugin.matrix.ingress_ipc_ext",
+            "MatrixIngressIPCExtension",
+        ),
     }

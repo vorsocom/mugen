@@ -206,7 +206,12 @@ class ConnectorInstanceService(  # pragma: no cover
         return {}
 
     def _connector_config(self) -> SimpleNamespace:
-        root = self._config_provider()
+        try:
+            root = self._config_provider()
+        except Exception:  # pylint: disable=broad-exception-caught
+            root = SimpleNamespace()
+        if root is None:
+            root = SimpleNamespace()
         cfg = getattr(root, "ops_connector", SimpleNamespace())
 
         timeout_seconds_default = self._parse_positive_float(

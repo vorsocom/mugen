@@ -17,6 +17,17 @@ This document defines the v1 WeChat platform contract in muGen.
   - Official Account: `GET/POST /api/wechat/official_account/webhook/<path_token>`
   - WeCom: `GET/POST /api/wechat/wecom/callback/<path_token>`
 
+## Shared Ingress Foundation
+
+WeChat transport ingress uses the shared durable ingress service described in
+[Messaging Ingress Contract](./messaging-ingress-contract.md).
+
+That means:
+
+- provider/path/signature verification still happens at the HTTP edge;
+- accepted webhook events are staged durably before business processing;
+- webhook success acknowledges committed staging, not completed handler work.
+
 ## Strict Startup Contract
 
 When `"wechat"` is enabled in `mugen.platforms`, startup is fail-closed unless all requirements below are met:
@@ -68,15 +79,30 @@ Any verification failure is rejected before IPC dispatch.
 
 ## Reliability Contract
 
-- Durable dedupe table: `wechat_event_dedup`.
-- Durable dead-letter table: `wechat_event_dead_letter`.
-- Duplicate webhook events are ignored after first successful dedupe insert.
-- Malformed payloads and unhandled processing failures are written to dead-letter persistence.
+- Each accepted WeChat webhook event becomes one canonical ingress row with:
+  - `platform="wechat"`
+  - `source_mode="webhook"`
+  - `identifier_type="path_token"`
+  - `ipc_command="wechat_ingress_event"`
+- Provider identity (`official_account` vs `wecom`) is preserved in
+  `provider_context`.
+- Shared reliability tables are:
+  - `messaging_ingress_event`
+  - `messaging_ingress_dedup`
+  - `messaging_ingress_dead_letter`
+- HTTP success is returned only after the staging transaction commits.
+- Duplicate deliveries are absorbed by shared dedupe on
+  `platform + runtime_profile_key + dedupe_key`.
+- IPC/handler failures are retried by the shared worker and dead-lettered after
+  the shared attempt budget.
+- Older WeChat-specific reliability tables and the raw
+  `wechat_official_account_event` / `wechat_wecom_event` ingress commands are
+  not part of the current runtime contract.
 
 ## IPC Contract
 
-- Official Account webhook dispatches `platform="wechat"`, `command="wechat_official_account_event"`.
-- WeCom webhook dispatches `platform="wechat"`, `command="wechat_wecom_event"`.
+- Shared ingress dispatches `platform="wechat"`, `command="wechat_ingress_event"`.
+- The worker receives the canonical ingress envelope, not raw provider XML.
 
 ## Outbound Response Contract
 

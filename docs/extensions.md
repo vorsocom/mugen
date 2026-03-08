@@ -36,6 +36,7 @@ defaults at import time.
 Common services available from `di.container`:
 
 - `config`
+- `ingress_service`
 - `logging_gateway`
 - `ipc_service`
 - `messaging_service`
