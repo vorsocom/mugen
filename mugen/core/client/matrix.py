@@ -58,6 +58,10 @@ from nio.responses import (
     UploadResponse,
 )
 
+from mugen.core.client.runtime_profile_manager import (
+    MultiProfileClientCloseError,
+    _close_clients_fail_closed,
+)
 from mugen.core.contract.client.matrix import IMatrixClient
 from mugen.core.contract.client.matrix_event_hook import MatrixEventHookPayload
 from mugen.core.contract.client.matrix_types import (
@@ -2462,9 +2466,9 @@ class MultiProfileMatrixClient(IMatrixClient):
         self,
         clients: dict[str, DefaultMatrixClient],
     ) -> None:
-        await asyncio.gather(
-            *(client.close() for client in clients.values()),
-            return_exceptions=True,
+        await _close_clients_fail_closed(
+            platform="matrix",
+            clients=clients,
         )
 
     async def _cancel_runtime_tasks(
@@ -2714,13 +2718,19 @@ class MultiProfileMatrixClient(IMatrixClient):
                 next_generation = self._generation
                 next_sync_tasks = {}
                 next_health_tasks = {}
-        except Exception:
+        except Exception as exc:
             await self._cancel_runtime_tasks(
                 locals().get("next_sync_tasks", {}),
                 locals().get("next_health_tasks", {}),
             )
             if self._entered:
-                await self._close_clients(next_clients)
+                try:
+                    await self._close_clients(next_clients)
+                except MultiProfileClientCloseError as close_exc:
+                    raise RuntimeError(
+                        "matrix runtime profile reload failed after "
+                        f"{type(exc).__name__}: {exc}; cleanup failed: {close_exc}"
+                    ) from close_exc
             raise
 
         async with self._lock:

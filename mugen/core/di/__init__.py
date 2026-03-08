@@ -466,7 +466,7 @@ def _validate_core_module_schema(config: dict) -> None:
     _ensure_only_known_keys(
         gateway_cfg,
         path="mugen.modules.core.gateway",
-        allowed={"completion", "email", "knowledge", "logging", "storage"},
+        allowed={"completion", "email", "knowledge", "logging", "sms", "storage"},
     )
 
     storage_cfg = gateway_cfg.get("storage")
@@ -507,7 +507,7 @@ def _validate_core_module_schema(config: dict) -> None:
                 "(module:Class unsupported)."
             )
 
-    for optional_key in ("email", "knowledge"):
+    for optional_key in ("email", "knowledge", "sms"):
         optional_token = gateway_cfg.get(optional_key)
         if optional_token is None:
             continue

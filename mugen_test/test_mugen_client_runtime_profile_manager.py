@@ -39,6 +39,7 @@ class _LifecycleClient:
         self.platform = platform
         self.runtime_profile_key = getattr(platform_cfg, "runtime_profile_key", None)
         self.verify_result = bool(getattr(platform_cfg, "verify_result", True))
+        self.close_error = getattr(platform_cfg, "close_error", None)
         self.init_count = 0
         self.close_count = 0
         self.closed = False
@@ -53,6 +54,8 @@ class _LifecycleClient:
     async def close(self) -> None:
         self.close_count += 1
         self.closed = True
+        if isinstance(self.close_error, str) and self.close_error:
+            raise RuntimeError(self.close_error)
 
 
 class _DelegationClient:
@@ -226,6 +229,68 @@ class TestSimpleProfileClientManager(unittest.IsolatedAsyncioTestCase):
             [client.closed for client in _LifecycleClient.instances[-1:]],
             [True],
         )
+
+    async def test_manager_close_surfaces_profile_close_failures(self) -> None:
+        manager = rpm_mod.SimpleProfileClientManager(
+            platform="line",
+            client_cls=_LifecycleClient,
+            config=build_config_namespace(
+                {
+                    "line": {
+                        "profiles": [
+                            {"key": "default", "close_error": "default close failed"},
+                            {"key": "secondary", "close_error": "secondary close failed"},
+                        ]
+                    }
+                }
+            ),
+        )
+
+        await manager.init()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            (
+                "line runtime profile cleanup failed: "
+                "default=RuntimeError: default close failed; "
+                "secondary=RuntimeError: secondary close failed"
+            ),
+        ):
+            await manager.close()
+
+        self.assertEqual(manager._clients, {})  # pylint: disable=protected-access
+        self.assertFalse(manager._initialized)  # pylint: disable=protected-access
+
+    async def test_manager_reload_failure_surfaces_candidate_cleanup_failure(self) -> None:
+        manager = rpm_mod.SimpleProfileClientManager(
+            platform="line",
+            client_cls=_LifecycleClient,
+            config=_profiled_config("line", ("default",)),
+        )
+        next_config = build_config_namespace(
+            {
+                "line": {
+                    "profiles": [
+                        {
+                            "key": "default",
+                            "verify_result": False,
+                            "close_error": "candidate close failed",
+                        },
+                    ]
+                }
+            }
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            (
+                "line runtime profile reload failed after RuntimeError: "
+                "line runtime profile startup probe failed\\.; cleanup failed: "
+                "line runtime profile cleanup failed: "
+                "default=RuntimeError: candidate close failed"
+            ),
+        ):
+            await manager.reload_profiles(next_config)
 
 
 class TestMultiProfilePlatformDelegates(unittest.IsolatedAsyncioTestCase):
