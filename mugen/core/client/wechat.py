@@ -19,6 +19,9 @@ import aiohttp
 from mugen.core.client.runtime_profile_manager import SimpleProfileClientManager
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import (
+    IRelationalStorageGateway,
+)
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
@@ -805,6 +808,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway | None = None,
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
@@ -815,6 +819,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
             config=config,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
+            relational_storage_gateway=relational_storage_gateway,
             logging_gateway=logging_gateway,
             messaging_service=messaging_service,
             user_service=user_service,
@@ -827,6 +832,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
         text: str,
         reply_to: str | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_text_message(
             recipient=recipient,
             text=text,
@@ -840,6 +846,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
         audio: dict[str, Any],
         reply_to: str | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_audio_message(
             recipient=recipient,
             audio=audio,
@@ -853,6 +860,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
         file: dict[str, Any],
         reply_to: str | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_file_message(
             recipient=recipient,
             file=file,
@@ -866,6 +874,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
         image: dict[str, Any],
         reply_to: str | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_image_message(
             recipient=recipient,
             image=image,
@@ -879,6 +888,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
         video: dict[str, Any],
         reply_to: str | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_video_message(
             recipient=recipient,
             video=video,
@@ -886,6 +896,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
         )
 
     async def send_raw_message(self, *, payload: dict[str, Any]) -> dict | None:
+        await self.init()
         return await self._client_for().send_raw_message(payload=payload)
 
     async def upload_media(
@@ -894,6 +905,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
         file_path: str | BytesIO,
         media_type: str,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().upload_media(
             file_path=file_path,
             media_type=media_type,
@@ -905,6 +917,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
         media_id: str,
         mime_type: str | None = None,
     ) -> dict[str, Any] | None:
+        await self.init()
         return await self._client_for().download_media(
             media_id=media_id,
             mime_type=mime_type,
@@ -917,6 +930,7 @@ class MultiProfileWeChatClient(SimpleProfileClientManager, IWeChatClient):
         state: str,
         message_id: str | None = None,
     ) -> bool | None:
+        await self.init()
         return await self._client_for().emit_processing_signal(
             recipient,
             state=state,

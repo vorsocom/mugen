@@ -95,9 +95,10 @@ def _default_ingress_route(
         "channel_key": channel_key,
         "identifier_claims": dict(identifier_claims or {}),
         "channel_profile_id": None,
+        "client_profile_id": None,
         "route_key": None,
         "binding_id": None,
-        "runtime_profile_key": None,
+        "client_profile_key": None,
     }
 
 

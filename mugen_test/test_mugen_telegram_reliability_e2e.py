@@ -16,6 +16,8 @@ from mugen.core.plugin.telegram.botapi.api import webhook
 from mugen.core.plugin.telegram.botapi.ipc_ext import TelegramBotAPIIPCExtension
 from mugen.core.service.ipc import DefaultIPCService
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000206")
+
 
 class _MemoryRelational:
     def __init__(self) -> None:
@@ -100,6 +102,8 @@ class _IngressRoutingStub:
                 tenant_slug="tenant-a",
                 platform="telegram",
                 channel_key="telegram",
+                client_profile_id=_CLIENT_PROFILE_ID,
+                client_profile_key="telegram-a",
                 identifier_claims={
                     "identifier_type": "path_token",
                     "identifier_value": str(identifier_value),
@@ -250,7 +254,8 @@ class TestMugenTelegramReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
-                        "runtime_profile_key": None,
+                        "client_profile_id": str(_CLIENT_PROFILE_ID),
+                        "client_profile_key": "telegram-a",
                         "tenant_resolution": {
                             "mode": "resolved",
                             "reason_code": None,
@@ -329,7 +334,8 @@ class TestMugenTelegramReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                         "channel_profile_id": None,
                         "route_key": None,
                         "binding_id": None,
-                        "runtime_profile_key": None,
+                        "client_profile_id": str(_CLIENT_PROFILE_ID),
+                        "client_profile_key": "telegram-a",
                         "tenant_resolution": {
                             "mode": "resolved",
                             "reason_code": None,

@@ -1,8 +1,8 @@
-"""Unit tests for runtime profile client managers."""
+"""Unit tests for ACP-backed multi-profile client managers."""
 
 from __future__ import annotations
 
-import asyncio
+import uuid
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -12,20 +12,65 @@ from mugen.core.client import runtime_profile_manager as rpm_mod
 from mugen.core.client import telegram as telegram_mod
 from mugen.core.client import wechat as wechat_mod
 from mugen.core.client import whatsapp as whatsapp_mod
-from mugen.core.utility.platform_runtime_profile import (
-    build_config_namespace,
-    runtime_profile_scope,
+from mugen.core.plugin.acp.service.messaging_client_profile import (
+    RuntimeMessagingClientProfileSpec,
 )
+from mugen.core.utility.client_profile_runtime import client_profile_scope
+from mugen.core.utility.platform_runtime_profile import build_config_namespace
+
+_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000111")
+_DEFAULT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_SECONDARY_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+_TERTIARY_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 
-def _profiled_config(platform: str, keys: tuple[str, ...]) -> SimpleNamespace:
-    return build_config_namespace(
-        {
-            platform: {
-                "profiles": [{"key": key} for key in keys],
-            }
-        }
+def _root_config() -> SimpleNamespace:
+    return build_config_namespace({})
+
+
+def _runtime_spec(
+    platform: str,
+    *,
+    client_profile_id: uuid.UUID,
+    profile_key: str,
+    settings: dict | None = None,
+) -> RuntimeMessagingClientProfileSpec:
+    platform_settings = {
+        "client_profile_id": str(client_profile_id),
+        "client_profile_key": profile_key,
+    }
+    platform_settings.update(settings or {})
+    return RuntimeMessagingClientProfileSpec(
+        client_profile_id=client_profile_id,
+        tenant_id=_TENANT_ID,
+        platform_key=platform,
+        profile_key=profile_key,
+        config=build_config_namespace({platform: platform_settings}),
+        snapshot={
+            "id": str(client_profile_id),
+            "profile_key": profile_key,
+            "settings": settings or {},
+        },
     )
+
+
+class _MessagingClientProfileServiceStub:
+    def __init__(self, *responses) -> None:
+        self._responses = list(responses)
+        self.calls: list[str] = []
+
+    async def list_active_runtime_specs(
+        self,
+        *,
+        config,
+        platform_key: str,
+    ) -> tuple[RuntimeMessagingClientProfileSpec, ...]:
+        _ = config
+        self.calls.append(platform_key)
+        if not self._responses:
+            return ()
+        index = min(len(self.calls) - 1, len(self._responses) - 1)
+        return self._responses[index]
 
 
 class _LifecycleClient:
@@ -33,11 +78,14 @@ class _LifecycleClient:
 
     def __init__(self, config: SimpleNamespace = None, **_kwargs) -> None:
         platform = next(
-            key for key in vars(config).keys() if not key.startswith("_") and key != "dict"
+            key
+            for key in vars(config).keys()
+            if not key.startswith("_") and key != "dict"
         )
         platform_cfg = getattr(config, platform)
         self.platform = platform
-        self.runtime_profile_key = getattr(platform_cfg, "runtime_profile_key", None)
+        self.client_profile_id = str(platform_cfg.client_profile_id)
+        self.client_profile_key = str(platform_cfg.client_profile_key)
         self.verify_result = bool(getattr(platform_cfg, "verify_result", True))
         self.close_error = getattr(platform_cfg, "close_error", None)
         self.init_count = 0
@@ -87,10 +135,13 @@ class _DelegationClient:
 
     def __init__(self, config: SimpleNamespace = None, **_kwargs) -> None:
         platform = next(
-            key for key in vars(config).keys() if not key.startswith("_") and key != "dict"
+            key
+            for key in vars(config).keys()
+            if not key.startswith("_") and key != "dict"
         )
         platform_cfg = getattr(config, platform)
-        self.runtime_profile_key = getattr(platform_cfg, "runtime_profile_key")
+        self.client_profile_id = str(platform_cfg.client_profile_id)
+        self.client_profile_key = str(platform_cfg.client_profile_key)
         self.init = AsyncMock()
         self.verify_startup = AsyncMock(return_value=True)
         self.close = AsyncMock()
@@ -105,7 +156,8 @@ class _DelegationClient:
         async def _result(*args, **kwargs):
             return {
                 "method": method_name,
-                "runtime_profile_key": self.runtime_profile_key,
+                "client_profile_id": self.client_profile_id,
+                "client_profile_key": self.client_profile_key,
                 "args": args,
                 "kwargs": kwargs,
             }
@@ -119,545 +171,724 @@ class TestSimpleProfileClientManager(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         _LifecycleClient.instances.clear()
 
-    async def test_manager_requires_profiles_and_resolves_runtime_keys(self) -> None:
-        with self.assertRaises(RuntimeError):
-            rpm_mod.SimpleProfileClientManager(
+    async def test_manager_allows_zero_profiles_and_resolves_client_ids(self) -> None:
+        empty_service = _MessagingClientProfileServiceStub(())
+        with patch.object(
+            rpm_mod,
+            "MessagingClientProfileService",
+            return_value=empty_service,
+        ):
+            manager = rpm_mod.SimpleProfileClientManager(
                 platform="line",
                 client_cls=_LifecycleClient,
-                config=build_config_namespace({}),
+                config=_root_config(),
+                relational_storage_gateway=object(),
             )
+            await manager.init()
+            self.assertEqual(manager.configured_client_profile_ids(), ())
+            with self.assertRaisesRegex(RuntimeError, "No active client profiles"):
+                manager._resolve_client_profile_id()  # pylint: disable=protected-access
 
-        manager = rpm_mod.SimpleProfileClientManager(
-            platform="line",
-            client_cls=_LifecycleClient,
-            config=_profiled_config("line", ("default", "secondary")),
+        profiled_service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_SECONDARY_ID,
+                    profile_key="secondary",
+                ),
+            )
         )
-        self.assertEqual(
-            manager.configured_runtime_profile_keys(),
-            ("default", "secondary"),
-        )
-        self.assertEqual(
-            manager._resolve_runtime_profile_key(),  # pylint: disable=protected-access
-            "default",
-        )
-        with runtime_profile_scope("secondary"):
+        with patch.object(
+            rpm_mod,
+            "MessagingClientProfileService",
+            return_value=profiled_service,
+        ):
+            manager = rpm_mod.SimpleProfileClientManager(
+                platform="line",
+                client_cls=_LifecycleClient,
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            await manager.init()
             self.assertEqual(
-                manager._resolve_runtime_profile_key(),  # pylint: disable=protected-access
-                "secondary",
+                manager.configured_client_profile_ids(),
+                (str(_DEFAULT_ID), str(_SECONDARY_ID)),
             )
+            with client_profile_scope(_SECONDARY_ID):
+                self.assertEqual(
+                    manager._resolve_client_profile_id(),  # pylint: disable=protected-access
+                    str(_SECONDARY_ID),
+                )
+                self.assertEqual(
+                    manager._client_for().client_profile_id,  # pylint: disable=protected-access
+                    str(_SECONDARY_ID),
+                )
+
+            with self.assertRaisesRegex(RuntimeError, "Unknown client profile id"):
+                manager._resolve_client_profile_id(  # pylint: disable=protected-access
+                    uuid.UUID("00000000-0000-0000-0000-000000000099")
+                )
+
+        single_service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+            )
+        )
+        with patch.object(
+            rpm_mod,
+            "MessagingClientProfileService",
+            return_value=single_service,
+        ):
+            manager = rpm_mod.SimpleProfileClientManager(
+                platform="line",
+                client_cls=_LifecycleClient,
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            await manager.init()
             self.assertEqual(
-                manager._client_for().runtime_profile_key,  # pylint: disable=protected-access
-                "secondary",
+                manager._resolve_client_profile_id(),  # pylint: disable=protected-access
+                str(_DEFAULT_ID),
             )
-        with self.assertRaises(RuntimeError):
-            manager._resolve_runtime_profile_key("missing")  # pylint: disable=protected-access
-
-        sole_manager = rpm_mod.SimpleProfileClientManager(
-            platform="line",
-            client_cls=_LifecycleClient,
-            config=_profiled_config("line", ("custom",)),
-        )
-        self.assertEqual(
-            sole_manager._resolve_runtime_profile_key(),  # pylint: disable=protected-access
-            "custom",
-        )
-
-        no_default_manager = rpm_mod.SimpleProfileClientManager(
-            platform="line",
-            client_cls=_LifecycleClient,
-            config=_profiled_config("line", ("alpha", "beta")),
-        )
-        with self.assertRaises(RuntimeError):
-            no_default_manager._resolve_runtime_profile_key()  # pylint: disable=protected-access
 
     async def test_manager_lifecycle_and_successful_reload(self) -> None:
+        service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_SECONDARY_ID,
+                    profile_key="secondary",
+                ),
+            ),
+            (
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                    settings={"channel": {"secret": "updated"}},
+                ),
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_TERTIARY_ID,
+                    profile_key="tertiary",
+                ),
+            ),
+        )
+        with patch.object(
+            rpm_mod,
+            "MessagingClientProfileService",
+            return_value=service,
+        ):
+            manager = rpm_mod.SimpleProfileClientManager(
+                platform="line",
+                client_cls=_LifecycleClient,
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+
+            await manager.init()
+            await manager.init()
+            initial_clients = tuple(manager._clients.values())  # pylint: disable=protected-access
+
+            self.assertTrue(manager._initialized)  # pylint: disable=protected-access
+            self.assertTrue(await manager.verify_startup())
+            self.assertEqual([client.init_count for client in initial_clients], [1, 1])
+
+            diff = await manager.reload_profiles(_root_config())
+            self.assertEqual(diff["added"], [str(_TERTIARY_ID)])
+            self.assertEqual(diff["removed"], [str(_SECONDARY_ID)])
+            self.assertEqual(diff["updated"], [str(_DEFAULT_ID)])
+            self.assertEqual(diff["unchanged"], [])
+            self.assertTrue(all(client.closed for client in initial_clients))
+
+            await manager.close()
+            self.assertEqual(manager._clients, {})  # pylint: disable=protected-access
+            self.assertEqual(manager._profile_snapshots, {})  # pylint: disable=protected-access
+            self.assertFalse(manager._initialized)  # pylint: disable=protected-access
+
+    async def test_service_class_helper_and_manager_without_relational_gateway(
+        self,
+    ) -> None:
+        imported_service_class = object()
+        with (
+            patch.object(rpm_mod, "MessagingClientProfileService", None),
+            patch.object(
+                rpm_mod.importlib,
+                "import_module",
+                return_value=SimpleNamespace(
+                    MessagingClientProfileService=imported_service_class
+                ),
+            ) as import_module,
+        ):
+            self.assertIs(
+                rpm_mod._messaging_client_profile_service_class(),  # pylint: disable=protected-access
+                imported_service_class,
+            )
+        import_module.assert_called_once_with(
+            "mugen.core.plugin.acp.service.messaging_client_profile"
+        )
+
         manager = rpm_mod.SimpleProfileClientManager(
             platform="line",
             client_cls=_LifecycleClient,
-            config=_profiled_config("line", ("default", "secondary")),
+            config=_root_config(),
         )
-        initial_clients = tuple(manager._clients.values())  # pylint: disable=protected-access
-
         await manager.init()
-        await manager.init()
-        self.assertTrue(manager._initialized)  # pylint: disable=protected-access
+        self.assertEqual(manager.configured_client_profile_ids(), ())
         self.assertTrue(await manager.verify_startup())
-        self.assertEqual([client.init_count for client in initial_clients], [1, 1])
-
-        next_config = build_config_namespace(
-            {
-                "line": {
-                    "profiles": [
-                        {"key": "default", "channel": {"secret": "updated"}},
-                        {"key": "tertiary"},
-                    ]
-                }
-            }
-        )
-        diff = await manager.reload_profiles(next_config)
-        self.assertEqual(diff["added"], ["tertiary"])
-        self.assertEqual(diff["removed"], ["secondary"])
-        self.assertEqual(diff["updated"], ["default"])
-        self.assertEqual(diff["unchanged"], [])
-        self.assertTrue(all(client.closed for client in initial_clients))
-
         await manager.close()
-        self.assertEqual(manager._clients, {})  # pylint: disable=protected-access
-        self.assertEqual(manager._profile_snapshots, {})  # pylint: disable=protected-access
-        self.assertFalse(manager._initialized)  # pylint: disable=protected-access
 
     async def test_manager_reload_failure_closes_candidate_clients(self) -> None:
-        manager = rpm_mod.SimpleProfileClientManager(
-            platform="line",
-            client_cls=_LifecycleClient,
-            config=_profiled_config("line", ("default",)),
+        service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+            ),
+            (
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                    settings={"verify_result": False},
+                ),
+            ),
         )
-        next_config = build_config_namespace(
-            {
-                "line": {
-                    "profiles": [
-                        {"key": "default", "verify_result": False},
-                    ]
-                }
-            }
-        )
+        with patch.object(
+            rpm_mod,
+            "MessagingClientProfileService",
+            return_value=service,
+        ):
+            manager = rpm_mod.SimpleProfileClientManager(
+                platform="line",
+                client_cls=_LifecycleClient,
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            await manager.init()
 
-        with self.assertRaises(RuntimeError):
-            await manager.reload_profiles(next_config)
+            with self.assertRaisesRegex(RuntimeError, "startup probe failed"):
+                await manager.reload_profiles(_root_config())
 
-        self.assertEqual(
-            [client.closed for client in _LifecycleClient.instances[-1:]],
-            [True],
-        )
+            self.assertTrue(_LifecycleClient.instances[-1].closed)
 
     async def test_manager_close_surfaces_profile_close_failures(self) -> None:
-        manager = rpm_mod.SimpleProfileClientManager(
-            platform="line",
-            client_cls=_LifecycleClient,
-            config=build_config_namespace(
-                {
-                    "line": {
-                        "profiles": [
-                            {"key": "default", "close_error": "default close failed"},
-                            {"key": "secondary", "close_error": "secondary close failed"},
-                        ]
-                    }
-                }
-            ),
-        )
-
-        await manager.init()
-
-        with self.assertRaisesRegex(
-            RuntimeError,
+        service = _MessagingClientProfileServiceStub(
             (
-                "line runtime profile cleanup failed: "
-                "default=RuntimeError: default close failed; "
-                "secondary=RuntimeError: secondary close failed"
-            ),
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                    settings={"close_error": "default close failed"},
+                ),
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_SECONDARY_ID,
+                    profile_key="secondary",
+                    settings={"close_error": "secondary close failed"},
+                ),
+            )
+        )
+        with patch.object(
+            rpm_mod,
+            "MessagingClientProfileService",
+            return_value=service,
         ):
-            await manager.close()
+            manager = rpm_mod.SimpleProfileClientManager(
+                platform="line",
+                client_cls=_LifecycleClient,
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            await manager.init()
 
-        self.assertEqual(manager._clients, {})  # pylint: disable=protected-access
-        self.assertFalse(manager._initialized)  # pylint: disable=protected-access
+            with self.assertRaisesRegex(
+                RuntimeError,
+                (
+                    "line client profile cleanup failed: "
+                    f"{_DEFAULT_ID}=RuntimeError: default close failed; "
+                    f"{_SECONDARY_ID}=RuntimeError: secondary close failed"
+                ),
+            ):
+                await manager.close()
+
+            self.assertEqual(manager._clients, {})  # pylint: disable=protected-access
+            self.assertFalse(manager._initialized)  # pylint: disable=protected-access
 
     async def test_manager_reload_failure_surfaces_candidate_cleanup_failure(self) -> None:
-        manager = rpm_mod.SimpleProfileClientManager(
-            platform="line",
-            client_cls=_LifecycleClient,
-            config=_profiled_config("line", ("default",)),
-        )
-        next_config = build_config_namespace(
-            {
-                "line": {
-                    "profiles": [
-                        {
-                            "key": "default",
-                            "verify_result": False,
-                            "close_error": "candidate close failed",
-                        },
-                    ]
-                }
-            }
-        )
-
-        with self.assertRaisesRegex(
-            RuntimeError,
+        service = _MessagingClientProfileServiceStub(
             (
-                "line runtime profile reload failed after RuntimeError: "
-                "line runtime profile startup probe failed\\.; cleanup failed: "
-                "line runtime profile cleanup failed: "
-                "default=RuntimeError: candidate close failed"
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
             ),
+            (
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                    settings={
+                        "verify_result": False,
+                        "close_error": "candidate close failed",
+                    },
+                ),
+            ),
+        )
+        with patch.object(
+            rpm_mod,
+            "MessagingClientProfileService",
+            return_value=service,
         ):
-            await manager.reload_profiles(next_config)
+            manager = rpm_mod.SimpleProfileClientManager(
+                platform="line",
+                client_cls=_LifecycleClient,
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            await manager.init()
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                (
+                    "line client profile reload failed after RuntimeError: "
+                    "line client profile startup probe failed\\.; cleanup failed: "
+                    "line client profile cleanup failed: "
+                    f"{_DEFAULT_ID}=RuntimeError: candidate close failed"
+                ),
+            ):
+                await manager.reload_profiles(_root_config())
 
 
 class TestMultiProfilePlatformDelegates(unittest.IsolatedAsyncioTestCase):
-    """Covers the thin delegation wrappers for multi-profile platform clients."""
+    """Covers thin delegation wrappers for ACP-backed platform clients."""
 
-    async def test_multi_profile_line_client_delegates_to_selected_profile(self) -> None:
-        with patch.object(line_mod, "DefaultLineClient", _DelegationClient):
+    async def test_multi_profile_line_client_requires_scope_and_delegates(self) -> None:
+        service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+                _runtime_spec(
+                    "line",
+                    client_profile_id=_SECONDARY_ID,
+                    profile_key="secondary",
+                ),
+            )
+        )
+        with (
+            patch.object(rpm_mod, "MessagingClientProfileService", return_value=service),
+            patch.object(line_mod, "DefaultLineClient", _DelegationClient),
+        ):
             client = line_mod.MultiProfileLineClient(
-                config=_profiled_config("line", ("default", "secondary"))
+                config=_root_config(),
+                relational_storage_gateway=object(),
             )
-            default_result = await client.reply_messages(
-                reply_token="reply-token",
-                messages=[{"type": "text"}],
-            )
-            self.assertEqual(default_result["runtime_profile_key"], "default")
-
-            with runtime_profile_scope("secondary"):
-                calls = [
-                    (
-                        client.push_messages,
-                        {"to": "U1", "messages": [{"type": "text"}]},
-                        "push_messages",
-                    ),
-                    (
-                        client.multicast_messages,
-                        {"to": ["U1", "U2"], "messages": [{"type": "text"}]},
-                        "multicast_messages",
-                    ),
-                    (
-                        client.send_text_message,
-                        {
-                            "recipient": "U1",
-                            "text": "hello",
-                            "reply_token": "reply-token",
-                        },
-                        "send_text_message",
-                    ),
-                    (
-                        client.send_image_message,
-                        {
-                            "recipient": "U1",
-                            "image": {"uri": "mxc://image"},
-                            "reply_token": None,
-                        },
-                        "send_image_message",
-                    ),
-                    (
-                        client.send_audio_message,
-                        {
-                            "recipient": "U1",
-                            "audio": {"uri": "mxc://audio"},
-                            "reply_token": None,
-                        },
-                        "send_audio_message",
-                    ),
-                    (
-                        client.send_video_message,
-                        {
-                            "recipient": "U1",
-                            "video": {"uri": "mxc://video"},
-                            "reply_token": None,
-                        },
-                        "send_video_message",
-                    ),
-                    (
-                        client.send_file_message,
-                        {
-                            "recipient": "U1",
-                            "file": {"uri": "mxc://file"},
-                            "reply_token": None,
-                        },
-                        "send_file_message",
-                    ),
-                    (
-                        client.send_raw_message,
-                        {"op": "push", "payload": {"x": 1}},
-                        "send_raw_message",
-                    ),
-                    (
-                        client.download_media,
-                        {"message_id": "msg-1"},
-                        "download_media",
-                    ),
-                    (
-                        client.get_profile,
-                        {"user_id": "U1"},
-                        "get_profile",
-                    ),
-                ]
-                for method, kwargs, expected_method in calls:
-                    result = await method(**kwargs)
-                    self.assertEqual(result["method"], expected_method)
-                    self.assertEqual(result["runtime_profile_key"], "secondary")
-
-                emit_result = await client.emit_processing_signal(
-                    "U1",
-                    state="start",
-                    message_id="m1",
+            with self.assertRaisesRegex(RuntimeError, "client_profile_id is required"):
+                await client.reply_messages(
+                    reply_token="reply-token",
+                    messages=[{"type": "text"}],
                 )
-                self.assertEqual(emit_result["method"], "emit_processing_signal")
-                self.assertEqual(
-                    emit_result["runtime_profile_key"],
-                    "secondary",
+
+            with client_profile_scope(_SECONDARY_ID):
+                result = await client.send_text_message(
+                    recipient="U1",
+                    text="hello",
+                    reply_token="reply-token",
                 )
+                self.assertEqual(result["method"], "send_text_message")
+                self.assertEqual(result["client_profile_id"], str(_SECONDARY_ID))
 
     async def test_multi_profile_telegram_client_delegates_to_selected_profile(self) -> None:
-        with patch.object(telegram_mod, "DefaultTelegramClient", _DelegationClient):
-            client = telegram_mod.MultiProfileTelegramClient(
-                config=_profiled_config("telegram", ("default", "secondary"))
+        service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "telegram",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+                _runtime_spec(
+                    "telegram",
+                    client_profile_id=_SECONDARY_ID,
+                    profile_key="secondary",
+                ),
             )
-
-            with runtime_profile_scope("secondary"):
-                calls = [
-                    (
-                        client.send_text_message,
-                        {
-                            "chat_id": "1",
-                            "text": "hello",
-                            "reply_markup": {"inline": True},
-                            "reply_to_message_id": 1,
-                        },
-                        "send_text_message",
-                    ),
-                    (
-                        client.send_audio_message,
-                        {
-                            "chat_id": "1",
-                            "audio": {"file_id": "audio"},
-                            "reply_to_message_id": 2,
-                        },
-                        "send_audio_message",
-                    ),
-                    (
-                        client.send_file_message,
-                        {
-                            "chat_id": "1",
-                            "document": {"file_id": "doc"},
-                            "reply_to_message_id": 3,
-                        },
-                        "send_file_message",
-                    ),
-                    (
-                        client.send_image_message,
-                        {
-                            "chat_id": "1",
-                            "photo": {"file_id": "photo"},
-                            "reply_to_message_id": 4,
-                        },
-                        "send_image_message",
-                    ),
-                    (
-                        client.send_video_message,
-                        {
-                            "chat_id": "1",
-                            "video": {"file_id": "video"},
-                            "reply_to_message_id": 5,
-                        },
-                        "send_video_message",
-                    ),
-                    (
-                        client.answer_callback_query,
-                        {
-                            "callback_query_id": "cq-1",
-                            "text": "ok",
-                            "show_alert": True,
-                        },
-                        "answer_callback_query",
-                    ),
-                ]
-                for method, kwargs, expected_method in calls:
-                    result = await method(**kwargs)
-                    self.assertEqual(result["method"], expected_method)
-                    self.assertEqual(result["runtime_profile_key"], "secondary")
-
-                emit_result = await client.emit_processing_signal(
-                    "1",
-                    state="start",
-                    message_id="m1",
+        )
+        with (
+            patch.object(rpm_mod, "MessagingClientProfileService", return_value=service),
+            patch.object(telegram_mod, "DefaultTelegramClient", _DelegationClient),
+        ):
+            client = telegram_mod.MultiProfileTelegramClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            with client_profile_scope(_SECONDARY_ID):
+                result = await client.send_text_message(
+                    chat_id="1",
+                    text="hello",
+                    reply_markup={"inline": True},
+                    reply_to_message_id=1,
                 )
-                self.assertEqual(emit_result["method"], "emit_processing_signal")
-
-                download_result = await client.download_media("file-1")
-                self.assertEqual(download_result["method"], "download_media")
+                self.assertEqual(result["method"], "send_text_message")
+                self.assertEqual(result["client_profile_id"], str(_SECONDARY_ID))
 
     async def test_multi_profile_wechat_client_delegates_to_selected_profile(self) -> None:
-        with patch.object(wechat_mod, "DefaultWeChatClient", _DelegationClient):
-            client = wechat_mod.MultiProfileWeChatClient(
-                config=_profiled_config("wechat", ("default", "secondary"))
+        service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "wechat",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+                _runtime_spec(
+                    "wechat",
+                    client_profile_id=_SECONDARY_ID,
+                    profile_key="secondary",
+                ),
             )
-
-            with runtime_profile_scope("secondary"):
-                calls = [
-                    (
-                        client.send_text_message,
-                        {
-                            "recipient": "user-1",
-                            "text": "hello",
-                            "reply_to": "ref-1",
-                        },
-                        "send_text_message",
-                    ),
-                    (
-                        client.send_audio_message,
-                        {
-                            "recipient": "user-1",
-                            "audio": {"media_id": "audio"},
-                            "reply_to": None,
-                        },
-                        "send_audio_message",
-                    ),
-                    (
-                        client.send_file_message,
-                        {
-                            "recipient": "user-1",
-                            "file": {"media_id": "file"},
-                            "reply_to": None,
-                        },
-                        "send_file_message",
-                    ),
-                    (
-                        client.send_image_message,
-                        {
-                            "recipient": "user-1",
-                            "image": {"media_id": "image"},
-                            "reply_to": None,
-                        },
-                        "send_image_message",
-                    ),
-                    (
-                        client.send_video_message,
-                        {
-                            "recipient": "user-1",
-                            "video": {"media_id": "video"},
-                            "reply_to": None,
-                        },
-                        "send_video_message",
-                    ),
-                    (
-                        client.send_raw_message,
-                        {"payload": {"msgtype": "text"}},
-                        "send_raw_message",
-                    ),
-                    (
-                        client.upload_media,
-                        {"file_path": "/tmp/file", "media_type": "image"},
-                        "upload_media",
-                    ),
-                    (
-                        client.download_media,
-                        {"media_id": "media-1", "mime_type": "image/png"},
-                        "download_media",
-                    ),
-                ]
-                for method, kwargs, expected_method in calls:
-                    result = await method(**kwargs)
-                    self.assertEqual(result["method"], expected_method)
-                    self.assertEqual(result["runtime_profile_key"], "secondary")
-
-                emit_result = await client.emit_processing_signal(
-                    "user-1",
-                    state="start",
-                    message_id="m1",
-                )
-                self.assertEqual(emit_result["method"], "emit_processing_signal")
+        )
+        with (
+            patch.object(rpm_mod, "MessagingClientProfileService", return_value=service),
+            patch.object(wechat_mod, "DefaultWeChatClient", _DelegationClient),
+        ):
+            client = wechat_mod.MultiProfileWeChatClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            with client_profile_scope(_SECONDARY_ID):
+                result = await client.send_raw_message(payload={"msgtype": "text"})
+                self.assertEqual(result["method"], "send_raw_message")
+                self.assertEqual(result["client_profile_id"], str(_SECONDARY_ID))
 
     async def test_multi_profile_whatsapp_client_delegates_to_selected_profile(self) -> None:
-        with patch.object(whatsapp_mod, "DefaultWhatsAppClient", _DelegationClient):
-            client = whatsapp_mod.MultiProfileWhatsAppClient(
-                config=_profiled_config("whatsapp", ("default", "secondary"))
+        service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "whatsapp",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+                _runtime_spec(
+                    "whatsapp",
+                    client_profile_id=_SECONDARY_ID,
+                    profile_key="secondary",
+                ),
             )
+        )
+        with (
+            patch.object(rpm_mod, "MessagingClientProfileService", return_value=service),
+            patch.object(whatsapp_mod, "DefaultWhatsAppClient", _DelegationClient),
+        ):
+            client = whatsapp_mod.MultiProfileWhatsAppClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            with client_profile_scope(_SECONDARY_ID):
+                result = await client.send_text_message(
+                    "hello",
+                    "15550001",
+                    "reply-1",
+                )
+                self.assertEqual(result["method"], "send_text_message")
+                self.assertEqual(result["client_profile_id"], str(_SECONDARY_ID))
 
-            with runtime_profile_scope("secondary"):
-                calls = [
-                    (client.delete_media, ("media-1",), {}, "delete_media"),
+    async def test_platform_delegate_wrappers_cover_remaining_methods(self) -> None:
+        with (
+            patch.object(
+                rpm_mod,
+                "MessagingClientProfileService",
+                return_value=_MessagingClientProfileServiceStub(
                     (
-                        client.download_media,
-                        ("https://example/media", "image/png"),
-                        {},
-                        "download_media",
+                        _runtime_spec(
+                            "line",
+                            client_profile_id=_DEFAULT_ID,
+                            profile_key="default",
+                        ),
+                        _runtime_spec(
+                            "line",
+                            client_profile_id=_SECONDARY_ID,
+                            profile_key="secondary",
+                        ),
+                    )
+                ),
+            ),
+            patch.object(line_mod, "DefaultLineClient", _DelegationClient),
+        ):
+            client = line_mod.MultiProfileLineClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            with client_profile_scope(_SECONDARY_ID):
+                line_results = [
+                    await client.push_messages(to="U1", messages=[{"type": "text"}]),
+                    await client.multicast_messages(
+                        to=["U1", "U2"],
+                        messages=[{"type": "text"}],
                     ),
-                    (
-                        client.retrieve_media_url,
-                        ("media-1",),
-                        {},
-                        "retrieve_media_url",
+                    await client.send_image_message(
+                        recipient="U1",
+                        image={"url": "https://example.com/image.png"},
                     ),
-                    (
-                        client.send_audio_message,
-                        ({"id": "audio"}, "15550001", "reply-1"),
-                        {},
-                        "send_audio_message",
+                    await client.send_audio_message(
+                        recipient="U1",
+                        audio={"url": "https://example.com/audio.mp3"},
                     ),
-                    (
-                        client.send_contacts_message,
-                        ({"contacts": []}, "15550001", "reply-1"),
-                        {},
-                        "send_contacts_message",
+                    await client.send_video_message(
+                        recipient="U1",
+                        video={"url": "https://example.com/video.mp4"},
                     ),
-                    (
-                        client.send_document_message,
-                        ({"id": "doc"}, "15550001", "reply-1"),
-                        {},
-                        "send_document_message",
+                    await client.send_file_message(
+                        recipient="U1",
+                        file={"url": "https://example.com/file.pdf"},
                     ),
-                    (
-                        client.send_image_message,
-                        ({"id": "img"}, "15550001", "reply-1"),
-                        {},
-                        "send_image_message",
+                    await client.send_raw_message(
+                        op="broadcast",
+                        payload={"messages": [{"type": "text"}]},
                     ),
-                    (
-                        client.send_interactive_message,
-                        ({"type": "button"}, "15550001", "reply-1"),
-                        {},
-                        "send_interactive_message",
-                    ),
-                    (
-                        client.send_location_message,
-                        ({"lat": 1}, "15550001", "reply-1"),
-                        {},
-                        "send_location_message",
-                    ),
-                    (
-                        client.send_reaction_message,
-                        ({"emoji": "👍"}, "15550001"),
-                        {},
-                        "send_reaction_message",
-                    ),
-                    (
-                        client.send_sticker_message,
-                        ({"id": "sticker"}, "15550001", "reply-1"),
-                        {},
-                        "send_sticker_message",
-                    ),
-                    (
-                        client.send_template_message,
-                        ({"name": "template"}, "15550001", "reply-1"),
-                        {},
-                        "send_template_message",
-                    ),
-                    (
-                        client.send_text_message,
-                        ("hello", "15550001", "reply-1"),
-                        {},
-                        "send_text_message",
-                    ),
-                    (
-                        client.send_video_message,
-                        ({"id": "video"}, "15550001", "reply-1"),
-                        {},
-                        "send_video_message",
-                    ),
-                    (
-                        client.upload_media,
-                        ("/tmp/file", "image/png"),
-                        {},
-                        "upload_media",
+                    await client.download_media(message_id="m-1"),
+                    await client.get_profile(user_id="U1"),
+                    await client.emit_processing_signal(
+                        "U1",
+                        state="typing",
+                        message_id="m-1",
                     ),
                 ]
-                for method, args, kwargs, expected_method in calls:
-                    result = await method(*args, **kwargs)
-                    self.assertEqual(result["method"], expected_method)
-                    self.assertEqual(result["runtime_profile_key"], "secondary")
+        self.assertEqual(
+            [result["method"] for result in line_results],
+            [
+                "push_messages",
+                "multicast_messages",
+                "send_image_message",
+                "send_audio_message",
+                "send_video_message",
+                "send_file_message",
+                "send_raw_message",
+                "download_media",
+                "get_profile",
+                "emit_processing_signal",
+            ],
+        )
+        self.assertTrue(
+            all(result["client_profile_id"] == str(_SECONDARY_ID) for result in line_results)
+        )
 
-                emit_result = await client.emit_processing_signal(
-                    "15550001",
-                    state="start",
-                    message_id="m1",
-                )
-                self.assertEqual(emit_result["method"], "emit_processing_signal")
+        with (
+            patch.object(
+                rpm_mod,
+                "MessagingClientProfileService",
+                return_value=_MessagingClientProfileServiceStub(
+                    (
+                        _runtime_spec(
+                            "telegram",
+                            client_profile_id=_DEFAULT_ID,
+                            profile_key="default",
+                        ),
+                        _runtime_spec(
+                            "telegram",
+                            client_profile_id=_SECONDARY_ID,
+                            profile_key="secondary",
+                        ),
+                    )
+                ),
+            ),
+            patch.object(telegram_mod, "DefaultTelegramClient", _DelegationClient),
+        ):
+            client = telegram_mod.MultiProfileTelegramClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            with client_profile_scope(_SECONDARY_ID):
+                telegram_results = [
+                    await client.send_audio_message(chat_id="1", audio={"id": "a-1"}),
+                    await client.send_file_message(
+                        chat_id="1",
+                        document={"id": "d-1"},
+                    ),
+                    await client.send_image_message(chat_id="1", photo={"id": "p-1"}),
+                    await client.send_video_message(chat_id="1", video={"id": "v-1"}),
+                    await client.answer_callback_query(
+                        callback_query_id="cb-1",
+                        text="ok",
+                        show_alert=True,
+                    ),
+                    await client.emit_processing_signal(
+                        "1",
+                        state="typing",
+                        message_id="m-1",
+                    ),
+                    await client.download_media("file-1"),
+                ]
+        self.assertEqual(
+            [result["method"] for result in telegram_results],
+            [
+                "send_audio_message",
+                "send_file_message",
+                "send_image_message",
+                "send_video_message",
+                "answer_callback_query",
+                "emit_processing_signal",
+                "download_media",
+            ],
+        )
+        self.assertTrue(
+            all(
+                result["client_profile_id"] == str(_SECONDARY_ID)
+                for result in telegram_results
+            )
+        )
+
+        with (
+            patch.object(
+                rpm_mod,
+                "MessagingClientProfileService",
+                return_value=_MessagingClientProfileServiceStub(
+                    (
+                        _runtime_spec(
+                            "wechat",
+                            client_profile_id=_DEFAULT_ID,
+                            profile_key="default",
+                        ),
+                        _runtime_spec(
+                            "wechat",
+                            client_profile_id=_SECONDARY_ID,
+                            profile_key="secondary",
+                        ),
+                    )
+                ),
+            ),
+            patch.object(wechat_mod, "DefaultWeChatClient", _DelegationClient),
+        ):
+            client = wechat_mod.MultiProfileWeChatClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            with client_profile_scope(_SECONDARY_ID):
+                wechat_results = [
+                    await client.send_text_message(recipient="U1", text="hello"),
+                    await client.send_audio_message(recipient="U1", audio={"id": "a-1"}),
+                    await client.send_file_message(recipient="U1", file={"id": "f-1"}),
+                    await client.send_image_message(recipient="U1", image={"id": "i-1"}),
+                    await client.send_video_message(recipient="U1", video={"id": "v-1"}),
+                    await client.upload_media(
+                        file_path="/tmp/example.bin",
+                        media_type="image",
+                    ),
+                    await client.download_media(
+                        media_id="media-1",
+                        mime_type="image/png",
+                    ),
+                    await client.emit_processing_signal(
+                        "U1",
+                        state="typing",
+                        message_id="m-1",
+                    ),
+                ]
+        self.assertEqual(
+            [result["method"] for result in wechat_results],
+            [
+                "send_text_message",
+                "send_audio_message",
+                "send_file_message",
+                "send_image_message",
+                "send_video_message",
+                "upload_media",
+                "download_media",
+                "emit_processing_signal",
+            ],
+        )
+        self.assertTrue(
+            all(result["client_profile_id"] == str(_SECONDARY_ID) for result in wechat_results)
+        )
+
+        with (
+            patch.object(
+                rpm_mod,
+                "MessagingClientProfileService",
+                return_value=_MessagingClientProfileServiceStub(
+                    (
+                        _runtime_spec(
+                            "whatsapp",
+                            client_profile_id=_DEFAULT_ID,
+                            profile_key="default",
+                        ),
+                        _runtime_spec(
+                            "whatsapp",
+                            client_profile_id=_SECONDARY_ID,
+                            profile_key="secondary",
+                        ),
+                    )
+                ),
+            ),
+            patch.object(whatsapp_mod, "DefaultWhatsAppClient", _DelegationClient),
+        ):
+            client = whatsapp_mod.MultiProfileWhatsAppClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            with client_profile_scope(_SECONDARY_ID):
+                whatsapp_results = [
+                    await client.delete_media("media-1"),
+                    await client.download_media("https://example.com/media", "image/png"),
+                    await client.retrieve_media_url("media-1"),
+                    await client.send_audio_message({"id": "a-1"}, "15550001"),
+                    await client.send_contacts_message({"name": "Alice"}, "15550001"),
+                    await client.send_document_message({"id": "d-1"}, "15550001"),
+                    await client.send_image_message({"id": "i-1"}, "15550001"),
+                    await client.send_interactive_message({"type": "button"}, "15550001"),
+                    await client.send_location_message({"lat": 1.0}, "15550001"),
+                    await client.send_reaction_message({"emoji": "👍"}, "15550001"),
+                    await client.send_sticker_message({"id": "s-1"}, "15550001"),
+                    await client.send_template_message({"name": "tmpl"}, "15550001"),
+                    await client.send_video_message({"id": "v-1"}, "15550001"),
+                    await client.emit_processing_signal(
+                        "15550001",
+                        state="typing",
+                        message_id="m-1",
+                    ),
+                    await client.upload_media("/tmp/example.bin", "image/png"),
+                ]
+        self.assertEqual(
+            [result["method"] for result in whatsapp_results],
+            [
+                "delete_media",
+                "download_media",
+                "retrieve_media_url",
+                "send_audio_message",
+                "send_contacts_message",
+                "send_document_message",
+                "send_image_message",
+                "send_interactive_message",
+                "send_location_message",
+                "send_reaction_message",
+                "send_sticker_message",
+                "send_template_message",
+                "send_video_message",
+                "emit_processing_signal",
+                "upload_media",
+            ],
+        )
+        self.assertTrue(
+            all(
+                result["client_profile_id"] == str(_SECONDARY_ID)
+                for result in whatsapp_results
+            )
+        )

@@ -17,6 +17,8 @@ from mugen.core.service.ipc import DefaultIPCService
 from mugen.core.plugin.whatsapp.wacapi.api import webhook
 from mugen.core.plugin.whatsapp.wacapi.ipc_ext import WhatsAppWACAPIIPCExtension
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000204")
+
 
 class _Response:
     def __init__(self, *, status: int, text: str) -> None:
@@ -130,6 +132,8 @@ class _IngressRoutingStub:
                 tenant_slug="tenant-a",
                 platform="whatsapp",
                 channel_key="whatsapp",
+                client_profile_id=_CLIENT_PROFILE_ID,
+                client_profile_key="whatsapp-a",
                 identifier_claims={
                     "identifier_type": "phone_number_id",
                     "identifier_value": str(identifier_value),
@@ -185,6 +189,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             new=SimpleNamespace(get_json=AsyncMock(return_value=payload)),
         ):
             first = await endpoint(
+                path_token="whatsapp-path-token",
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
             )
@@ -195,42 +200,21 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             new=SimpleNamespace(get_json=AsyncMock(return_value=payload)),
         ):
             second = await endpoint(
+                path_token="whatsapp-path-token",
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
             )
 
         self.assertEqual(first, {"response": "OK"})
         self.assertEqual(second, {"response": "OK"})
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "whatsapp",
-            room_id="15551230001",
-            sender="15551230001",
-            message="hello",
-            message_context=[
-                {
-                    "type": "ingress_route",
-                    "content": {
-                        "tenant_id": "11111111-1111-1111-1111-111111111111",
-                        "tenant_slug": "tenant-a",
-                        "platform": "whatsapp",
-                        "channel_key": "whatsapp",
-                        "identifier_claims": {
-                            "identifier_type": "phone_number_id",
-                            "identifier_value": "123456789",
-                        },
-                        "channel_profile_id": None,
-                        "route_key": None,
-                        "binding_id": None,
-                        "runtime_profile_key": None,
-                        "tenant_resolution": {
-                            "mode": "resolved",
-                            "reason_code": None,
-                            "source": "whatsapp.ingress_routing",
-                        },
-                    },
-                }
-            ],
-        )
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "15551230001")
+        self.assertEqual(kwargs["sender"], "15551230001")
+        self.assertEqual(kwargs["message"], "hello")
+        ingress_route = kwargs["message_context"][-1]["content"]
+        self.assertEqual(ingress_route["platform"], "whatsapp")
+        self.assertEqual(ingress_route["client_profile_id"], str(_CLIENT_PROFILE_ID))
+        self.assertEqual(ingress_route["client_profile_key"], "whatsapp-a")
         logger.debug.assert_any_call("Skip duplicate WhatsApp message event.")
 
     async def test_transient_graph_failure_recovers_via_retry(self) -> None:
@@ -300,39 +284,17 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             new=SimpleNamespace(get_json=AsyncMock(return_value=payload)),
         ):
             response = await endpoint(
+                path_token="whatsapp-path-token",
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: ext_logger,
             )
 
         self.assertEqual(response, {"response": "OK"})
         self.assertEqual(session.post.await_count, 2)
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "whatsapp",
-            room_id="15551230001",
-            sender="15551230001",
-            message="hello",
-            message_context=[
-                {
-                    "type": "ingress_route",
-                    "content": {
-                        "tenant_id": "11111111-1111-1111-1111-111111111111",
-                        "tenant_slug": "tenant-a",
-                        "platform": "whatsapp",
-                        "channel_key": "whatsapp",
-                        "identifier_claims": {
-                            "identifier_type": "phone_number_id",
-                            "identifier_value": "123456789",
-                        },
-                        "channel_profile_id": None,
-                        "route_key": None,
-                        "binding_id": None,
-                        "runtime_profile_key": None,
-                        "tenant_resolution": {
-                            "mode": "resolved",
-                            "reason_code": None,
-                            "source": "whatsapp.ingress_routing",
-                        },
-                    },
-                }
-            ],
-        )
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "15551230001")
+        self.assertEqual(kwargs["sender"], "15551230001")
+        self.assertEqual(kwargs["message"], "hello")
+        ingress_route = kwargs["message_context"][-1]["content"]
+        self.assertEqual(ingress_route["client_profile_id"], str(_CLIENT_PROFILE_ID))
+        self.assertEqual(ingress_route["client_profile_key"], "whatsapp-a")

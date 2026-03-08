@@ -5,50 +5,22 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 import uuid
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
-from mugen.core.plugin.channel_orchestration.service import (
-    channel_profile as channel_profile_mod,
-)
 from mugen.core.plugin.channel_orchestration.service.channel_profile import (
     ChannelProfileService,
 )
-from mugen.core.utility.platform_runtime_profile import build_config_namespace
-
-
-def _runtime_config() -> SimpleNamespace:
-    return build_config_namespace(
-        {
-            "line": {
-                "profiles": [
-                    {
-                        "key": "default",
-                        "webhook": {"path_token": "line-path"},
-                        "channel": {"secret": "line-secret"},
-                    }
-                ]
-            },
-            "matrix": {
-                "profiles": [
-                    {
-                        "key": "default",
-                        "client": {"user": "@bot:test"},
-                    }
-                ]
-            },
-        }
-    )
 
 
 class TestMuGenChannelProfileService(unittest.IsolatedAsyncioTestCase):
-    """Covers runtime profile validation and CRUD payload normalization."""
+    """Covers client profile validation and CRUD payload normalization."""
 
-    def test_private_runtime_profile_validation_helpers(self) -> None:
-        config = _runtime_config()
+    async def test_private_client_profile_validation_helpers(self) -> None:
+        tenant_id = uuid.uuid4()
+        client_profile_id = uuid.uuid4()
         svc = ChannelProfileService(
             table="channel_profile",
             rsg=Mock(),
-            config=config,
         )
 
         self.assertIsNone(svc._normalize_optional_text(None))  # pylint: disable=protected-access
@@ -57,69 +29,70 @@ class TestMuGenChannelProfileService(unittest.IsolatedAsyncioTestCase):
             svc._normalize_optional_text(" line "),  # pylint: disable=protected-access
             "line",
         )
-        self.assertIs(svc._resolve_config(), config)  # pylint: disable=protected-access
+        self.assertIsNone(svc._normalize_optional_uuid("bad"))  # pylint: disable=protected-access
         self.assertEqual(
-            svc._validate_runtime_profile_key(  # pylint: disable=protected-access
+            svc._normalize_optional_uuid(f" {client_profile_id} "),  # pylint: disable=protected-access
+            client_profile_id,
+        )
+
+        self.assertIsNone(
+            await svc._validate_client_profile_id(  # pylint: disable=protected-access
                 channel_key="web",
-                runtime_profile_key=" secondary ",
-            ),
-            "secondary",
+                tenant_id=tenant_id,
+                client_profile_id=None,
+            )
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "ClientProfileId is required"):
+            await svc._validate_client_profile_id(  # pylint: disable=protected-access
+                channel_key="line",
+                tenant_id=tenant_id,
+                client_profile_id=None,
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "TenantId is required"):
+            await svc._validate_client_profile_id(  # pylint: disable=protected-access
+                channel_key="line",
+                tenant_id=None,
+                client_profile_id=client_profile_id,
+            )
+
+        svc._messaging_client_profile_service.get = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+        with self.assertRaisesRegex(RuntimeError, "Unknown ClientProfileId"):
+            await svc._validate_client_profile_id(  # pylint: disable=protected-access
+                channel_key="line",
+                tenant_id=tenant_id,
+                client_profile_id=client_profile_id,
+            )
+
+        svc._messaging_client_profile_service.get = AsyncMock(  # type: ignore[attr-defined]
+            return_value=SimpleNamespace(platform_key="telegram")
+        )
+        with self.assertRaisesRegex(RuntimeError, "platform does not match"):
+            await svc._validate_client_profile_id(  # pylint: disable=protected-access
+                channel_key="line",
+                tenant_id=tenant_id,
+                client_profile_id=client_profile_id,
+            )
+
+        svc._messaging_client_profile_service.get = AsyncMock(  # type: ignore[attr-defined]
+            return_value=SimpleNamespace(platform_key="line")
         )
         self.assertEqual(
-            svc._validate_runtime_profile_key(  # pylint: disable=protected-access
+            await svc._validate_client_profile_id(  # pylint: disable=protected-access
                 channel_key="line",
-                runtime_profile_key=" default ",
+                tenant_id=tenant_id,
+                client_profile_id=f" {client_profile_id} ",
             ),
-            "default",
+            client_profile_id,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "required"):
-            svc._validate_runtime_profile_key(  # pylint: disable=protected-access
-                channel_key="line",
-                runtime_profile_key=None,
-            )
-
-        with self.assertRaisesRegex(RuntimeError, "Unknown RuntimeProfileKey"):
-            svc._validate_runtime_profile_key(  # pylint: disable=protected-access
-                channel_key="line",
-                runtime_profile_key="missing",
-            )
-
-        svc_without_config = ChannelProfileService(
-            table="channel_profile",
-            rsg=Mock(),
-            config=None,
-        )
-        with patch.object(
-            channel_profile_mod.di,
-            "container",
-            new=SimpleNamespace(config=config),
-        ):
-            self.assertIs(
-                svc_without_config._resolve_config(),  # pylint: disable=protected-access
-                config,
-            )
-
-        with patch.object(
-            channel_profile_mod.di,
-            "container",
-            new=SimpleNamespace(),
-        ):
-            self.assertIsNone(
-                svc_without_config._resolve_config()  # pylint: disable=protected-access
-            )
-            with self.assertRaisesRegex(RuntimeError, "requires runtime configuration"):
-                svc_without_config._validate_runtime_profile_key(  # pylint: disable=protected-access
-                    channel_key="line",
-                    runtime_profile_key="default",
-                )
-
-    async def test_create_update_and_row_version_update_validate_runtime_profile_key(
+    async def test_create_update_and_row_version_update_validate_client_profile_id(
         self,
     ) -> None:
         tenant_id = uuid.uuid4()
         profile_id = uuid.uuid4()
-        config = _runtime_config()
+        client_profile_id = uuid.uuid4()
         rsg = Mock()
         rsg.insert_one = AsyncMock(
             return_value={
@@ -127,7 +100,7 @@ class TestMuGenChannelProfileService(unittest.IsolatedAsyncioTestCase):
                 "tenant_id": tenant_id,
                 "channel_key": "line",
                 "profile_key": "support",
-                "runtime_profile_key": "default",
+                "client_profile_id": client_profile_id,
             }
         )
         rsg.update_one = AsyncMock(
@@ -137,7 +110,7 @@ class TestMuGenChannelProfileService(unittest.IsolatedAsyncioTestCase):
                     "tenant_id": tenant_id,
                     "channel_key": "line",
                     "profile_key": "support",
-                    "runtime_profile_key": "default",
+                    "client_profile_id": client_profile_id,
                     "display_name": "Support",
                 },
                 {
@@ -145,7 +118,7 @@ class TestMuGenChannelProfileService(unittest.IsolatedAsyncioTestCase):
                     "tenant_id": tenant_id,
                     "channel_key": "line",
                     "profile_key": "support",
-                    "runtime_profile_key": "default",
+                    "client_profile_id": client_profile_id,
                     "display_name": "Support",
                     "row_version": 7,
                 },
@@ -154,7 +127,9 @@ class TestMuGenChannelProfileService(unittest.IsolatedAsyncioTestCase):
         svc = ChannelProfileService(
             table="channel_profile",
             rsg=rsg,
-            config=config,
+        )
+        svc._messaging_client_profile_service.get = AsyncMock(  # type: ignore[attr-defined]
+            return_value=SimpleNamespace(platform_key="line")
         )
 
         created = await svc.create(
@@ -162,18 +137,19 @@ class TestMuGenChannelProfileService(unittest.IsolatedAsyncioTestCase):
                 "tenant_id": tenant_id,
                 "channel_key": "line",
                 "profile_key": "support",
-                "runtime_profile_key": " default ",
+                "client_profile_id": f" {client_profile_id} ",
             }
         )
-        self.assertEqual(created.runtime_profile_key, "default")
+        self.assertEqual(created.client_profile_id, client_profile_id)
         self.assertEqual(
-            rsg.insert_one.await_args.args[1]["runtime_profile_key"],
-            "default",
+            rsg.insert_one.await_args.args[1]["client_profile_id"],
+            client_profile_id,
         )
 
         current = SimpleNamespace(
             channel_key="line",
-            runtime_profile_key="default",
+            tenant_id=tenant_id,
+            client_profile_id=client_profile_id,
         )
         svc.get = AsyncMock(side_effect=[current, None, current, None])
 
@@ -183,8 +159,8 @@ class TestMuGenChannelProfileService(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(updated.display_name, "Support")
         self.assertEqual(
-            rsg.update_one.await_args_list[0].kwargs["changes"]["runtime_profile_key"],
-            "default",
+            rsg.update_one.await_args_list[0].kwargs["changes"]["client_profile_id"],
+            client_profile_id,
         )
 
         self.assertIsNone(
@@ -197,9 +173,9 @@ class TestMuGenChannelProfileService(unittest.IsolatedAsyncioTestCase):
         updated_with_row_version = await svc.update_with_row_version(
             {"id": profile_id},
             expected_row_version=7,
-            changes={"runtime_profile_key": " default "},
+            changes={"client_profile_id": f" {client_profile_id} "},
         )
-        self.assertEqual(updated_with_row_version.runtime_profile_key, "default")
+        self.assertEqual(updated_with_row_version.client_profile_id, client_profile_id)
         self.assertEqual(
             rsg.update_one.await_args_list[1].kwargs["where"]["row_version"],
             7,
@@ -209,6 +185,6 @@ class TestMuGenChannelProfileService(unittest.IsolatedAsyncioTestCase):
             await svc.update_with_row_version(
                 {"id": profile_id},
                 expected_row_version=8,
-                changes={"runtime_profile_key": "default"},
+                changes={"client_profile_id": client_profile_id},
             )
         )

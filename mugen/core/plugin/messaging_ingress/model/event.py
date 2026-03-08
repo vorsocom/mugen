@@ -4,10 +4,11 @@ __all__ = ["MessagingIngressEventRecord"]
 
 from datetime import datetime
 from typing import Any
+import uuid
 
 from sqlalchemy import CheckConstraint, DateTime, Index, Integer
 from sqlalchemy import text as sa_text
-from sqlalchemy.dialects.postgresql import CITEXT, JSONB
+from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
@@ -30,8 +31,8 @@ class MessagingIngressEventRecord(ModelBase):
         index=True,
     )
 
-    runtime_profile_key: Mapped[str] = mapped_column(
-        CITEXT(128),
+    client_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         nullable=False,
         index=True,
     )
@@ -144,10 +145,6 @@ class MessagingIngressEventRecord(ModelBase):
         CheckConstraint("version > 0", name="ck_msg_ingress_event_version_positive"),
         CheckConstraint("length(btrim(platform)) > 0", name="ck_msg_ingress_event_platform_nonempty"),
         CheckConstraint(
-            "length(btrim(runtime_profile_key)) > 0",
-            name="ck_msg_ingress_event_runtime_profile_nonempty",
-        ),
-        CheckConstraint(
             "length(btrim(ipc_command)) > 0",
             name="ck_msg_ingress_event_ipc_command_nonempty",
         ),
@@ -181,7 +178,7 @@ class MessagingIngressEventRecord(ModelBase):
         Index(
             "ix_msg_ingress_event_platform_profile_status",
             "platform",
-            "runtime_profile_key",
+            "client_profile_id",
             "status",
         ),
         {"schema": "mugen"},

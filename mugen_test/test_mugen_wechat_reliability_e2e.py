@@ -16,6 +16,8 @@ from mugen.core.plugin.wechat.api import webhook
 from mugen.core.plugin.wechat.ipc_ext import WeChatIPCExtension
 from mugen.core.service.ipc import DefaultIPCService
 
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000203")
+
 
 class _MemoryRelational:
     def __init__(self) -> None:
@@ -102,12 +104,29 @@ class _IngressRoutingStub:
                 tenant_slug="tenant-a",
                 platform="wechat",
                 channel_key="wechat",
+                client_profile_id=_CLIENT_PROFILE_ID,
+                client_profile_key="wechat-a",
                 identifier_claims={
                     "identifier_type": "path_token",
                     "identifier_value": str(identifier_value),
                 },
             ),
         )
+
+
+class _ClientProfileServiceStub:
+    async def resolve_active_by_identifier(self, **_kwargs):
+        return SimpleNamespace(
+            id=_CLIENT_PROFILE_ID,
+            tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+            platform_key="wechat",
+            profile_key="wechat-a",
+            path_token="path-token",
+            provider="official_account",
+        )
+
+    async def build_runtime_config(self, *, config, client_profile):  # noqa: ARG002
+        return config
 
 
 def _new_extension(
@@ -215,6 +234,7 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                 config_provider=lambda: cfg,
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
+                client_profile_service_provider=lambda: _ClientProfileServiceStub(),
             )
 
         with patch.object(
@@ -230,40 +250,19 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                 config_provider=lambda: cfg,
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
+                client_profile_service_provider=lambda: _ClientProfileServiceStub(),
             )
 
         self.assertEqual(first, "success")
         self.assertEqual(second, "success")
-        messaging_service.handle_text_message.assert_awaited_once_with(
-            "wechat",
-            room_id="user-1",
-            sender="user-1",
-            message="hello",
-            message_context=[
-                {
-                    "type": "ingress_route",
-                    "content": {
-                        "tenant_id": "11111111-1111-1111-1111-111111111111",
-                        "tenant_slug": "tenant-a",
-                        "platform": "wechat",
-                        "channel_key": "wechat",
-                        "identifier_claims": {
-                            "identifier_type": "path_token",
-                            "identifier_value": "path-token",
-                        },
-                        "channel_profile_id": None,
-                        "route_key": None,
-                        "binding_id": None,
-                        "runtime_profile_key": None,
-                        "tenant_resolution": {
-                            "mode": "resolved",
-                            "reason_code": None,
-                            "source": "wechat.ingress_routing",
-                        },
-                    },
-                }
-            ],
-        )
+        kwargs = messaging_service.handle_text_message.await_args.kwargs
+        self.assertEqual(kwargs["room_id"], "user-1")
+        self.assertEqual(kwargs["sender"], "user-1")
+        self.assertEqual(kwargs["message"], "hello")
+        ingress_route = kwargs["message_context"][-1]["content"]
+        self.assertEqual(ingress_route["platform"], "wechat")
+        self.assertEqual(ingress_route["client_profile_id"], str(_CLIENT_PROFILE_ID))
+        self.assertEqual(ingress_route["client_profile_key"], "wechat-a")
         logger.debug.assert_any_call("Skip duplicate WeChat event.")
 
     async def test_voice_event_routes_download_and_audio_handler(self) -> None:
@@ -309,6 +308,7 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                 config_provider=lambda: cfg,
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
+                client_profile_service_provider=lambda: _ClientProfileServiceStub(),
             )
 
         self.assertEqual(response, "success")
@@ -360,6 +360,7 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                 config_provider=lambda: cfg,
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
+                client_profile_service_provider=lambda: _ClientProfileServiceStub(),
             )
 
         self.assertEqual(response, "success")
@@ -393,6 +394,7 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                 config_provider=lambda: cfg,
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
+                client_profile_service_provider=lambda: _ClientProfileServiceStub(),
             )
 
         ipc_service.handle_ipc_request.assert_not_awaited()

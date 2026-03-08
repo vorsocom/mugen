@@ -21,6 +21,9 @@ import aiohttp
 from mugen.core.client.runtime_profile_manager import SimpleProfileClientManager
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import (
+    IRelationalStorageGateway,
+)
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
@@ -73,6 +76,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway | None = None,
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
@@ -975,6 +979,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway | None = None,
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
@@ -985,18 +990,22 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
             config=config,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
+            relational_storage_gateway=relational_storage_gateway,
             logging_gateway=logging_gateway,
             messaging_service=messaging_service,
             user_service=user_service,
         )
 
     async def delete_media(self, media_id: str) -> dict | None:
+        await self.init()
         return await self._client_for().delete_media(media_id)
 
     async def download_media(self, media_url: str, mimetype: str) -> str | None:
+        await self.init()
         return await self._client_for().download_media(media_url, mimetype)
 
     async def retrieve_media_url(self, media_id: str) -> dict | None:
+        await self.init()
         return await self._client_for().retrieve_media_url(media_id)
 
     async def send_audio_message(
@@ -1005,6 +1014,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         recipient: str,
         reply_to: str = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_audio_message(audio, recipient, reply_to)
 
     async def send_contacts_message(
@@ -1013,6 +1023,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         recipient: str,
         reply_to: str = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_contacts_message(
             contacts,
             recipient,
@@ -1025,6 +1036,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         recipient: str,
         reply_to: str = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_document_message(
             document,
             recipient,
@@ -1037,6 +1049,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         recipient: str,
         reply_to: str = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_image_message(image, recipient, reply_to)
 
     async def send_interactive_message(
@@ -1045,6 +1058,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         recipient: str,
         reply_to: str = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_interactive_message(
             interactive,
             recipient,
@@ -1057,6 +1071,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         recipient: str,
         reply_to: str = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_location_message(
             location,
             recipient,
@@ -1068,6 +1083,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         reaction: dict,
         recipient: str,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_reaction_message(reaction, recipient)
 
     async def send_sticker_message(
@@ -1076,6 +1092,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         recipient: str,
         reply_to: str = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_sticker_message(
             sticker,
             recipient,
@@ -1088,6 +1105,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         recipient: str,
         reply_to: str = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_template_message(
             template,
             recipient,
@@ -1100,6 +1118,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         recipient: str,
         reply_to: str = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_text_message(message, recipient, reply_to)
 
     async def send_video_message(
@@ -1108,6 +1127,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         recipient: str,
         reply_to: str = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_video_message(video, recipient, reply_to)
 
     async def emit_processing_signal(
@@ -1117,6 +1137,7 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         state: str,
         message_id: str | None = None,
     ) -> bool | None:
+        await self.init()
         return await self._client_for().emit_processing_signal(
             recipient,
             state=state,
@@ -1128,4 +1149,5 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
         file_path: str | BytesIO,
         file_type: str,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().upload_media(file_path, file_type)

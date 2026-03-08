@@ -46,35 +46,10 @@ class TestTelegramRuntimeConfigContract(unittest.TestCase):
         cfg = _valid_config()
         validate_telegram_enabled_runtime_config(cfg)
 
-    def test_accepts_profiles_and_rejects_duplicate_profile_keys(self) -> None:
+    def test_ignores_legacy_profiles_blocks(self) -> None:
         cfg = _valid_config()
-        cfg["telegram"]["profiles"] = [
-            {
-                "key": "default",
-                "bot": {"token": "token-a"},
-                "webhook": {
-                    "path_token": "path-token-a",
-                    "secret_token": "secret-token-a",
-                },
-            },
-            {
-                "key": "secondary",
-                "bot": {"token": "token-b"},
-                "webhook": {
-                    "path_token": "path-token-b",
-                    "secret_token": "secret-token-b",
-                },
-            },
-        ]
+        cfg["telegram"]["profiles"] = []
         validate_telegram_enabled_runtime_config(cfg)
-
-        cfg = copy.deepcopy(cfg)
-        cfg["telegram"]["profiles"][1]["key"] = "default"
-        with self.assertRaisesRegex(
-            RuntimeError,
-            re.escape("telegram profile keys must be unique"),
-        ):
-            validate_telegram_enabled_runtime_config(cfg)
 
     def test_rejects_invalid_shapes_and_values(self) -> None:
         cases: list[tuple[dict, str]] = []
@@ -82,18 +57,6 @@ class TestTelegramRuntimeConfigContract(unittest.TestCase):
         cfg = _valid_config()
         cfg["telegram"] = "invalid"
         cases.append((cfg, "telegram must be a table"))
-
-        cfg = _valid_config()
-        cfg["telegram"]["bot"]["token"] = ""
-        cases.append((cfg, "telegram.bot.token"))
-
-        cfg = _valid_config()
-        cfg["telegram"]["webhook"]["path_token"] = ""
-        cases.append((cfg, "telegram.webhook.path_token"))
-
-        cfg = _valid_config()
-        cfg["telegram"]["webhook"]["secret_token"] = ""
-        cases.append((cfg, "telegram.webhook.secret_token"))
 
         cfg = _valid_config()
         cfg["telegram"]["webhook"]["dedupe_ttl_seconds"] = 0

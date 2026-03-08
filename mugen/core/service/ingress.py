@@ -242,7 +242,7 @@ class DefaultMessagingIngressService(IMessagingIngressService):
         self,
         *,
         platform: str,
-        runtime_profile_key: str,
+        client_profile_id,
         checkpoint_key: str,
     ) -> str | None:
         async with self._session_provider() as session:
@@ -251,12 +251,12 @@ class DefaultMessagingIngressService(IMessagingIngressService):
                     "SELECT checkpoint_value "
                     "FROM mugen.messaging_ingress_checkpoint "
                     "WHERE platform = :platform "
-                    "AND runtime_profile_key = :runtime_profile_key "
+                    "AND client_profile_id = :client_profile_id "
                     "AND checkpoint_key = :checkpoint_key"
                 ),
                 {
                     "platform": platform,
-                    "runtime_profile_key": runtime_profile_key,
+                    "client_profile_id": client_profile_id,
                     "checkpoint_key": checkpoint_key,
                 },
             )
@@ -277,18 +277,18 @@ class DefaultMessagingIngressService(IMessagingIngressService):
         result = await session.execute(
             self._schema_sql(
                 "INSERT INTO mugen.messaging_ingress_dedup ("
-                "platform, runtime_profile_key, event_type, dedupe_key, event_id, "
+                "platform, client_profile_id, event_type, dedupe_key, event_id, "
                 "last_seen_at, expires_at"
                 ") VALUES ("
-                ":platform, :runtime_profile_key, :event_type, :dedupe_key, :event_id, "
+                ":platform, :client_profile_id, :event_type, :dedupe_key, :event_id, "
                 ":last_seen_at, :expires_at"
                 ") "
-                "ON CONFLICT (platform, runtime_profile_key, dedupe_key) DO NOTHING "
+                "ON CONFLICT (platform, client_profile_id, dedupe_key) DO NOTHING "
                 "RETURNING id"
             ),
             {
                 "platform": event.platform,
-                "runtime_profile_key": event.runtime_profile_key,
+                "client_profile_id": event.client_profile_id,
                 "event_type": event.event_type,
                 "dedupe_key": event.dedupe_key,
                 "event_id": event.event_id,
@@ -308,12 +308,12 @@ class DefaultMessagingIngressService(IMessagingIngressService):
                 "updated_at = now(), "
                 "row_version = row_version + 1 "
                 "WHERE platform = :platform "
-                "AND runtime_profile_key = :runtime_profile_key "
+                "AND client_profile_id = :client_profile_id "
                 "AND dedupe_key = :dedupe_key"
             ),
             {
                 "platform": event.platform,
-                "runtime_profile_key": event.runtime_profile_key,
+                "client_profile_id": event.client_profile_id,
                 "dedupe_key": event.dedupe_key,
                 "event_id": event.event_id,
                 "last_seen_at": now,
@@ -332,11 +332,11 @@ class DefaultMessagingIngressService(IMessagingIngressService):
         await session.execute(
             self._schema_sql(
                 "INSERT INTO mugen.messaging_ingress_event ("
-                "version, platform, runtime_profile_key, ipc_command, source_mode, "
+                "version, platform, client_profile_id, ipc_command, source_mode, "
                 "event_type, event_id, dedupe_key, identifier_type, identifier_value, "
                 "room_id, sender, payload, provider_context, received_at, status, attempts"
                 ") VALUES ("
-                ":version, :platform, :runtime_profile_key, :ipc_command, :source_mode, "
+                ":version, :platform, :client_profile_id, :ipc_command, :source_mode, "
                 ":event_type, :event_id, :dedupe_key, :identifier_type, :identifier_value, "
                 ":room_id, :sender, :payload, :provider_context, :received_at, 'queued', 0"
                 ")"
@@ -344,7 +344,7 @@ class DefaultMessagingIngressService(IMessagingIngressService):
             {
                 "version": event.version,
                 "platform": event.platform,
-                "runtime_profile_key": event.runtime_profile_key,
+                "client_profile_id": event.client_profile_id,
                 "ipc_command": entry.ipc_command,
                 "source_mode": event.source_mode,
                 "event_type": event.event_type,
@@ -369,13 +369,13 @@ class DefaultMessagingIngressService(IMessagingIngressService):
         await session.execute(
             self._schema_sql(
                 "INSERT INTO mugen.messaging_ingress_checkpoint ("
-                "platform, runtime_profile_key, checkpoint_key, checkpoint_value, "
+                "platform, client_profile_id, checkpoint_key, checkpoint_value, "
                 "provider_context, observed_at"
                 ") VALUES ("
-                ":platform, :runtime_profile_key, :checkpoint_key, :checkpoint_value, "
+                ":platform, :client_profile_id, :checkpoint_key, :checkpoint_value, "
                 ":provider_context, :observed_at"
                 ") "
-                "ON CONFLICT (platform, runtime_profile_key, checkpoint_key) "
+                "ON CONFLICT (platform, client_profile_id, checkpoint_key) "
                 "DO UPDATE SET "
                 "checkpoint_value = EXCLUDED.checkpoint_value, "
                 "provider_context = EXCLUDED.provider_context, "
@@ -385,7 +385,7 @@ class DefaultMessagingIngressService(IMessagingIngressService):
             ),
             {
                 "platform": checkpoint.platform,
-                "runtime_profile_key": checkpoint.runtime_profile_key,
+                "client_profile_id": checkpoint.client_profile_id,
                 "checkpoint_key": checkpoint.checkpoint_key,
                 "checkpoint_value": checkpoint.checkpoint_value,
                 "provider_context": dict(checkpoint.provider_context),
@@ -451,7 +451,7 @@ class DefaultMessagingIngressService(IMessagingIngressService):
         event = MessagingIngressEvent(
             version=int(row.get("version") or 1),
             platform=str(row.get("platform") or ""),
-            runtime_profile_key=str(row.get("runtime_profile_key") or ""),
+            client_profile_id=row.get("client_profile_id"),
             source_mode=str(row.get("source_mode") or ""),
             event_type=str(row.get("event_type") or ""),
             event_id=row.get("event_id"),
@@ -528,13 +528,13 @@ class DefaultMessagingIngressService(IMessagingIngressService):
                 await session.execute(
                     self._schema_sql(
                         "INSERT INTO mugen.messaging_ingress_dead_letter ("
-                        "source_event_id, version, platform, runtime_profile_key, ipc_command, "
+                        "source_event_id, version, platform, client_profile_id, ipc_command, "
                         "source_mode, event_type, event_id, dedupe_key, identifier_type, "
                         "identifier_value, room_id, sender, payload, provider_context, "
                         "received_at, reason_code, error_message, status, attempts, "
                         "first_failed_at, last_failed_at"
                         ") VALUES ("
-                        ":source_event_id, :version, :platform, :runtime_profile_key, "
+                        ":source_event_id, :version, :platform, :client_profile_id, "
                         ":ipc_command, :source_mode, :event_type, :event_id, :dedupe_key, "
                         ":identifier_type, :identifier_value, :room_id, :sender, :payload, "
                         ":provider_context, :received_at, :reason_code, :error_message, "
@@ -545,7 +545,7 @@ class DefaultMessagingIngressService(IMessagingIngressService):
                         "source_event_id": row.get("id"),
                         "version": int(row.get("version") or 1),
                         "platform": row.get("platform"),
-                        "runtime_profile_key": row.get("runtime_profile_key"),
+                        "client_profile_id": row.get("client_profile_id"),
                         "ipc_command": row.get("ipc_command"),
                         "source_mode": row.get("source_mode"),
                         "event_type": row.get("event_type"),

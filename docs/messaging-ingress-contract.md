@@ -1,7 +1,7 @@
 # Messaging Ingress Contract
 
-This document defines the shared durable ingress contract for external messaging
-platforms in muGen core.
+This document defines the shared durable ingress contract for external
+messaging platforms in muGen core.
 
 ## Scope
 
@@ -14,8 +14,7 @@ The shared ingress foundation applies to:
 - WeChat
 - WhatsApp
 
-The `web` platform is explicitly out of scope and keeps its existing
-queue/stream contract.
+The `web` platform is out of scope.
 
 ## Shared Startup Contract
 
@@ -33,8 +32,7 @@ When any platform above is enabled, muGen expects:
   - `messaging_ingress_dead_letter`
   - `messaging_ingress_checkpoint`
 
-The ingress service is a first-class DI provider and is part of container
-readiness for external messaging platforms.
+Enabled messaging platforms may start with zero active ACP client profiles.
 
 ## Canonical Event Envelope
 
@@ -45,7 +43,7 @@ Required fields:
 
 - `version`
 - `platform`
-- `runtime_profile_key`
+- `client_profile_id`
 - `source_mode`
 - `event_type`
 - `event_id`
@@ -60,40 +58,33 @@ Required fields:
 
 Practical rules:
 
-- `runtime_profile_key` identifies the active transport/runtime profile that
-  received the event.
-- `identifier_type` and `identifier_value` carry the tenant-routing identity
-  used by ingress bindings.
+- `client_profile_id` identifies the transport account that received the event.
+- `identifier_type` and `identifier_value` carry the tenant-routing identity.
 - `room_id` remains conversation/reply context, not the tenant-routing key.
-- `provider_context` carries transport-specific metadata that should survive
-  normalization without forcing provider-specific worker contracts.
+- `provider_context` may carry optional `client_profile_key` for logs/debugging.
 
 ## Shared Persistence Model
 
 The shared ingress foundation uses four tables:
 
-- `messaging_ingress_event`: durable inbox plus worker lease/status state
-- `messaging_ingress_dedup`: duplicate suppression ledger
-- `messaging_ingress_dead_letter`: terminal failures and replay candidates
-- `messaging_ingress_checkpoint`: transport/runtime checkpoints
+- `messaging_ingress_event`
+- `messaging_ingress_dedup`
+- `messaging_ingress_dead_letter`
+- `messaging_ingress_checkpoint`
 
 Current checkpoint use:
 
-- Matrix persists sync checkpoints here with `checkpoint_key = "sync_token"`.
+- Matrix persists `checkpoint_key = "sync_token"` per `client_profile_id`.
 
 ## Staging Transaction
 
 Every supported transport follows the same high-level flow:
 
-1. transport-specific auth/verification happens at the source edge;
-2. transport payloads are converted into one canonical ingress event per
-   logical inbound event;
+1. transport-specific auth and verification happens at the source edge;
+2. transport payloads are converted into canonical ingress events;
 3. dedupe rows and inbox rows are written in one transaction;
 4. optional checkpoints are written in that same transaction;
 5. transport success is returned only after the staging transaction commits.
-
-For webhook platforms, this means HTTP success is an acknowledgement of durable
-staging, not of completed business processing.
 
 ## Worker Contract
 
@@ -107,12 +98,7 @@ The shared ingress worker:
 - writes terminal failures to `messaging_ingress_dead_letter`;
 - marks successful rows `completed`.
 
-The transport ingress path is therefore decoupled from business handler latency
-and failures.
-
 ## Normalized IPC Commands
-
-New ingress rows target these normalized commands:
 
 | Platform | Command | Primary `identifier_type` | Typical `source_mode` |
 | --- | --- | --- | --- |
@@ -123,29 +109,5 @@ New ingress rows target these normalized commands:
 | WeChat | `wechat_ingress_event` | `path_token` | `webhook` |
 | WhatsApp | `whatsapp_ingress_event` | `phone_number_id` | `webhook` |
 
-These commands define the current public ingress-processing contract.
-
-Older raw ingress commands and older platform-specific reliability table names
-may still exist as compatibility paths in some code paths, but they are not the
-current runtime contract and should not be used for new integrations.
-
-## Replay and Operations
-
-Operators inspect and redrive ingress through ACP-visible tables and documented
-row-state mutation. This initiative does not add a separate replay API.
-
-Operational consequences:
-
-- backlog visibility is table-driven;
-- failed and dead-letter rows are durable across restart;
-- replay is based on queue/dead-letter row state, not transport redelivery.
-
-## Change Policy
-
-If shared ingress behavior changes in core, update this contract and the
-affected platform support contracts in the same change set. At minimum, cover:
-
-- envelope shape changes;
-- shared table or worker semantic changes;
-- normalized command changes;
-- checkpoint behavior changes.
+Older raw ingress commands and older platform-specific reliability tables are
+not part of the current runtime contract.

@@ -49,35 +49,10 @@ class TestSignalRuntimeConfigContract(unittest.TestCase):
         cfg = _valid_config()
         validate_signal_enabled_runtime_config(cfg)
 
-    def test_accepts_profiles_and_rejects_duplicate_account_numbers(self) -> None:
+    def test_ignores_legacy_profiles_blocks(self) -> None:
         cfg = _valid_config()
-        cfg["signal"]["profiles"] = [
-            {
-                "key": "default",
-                "account": {"number": "+15550000001"},
-                "api": {
-                    "base_url": "http://127.0.0.1:8080",
-                    "bearer_token": "token-a",
-                },
-            },
-            {
-                "key": "secondary",
-                "account": {"number": "+15550000002"},
-                "api": {
-                    "base_url": "http://127.0.0.1:8081",
-                    "bearer_token": "token-b",
-                },
-            },
-        ]
+        cfg["signal"]["profiles"] = []
         validate_signal_enabled_runtime_config(cfg)
-
-        cfg = copy.deepcopy(cfg)
-        cfg["signal"]["profiles"][1]["account"]["number"] = "+15550000001"
-        with self.assertRaisesRegex(
-            RuntimeError,
-            re.escape("signal account numbers must be unique"),
-        ):
-            validate_signal_enabled_runtime_config(cfg)
 
     def test_rejects_invalid_shapes_and_values(self) -> None:
         cases: list[tuple[dict, str]] = []
@@ -87,16 +62,8 @@ class TestSignalRuntimeConfigContract(unittest.TestCase):
         cases.append((cfg, "signal must be a table"))
 
         cfg = _valid_config()
-        cfg["signal"]["account"]["number"] = ""
-        cases.append((cfg, "signal.account.number"))
-
-        cfg = _valid_config()
         cfg["signal"]["api"]["base_url"] = ""
         cases.append((cfg, "signal.api.base_url"))
-
-        cfg = _valid_config()
-        cfg["signal"]["api"]["bearer_token"] = ""
-        cases.append((cfg, "signal.api.bearer_token"))
 
         cfg = _valid_config()
         cfg["signal"]["api"]["timeout_seconds"] = 0

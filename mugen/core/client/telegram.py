@@ -18,6 +18,9 @@ import aiohttp
 from mugen.core.client.runtime_profile_manager import SimpleProfileClientManager
 from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.storage.rdbms.gateway import (
+    IRelationalStorageGateway,
+)
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.service.ipc import IIPCService
@@ -821,6 +824,7 @@ class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway | None = None,
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
@@ -831,6 +835,7 @@ class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
             config=config,
             ipc_service=ipc_service,
             keyval_storage_gateway=keyval_storage_gateway,
+            relational_storage_gateway=relational_storage_gateway,
             logging_gateway=logging_gateway,
             messaging_service=messaging_service,
             user_service=user_service,
@@ -844,6 +849,7 @@ class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
         reply_markup: dict[str, Any] | None = None,
         reply_to_message_id: int | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_text_message(
             chat_id=chat_id,
             text=text,
@@ -858,6 +864,7 @@ class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
         audio: dict[str, Any],
         reply_to_message_id: int | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_audio_message(
             chat_id=chat_id,
             audio=audio,
@@ -871,6 +878,7 @@ class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
         document: dict[str, Any],
         reply_to_message_id: int | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_file_message(
             chat_id=chat_id,
             document=document,
@@ -884,6 +892,7 @@ class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
         photo: dict[str, Any],
         reply_to_message_id: int | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_image_message(
             chat_id=chat_id,
             photo=photo,
@@ -897,6 +906,7 @@ class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
         video: dict[str, Any],
         reply_to_message_id: int | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().send_video_message(
             chat_id=chat_id,
             video=video,
@@ -910,6 +920,7 @@ class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
         text: str | None = None,
         show_alert: bool | None = None,
     ) -> dict | None:
+        await self.init()
         return await self._client_for().answer_callback_query(
             callback_query_id=callback_query_id,
             text=text,
@@ -923,6 +934,7 @@ class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
         state: str,
         message_id: str | None = None,
     ) -> bool | None:
+        await self.init()
         return await self._client_for().emit_processing_signal(
             chat_id,
             state=state,
@@ -930,4 +942,5 @@ class MultiProfileTelegramClient(SimpleProfileClientManager, ITelegramClient):
         )
 
     async def download_media(self, file_id: str) -> dict[str, Any] | None:
+        await self.init()
         return await self._client_for().download_media(file_id)

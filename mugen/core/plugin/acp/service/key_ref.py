@@ -550,3 +550,22 @@ class KeyRefService(
         if resolved_ref is None:
             return None
         return self._key_material_resolver.resolve(resolved_ref)
+
+    async def resolve_secret_for_id(
+        self,
+        *,
+        tenant_id: uuid.UUID | None,
+        key_ref_id: uuid.UUID,
+    ) -> ResolvedKeyMaterial | None:
+        normalized_tenant = self._normalize_tenant_id(tenant_id)
+
+        resolved_ref = await self.get(
+            {
+                "tenant_id": normalized_tenant,
+                "id": key_ref_id,
+                "status": "active",
+            }
+        )
+        if resolved_ref is None:
+            return None
+        return self._key_material_resolver.resolve(resolved_ref)

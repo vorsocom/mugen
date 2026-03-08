@@ -1,11 +1,10 @@
-# Platform Runtime Profiles
+# ACP Messaging Client Profiles
 
-This document defines the shared runtime-profile model for messaging platforms in
-muGen core.
+This document defines the current messaging client profile model in muGen core.
 
 ## Scope
 
-The multi-profile runtime model applies to:
+The ACP-owned client profile model applies to:
 
 - Matrix
 - LINE
@@ -14,131 +13,96 @@ The multi-profile runtime model applies to:
 - WeChat
 - WhatsApp
 
-The `web` platform does not use transport runtime profiles.
+The `web` platform is out of scope.
 
-## Configuration Model
+## Source Of Truth
 
-Each supported platform now accepts one or more `profiles[]` entries under its
-platform config section.
+Messaging transport accounts now live in the ACP `MessagingClientProfiles`
+entity set.
 
-- Shared operational settings stay at the platform root.
-- Transport credentials and transport-owned endpoint selectors move into
-  `[[<platform>.profiles]]`.
-- Every runtime profile requires a unique `key`.
-- Legacy single-profile config is still accepted and normalized to one implicit
-  runtime profile with key `default`.
+- Config keeps only process-level platform settings such as timeouts, allow
+  lists, media limits, and bind/runtime switches.
+- Tenant-owned transport credentials, webhook selectors, and account identifiers
+  live in ACP rows plus ACP `KeyRef` secrets.
+- A deployment may start with zero active client profiles for any enabled
+  messaging platform.
 
-Examples:
+Each `MessagingClientProfiles` row owns:
 
-- Matrix: `[[matrix.profiles]]`
-- LINE: `[[line.profiles]]`
-- Signal: `[[signal.profiles]]`
-- Telegram: `[[telegram.profiles]]`
-- WeChat: `[[wechat.profiles]]`
-- WhatsApp: `[[whatsapp.profiles]]`
+- `platform_key`
+- `profile_key`
+- `display_name`
+- `is_active`
+- `settings`
+- `secret_refs`
+- lookup identifiers such as `path_token`, `recipient_user_id`,
+  `account_number`, `phone_number_id`, and `provider`
 
-The normalization and lookup behavior is implemented in
-[platform_runtime_profile.py](../mugen/core/utility/platform_runtime_profile.py).
+## Channel Binding Model
 
-## Tenant Binding Model
-
-Tenant-owned channel identity and runtime transport identity are separate.
+`ChannelProfile` remains the tenant-facing business profile, but it now points
+to a transport account by `client_profile_id`.
 
 - `ChannelProfile.profile_key` remains the tenant-facing business identifier.
-- `ChannelProfile.runtime_profile_key` selects the configured runtime transport
-  profile used for that tenant/channel endpoint.
-- `runtime_profile_key` is required for non-web messaging channel profiles.
-- `runtime_profile_key` must match one active configured runtime profile for the
-  same platform.
+- `ChannelProfile.client_profile_id` selects the ACP-owned transport account.
+- Validation is same-tenant and same-platform fail-closed.
 
-This validation is enforced in
-[channel_profile.py](../mugen/core/plugin/channel_orchestration/service/channel_profile.py).
+The global tenant may own explicit client profiles, but there is no implicit
+platform fallback to the global tenant.
 
 ## Ingress Routing
 
-Ingress route resolution now carries `runtime_profile_key` in the downstream
-route envelope in addition to tenant, binding, and route metadata.
+Ingress route resolution now carries `client_profile_id` and optional
+`client_profile_key` in the downstream route envelope.
 
 Platform identifier mapping:
 
-| Platform | Identifier type | Identifier value source | Global fallback |
-| --- | --- | --- | --- |
-| Matrix | `recipient_user_id` | active Matrix runtime profile user id | Yes, for `missing_identifier` and `missing_binding` |
-| LINE | `path_token` | webhook path token | No |
-| Telegram | `path_token` | webhook path token | No |
-| WeChat | `path_token` | webhook path token | No |
-| Signal | `account_number` | configured Signal account number | No |
-| WhatsApp | `phone_number_id` | webhook payload metadata | No |
+| Platform | Identifier type | Identifier value source |
+| --- | --- | --- |
+| Matrix | `recipient_user_id` | active Matrix client profile user id |
+| LINE | `path_token` | ACP client profile webhook path token |
+| Telegram | `path_token` | ACP client profile webhook path token |
+| WeChat | `path_token` | ACP client profile webhook path token |
+| Signal | `account_number` | ACP client profile account number |
+| WhatsApp | `phone_number_id` | ACP client profile phone number id |
 
-Conversation identifiers such as `room_id`, chat ids, or sender phone numbers
-still matter, but only as conversation context and reply targets. They are not
-the canonical tenant-owned runtime-profile selector.
+Unresolved messaging ingress now fails closed across all six platforms.
 
 ## Shared Ingress Persistence
 
-The shared messaging ingress foundation also persists `runtime_profile_key` on
-every canonical ingress row.
+The shared ingress tables persist `client_profile_id` on every canonical row.
 
 Practical consequences:
 
-- dedupe is scoped by `platform + runtime_profile_key + dedupe_key`;
-- dead-letter and replay remain isolated by runtime profile;
-- worker dispatch preserves the runtime profile that received the event;
-- Matrix sync checkpoints are stored per `runtime_profile_key` in
-  `messaging_ingress_checkpoint`.
+- dedupe is scoped by `platform + client_profile_id + dedupe_key`;
+- dead-letter and replay stay isolated per client profile;
+- worker dispatch preserves the client profile that received the event;
+- Matrix sync checkpoints are stored per `client_profile_id`.
 
-See [Messaging Ingress Contract](./messaging-ingress-contract.md) for the shared
-inbox, dedupe, dead-letter, and checkpoint model.
+See [Messaging Ingress Contract](./messaging-ingress-contract.md).
 
 ## Outbound Dispatch
 
-Inbound route metadata includes the selected `runtime_profile_key`, and outbound
-dispatch uses that same runtime profile when responding to the conversation.
+Inbound route metadata includes the selected `client_profile_id`, and outbound
+dispatch uses that same client profile when responding.
 
 That means:
 
-- the same tenant can own multiple runtime profiles on one platform;
-- the reply uses the same platform account/bot/profile that received the event;
-- the external recipient/conversation target still comes from the conversation
-  context (`room_id`, reply token, recipient phone number, and so on).
+- one tenant may own multiple client profiles on one platform;
+- replies go out through the same transport account that received the event;
+- `client_profile_key` is optional debug metadata only.
 
-## Platform Runtime Managers
+## Runtime Managers And Reload
 
-Core DI still exposes one client provider per platform, but the provider now
-returns a multi-profile manager for the supported messaging platforms.
+Core DI still exposes one client provider per platform, but each messaging
+provider now resolves active clients from ACP.
 
 Behavior by platform:
 
-- Matrix and Signal run one long-lived task set per runtime profile.
-- LINE, Telegram, WeChat, and WhatsApp multiplex outbound calls by runtime
-  profile.
-- Matrix runtime state and Signal receive-loop state are isolated per runtime
-  profile.
+- Matrix and Signal run one long-lived task set per active client profile.
+- LINE, Telegram, WeChat, and WhatsApp multiplex outbound calls by active
+  client profile.
 
-## Live Reload
-
-muGen exposes an admin ACP action to reload runtime profiles without a full
-process restart:
-
-- entity set: `SystemFlags`
-- action: `reloadPlatformProfiles`
-
-Runtime reload behavior:
-
-- rereads the active config file;
-- validates the new config;
-- reloads only changed active profiled platforms;
-- keeps unchanged platforms in place;
-- applies reload atomically per platform;
-- rolls back already-reloaded platforms if a later platform fails.
-
-Current limitation:
-
-- platform activation changes still require a restart;
-- the reload action can reconcile profile changes for active platforms, but it
-  cannot turn a platform on or off in place.
-
-The reload logic is implemented in
-[platform_runtime_reload.py](../mugen/core/service/platform_runtime_reload.py)
-and exposed through ACP in
-[system_flag.py](../mugen/core/plugin/acp/service/system_flag.py).
+Live reload still uses the `SystemFlags.reloadPlatformProfiles` ACP action, but
+the reload target is now the ACP-owned client profile catalog plus the current
+process-level config.

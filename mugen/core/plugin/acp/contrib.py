@@ -652,6 +652,46 @@ def contribute(
             ),
         },
         {
+            "set": "MessagingClientProfiles",
+            "entity": "MessagingClientProfile",
+            "description": (
+                "Tenant/global messaging transport client accounts, webhook"
+                " verification settings, identifier bindings, and secret references."
+            ),
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "crud": CrudPolicy(
+                create_schema=(
+                    "TenantId",
+                    "PlatformKey",
+                    "ProfileKey",
+                    "DisplayName",
+                    "IsActive",
+                    "Settings",
+                    "SecretRefs",
+                    "PathToken",
+                    "RecipientUserId",
+                    "AccountNumber",
+                    "PhoneNumberId",
+                    "Provider",
+                ),
+                update_schema=(
+                    "PlatformKey",
+                    "ProfileKey",
+                    "DisplayName",
+                    "IsActive",
+                    "Settings",
+                    "SecretRefs",
+                    "PathToken",
+                    "RecipientUserId",
+                    "AccountNumber",
+                    "PhoneNumberId",
+                    "Provider",
+                ),
+            ),
+        },
+        {
             "set": "PluginCapabilityGrants",
             "entity": "PluginCapabilityGrant",
             "description": (

@@ -12,11 +12,8 @@ from quart import abort, request
 
 from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.utility.platform_runtime_profile import (
-    find_platform_runtime_profile_key,
-    get_platform_profile_section,
-    get_platform_runtime_profile_keys,
-    identifier_configured_for_platform,
+from mugen.core.plugin.acp.service.messaging_client_profile import (
+    MessagingClientProfileService,
 )
 
 
@@ -26,6 +23,20 @@ def _config_provider():
 
 def _logger_provider():
     return di.container.logging_gateway
+
+
+def _client_profile_service() -> MessagingClientProfileService | None:
+    relational_storage_gateway = getattr(
+        di.container,
+        "relational_storage_gateway",
+        None,
+    )
+    if relational_storage_gateway is None:
+        return None
+    return MessagingClientProfileService(
+        table="admin_messaging_client_profile",
+        rsg=relational_storage_gateway,
+    )
 
 
 def line_platform_required(
@@ -79,15 +90,14 @@ def line_webhook_path_token_required(
                 logger.error("LINE webhook path token missing.")
                 abort(400)
 
+            service = _client_profile_service()
+            if service is None:
+                logger.error("LINE webhook path token configuration missing.")
+                abort(500)
+
             try:
-                identifier_configured = identifier_configured_for_platform(
-                    config,
-                    platform="line",
-                    identifier_type="path_token",
-                )
-                runtime_profile_key = find_platform_runtime_profile_key(
-                    config,
-                    platform="line",
+                client_profile = await service.resolve_active_by_identifier(
+                    platform_key="line",
                     identifier_type="path_token",
                     identifier_value=path_token,
                 )
@@ -95,11 +105,7 @@ def line_webhook_path_token_required(
                 logger.error("LINE webhook path token configuration missing.")
                 abort(500)
 
-            if identifier_configured is not True:
-                logger.error("LINE webhook path token configuration missing.")
-                abort(500)
-
-            if runtime_profile_key is None:
+            if client_profile is None:
                 logger.error("LINE webhook path token verification failed.")
                 abort(401)
 
@@ -126,52 +132,31 @@ def line_webhook_signature_required(
         async def wrapper(*args, **kwargs):
             config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
-
-            try:
-                identifier_configured = identifier_configured_for_platform(
-                    config,
-                    platform="line",
-                    identifier_type="path_token",
-                )
-            except RuntimeError:
+            service = _client_profile_service()
+            if service is None:
                 logger.error("LINE channel secret configuration missing.")
                 abort(500)
 
-            if identifier_configured is not True:
-                logger.error("LINE channel secret configuration missing.")
-                abort(500)
-
-            profile_keys = get_platform_runtime_profile_keys(
-                config,
-                platform="line",
-            )
             path_token = kwargs.get("path_token")
-            runtime_profile_key = None
             if not isinstance(path_token, str) or path_token.strip() == "":
-                if len(profile_keys) == 1:
-                    runtime_profile_key = profile_keys[0]
-                else:
-                    logger.error("LINE webhook path token missing.")
-                    abort(400)
+                logger.error("LINE webhook path token missing.")
+                abort(400)
 
             try:
-                if runtime_profile_key is None:
-                    runtime_profile_key = find_platform_runtime_profile_key(
-                        config,
-                        platform="line",
-                        identifier_type="path_token",
-                        identifier_value=path_token,
-                    )
-                if runtime_profile_key is None:
+                client_profile = await service.resolve_active_by_identifier(
+                    platform_key="line",
+                    identifier_type="path_token",
+                    identifier_value=path_token,
+                )
+                if client_profile is None:
                     logger.error("LINE webhook path token verification failed.")
                     abort(401)
-                profile_cfg = get_platform_profile_section(
-                    config,
-                    platform="line",
-                    runtime_profile_key=runtime_profile_key,
+                runtime_config = await service.build_runtime_config(
+                    config=config,
+                    client_profile=client_profile,
                 )
-                channel_secret = str(profile_cfg.channel.secret)
-            except (AttributeError, KeyError, RuntimeError):
+                channel_secret = str(runtime_config.line.channel.secret)
+            except (AttributeError, KeyError, RuntimeError, TypeError):
                 logger.error("LINE channel secret configuration missing.")
                 abort(500)
 

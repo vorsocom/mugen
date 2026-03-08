@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+import uuid
 
 
 def _normalize_required_text(value: object, *, field_name: str) -> str:
@@ -42,6 +43,15 @@ def _normalize_mapping(value: object, *, field_name: str) -> dict[str, Any]:
     return dict(value)
 
 
+def _normalize_required_uuid(value: object, *, field_name: str) -> uuid.UUID:
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value).strip())
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} is required.") from exc
+
+
 def _normalize_datetime(value: object, *, field_name: str) -> datetime:
     if value is None:
         return datetime.now(timezone.utc)
@@ -58,7 +68,7 @@ class MessagingIngressEvent:
 
     version: int
     platform: str
-    runtime_profile_key: str
+    client_profile_id: uuid.UUID
     source_mode: str
     event_type: str
     event_id: str | None
@@ -82,10 +92,10 @@ class MessagingIngressEvent:
         )
         object.__setattr__(
             self,
-            "runtime_profile_key",
-            _normalize_required_text(
-                self.runtime_profile_key,
-                field_name="MessagingIngressEvent.runtime_profile_key",
+            "client_profile_id",
+            _normalize_required_uuid(
+                self.client_profile_id,
+                field_name="MessagingIngressEvent.client_profile_id",
             ),
         )
         object.__setattr__(
@@ -177,6 +187,7 @@ class MessagingIngressEvent:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-safe plain dictionary."""
         payload = asdict(self)
+        payload["client_profile_id"] = str(self.client_profile_id)
         payload["received_at"] = self.received_at.astimezone(timezone.utc).isoformat()
         return payload
 
@@ -212,7 +223,7 @@ class MessagingIngressCheckpointUpdate:
     """Checkpoint mutation staged transactionally with ingress events."""
 
     platform: str
-    runtime_profile_key: str
+    client_profile_id: uuid.UUID
     checkpoint_key: str
     checkpoint_value: str
     provider_context: dict[str, Any] = field(default_factory=dict)
@@ -229,10 +240,10 @@ class MessagingIngressCheckpointUpdate:
         )
         object.__setattr__(
             self,
-            "runtime_profile_key",
-            _normalize_required_text(
-                self.runtime_profile_key,
-                field_name="MessagingIngressCheckpointUpdate.runtime_profile_key",
+            "client_profile_id",
+            _normalize_required_uuid(
+                self.client_profile_id,
+                field_name="MessagingIngressCheckpointUpdate.client_profile_id",
             ),
         )
         object.__setattr__(
@@ -303,7 +314,7 @@ class IMessagingIngressService(ABC):
         self,
         *,
         platform: str,
-        runtime_profile_key: str,
+        client_profile_id: uuid.UUID,
         checkpoint_key: str,
     ) -> str | None:
         """Fetch the latest checkpoint value for one platform/profile key."""

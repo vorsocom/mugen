@@ -3,19 +3,17 @@
 __all__ = ["ChannelProfileService"]
 
 from collections.abc import Mapping
-from types import SimpleNamespace
 from typing import Any
+import uuid
 
-from mugen.core import di
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
 from mugen.core.plugin.channel_orchestration.contract.service.channel_profile import (
     IChannelProfileService,
 )
 from mugen.core.plugin.channel_orchestration.domain import ChannelProfileDE
-from mugen.core.utility.platform_runtime_profile import (
-    get_platform_runtime_profile_keys,
-    normalize_runtime_profile_key,
+from mugen.core.plugin.acp.service.messaging_client_profile import (
+    MessagingClientProfileService,
 )
 
 
@@ -25,7 +23,7 @@ class ChannelProfileService(  # pylint: disable=too-few-public-methods
 ):
     """A CRUD service for channel profiles."""
 
-    _runtime_profile_channels = frozenset(
+    _client_profile_channels = frozenset(
         {
             "line",
             "matrix",
@@ -40,10 +38,12 @@ class ChannelProfileService(  # pylint: disable=too-few-public-methods
         self,
         table: str,
         rsg: IRelationalStorageGateway,
-        config: SimpleNamespace | None = None,
         **kwargs,
     ):
-        self._config = config
+        self._messaging_client_profile_service = MessagingClientProfileService(
+            table="admin_messaging_client_profile",
+            rsg=rsg,
+        )
         super().__init__(
             de_type=ChannelProfileDE,
             table=table,
@@ -58,56 +58,68 @@ class ChannelProfileService(  # pylint: disable=too-few-public-methods
         normalized = value.strip()
         return normalized or None
 
-    def _resolve_config(self) -> SimpleNamespace | Mapping[str, Any] | None:
-        if self._config is not None:
-            return self._config
+    @staticmethod
+    def _normalize_optional_uuid(value: object) -> uuid.UUID | None:
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return value
         try:
-            return di.container.config
-        except Exception:  # pylint: disable=broad-exception-caught
+            return uuid.UUID(str(value).strip())
+        except (AttributeError, TypeError, ValueError):
             return None
 
-    def _validate_runtime_profile_key(
+    async def _validate_client_profile_id(
         self,
         *,
         channel_key: str | None,
-        runtime_profile_key: str | None,
-    ) -> str | None:
+        tenant_id: object,
+        client_profile_id: object,
+    ) -> uuid.UUID | None:
         normalized_channel_key = self._normalize_optional_text(channel_key)
-        normalized_runtime_profile_key = normalize_runtime_profile_key(
-            runtime_profile_key
-        )
+        normalized_client_profile_id = self._normalize_optional_uuid(client_profile_id)
 
-        if normalized_channel_key not in self._runtime_profile_channels:
-            return normalized_runtime_profile_key
+        if normalized_channel_key not in self._client_profile_channels:
+            return normalized_client_profile_id
 
-        if normalized_runtime_profile_key is None:
+        if normalized_client_profile_id is None:
             raise RuntimeError(
-                "RuntimeProfileKey is required for non-web messaging channel profiles."
+                "ClientProfileId is required for non-web messaging channel profiles."
             )
 
-        config = self._resolve_config()
-        if config is None:
+        tenant_uuid = self._normalize_optional_uuid(tenant_id)
+        if tenant_uuid is None:
             raise RuntimeError(
-                "RuntimeProfileKey validation requires runtime configuration."
+                "TenantId is required to validate ClientProfileId."
             )
 
-        active_keys = get_platform_runtime_profile_keys(
-            config,
-            platform=normalized_channel_key,
+        client_profile = await self._messaging_client_profile_service.get(
+            {
+                "tenant_id": tenant_uuid,
+                "id": normalized_client_profile_id,
+                "is_active": True,
+            }
         )
-        if normalized_runtime_profile_key not in active_keys:
+        if client_profile is None:
             raise RuntimeError(
-                "Unknown RuntimeProfileKey for channel profile "
+                "Unknown ClientProfileId for channel profile "
                 f"(channel_key={normalized_channel_key!r} "
-                f"runtime_profile_key={normalized_runtime_profile_key!r})."
+                f"client_profile_id={str(normalized_client_profile_id)!r})."
             )
-        return normalized_runtime_profile_key
+        if client_profile.platform_key != normalized_channel_key:
+            raise RuntimeError(
+                "ClientProfileId platform does not match ChannelKey "
+                f"(channel_key={normalized_channel_key!r} "
+                f"platform_key={client_profile.platform_key!r})."
+            )
+        return normalized_client_profile_id
 
     async def create(self, values: Mapping[str, Any]) -> ChannelProfileDE:
         payload = dict(values)
-        payload["runtime_profile_key"] = self._validate_runtime_profile_key(
+        payload["client_profile_id"] = await self._validate_client_profile_id(
             channel_key=payload.get("channel_key"),
-            runtime_profile_key=payload.get("runtime_profile_key"),
+            tenant_id=payload.get("tenant_id"),
+            client_profile_id=payload.get("client_profile_id"),
         )
         return await super().create(payload)
 
@@ -121,11 +133,12 @@ class ChannelProfileService(  # pylint: disable=too-few-public-methods
             return None
 
         payload = dict(changes)
-        payload["runtime_profile_key"] = self._validate_runtime_profile_key(
+        payload["client_profile_id"] = await self._validate_client_profile_id(
             channel_key=payload.get("channel_key", current.channel_key),
-            runtime_profile_key=payload.get(
-                "runtime_profile_key",
-                current.runtime_profile_key,
+            tenant_id=payload.get("tenant_id", current.tenant_id),
+            client_profile_id=payload.get(
+                "client_profile_id",
+                current.client_profile_id,
             ),
         )
         return await super().update(where, payload)
@@ -142,11 +155,12 @@ class ChannelProfileService(  # pylint: disable=too-few-public-methods
             return None
 
         payload = dict(changes)
-        payload["runtime_profile_key"] = self._validate_runtime_profile_key(
+        payload["client_profile_id"] = await self._validate_client_profile_id(
             channel_key=payload.get("channel_key", current.channel_key),
-            runtime_profile_key=payload.get(
-                "runtime_profile_key",
-                current.runtime_profile_key,
+            tenant_id=payload.get("tenant_id", current.tenant_id),
+            client_profile_id=payload.get(
+                "client_profile_id",
+                current.client_profile_id,
             ),
         )
         return await super().update_with_row_version(

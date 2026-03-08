@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from mugen.core.utility.platform_runtime_profile import get_platform_profile_sections
-
 
 def _require_table(parent: object, *, path: str) -> Mapping[str, Any]:
     if not isinstance(parent, Mapping):
@@ -81,78 +79,9 @@ def _require_nonnegative_number(*, value: object, path: str) -> float:
     return number
 
 
-def _iter_telegram_profile_configs(
-    config: Mapping[str, Any],
-) -> list[tuple[str, Mapping[str, Any]]]:
-    telegram_cfg = _require_table(config.get("telegram"), path="telegram")
-    raw_profiles = telegram_cfg.get("profiles")
-    if isinstance(raw_profiles, list) and not raw_profiles:
-        raise RuntimeError(
-            "Invalid configuration: telegram.profiles must be a non-empty array."
-        )
-
-    profiles_enabled = isinstance(raw_profiles, list) and bool(raw_profiles)
-    profile_keys: set[str] = set()
-    path_tokens: set[str] = set()
-    secret_tokens: set[str] = set()
-    profile_configs: list[tuple[str, Mapping[str, Any]]] = []
-
-    for index, profile_ns in enumerate(
-        get_platform_profile_sections(config, platform="telegram")
-    ):
-        profile_path = (
-            f"telegram.profiles[{index}]"
-            if profiles_enabled
-            else "telegram"
-        )
-        profile_cfg = getattr(profile_ns, "dict", None)
-        if not isinstance(profile_cfg, Mapping):
-            raise RuntimeError(
-                f"Invalid configuration: {profile_path} must be a table."
-            )
-
-        profile_key = _require_non_empty_string(
-            value=profile_cfg.get("key"),
-            path=f"{profile_path}.key",
-        )
-        if profile_key in profile_keys:
-            raise RuntimeError(
-                "Invalid configuration: telegram profile keys must be unique."
-            )
-        profile_keys.add(profile_key)
-
-        webhook_cfg = _require_table(
-            profile_cfg.get("webhook"),
-            path=f"{profile_path}.webhook",
-        )
-        path_token = _require_non_empty_string(
-            value=webhook_cfg.get("path_token"),
-            path=f"{profile_path}.webhook.path_token",
-        )
-        secret_token = _require_non_empty_string(
-            value=webhook_cfg.get("secret_token"),
-            path=f"{profile_path}.webhook.secret_token",
-        )
-        if path_token in path_tokens:
-            raise RuntimeError(
-                "Invalid configuration: telegram webhook path tokens must be unique."
-            )
-        if secret_token in secret_tokens:
-            raise RuntimeError(
-                "Invalid configuration: telegram webhook secret tokens must be unique."
-            )
-        path_tokens.add(path_token)
-        secret_tokens.add(secret_token)
-
-        profile_configs.append((profile_path, profile_cfg))
-
-    return profile_configs
-
-
 def validate_telegram_enabled_runtime_config(config: Mapping[str, Any]) -> None:
     """Validate strict telegram runtime config when telegram platform is enabled."""
     telegram_cfg = _require_table(config.get("telegram"), path="telegram")
-    _iter_telegram_profile_configs(config)
 
     webhook_cfg = _require_table(telegram_cfg.get("webhook"), path="telegram.webhook")
     _require_positive_int(
@@ -202,10 +131,3 @@ def validate_telegram_enabled_runtime_config(config: Mapping[str, Any]) -> None:
         value=typing_cfg.get("enabled"),
         path="telegram.typing.enabled",
     )
-
-    for profile_path, profile_cfg in _iter_telegram_profile_configs(config):
-        bot_cfg = _require_table(profile_cfg.get("bot"), path=f"{profile_path}.bot")
-        _require_non_empty_string(
-            value=bot_cfg.get("token"),
-            path=f"{profile_path}.bot.token",
-        )

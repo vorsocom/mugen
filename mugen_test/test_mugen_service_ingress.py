@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 from mugen.core.contract.service.ingress import (
     MessagingIngressCheckpointUpdate,
@@ -18,6 +19,7 @@ from mugen.core.service.ingress import DefaultMessagingIngressService
 
 
 _MISSING = object()
+_CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000101")
 
 
 class _FakeResult:
@@ -152,7 +154,7 @@ def _make_event(**overrides) -> MessagingIngressEvent:
     payload = {
         "version": 1,
         "platform": "matrix",
-        "runtime_profile_key": "matrix-default",
+        "client_profile_id": _CLIENT_PROFILE_ID,
         "source_mode": "sync_room_message",
         "event_type": "RoomMessageText",
         "event_id": "$event-1",
@@ -182,7 +184,7 @@ def _make_entry(**event_overrides) -> MessagingIngressStageEntry:
 def _make_checkpoint(**overrides) -> MessagingIngressCheckpointUpdate:
     payload = {
         "platform": "matrix",
-        "runtime_profile_key": "matrix-default",
+        "client_profile_id": _CLIENT_PROFILE_ID,
         "checkpoint_key": "sync_token",
         "checkpoint_value": "next-batch",
         "provider_context": {"source": "sync"},
@@ -197,7 +199,7 @@ def _make_row(**overrides) -> dict:
         "id": 7,
         "version": 1,
         "platform": "matrix",
-        "runtime_profile_key": "matrix-default",
+        "client_profile_id": _CLIENT_PROFILE_ID,
         "ipc_command": "matrix_ingress_event",
         "source_mode": "sync_room_message",
         "event_type": "RoomMessageText",
@@ -421,7 +423,7 @@ class TestMugenServiceIngress(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             await service.get_checkpoint(
                 platform="matrix",
-                runtime_profile_key="matrix-default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 checkpoint_key="sync_token",
             )
         )
@@ -432,7 +434,7 @@ class TestMugenServiceIngress(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             await service.get_checkpoint(
                 platform="matrix",
-                runtime_profile_key="matrix-default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 checkpoint_key="sync_token",
             )
         )
@@ -443,7 +445,7 @@ class TestMugenServiceIngress(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await service.get_checkpoint(
                 platform="matrix",
-                runtime_profile_key="matrix-default",
+                client_profile_id=_CLIENT_PROFILE_ID,
                 checkpoint_key="sync_token",
             ),
             "next-batch",

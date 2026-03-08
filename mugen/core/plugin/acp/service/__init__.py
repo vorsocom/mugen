@@ -6,6 +6,7 @@ __all__ = [
     "GlobalRoleMembershipService",
     "GlobalRoleService",
     "KeyRefService",
+    "MessagingClientProfileService",
     "PermissionEntryService",
     "PermissionObjectService",
     "PermissionTypeService",
@@ -35,6 +36,9 @@ from mugen.core.plugin.acp.service.global_role_membership import (
     GlobalRoleMembershipService,
 )
 from mugen.core.plugin.acp.service.key_ref import KeyRefService
+from mugen.core.plugin.acp.service.messaging_client_profile import (
+    MessagingClientProfileService,
+)
 from mugen.core.plugin.acp.service.permission_entry import PermissionEntryService
 from mugen.core.plugin.acp.service.permission_object import PermissionObjectService
 from mugen.core.plugin.acp.service.permission_type import PermissionTypeService
@@ -60,6 +64,7 @@ REGISTRATIONS = [
     (GlobalRoleService, admin_model.GlobalRole),
     (GlobalRoleMembershipService, admin_model.GlobalRoleMembership),
     (KeyRefService, admin_model.KeyRef),
+    (MessagingClientProfileService, admin_model.MessagingClientProfile),
     (PermissionEntryService, admin_model.PermissionEntry),
     (PermissionObjectService, admin_model.PermissionObject),
     (PermissionTypeService, admin_model.PermissionType),

@@ -647,6 +647,35 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+        key_ref_id = uuid.uuid4()
+        key_ref_by_id = KeyRefDE(
+            id=key_ref_id,
+            tenant_id=tenant_id,
+            purpose="audit_hmac",
+        )
+        svc.get = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[key_ref_by_id, None]
+        )
+        secret = await svc.resolve_secret_for_id(
+            tenant_id=tenant_id,
+            key_ref_id=key_ref_id,
+        )
+        self.assertIsNotNone(secret)
+        self.assertIsNone(
+            await svc.resolve_secret_for_id(
+                tenant_id=tenant_id,
+                key_ref_id=key_ref_id,
+            )
+        )
+        self.assertEqual(
+            svc.get.await_args_list[0].args[0],
+            {
+                "tenant_id": tenant_id,
+                "id": key_ref_id,
+                "status": "active",
+            },
+        )
+
         resolver.resolve.reset_mock()
         tenant_key_row = KeyRefDE(
             id=uuid.uuid4(),

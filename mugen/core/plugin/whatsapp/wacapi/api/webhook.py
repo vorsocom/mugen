@@ -12,6 +12,9 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.service.ingress import IMessagingIngressService
 from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
+from mugen.core.plugin.acp.service.messaging_client_profile import (
+    MessagingClientProfileService,
+)
 from mugen.core.plugin.whatsapp.wacapi.api.decorator import (
     whatsapp_platform_required,
     whatsapp_request_signature_verification_required,
@@ -42,16 +45,34 @@ def _logger_provider():
     return di.container.logging_gateway
 
 
-@api.get("/whatsapp/wacapi/webhook")
+def _client_profile_service() -> MessagingClientProfileService | None:
+    relational_storage_gateway = getattr(
+        di.container,
+        "relational_storage_gateway",
+        None,
+    )
+    if relational_storage_gateway is None:
+        return None
+    return MessagingClientProfileService(
+        table="admin_messaging_client_profile",
+        rsg=relational_storage_gateway,
+    )
+
+
+@api.get("/whatsapp/wacapi/webhook/<path_token>")
 @whatsapp_platform_required
 @whatsapp_server_ip_allow_list_required
 async def whatsapp_wacapi_subscription(
+    path_token: str,
     config_provider=_config_provider,
     logger_provider=_logger_provider,
+    client_profile_service_provider=None,
 ):
     """Whatsapp Cloud API verification."""
     config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
+    if client_profile_service_provider is None:
+        client_profile_service_provider = _client_profile_service
 
     if request.args.get("hub.mode") != "subscribe":
         logger.error("hub.mode incorrect.")
@@ -61,14 +82,34 @@ async def whatsapp_wacapi_subscription(
         logger.error("hub.verify_token not supplied or is empty.")
         abort(400)
 
+    service = (
+        client_profile_service_provider()
+        if callable(client_profile_service_provider)
+        else None
+    )
+    if service is None:
+        logger.error("Could not get verification token.")
+        abort(500)
+
     try:
-        if (
-            request.args.get("hub.verify_token")
-            != config.whatsapp.webhook.verification_token
+        client_profile = await service.resolve_active_by_identifier(
+            platform_key="whatsapp",
+            identifier_type="path_token",
+            identifier_value=path_token,
+        )
+        if client_profile is None:
+            logger.error("Incorrect verification token.")
+            abort(401)
+        runtime_config = await service.build_runtime_config(
+            config=config,
+            client_profile=client_profile,
+        )
+        if request.args.get("hub.verify_token") != str(
+            runtime_config.whatsapp.webhook.verification_token
         ):
             logger.error("Incorrect verification token.")
             abort(400)
-    except AttributeError:
+    except (AttributeError, KeyError, RuntimeError, TypeError):
         logger.error("Could not get verification token.")
         abort(500)
 
@@ -79,11 +120,12 @@ async def whatsapp_wacapi_subscription(
     return request.args.get("hub.challenge")
 
 
-@api.post("/whatsapp/wacapi/webhook")
+@api.post("/whatsapp/wacapi/webhook/<path_token>")
 @whatsapp_platform_required
 @whatsapp_server_ip_allow_list_required
 @whatsapp_request_signature_verification_required
 async def whatsapp_wacapi_event(
+    path_token: str,
     ipc_provider=None,
     ingress_provider=_ingress_provider,
     relational_storage_gateway_provider=_relational_storage_gateway_provider,
@@ -107,7 +149,10 @@ async def whatsapp_wacapi_event(
             IPCCommandRequest(
                 platform="whatsapp",
                 command="whatsapp_wacapi_event",
-                data=data,
+                data={
+                    "path_token": path_token,
+                    "payload": data,
+                },
             )
         )
         if response.errors:
@@ -124,6 +169,7 @@ async def whatsapp_wacapi_event(
     )
     try:
         entries = await extract_whatsapp_stage_entries(
+            path_token=path_token,
             payload=data,
             relational_storage_gateway=relational_storage_gateway,
             logging_gateway=logger,

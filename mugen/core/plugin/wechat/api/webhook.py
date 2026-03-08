@@ -17,6 +17,9 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.service.ingress import IMessagingIngressService
 from mugen.core.contract.service.ipc import IIPCService, IPCCommandRequest
+from mugen.core.plugin.acp.service.messaging_client_profile import (
+    MessagingClientProfileService,
+)
 from mugen.core.plugin.wechat.api.decorator import (
     wechat_platform_required,
     wechat_provider_required,
@@ -24,11 +27,6 @@ from mugen.core.plugin.wechat.api.decorator import (
 )
 from mugen.core.service.messaging_ingress_extractors import (
     extract_wechat_stage_entries,
-)
-from mugen.core.utility.platform_runtime_profile import (
-    find_platform_runtime_profile_key,
-    get_platform_profile_section,
-    identifier_configured_for_platform,
 )
 
 
@@ -50,6 +48,20 @@ def _relational_storage_gateway_provider():
 
 def _logger_provider():
     return di.container.logging_gateway
+
+
+def _client_profile_service() -> MessagingClientProfileService | None:
+    relational_storage_gateway = getattr(
+        di.container,
+        "relational_storage_gateway",
+        None,
+    )
+    if relational_storage_gateway is None:
+        return None
+    return MessagingClientProfileService(
+        table="admin_messaging_client_profile",
+        rsg=relational_storage_gateway,
+    )
 
 
 def _coerce_text(value: object) -> str:
@@ -134,55 +146,76 @@ def _parse_xml_payload(xml_text: str) -> dict:
     return payload
 
 
-def _wechat_profile_config(
+async def _wechat_profile_config(
     config: SimpleNamespace,
     *,
     path_token: str | None,
+    client_profile_service: MessagingClientProfileService | None = None,
 ) -> SimpleNamespace:
-    try:
-        identifier_configured = identifier_configured_for_platform(
-            config,
-            platform="wechat",
-            identifier_type="path_token",
-        )
-    except RuntimeError as exc:
-        raise RuntimeError("Unknown WeChat webhook path token.") from exc
-
-    if identifier_configured is not True:
-        profile_cfg = getattr(config, "wechat", None)
-        if isinstance(profile_cfg, SimpleNamespace):
-            return profile_cfg
+    service = (
+        client_profile_service
+        if client_profile_service is not None
+        else _client_profile_service()
+    )
+    if service is None:
         raise RuntimeError("Unknown WeChat webhook path token.")
-
-    runtime_profile_key = find_platform_runtime_profile_key(
-        config,
-        platform="wechat",
+    client_profile = await service.resolve_active_by_identifier(
+        platform_key="wechat",
         identifier_type="path_token",
         identifier_value=_coerce_text(path_token),
     )
-    if runtime_profile_key is None:
+    if client_profile is None:
         raise RuntimeError("Unknown WeChat webhook path token.")
-    profile_cfg = get_platform_profile_section(
-        config,
-        platform="wechat",
-        runtime_profile_key=runtime_profile_key,
+    runtime_config = await service.build_runtime_config(
+        config=config,
+        client_profile=client_profile,
     )
-    return profile_cfg
+    return runtime_config.wechat
 
 
-def _resolve_signature_token(config: SimpleNamespace, *, path_token: str | None) -> str:
-    return str(_wechat_profile_config(config, path_token=path_token).webhook.signature_token)
+async def _resolve_signature_token(
+    config: SimpleNamespace,
+    *,
+    path_token: str | None,
+    client_profile_service: MessagingClientProfileService | None = None,
+) -> str:
+    profile_cfg = await _wechat_profile_config(
+        config,
+        path_token=path_token,
+        client_profile_service=client_profile_service,
+    )
+    return str(profile_cfg.webhook.signature_token)
 
 
-def _resolve_aes_enabled(config: SimpleNamespace, *, path_token: str | None) -> bool:
-    return bool(_wechat_profile_config(config, path_token=path_token).webhook.aes_enabled)
+async def _resolve_aes_enabled(
+    config: SimpleNamespace,
+    *,
+    path_token: str | None,
+    client_profile_service: MessagingClientProfileService | None = None,
+) -> bool:
+    profile_cfg = await _wechat_profile_config(
+        config,
+        path_token=path_token,
+        client_profile_service=client_profile_service,
+    )
+    return bool(profile_cfg.webhook.aes_enabled)
 
 
-def _resolve_aes_key(config: SimpleNamespace, *, path_token: str | None) -> str:
-    return str(_wechat_profile_config(config, path_token=path_token).webhook.aes_key)
+async def _resolve_aes_key(
+    config: SimpleNamespace,
+    *,
+    path_token: str | None,
+    client_profile_service: MessagingClientProfileService | None = None,
+) -> str:
+    profile_cfg = await _wechat_profile_config(
+        config,
+        path_token=path_token,
+        client_profile_service=client_profile_service,
+    )
+    return str(profile_cfg.webhook.aes_key)
 
 
-def _verify_get_signature_or_abort(
+async def _verify_get_signature_or_abort(
     *,
     config: SimpleNamespace,
     logger: ILoggingGateway,
@@ -190,10 +223,19 @@ def _verify_get_signature_or_abort(
     timestamp: str,
     nonce: str,
     echostr: str,
+    client_profile_service: MessagingClientProfileService | None = None,
 ) -> str:
     try:
-        signature_token = _resolve_signature_token(config, path_token=path_token)
-        aes_enabled = _resolve_aes_enabled(config, path_token=path_token)
+        signature_token = await _resolve_signature_token(
+            config,
+            path_token=path_token,
+            client_profile_service=client_profile_service,
+        )
+        aes_enabled = await _resolve_aes_enabled(
+            config,
+            path_token=path_token,
+            client_profile_service=client_profile_service,
+        )
     except (AttributeError, KeyError, RuntimeError):
         logger.error("WeChat webhook configuration missing.")
         abort(500)
@@ -218,7 +260,11 @@ def _verify_get_signature_or_abort(
         try:
             return _decrypt_wechat_payload(
                 encrypted=echostr,
-                aes_key=_resolve_aes_key(config, path_token=path_token),
+                aes_key=await _resolve_aes_key(
+                    config,
+                    path_token=path_token,
+                    client_profile_service=client_profile_service,
+                ),
             )
         except ValueError:
             logger.error("Unable to decrypt WeChat handshake payload.")
@@ -249,6 +295,7 @@ async def _resolve_inbound_payload_or_abort(
     config: SimpleNamespace,
     logger: ILoggingGateway,
     path_token: str | None = None,
+    client_profile_service: MessagingClientProfileService | None = None,
 ) -> dict:
     timestamp = _required_query_arg("timestamp")
     nonce = _required_query_arg("nonce")
@@ -263,8 +310,16 @@ async def _resolve_inbound_payload_or_abort(
         abort(400)
 
     try:
-        signature_token = _resolve_signature_token(config, path_token=path_token)
-        aes_enabled = _resolve_aes_enabled(config, path_token=path_token)
+        signature_token = await _resolve_signature_token(
+            config,
+            path_token=path_token,
+            client_profile_service=client_profile_service,
+        )
+        aes_enabled = await _resolve_aes_enabled(
+            config,
+            path_token=path_token,
+            client_profile_service=client_profile_service,
+        )
     except (AttributeError, KeyError, RuntimeError):
         logger.error("WeChat webhook configuration missing.")
         abort(500)
@@ -290,7 +345,11 @@ async def _resolve_inbound_payload_or_abort(
         try:
             body_text = _decrypt_wechat_payload(
                 encrypted=encrypted,
-                aes_key=_resolve_aes_key(config, path_token=path_token),
+                aes_key=await _resolve_aes_key(
+                    config,
+                    path_token=path_token,
+                    client_profile_service=client_profile_service,
+                ),
             )
         except ValueError:
             logger.error("Unable to decrypt WeChat encrypted payload.")
@@ -331,20 +390,29 @@ async def _handle_get_verification(
     path_token: str | None = None,
     config_provider,
     logger_provider,
+    client_profile_service_provider=None,
 ) -> str:
     config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
+    if client_profile_service_provider is None:
+        client_profile_service_provider = _client_profile_service
+    client_profile_service = (
+        client_profile_service_provider()
+        if callable(client_profile_service_provider)
+        else None
+    )
 
     timestamp = _required_query_arg("timestamp")
     nonce = _required_query_arg("nonce")
     echostr = _required_query_arg("echostr")
-    return _verify_get_signature_or_abort(
+    return await _verify_get_signature_or_abort(
         config=config,
         logger=logger,
         path_token=path_token,
         timestamp=timestamp,
         nonce=nonce,
         echostr=echostr,
+        client_profile_service=client_profile_service,
     )
 
 
@@ -358,14 +426,23 @@ async def _handle_post_event(
     ingress_provider,
     relational_storage_gateway_provider,
     logger_provider,
+    client_profile_service_provider=None,
 ) -> str:
     config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
+    if client_profile_service_provider is None:
+        client_profile_service_provider = _client_profile_service
+    client_profile_service = (
+        client_profile_service_provider()
+        if callable(client_profile_service_provider)
+        else None
+    )
 
     payload = await _resolve_inbound_payload_or_abort(
         config=config,
         logger=logger,
         path_token=path_token,
+        client_profile_service=client_profile_service,
     )
 
     ipc_svc: IIPCService | None = ipc_provider() if callable(ipc_provider) else None
@@ -418,12 +495,14 @@ async def wechat_official_account_subscription(
     path_token: str,
     config_provider=_config_provider,
     logger_provider=_logger_provider,
+    client_profile_service_provider=None,
 ):
     """Official Account URL verification endpoint."""
     return await _handle_get_verification(
         path_token=path_token,
         config_provider=config_provider,
         logger_provider=logger_provider,
+        client_profile_service_provider=client_profile_service_provider,
     )
 
 
@@ -438,6 +517,7 @@ async def wechat_official_account_event(
     ingress_provider=_ingress_provider,
     relational_storage_gateway_provider=_relational_storage_gateway_provider,
     logger_provider=_logger_provider,
+    client_profile_service_provider=None,
 ):
     """Official Account webhook event endpoint."""
     _ = path_token
@@ -450,6 +530,7 @@ async def wechat_official_account_event(
         ingress_provider=ingress_provider,
         relational_storage_gateway_provider=relational_storage_gateway_provider,
         logger_provider=logger_provider,
+        client_profile_service_provider=client_profile_service_provider,
     )
 
 
@@ -461,12 +542,14 @@ async def wechat_wecom_subscription(
     path_token: str,
     config_provider=_config_provider,
     logger_provider=_logger_provider,
+    client_profile_service_provider=None,
 ):
     """WeCom callback URL verification endpoint."""
     return await _handle_get_verification(
         path_token=path_token,
         config_provider=config_provider,
         logger_provider=logger_provider,
+        client_profile_service_provider=client_profile_service_provider,
     )
 
 
@@ -481,6 +564,7 @@ async def wechat_wecom_event(
     ingress_provider=_ingress_provider,
     relational_storage_gateway_provider=_relational_storage_gateway_provider,
     logger_provider=_logger_provider,
+    client_profile_service_provider=None,
 ):
     """WeCom callback event endpoint."""
     _ = path_token
@@ -493,4 +577,5 @@ async def wechat_wecom_event(
         ingress_provider=ingress_provider,
         relational_storage_gateway_provider=relational_storage_gateway_provider,
         logger_provider=logger_provider,
+        client_profile_service_provider=client_profile_service_provider,
     )

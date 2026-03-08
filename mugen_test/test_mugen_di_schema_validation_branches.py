@@ -504,21 +504,6 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["matrix"]
-        cfg["matrix"]["homeserver"] = ""
-        cases.append((cfg, "matrix.homeserver"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["matrix"]
-        cfg["matrix"]["client"]["user"] = ""
-        cases.append((cfg, "matrix.client.user"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["matrix"]
-        cfg["matrix"]["client"]["password"] = ""
-        cases.append((cfg, "matrix.client.password"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["matrix"]
         cfg["matrix"]["domains"]["allowed"] = []
         cases.append((cfg, "matrix.domains.allowed"))
 
@@ -587,13 +572,13 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["telegram"]
-        cfg["telegram"]["bot"]["token"] = ""
-        cases.append((cfg, "telegram.bot.token"))
+        cfg["telegram"]["webhook"]["dedupe_ttl_seconds"] = 0
+        cases.append((cfg, "telegram.webhook.dedupe_ttl_seconds"))
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["telegram"]
-        cfg["telegram"]["webhook"]["path_token"] = ""
-        cases.append((cfg, "telegram.webhook.path_token"))
+        cfg["telegram"]["api"]["base_url"] = ""
+        cases.append((cfg, "telegram.api.base_url"))
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["telegram"]
@@ -627,18 +612,13 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["line"]
-        cfg["line"]["channel"]["access_token"] = ""
-        cases.append((cfg, "line.channel.access_token"))
+        cfg["line"]["webhook"]["dedupe_ttl_seconds"] = 0
+        cases.append((cfg, "line.webhook.dedupe_ttl_seconds"))
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["line"]
-        cfg["line"]["channel"]["secret"] = ""
-        cases.append((cfg, "line.channel.secret"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["line"]
-        cfg["line"]["webhook"]["path_token"] = ""
-        cases.append((cfg, "line.webhook.path_token"))
+        cfg["line"]["api"]["base_url"] = ""
+        cases.append((cfg, "line.api.base_url"))
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["line"]
@@ -661,30 +641,18 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["wechat"]
-        cfg["wechat"]["provider"] = "invalid"
-        cases.append((cfg, "wechat.provider"))
+        cfg["wechat"]["webhook"]["dedupe_ttl_seconds"] = 0
+        cases.append((cfg, "wechat.webhook.dedupe_ttl_seconds"))
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["wechat"]
-        cfg["wechat"]["webhook"]["path_token"] = ""
-        cases.append((cfg, "wechat.webhook.path_token"))
+        cfg["wechat"]["api"]["timeout_seconds"] = 0
+        cases.append((cfg, "wechat.api.timeout_seconds"))
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["wechat"]
-        cfg["wechat"]["webhook"]["aes_enabled"] = True
-        cfg["wechat"]["webhook"]["aes_key"] = ""
-        cases.append((cfg, "wechat.webhook.aes_key"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["wechat"]
-        cfg["wechat"]["official_account"]["app_id"] = ""
-        cases.append((cfg, "wechat.official_account.app_id"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["wechat"]
-        cfg["wechat"]["provider"] = "wecom"
-        cfg["wechat"]["wecom"]["agent_id"] = 0
-        cases.append((cfg, "wechat.wecom.agent_id"))
+        cfg["wechat"]["typing"]["enabled"] = "true"
+        cases.append((cfg, "wechat.typing.enabled"))
 
         for candidate, message in cases:
             with self.subTest(message=message):
@@ -695,11 +663,6 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cfg["mugen"]["platforms"] = ["wechat"]
         di._validate_core_module_schema(cfg)
 
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["wechat"]
-        cfg["wechat"]["provider"] = "wecom"
-        di._validate_core_module_schema(cfg)
-
     def test_core_schema_requires_strict_whatsapp_runtime_contract_when_enabled(
         self,
     ) -> None:
@@ -707,13 +670,13 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["whatsapp"]
-        cfg["whatsapp"]["app"]["secret"] = ""
-        cases.append((cfg, "whatsapp.app.secret"))
+        cfg["whatsapp"]["graphapi"]["base_url"] = ""
+        cases.append((cfg, "whatsapp.graphapi.base_url"))
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["whatsapp"]
-        cfg["whatsapp"]["business"]["phone_number_id"] = ""
-        cases.append((cfg, "whatsapp.business.phone_number_id"))
+        cfg["whatsapp"]["graphapi"]["version"] = ""
+        cases.append((cfg, "whatsapp.graphapi.version"))
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["whatsapp"]

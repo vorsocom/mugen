@@ -93,6 +93,7 @@ class TestDIBuildWeChatClient(unittest.TestCase):
                 config,
                 ipc_service,
                 keyval_storage_gateway,
+                relational_storage_gateway,
                 logging_gateway,
                 messaging_service,
                 user_service,
@@ -101,6 +102,7 @@ class TestDIBuildWeChatClient(unittest.TestCase):
                     config,
                     ipc_service,
                     keyval_storage_gateway,
+                    relational_storage_gateway,
                     logging_gateway,
                     messaging_service,
                     user_service,
@@ -207,4 +209,3 @@ class TestDIBuildWeChatClient(unittest.TestCase):
             di._build_provider(config, injector, provider_name="wechat_client")
 
         self.assertIsInstance(injector.wechat_client, DummyWeChatClientClass)
-

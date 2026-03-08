@@ -38,8 +38,8 @@ class MessagingIngressDeadLetterRecord(ModelBase):
         index=True,
     )
 
-    runtime_profile_key: Mapped[str] = mapped_column(
-        CITEXT(128),
+    client_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         nullable=False,
         index=True,
     )
@@ -150,10 +150,6 @@ class MessagingIngressDeadLetterRecord(ModelBase):
         CheckConstraint(
             "length(btrim(platform)) > 0",
             name="ck_msg_ingress_dead_letter_platform_nonempty",
-        ),
-        CheckConstraint(
-            "length(btrim(runtime_profile_key)) > 0",
-            name="ck_msg_ingress_dead_letter_runtime_profile_nonempty",
         ),
         CheckConstraint(
             "length(btrim(ipc_command)) > 0",
