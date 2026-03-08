@@ -17,6 +17,7 @@ __all__ = [
     "refresh_token_type",
     "role_type",
     "role_membership_type",
+    "runtime_config_profile_type",
     "schema_binding_type",
     "schema_definition_type",
     "system_flag_type",
@@ -49,6 +50,9 @@ from mugen.core.plugin.acp.edm.plugin_capability_grant import (
 from mugen.core.plugin.acp.edm.refresh_token import refresh_token_type
 from mugen.core.plugin.acp.edm.role import role_type
 from mugen.core.plugin.acp.edm.role_membership import role_membership_type
+from mugen.core.plugin.acp.edm.runtime_config_profile import (
+    runtime_config_profile_type,
+)
 from mugen.core.plugin.acp.edm.schema_binding import schema_binding_type
 from mugen.core.plugin.acp.edm.schema_definition import schema_definition_type
 from mugen.core.plugin.acp.edm.system_flag import system_flag_type

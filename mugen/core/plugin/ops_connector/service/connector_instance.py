@@ -27,6 +27,9 @@ from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.contract.service.key_provider import ResolvedKeyMaterial
 from mugen.core.plugin.acp.service.dedup_record import DedupRecordService
 from mugen.core.plugin.acp.service.key_ref import KeyRefService
+from mugen.core.plugin.acp.service.runtime_config_profile import (
+    RuntimeConfigProfileService,
+)
 from mugen.core.plugin.acp.service.schema_definition import SchemaDefinitionService
 from mugen.core.plugin.ops_connector.api.validation import (
     ConnectorInstanceCreateValidation,
@@ -69,6 +72,7 @@ class ConnectorInstanceService(  # pragma: no cover
     _TYPE_TABLE = "ops_connector_type"
     _CALL_LOG_TABLE = "ops_connector_call_log"
     _KEY_REF_TABLE = "admin_key_ref"
+    _RUNTIME_CONFIG_PROFILE_TABLE = "admin_runtime_config_profile"
     _SCHEMA_DEFINITION_TABLE = "admin_schema_definition"
     _DEDUP_RECORD_TABLE = "admin_dedup_record"
     _SLA_ESCALATION_POLICY_TABLE = "ops_sla_escalation_policy"
@@ -100,6 +104,10 @@ class ConnectorInstanceService(  # pragma: no cover
             table=self._CALL_LOG_TABLE, rsg=rsg
         )
         self._key_ref_service = KeyRefService(table=self._KEY_REF_TABLE, rsg=rsg)
+        self._runtime_config_profile_service = RuntimeConfigProfileService(
+            table=self._RUNTIME_CONFIG_PROFILE_TABLE,
+            rsg=rsg,
+        )
         self._schema_definition_service = SchemaDefinitionService(
             table=self._SCHEMA_DEFINITION_TABLE,
             rsg=rsg,
@@ -205,7 +213,7 @@ class ConnectorInstanceService(  # pragma: no cover
             return vars(value)
         return {}
 
-    def _connector_config(self) -> SimpleNamespace:
+    def _base_connector_config(self) -> SimpleNamespace:
         try:
             root = self._config_provider()
         except Exception:  # pylint: disable=broad-exception-caught
@@ -277,6 +285,77 @@ class ConnectorInstanceService(  # pragma: no cover
             retry_status_codes_default=retry_status_codes_default,
             redacted_keys=redacted_keys,
             secret_purpose=secret_purpose,
+        )
+
+    async def _connector_config(
+        self,
+        *,
+        tenant_id: uuid.UUID | None,
+    ) -> SimpleNamespace:
+        base_cfg = self._base_connector_config()
+        overlay = await self._runtime_config_profile_service.resolve_active_settings(
+            tenant_id=tenant_id,
+            category="ops_connector.defaults",
+            profile_key="default",
+        )
+
+        timeout_seconds_default = self._parse_positive_float(
+            overlay.get(
+                "timeout_seconds_default",
+                base_cfg.timeout_seconds_default,
+            ),
+            default=base_cfg.timeout_seconds_default,
+            minimum=0.0,
+        )
+        max_retries_default = self._parse_positive_int(
+            overlay.get("max_retries_default", base_cfg.max_retries_default),
+            default=base_cfg.max_retries_default,
+        )
+        retry_backoff_seconds_default = self._parse_positive_float(
+            overlay.get(
+                "retry_backoff_seconds_default",
+                base_cfg.retry_backoff_seconds_default,
+            ),
+            default=base_cfg.retry_backoff_seconds_default,
+            minimum=-1.0,
+        )
+
+        raw_codes = overlay.get(
+            "retry_status_codes_default",
+            base_cfg.retry_status_codes_default,
+        )
+        if isinstance(raw_codes, (list, tuple, set)):
+            retry_status_codes_default = tuple(
+                code
+                for code in [
+                    int(item) for item in raw_codes if str(item).strip().isdigit()
+                ]
+                if 100 <= code <= 599
+            )
+            if not retry_status_codes_default:
+                retry_status_codes_default = base_cfg.retry_status_codes_default
+        else:
+            retry_status_codes_default = base_cfg.retry_status_codes_default
+
+        redacted_keys_raw = overlay.get("redacted_keys", base_cfg.redacted_keys)
+        if isinstance(redacted_keys_raw, (list, tuple, set)):
+            redacted_keys = tuple(
+                str(item).strip().casefold()
+                for item in redacted_keys_raw
+                if str(item).strip()
+            )
+            if not redacted_keys:
+                redacted_keys = base_cfg.redacted_keys
+        else:
+            redacted_keys = base_cfg.redacted_keys
+
+        return SimpleNamespace(
+            timeout_seconds_default=timeout_seconds_default,
+            max_retries_default=max_retries_default,
+            retry_backoff_seconds_default=retry_backoff_seconds_default,
+            retry_status_codes_default=retry_status_codes_default,
+            redacted_keys=redacted_keys,
+            secret_purpose=base_cfg.secret_purpose,
         )
 
     def _safe_registry(self) -> IAdminRegistry | None:
@@ -592,9 +671,8 @@ class ConnectorInstanceService(  # pragma: no cover
         *,
         tenant_id: uuid.UUID,
         secret_ref: str,
+        cfg: SimpleNamespace,
     ) -> ResolvedKeyMaterial:
-        cfg = self._connector_config()
-
         try:
             resolved = await self._key_ref_service.resolve_secret_for_key_id(
                 tenant_id=tenant_id,
@@ -620,9 +698,8 @@ class ConnectorInstanceService(  # pragma: no cover
         *,
         instance: ConnectorInstanceDE,
         capability: Mapping[str, Any],
+        cfg: SimpleNamespace,
     ) -> tuple[float, int, float, tuple[int, ...]]:
-        cfg = self._connector_config()
-
         config_json = (
             instance.config_json if isinstance(instance.config_json, Mapping) else {}
         )
@@ -1204,9 +1281,11 @@ class ConnectorInstanceService(  # pragma: no cover
         if str(connector_type.adapter_kind or "").casefold() != "http_json":
             abort(409, "Only http_json adapter_kind is supported in Phase 6.")
 
+        cfg = await self._connector_config(tenant_id=tenant_id)
         secret = await self._resolve_secret_material(
             tenant_id=tenant_id,
             secret_ref=str(current.secret_ref),
+            cfg=cfg,
         )
 
         base_url = self._resolve_base_url(current)
@@ -1223,6 +1302,7 @@ class ConnectorInstanceService(  # pragma: no cover
             self._resolve_retry_policy(
                 instance=current,
                 capability={},
+                cfg=cfg,
             )
         )
 
@@ -1260,7 +1340,6 @@ class ConnectorInstanceService(  # pragma: no cover
         finished_at = self._now_utc()
         duration_ms = max(0, int((finished_at - started_at).total_seconds() * 1000))
 
-        cfg = self._connector_config()
         redacted_request = self._redact_payload(
             request_json, redacted_keys=cfg.redacted_keys
         )
@@ -1364,7 +1443,7 @@ class ConnectorInstanceService(  # pragma: no cover
             capability_name=data.capability_name,
         )
 
-        cfg = self._connector_config()
+        cfg = await self._connector_config(tenant_id=tenant_id)
         redacted_input = self._redact_payload(
             self._json_safe(data.input_json),
             redacted_keys=cfg.redacted_keys,
@@ -1416,12 +1495,17 @@ class ConnectorInstanceService(  # pragma: no cover
             secret = await self._resolve_secret_material(
                 tenant_id=tenant_id,
                 secret_ref=str(current.secret_ref),
+                cfg=cfg,
             )
             secret_text = secret.secret.decode("utf-8", errors="ignore")
 
             base_url = self._resolve_base_url(current)
             timeout_seconds, max_retries, retry_backoff_seconds, retry_status_codes = (
-                self._resolve_retry_policy(instance=current, capability=capability)
+                self._resolve_retry_policy(
+                    instance=current,
+                    capability=capability,
+                    cfg=cfg,
+                )
             )
 
             method, url, params, _unused, body_text, body_json = self._invoke_request_spec(

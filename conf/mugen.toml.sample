@@ -257,11 +257,18 @@ kid = "<kid>"
 alg = "EdDSA"
 pem = "-----BEGIN PRIVATE KEY-----\\n<replace-with-private-key>\\n-----END PRIVATE KEY-----\\n"
 
+# Default tenant-facing ACP secret storage provider.
+[acp.key_management.providers.managed]
+encryption_key = "<set-acp-managed-secret-encryption-key>"
+
+# Local key maps are operator-owned bootstrap / emergency material only.
 [acp.key_management.providers.local.keys.ops_connector_secret]
 ops_connector_default = "dev-ops-connector-secret"
 
 # === OPS CONNECTOR ===
 [ops_connector]
+# Process-level bootstrap defaults. Tenant/global overlays can now also be
+# managed through ACP RuntimeConfigProfiles(category="ops_connector.defaults").
 timeout_seconds_default = 10.0
 max_retries_default = 2
 retry_backoff_seconds_default = 0.5

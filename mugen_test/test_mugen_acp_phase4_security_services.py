@@ -47,6 +47,8 @@ from mugen.core.plugin.acp.domain import KeyRefDE, PluginCapabilityGrantDE
 from mugen.core.plugin.acp.service.key_provider import (
     KeyMaterialResolver,
     LocalConfigKeyMaterialProvider,
+    ManagedEncryptedKeyMaterialProvider,
+    ManagedKeyMaterialCipher,
 )
 from mugen.core.plugin.acp.service.key_ref import KeyRefService
 from mugen.core.plugin.acp.service.plugin_capability_grant import (
@@ -189,6 +191,94 @@ class TestLocalConfigKeyMaterialProvider(unittest.TestCase):
             )
         )
 
+    def test_managed_key_material_cipher_and_provider_paths(self) -> None:
+        config = SimpleNamespace(
+            acp=SimpleNamespace(
+                key_management=SimpleNamespace(
+                    providers={
+                        "managed": {
+                            "encryption_key": (
+                                "0123456789012345678901234567890123456789"
+                            )
+                        }
+                    }
+                )
+            )
+        )
+        cipher = ManagedKeyMaterialCipher(config_provider=lambda: config)
+        encrypted = cipher.encrypt("super-secret")
+        self.assertNotEqual(encrypted, "super-secret")
+        self.assertEqual(cipher.decrypt(encrypted), b"super-secret")
+
+        provider = ManagedEncryptedKeyMaterialProvider(
+            config_provider=lambda: config,
+            cipher=cipher,
+        )
+        self.assertEqual(
+            provider.resolve(
+                KeyRefDE(
+                    key_id="key-1",
+                    provider="managed",
+                    encrypted_secret=encrypted,
+                )
+            ),
+            b"super-secret",
+        )
+        self.assertIsNone(
+            provider.resolve(
+                KeyRefDE(key_id="key-1", provider="managed", encrypted_secret=None)
+            )
+        )
+        self.assertIsNone(
+            provider.resolve(
+                KeyRefDE(key_id="key-1", provider="local", encrypted_secret=encrypted)
+            )
+        )
+
+        missing_cfg = SimpleNamespace(
+            acp=SimpleNamespace(
+                key_management=SimpleNamespace(providers={"managed": {}})
+            )
+        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "acp.key_management.providers.managed.encryption_key",
+        ):
+            ManagedKeyMaterialCipher(config_provider=lambda: missing_cfg).encrypt(
+                "value"
+            )
+
+        wrong_cfg = SimpleNamespace(
+            acp=SimpleNamespace(
+                key_management=SimpleNamespace(
+                    providers={
+                        "managed": {
+                            "encryption_key": (
+                                "9999999999999999999999999999999999999999"
+                            )
+                        }
+                    }
+                )
+            )
+        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "could not be decrypted",
+        ):
+            ManagedEncryptedKeyMaterialProvider(
+                config_provider=lambda: wrong_cfg,
+            ).resolve(
+                KeyRefDE(
+                    key_id="key-1",
+                    provider="managed",
+                    encrypted_secret=encrypted,
+                )
+            )
+
+        self.assertEqual(ManagedKeyMaterialCipher._to_mapping("x"), {})
+        with self.assertRaisesRegex(RuntimeError, "SecretValue must be a string"):
+            cipher.encrypt(123)  # type: ignore[arg-type]
+
 
 class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
     """Covers key reference action workflows and resolution precedence."""
@@ -199,6 +289,17 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as ctx:
             KeyRefService._normalize_required_text(" ", field_name="Purpose")
         self.assertEqual(ctx.exception.code, 400)
+        self.assertIsNone(KeyRefService._normalize_secret_value(None))
+        with self.assertRaises(HTTPException) as ctx:
+            KeyRefService._normalize_secret_value(1)
+        self.assertEqual(ctx.exception.code, 400)
+        with self.assertRaises(HTTPException) as ctx:
+            KeyRefService._normalize_secret_value("   ")
+        self.assertEqual(ctx.exception.code, 400)
+        self.assertEqual(
+            KeyRefService._normalize_secret_value("secret-value"),
+            "secret-value",
+        )
 
         svc = KeyRefService(
             table="admin_key_ref",
@@ -243,18 +344,89 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(return_value=created),
         ) as base_create:
             explicit_tenant_id = uuid.uuid4()
+            with self.assertRaises(HTTPException) as ctx:
+                await svc.create(
+                    {
+                        "tenant_id": explicit_tenant_id,
+                        "purpose": "audit_hmac",
+                        "key_id": "key-1",
+                        "provider": "local",
+                        "status": "retired",
+                    }
+                )
+        self.assertEqual(ctx.exception.code, 409)
+        base_create.assert_not_awaited()
+
+        with self.assertRaises(HTTPException) as ctx:
             await svc.create(
                 {
-                    "tenant_id": explicit_tenant_id,
+                    "tenant_id": None,
                     "purpose": "audit_hmac",
-                    "key_id": "key-1",
+                    "key_id": "managed-key",
+                    "provider": "managed",
+                }
+            )
+        self.assertEqual(ctx.exception.code, 400)
+
+        managed_created = KeyRefDE(
+            id=uuid.uuid4(),
+            tenant_id=GLOBAL_TENANT_ID,
+            purpose="audit_hmac",
+            key_id="managed-key",
+            provider="managed",
+            status="active",
+            has_material=True,
+        )
+        with patch.object(
+            IRelationalService,
+            "create",
+            new=AsyncMock(return_value=managed_created),
+        ) as base_create:
+            result = await svc.create(
+                {
+                    "_allow_managed_create": True,
+                    "tenant_id": None,
+                    "purpose": "audit_hmac",
+                    "key_id": "managed-key",
+                    "provider": "managed",
+                    "encrypted_secret": "ciphertext",
+                }
+            )
+        self.assertEqual(result.id, managed_created.id)
+        self.assertTrue(base_create.await_args.args[0]["has_material"])
+
+        with patch.object(
+            IRelationalService,
+            "create",
+            new=AsyncMock(return_value=created),
+        ) as base_create:
+            await svc.create(
+                {
+                    "tenant_id": None,
+                    "purpose": "audit_hmac",
+                    "key_id": "key-4",
+                    "provider": "local",
+                    "encrypted_secret": "should-clear",
+                    "has_material": False,
+                }
+            )
+        self.assertIsNone(base_create.await_args.args[0]["encrypted_secret"])
+
+        with patch.object(
+            IRelationalService,
+            "create",
+            new=AsyncMock(return_value=created),
+        ) as base_create:
+            await svc.create(
+                {
+                    "tenant_id": None,
+                    "purpose": "audit_hmac",
+                    "key_id": "key-5",
                     "provider": "local",
                     "status": "retired",
                 }
             )
-        payload = base_create.await_args.args[0]
-        self.assertEqual(payload["tenant_id"], explicit_tenant_id)
-        self.assertEqual(payload["status"], "retired")
+        self.assertEqual(base_create.await_args.args[0]["status"], "retired")
 
     async def test_get_for_action_branches(self) -> None:
         svc = KeyRefService(
@@ -303,13 +475,18 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
         now = datetime(2026, 2, 25, 20, 0, tzinfo=timezone.utc)
 
         svc = KeyRefService(
-            table="admin_key_ref", rsg=Mock(), key_material_resolver=Mock()
+            table="admin_key_ref",
+            rsg=Mock(),
+            key_material_resolver=Mock(),
+            managed_key_material_cipher=Mock(
+                encrypt=Mock(return_value="encrypted-managed")
+            ),
         )
         svc._now_utc = lambda: now
 
         existing = KeyRefDE(
             id=uuid.uuid4(),
-            tenant_id=tenant_id,
+            tenant_id=GLOBAL_TENANT_ID,
             purpose="audit_hmac",
             key_id="key-1",
             provider="local",
@@ -321,7 +498,7 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
         svc.update = AsyncMock()
         svc.create = AsyncMock()
         same = await svc._activate(
-            tenant_id=tenant_id,
+            tenant_id=GLOBAL_TENANT_ID,
             purpose="audit_hmac",
             key_id="key-1",
             provider="local",
@@ -333,7 +510,7 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
 
         candidate = KeyRefDE(
             id=uuid.uuid4(),
-            tenant_id=tenant_id,
+            tenant_id=GLOBAL_TENANT_ID,
             purpose="audit_hmac",
             key_id="key-2",
             provider="local",
@@ -342,7 +519,7 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
         )
         updated_candidate = KeyRefDE(
             id=candidate.id,
-            tenant_id=tenant_id,
+            tenant_id=GLOBAL_TENANT_ID,
             purpose="audit_hmac",
             key_id="key-2",
             provider="local",
@@ -353,7 +530,7 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
         svc.get = AsyncMock(side_effect=[existing, candidate])
         svc.update = AsyncMock(side_effect=[existing, updated_candidate])
         activated = await svc._activate(
-            tenant_id=tenant_id,
+            tenant_id=GLOBAL_TENANT_ID,
             purpose="audit_hmac",
             key_id="key-2",
             provider="local",
@@ -365,7 +542,7 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
         svc.get = AsyncMock(side_effect=[None, None])
         created = KeyRefDE(
             id=uuid.uuid4(),
-            tenant_id=tenant_id,
+            tenant_id=GLOBAL_TENANT_ID,
             purpose="audit_hmac",
             key_id="key-3",
             provider="local",
@@ -374,7 +551,7 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
         )
         svc.create = AsyncMock(return_value=created)
         inserted = await svc._activate(
-            tenant_id=tenant_id,
+            tenant_id=GLOBAL_TENANT_ID,
             purpose="audit_hmac",
             key_id="key-3",
             provider="local",
@@ -388,7 +565,7 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaises(HTTPException) as ctx:
             await svc._activate(
-                tenant_id=tenant_id,
+                tenant_id=GLOBAL_TENANT_ID,
                 purpose="audit_hmac",
                 key_id="key-x",
                 provider="local",
@@ -401,7 +578,7 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
         svc.update = AsyncMock(side_effect=[existing, None])
         with self.assertRaises(HTTPException) as ctx:
             await svc._activate(
-                tenant_id=tenant_id,
+                tenant_id=GLOBAL_TENANT_ID,
                 purpose="audit_hmac",
                 key_id="key-2",
                 provider="local",
@@ -414,7 +591,7 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
         svc.update = AsyncMock(side_effect=SQLAlchemyError("boom"))
         with self.assertRaises(HTTPException) as ctx:
             await svc._activate(
-                tenant_id=tenant_id,
+                tenant_id=GLOBAL_TENANT_ID,
                 purpose="audit_hmac",
                 key_id="key-2",
                 provider="local",
@@ -422,6 +599,106 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
                 attributes=None,
             )
         self.assertEqual(ctx.exception.code, 500)
+
+        managed_current = KeyRefDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            purpose="audit_hmac",
+            key_id="managed-key",
+            provider="managed",
+            status="active",
+            row_version=3,
+        )
+        managed_updated = KeyRefDE(
+            id=managed_current.id,
+            tenant_id=tenant_id,
+            purpose="audit_hmac",
+            key_id="managed-key",
+            provider="managed",
+            status="active",
+            row_version=4,
+            has_material=True,
+        )
+        svc.get = AsyncMock(return_value=managed_current)
+        svc.update = AsyncMock(return_value=managed_updated)
+        rotated_managed = await svc._activate(
+            tenant_id=tenant_id,
+            purpose="audit_hmac",
+            key_id="managed-key",
+            provider="managed",
+            auth_user_id=auth_user_id,
+            attributes={"rotated": True},
+            secret_value="s3cret",
+        )
+        self.assertEqual(rotated_managed.id, managed_current.id)
+        self.assertEqual(
+            svc.update.await_args.args[1]["encrypted_secret"],
+            "encrypted-managed",
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            await svc._activate(
+                tenant_id=tenant_id,
+                purpose="audit_hmac",
+                key_id="managed-key",
+                provider="managed",
+                auth_user_id=auth_user_id,
+                attributes=None,
+                secret_value=None,
+            )
+        self.assertEqual(ctx.exception.code, 400)
+
+        with self.assertRaises(HTTPException) as ctx:
+            await svc._activate(
+                tenant_id=GLOBAL_TENANT_ID,
+                purpose="audit_hmac",
+                key_id="key-1",
+                provider="local",
+                auth_user_id=auth_user_id,
+                attributes=None,
+                secret_value="unexpected",
+            )
+        self.assertEqual(ctx.exception.code, 400)
+
+        with self.assertRaises(HTTPException) as ctx:
+            await svc._activate(
+                tenant_id=tenant_id,
+                purpose="audit_hmac",
+                key_id="local-key",
+                provider="local",
+                auth_user_id=auth_user_id,
+                attributes=None,
+                secret_value=None,
+            )
+        self.assertEqual(ctx.exception.code, 409)
+
+        svc.get = AsyncMock(return_value=managed_current)
+        svc.update = AsyncMock(side_effect=SQLAlchemyError("boom"))
+        with self.assertRaises(HTTPException) as ctx:
+            await svc._activate(
+                tenant_id=tenant_id,
+                purpose="audit_hmac",
+                key_id="managed-key",
+                provider="managed",
+                auth_user_id=auth_user_id,
+                attributes=None,
+                secret_value="s3cret",
+            )
+        self.assertEqual(ctx.exception.code, 500)
+
+        svc.get = AsyncMock(return_value=managed_current)
+        svc.update = AsyncMock(return_value=None)
+        with self.assertRaises(HTTPException) as ctx:
+            await svc._activate(
+                tenant_id=tenant_id,
+                purpose="audit_hmac",
+                key_id="managed-key",
+                provider="managed",
+                auth_user_id=auth_user_id,
+                attributes=None,
+                secret_value="s3cret",
+            )
+        self.assertEqual(ctx.exception.code, 409)
 
         active_row = KeyRefDE(id=uuid.uuid4(), status="active", row_version=4)
         retired_row = KeyRefDE(id=active_row.id, status="retired", row_version=5)
@@ -585,10 +862,33 @@ class TestKeyRefService(unittest.IsolatedAsyncioTestCase):
                 purpose="audit_hmac",
                 key_id="k",
                 provider="local",
+                secret_value=None,
                 attributes=None,
             ),
         )
         self.assertEqual((rotate_status, rotate_payload["Status"]), (200, "active"))
+
+        svc3 = KeyRefService(
+            table="admin_key_ref",
+            rsg=Mock(),
+            key_material_resolver=Mock(),
+            managed_key_material_cipher=Mock(
+                encrypt=Mock(return_value="encrypted-managed")
+            ),
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            await svc3._rotate(
+                tenant_id=tenant_id,
+                auth_user_id=auth_user_id,
+                data=SimpleNamespace(
+                    purpose="audit_hmac",
+                    key_id="k",
+                    provider="managed",
+                    secret_value=None,
+                    attributes=None,
+                ),
+            )
+        self.assertEqual(ctx.exception.code, 400)
 
     async def test_resolve_active_and_secret_precedence(self) -> None:
         tenant_id = uuid.uuid4()

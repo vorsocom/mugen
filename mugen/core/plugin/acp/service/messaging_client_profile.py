@@ -13,6 +13,8 @@ from types import SimpleNamespace
 from typing import Any
 import uuid
 
+from quart import abort
+
 from mugen.core import di
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
@@ -20,21 +22,19 @@ from mugen.core.contract.gateway.storage.rdbms.types import FilterGroup, OrderBy
 from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 from mugen.core.plugin.acp.domain import MessagingClientProfileDE
 from mugen.core.plugin.acp.service.key_ref import KeyRefService
+from mugen.core.plugin.acp.service.runtime_config_profile import (
+    RuntimeConfigProfileService,
+)
 from mugen.core.service.platform_runtime_reload import reload_platform_runtime_profiles
 from mugen.core.utility.platform_runtime_profile import build_config_namespace
+from mugen.core.plugin.acp.utility.runtime_config_policy import (
+    normalize_messaging_platform_key,
+    normalize_secret_ref_map,
+    normalize_tenant_messaging_settings,
+)
 
 _TABLE_KEY_REF = "admin_key_ref"
-
-_ALLOWED_PLATFORMS = frozenset(
-    {
-        "line",
-        "matrix",
-        "signal",
-        "telegram",
-        "wechat",
-        "whatsapp",
-    }
-)
+_TABLE_RUNTIME_CONFIG_PROFILE = "admin_runtime_config_profile"
 
 _IDENTIFIER_COLUMNS = {
     "path_token": "path_token",
@@ -139,6 +139,7 @@ class MessagingClientProfileService(
         table: str,
         rsg: IRelationalStorageGateway,
         key_ref_service: KeyRefService | None = None,
+        runtime_config_profile_service: RuntimeConfigProfileService | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -150,6 +151,13 @@ class MessagingClientProfileService(
         self._key_ref_service = key_ref_service or KeyRefService(
             table=_TABLE_KEY_REF,
             rsg=rsg,
+        )
+        self._runtime_config_profile_service = (
+            runtime_config_profile_service
+            or RuntimeConfigProfileService(
+                table=_TABLE_RUNTIME_CONFIG_PROFILE,
+                rsg=rsg,
+            )
         )
 
     @staticmethod
@@ -184,6 +192,18 @@ class MessagingClientProfileService(
         if not isinstance(value, dict):
             raise RuntimeError("Expected a JSON object payload.")
         return dict(value)
+
+    @classmethod
+    def _normalize_settings(
+        cls,
+        *,
+        platform_key: object,
+        value: object,
+    ) -> dict[str, Any]:
+        return normalize_tenant_messaging_settings(
+            platform_key=platform_key,
+            value=value,
+        )
 
     @staticmethod
     def _plain_data(value: Any) -> Any:
@@ -268,14 +288,7 @@ class MessagingClientProfileService(
 
     @classmethod
     def _normalize_platform_key(cls, value: object) -> str:
-        platform_key = cls._normalize_required_text(value, field_name="PlatformKey")
-        platform_key = platform_key.lower()
-        if platform_key not in _ALLOWED_PLATFORMS:
-            raise RuntimeError(
-                "PlatformKey must be one of "
-                f"{', '.join(sorted(_ALLOWED_PLATFORMS))}."
-            )
-        return platform_key
+        return normalize_messaging_platform_key(value)
 
     @classmethod
     def _normalize_secret_refs(cls, value: object) -> dict[str, str]:
@@ -290,6 +303,18 @@ class MessagingClientProfileService(
                     f"SecretRefs.{key} must be a valid KeyRef UUID."
                 ) from exc
         return normalized
+
+    @classmethod
+    def _normalize_platform_secret_refs(
+        cls,
+        *,
+        platform_key: object,
+        value: object,
+    ) -> dict[str, str]:
+        return normalize_secret_ref_map(
+            platform_key=platform_key,
+            value=value,
+        )
 
     def _normalize_identifier_fields(
         self,
@@ -411,6 +436,15 @@ class MessagingClientProfileService(
 
         merged = self._deep_merge(
             base_section,
+            await self._runtime_config_profile_service.resolve_active_settings(
+                tenant_id=client_profile.tenant_id,
+                category="messaging.platform_defaults",
+                profile_key=platform_key,
+            ),
+        )
+
+        merged = self._deep_merge(
+            merged,
             self._plain_data(client_profile.settings or {}),
         )
 
@@ -568,28 +602,37 @@ class MessagingClientProfileService(
         return rows[0]
 
     async def create(self, values: dict[str, Any]) -> MessagingClientProfileDE:
-        payload = dict(values)
-        payload["tenant_id"] = self._normalize_tenant_id(payload.get("tenant_id"))
-        payload["platform_key"] = self._normalize_platform_key(
-            payload.get("platform_key")
-        )
-        payload["profile_key"] = self._normalize_required_text(
-            payload.get("profile_key"),
-            field_name="ProfileKey",
-        )
-        payload["display_name"] = self._normalize_optional_text(
-            payload.get("display_name")
-        )
-        payload["settings"] = self._normalize_mapping(payload.get("settings"))
-        payload["secret_refs"] = self._normalize_secret_refs(payload.get("secret_refs"))
-        self._normalize_identifier_fields(
-            payload=payload,
-            platform_key=payload["platform_key"],
-        )
-        await self._validate_secret_refs(
-            tenant_id=payload["tenant_id"],
-            secret_refs=payload["secret_refs"],
-        )
+        try:
+            payload = dict(values)
+            payload["tenant_id"] = self._normalize_tenant_id(payload.get("tenant_id"))
+            payload["platform_key"] = self._normalize_platform_key(
+                payload.get("platform_key")
+            )
+            payload["profile_key"] = self._normalize_required_text(
+                payload.get("profile_key"),
+                field_name="ProfileKey",
+            )
+            payload["display_name"] = self._normalize_optional_text(
+                payload.get("display_name")
+            )
+            payload["settings"] = self._normalize_settings(
+                platform_key=payload["platform_key"],
+                value=payload.get("settings"),
+            )
+            payload["secret_refs"] = self._normalize_platform_secret_refs(
+                platform_key=payload["platform_key"],
+                value=payload.get("secret_refs"),
+            )
+            self._normalize_identifier_fields(
+                payload=payload,
+                platform_key=payload["platform_key"],
+            )
+            await self._validate_secret_refs(
+                tenant_id=payload["tenant_id"],
+                secret_refs=payload["secret_refs"],
+            )
+        except RuntimeError as exc:
+            abort(400, str(exc))
         created = await super().create(payload)
         await self._reload_runtime_profiles_for_platforms(payload["platform_key"])
         return created
@@ -603,47 +646,55 @@ class MessagingClientProfileService(
         if current is None:
             return None
 
-        payload = {
-            "tenant_id": self._normalize_tenant_id(
-                changes.get("tenant_id", current.tenant_id)
-            ),
-            "platform_key": self._normalize_platform_key(
-                changes.get("platform_key", current.platform_key)
-            ),
-            "profile_key": self._normalize_required_text(
-                changes.get("profile_key", current.profile_key),
-                field_name="ProfileKey",
-            ),
-            "display_name": self._normalize_optional_text(
-                changes.get("display_name", current.display_name)
-            ),
-            "settings": self._normalize_mapping(
-                changes.get("settings", current.settings or {})
-            ),
-            "secret_refs": self._normalize_secret_refs(
-                changes.get("secret_refs", current.secret_refs or {})
-            ),
-            "is_active": bool(changes.get("is_active", current.is_active)),
-            "path_token": changes.get("path_token", current.path_token),
-            "recipient_user_id": changes.get(
-                "recipient_user_id",
-                current.recipient_user_id,
-            ),
-            "account_number": changes.get("account_number", current.account_number),
-            "phone_number_id": changes.get(
-                "phone_number_id",
-                current.phone_number_id,
-            ),
-            "provider": changes.get("provider", current.provider),
-        }
-        self._normalize_identifier_fields(
-            payload=payload,
-            platform_key=payload["platform_key"],
-        )
-        await self._validate_secret_refs(
-            tenant_id=payload["tenant_id"],
-            secret_refs=payload["secret_refs"],
-        )
+        try:
+            payload = {
+                "tenant_id": self._normalize_tenant_id(
+                    changes.get("tenant_id", current.tenant_id)
+                ),
+                "platform_key": self._normalize_platform_key(
+                    changes.get("platform_key", current.platform_key)
+                ),
+                "profile_key": self._normalize_required_text(
+                    changes.get("profile_key", current.profile_key),
+                    field_name="ProfileKey",
+                ),
+                "display_name": self._normalize_optional_text(
+                    changes.get("display_name", current.display_name)
+                ),
+                "settings": self._normalize_settings(
+                    platform_key=changes.get("platform_key", current.platform_key),
+                    value=changes.get("settings", current.settings or {}),
+                ),
+                "secret_refs": self._normalize_platform_secret_refs(
+                    platform_key=changes.get("platform_key", current.platform_key),
+                    value=changes.get("secret_refs", current.secret_refs or {}),
+                ),
+                "is_active": bool(changes.get("is_active", current.is_active)),
+                "path_token": changes.get("path_token", current.path_token),
+                "recipient_user_id": changes.get(
+                    "recipient_user_id",
+                    current.recipient_user_id,
+                ),
+                "account_number": changes.get(
+                    "account_number",
+                    current.account_number,
+                ),
+                "phone_number_id": changes.get(
+                    "phone_number_id",
+                    current.phone_number_id,
+                ),
+                "provider": changes.get("provider", current.provider),
+            }
+            self._normalize_identifier_fields(
+                payload=payload,
+                platform_key=payload["platform_key"],
+            )
+            await self._validate_secret_refs(
+                tenant_id=payload["tenant_id"],
+                secret_refs=payload["secret_refs"],
+            )
+        except RuntimeError as exc:
+            abort(400, str(exc))
         updated = await super().update(where, payload)
         if updated is not None:
             await self._reload_runtime_profiles_for_platforms(
@@ -663,47 +714,55 @@ class MessagingClientProfileService(
         if current is None:
             return None
 
-        payload = {
-            "tenant_id": self._normalize_tenant_id(
-                changes.get("tenant_id", current.tenant_id)
-            ),
-            "platform_key": self._normalize_platform_key(
-                changes.get("platform_key", current.platform_key)
-            ),
-            "profile_key": self._normalize_required_text(
-                changes.get("profile_key", current.profile_key),
-                field_name="ProfileKey",
-            ),
-            "display_name": self._normalize_optional_text(
-                changes.get("display_name", current.display_name)
-            ),
-            "settings": self._normalize_mapping(
-                changes.get("settings", current.settings or {})
-            ),
-            "secret_refs": self._normalize_secret_refs(
-                changes.get("secret_refs", current.secret_refs or {})
-            ),
-            "is_active": bool(changes.get("is_active", current.is_active)),
-            "path_token": changes.get("path_token", current.path_token),
-            "recipient_user_id": changes.get(
-                "recipient_user_id",
-                current.recipient_user_id,
-            ),
-            "account_number": changes.get("account_number", current.account_number),
-            "phone_number_id": changes.get(
-                "phone_number_id",
-                current.phone_number_id,
-            ),
-            "provider": changes.get("provider", current.provider),
-        }
-        self._normalize_identifier_fields(
-            payload=payload,
-            platform_key=payload["platform_key"],
-        )
-        await self._validate_secret_refs(
-            tenant_id=payload["tenant_id"],
-            secret_refs=payload["secret_refs"],
-        )
+        try:
+            payload = {
+                "tenant_id": self._normalize_tenant_id(
+                    changes.get("tenant_id", current.tenant_id)
+                ),
+                "platform_key": self._normalize_platform_key(
+                    changes.get("platform_key", current.platform_key)
+                ),
+                "profile_key": self._normalize_required_text(
+                    changes.get("profile_key", current.profile_key),
+                    field_name="ProfileKey",
+                ),
+                "display_name": self._normalize_optional_text(
+                    changes.get("display_name", current.display_name)
+                ),
+                "settings": self._normalize_settings(
+                    platform_key=changes.get("platform_key", current.platform_key),
+                    value=changes.get("settings", current.settings or {}),
+                ),
+                "secret_refs": self._normalize_platform_secret_refs(
+                    platform_key=changes.get("platform_key", current.platform_key),
+                    value=changes.get("secret_refs", current.secret_refs or {}),
+                ),
+                "is_active": bool(changes.get("is_active", current.is_active)),
+                "path_token": changes.get("path_token", current.path_token),
+                "recipient_user_id": changes.get(
+                    "recipient_user_id",
+                    current.recipient_user_id,
+                ),
+                "account_number": changes.get(
+                    "account_number",
+                    current.account_number,
+                ),
+                "phone_number_id": changes.get(
+                    "phone_number_id",
+                    current.phone_number_id,
+                ),
+                "provider": changes.get("provider", current.provider),
+            }
+            self._normalize_identifier_fields(
+                payload=payload,
+                platform_key=payload["platform_key"],
+            )
+            await self._validate_secret_refs(
+                tenant_id=payload["tenant_id"],
+                secret_refs=payload["secret_refs"],
+            )
+        except RuntimeError as exc:
+            abort(400, str(exc))
         updated = await super().update_with_row_version(
             where,
             expected_row_version=expected_row_version,

@@ -652,6 +652,36 @@ def contribute(
             ),
         },
         {
+            "set": "RuntimeConfigProfiles",
+            "entity": "RuntimeConfigProfile",
+            "description": (
+                "Tenant/global runtime config overlays for tenant-editable"
+                " non-secret platform defaults."
+            ),
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "crud": CrudPolicy(
+                create_schema=(
+                    "TenantId",
+                    "Category",
+                    "ProfileKey",
+                    "DisplayName",
+                    "IsActive",
+                    "SettingsJson",
+                    "Attributes",
+                ),
+                update_schema=(
+                    "Category",
+                    "ProfileKey",
+                    "DisplayName",
+                    "IsActive",
+                    "SettingsJson",
+                    "Attributes",
+                ),
+            ),
+        },
+        {
             "set": "MessagingClientProfiles",
             "entity": "MessagingClientProfile",
             "description": (

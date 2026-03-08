@@ -15,6 +15,7 @@ __all__ = [
     "RefreshToken",
     "Role",
     "RoleMembership",
+    "RuntimeConfigProfile",
     "SchemaBinding",
     "SchemaDefinition",
     "SystemFlag",
@@ -41,6 +42,7 @@ from mugen.core.plugin.acp.model.plugin_capability_grant import PluginCapability
 from mugen.core.plugin.acp.model.refresh_token import RefreshToken
 from mugen.core.plugin.acp.model.role import Role
 from mugen.core.plugin.acp.model.role_membership import RoleMembership
+from mugen.core.plugin.acp.model.runtime_config_profile import RuntimeConfigProfile
 from mugen.core.plugin.acp.model.schema_binding import SchemaBinding
 from mugen.core.plugin.acp.model.schema_definition import SchemaDefinition
 from mugen.core.plugin.acp.model.system_flag import SystemFlag

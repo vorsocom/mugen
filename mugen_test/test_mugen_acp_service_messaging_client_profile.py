@@ -7,6 +7,8 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 import uuid
 
+from werkzeug.exceptions import HTTPException
+
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
 from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 from mugen.core.plugin.acp.contract.service.key_provider import ResolvedKeyMaterial
@@ -60,10 +62,14 @@ def _make_service() -> tuple[
         get=AsyncMock(),
         resolve_secret_for_id=AsyncMock(),
     )
+    runtime_config_profile_service = SimpleNamespace(
+        resolve_active_settings=AsyncMock(return_value={}),
+    )
     svc = profile_mod.MessagingClientProfileService(
         table="admin_messaging_client_profile",
         rsg=Mock(),
         key_ref_service=key_ref_service,
+        runtime_config_profile_service=runtime_config_profile_service,
     )
     return svc, key_ref_service
 
@@ -177,9 +183,36 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             ),
             {"channel.secret": str(_KEY_REF_ID)},
         )
+        self.assertEqual(
+            profile_mod.MessagingClientProfileService._normalize_settings(
+                platform_key="matrix",
+                value={"client": {"device": "dev-box"}},
+            ),
+            {"client": {"device": "dev-box"}},
+        )
+        self.assertEqual(
+            profile_mod.MessagingClientProfileService._normalize_platform_secret_refs(
+                platform_key="line",
+                value={"channel.secret": str(_KEY_REF_ID)},
+            ),
+            {"channel.secret": str(_KEY_REF_ID)},
+        )
         with self.assertRaisesRegex(RuntimeError, "SecretRefs.bad must be a valid"):
             profile_mod.MessagingClientProfileService._normalize_secret_refs(
                 {"bad": "not-a-uuid"}
+            )
+        with self.assertRaisesRegex(RuntimeError, "Settings path 'channel.mode'"):
+            profile_mod.MessagingClientProfileService._normalize_settings(
+                platform_key="line",
+                value={"channel": {"mode": "reply"}},
+            )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "SecretRefs path 'client.password' is not allowed",
+        ):
+            profile_mod.MessagingClientProfileService._normalize_platform_secret_refs(
+                platform_key="line",
+                value={"client.password": str(_KEY_REF_ID)},
             )
 
         identifier_payload = {
@@ -331,7 +364,7 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
         client_profile = _profile(
             platform_key="line",
             profile_key="support",
-            settings={"channel": {"mode": "reply"}},
+            settings={},
             secret_refs={
                 " ": str(_KEY_REF_ID),
                 "channel.secret": str(_KEY_REF_ID),
@@ -360,7 +393,6 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             client_profile=client_profile,
         )
         self.assertEqual(section["server"]["bind"], "0.0.0.0")
-        self.assertEqual(section["channel"]["mode"], "reply")
         self.assertEqual(section["channel"]["secret"], "resolved-secret")
         self.assertEqual(section["webhook"]["path_token"], "line-path")
         self.assertEqual(section["key"], "support")
@@ -568,7 +600,7 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                     "platform_key": " line ",
                     "profile_key": " support ",
                     "display_name": " Support ",
-                    "settings": {"channel": {"mode": "reply"}},
+                    "settings": {},
                     "secret_refs": {"channel.secret": str(_KEY_REF_ID)},
                     "path_token": " line-path ",
                 }
@@ -581,7 +613,7 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                 "platform_key": "line",
                 "profile_key": "support",
                 "display_name": "Support",
-                "settings": {"channel": {"mode": "reply"}},
+                "settings": {},
                 "secret_refs": {"channel.secret": str(_KEY_REF_ID)},
                 "path_token": "line-path",
                 "recipient_user_id": None,
@@ -594,17 +626,30 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             "line"
         )  # type: ignore[union-attr]
 
+        with self.assertRaises(HTTPException) as ctx:
+            await svc.create(
+                {
+                    "tenant_id": None,
+                    "platform_key": "telegram",
+                    "profile_key": "bot",
+                    "settings": {"webhook": {"path_token": "blocked"}},
+                    "secret_refs": {},
+                }
+            )
+        self.assertEqual(ctx.exception.code, 400)
+        self.assertIn("Settings path 'webhook.path_token'", str(ctx.exception))
+
         current = _profile(
             platform_key="line",
             profile_key="support",
-            settings={"channel": {"mode": "reply"}},
+            settings={},
             secret_refs={"channel.secret": str(_KEY_REF_ID)},
             path_token="line-path",
         )
         updated_profile = _profile(
             platform_key="telegram",
             profile_key="support-updated",
-            settings={"webhook": {"path_token": "telegram-path"}},
+            settings={},
             secret_refs={"bot.token": str(_KEY_REF_ID)},
             path_token="telegram-path",
         )
@@ -625,7 +670,7 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                 {
                     "platform_key": "telegram",
                     "profile_key": " support-updated ",
-                    "settings": {"webhook": {"path_token": "telegram-path"}},
+                    "settings": {},
                     "secret_refs": {"bot.token": str(_KEY_REF_ID)},
                     "path_token": " telegram-path ",
                     "is_active": False,
@@ -645,7 +690,7 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                 "platform_key": "telegram",
                 "profile_key": "support-updated",
                 "display_name": "Support",
-                "settings": {"webhook": {"path_token": "telegram-path"}},
+                "settings": {},
                 "secret_refs": {"bot.token": str(_KEY_REF_ID)},
                 "is_active": False,
                 "path_token": "telegram-path",
@@ -655,6 +700,31 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                 "provider": None,
             },
         )
+
+        svc.get = AsyncMock(return_value=current)  # type: ignore[method-assign]
+        with self.assertRaises(HTTPException) as ctx:
+            await svc.update(
+                {"id": _PROFILE_ID},
+                {
+                    "platform_key": "matrix",
+                    "secret_refs": {"bot.token": str(_KEY_REF_ID)},
+                },
+            )
+        self.assertEqual(ctx.exception.code, 400)
+        self.assertIn("SecretRefs path 'bot.token' is not allowed", str(ctx.exception))
+
+        svc.get = AsyncMock(return_value=current)  # type: ignore[method-assign]
+        with self.assertRaises(HTTPException) as ctx:
+            await svc.update_with_row_version(
+                {"id": _PROFILE_ID},
+                expected_row_version=6,
+                changes={
+                    "platform_key": "matrix",
+                    "secret_refs": {"bot.token": str(_KEY_REF_ID)},
+                },
+            )
+        self.assertEqual(ctx.exception.code, 400)
+        self.assertIn("SecretRefs path 'bot.token' is not allowed", str(ctx.exception))
 
         svc.get = AsyncMock(  # type: ignore[method-assign]
             side_effect=[current, current]

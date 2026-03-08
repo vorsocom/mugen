@@ -15,6 +15,7 @@ __all__ = [
     "RefreshTokenDE",
     "RoleDE",
     "RoleMembershipDE",
+    "RuntimeConfigProfileDE",
     "SchemaBindingDE",
     "SchemaDefinitionDE",
     "SystemFlagDE",
@@ -45,6 +46,9 @@ from mugen.core.plugin.acp.domain.plugin_capability_grant import (
 from mugen.core.plugin.acp.domain.refresh_token import RefreshTokenDE
 from mugen.core.plugin.acp.domain.role import RoleDE
 from mugen.core.plugin.acp.domain.role_membership import RoleMembershipDE
+from mugen.core.plugin.acp.domain.runtime_config_profile import (
+    RuntimeConfigProfileDE,
+)
 from mugen.core.plugin.acp.domain.schema_binding import SchemaBindingDE
 from mugen.core.plugin.acp.domain.schema_definition import SchemaDefinitionDE
 from mugen.core.plugin.acp.domain.system_flag import SystemFlagDE

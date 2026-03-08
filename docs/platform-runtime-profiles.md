@@ -38,6 +38,19 @@ Each `MessagingClientProfiles` row owns:
 - lookup identifiers such as `path_token`, `recipient_user_id`,
   `account_number`, `phone_number_id`, and `provider`
 
+Tenant-editable non-secret platform defaults now live in ACP
+`RuntimeConfigProfiles` rows rather than operator-owned TOML.
+
+- `Category = "messaging.platform_defaults"` with `ProfileKey = <platform>`
+  stores tenant/global non-secret runtime overlays for the supported messaging
+  platforms.
+- `Category = "ops_connector.defaults"` with `ProfileKey = "default"` stores
+  tenant/global retry and redaction defaults for `ops_connector`.
+- Resolution is tenant row first, then global row, then process config.
+
+Tenant-facing secrets should use ACP `KeyRef` rows with `provider="managed"`.
+The operator-owned `local` provider remains for bootstrap and emergency use only.
+
 ## Channel Binding Model
 
 `ChannelProfile` remains the tenant-facing business profile, but it now points
@@ -106,6 +119,18 @@ Behavior by platform:
 Live reload still uses the `SystemFlags.reloadPlatformProfiles` ACP action, but
 the reload target is now the ACP-owned client profile catalog plus the current
 process-level config.
+
+## Legacy Import
+
+Use `scripts/import_legacy_runtime_config.py` to import:
+
+- legacy `[[<platform>.profiles]]` blocks as global `MessagingClientProfiles`;
+- operator-local ACP key maps as managed `KeyRefs`;
+- global `ops_connector` defaults as `RuntimeConfigProfiles`.
+
+The import is idempotent and does not edit local config files. After a
+successful run, remove legacy `profiles` blocks and local key maps manually
+once the imported ACP rows are verified.
 
 For Matrix, device verification data is available through ACP runtime read
 endpoints, including tenant-scoped reads for tenant-owned active runtime client

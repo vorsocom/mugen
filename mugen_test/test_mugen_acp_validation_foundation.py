@@ -270,8 +270,11 @@ class TestMugenAcpValidationFoundation(unittest.TestCase):
             purpose=" audit_hmac ",
             key_id=" key-002 ",
             provider=" ",
+            secret_value=" managed-secret ",
         )
         self.assertEqual(rotate.provider, "local")
+        self.assertEqual(rotate.secret_value, " managed-secret ")
+        self.assertNotIn("secret_value", rotate.model_dump())
         self.assertEqual(
             KeyRefRotateValidation(
                 purpose="audit_hmac",

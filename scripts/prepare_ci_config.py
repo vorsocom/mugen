@@ -184,6 +184,11 @@ def _parse_args() -> argparse.Namespace:
         help="ACP secret_key value for CI.",
     )
     parser.add_argument(
+        "--acp-managed-secret-encryption-key",
+        default="ci-acp-managed-secret-root-key-0123456789",
+        help="ACP managed secret encryption root key for CI.",
+    )
+    parser.add_argument(
         "--refresh-token-pepper",
         default="ci-refresh-pepper",
         help="ACP refresh_token_pepper value for CI.",
@@ -326,6 +331,9 @@ def main() -> int:
     doc["acp"]["admin_password_hash"] = generate_password_hash(args.admin_password)
     doc["acp"]["login_dummy_hash"] = generate_password_hash("ci-dummy-password")
     doc["acp"]["secret_key"] = args.acp_secret_key
+    doc["acp"]["key_management"]["providers"]["managed"]["encryption_key"] = (
+        args.acp_managed_secret_encryption_key
+    )
     doc["acp"]["refresh_token_pepper"] = args.refresh_token_pepper
 
     doc["acp"]["jwt"]["active_kid"] = args.jwt_kid

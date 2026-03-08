@@ -16,7 +16,10 @@ from mugen.core.plugin.acp.constants import GLOBAL_TENANT_ID
 from mugen.core.plugin.acp.contract.service.key_provider import ResolvedKeyMaterial
 from mugen.core.plugin.acp.contract.service.key_ref import IKeyRefService
 from mugen.core.plugin.acp.domain import KeyRefDE
-from mugen.core.plugin.acp.service.key_provider import KeyMaterialResolver
+from mugen.core.plugin.acp.service.key_provider import (
+    KeyMaterialResolver,
+    ManagedKeyMaterialCipher,
+)
 
 
 class KeyRefService(
@@ -30,6 +33,7 @@ class KeyRefService(
         table: str,
         rsg: IRelationalStorageGateway,
         key_material_resolver: KeyMaterialResolver | None = None,
+        managed_key_material_cipher: ManagedKeyMaterialCipher | None = None,
         **kwargs,
     ):
         super().__init__(
@@ -39,6 +43,9 @@ class KeyRefService(
             **kwargs,
         )
         self._key_material_resolver = key_material_resolver or KeyMaterialResolver()
+        self._managed_key_material_cipher = (
+            managed_key_material_cipher or ManagedKeyMaterialCipher()
+        )
 
     @staticmethod
     def _now_utc() -> datetime:
@@ -69,6 +76,36 @@ class KeyRefService(
             provider = "local"
         return provider
 
+    @classmethod
+    def _ensure_provider_allowed_for_scope(
+        cls,
+        *,
+        tenant_id: uuid.UUID,
+        provider: str,
+        operation: str,
+    ) -> None:
+        if provider == "managed" and operation == "create":
+            abort(
+                400,
+                "Create is not supported for provider 'managed'. "
+                "Use KeyRefs/$action/rotate with SecretValue.",
+            )
+        if provider == "local" and tenant_id != GLOBAL_TENANT_ID:
+            abort(
+                409,
+                "Provider 'local' is restricted to global scope.",
+            )
+
+    @staticmethod
+    def _normalize_secret_value(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str) is not True:
+            abort(400, "SecretValue must be a string.")
+        if value.strip() == "":
+            abort(400, "SecretValue must be non-empty.")
+        return value
+
     @staticmethod
     def _status_text(value: Any) -> str:
         return str(getattr(value, "value", value) or "").strip()
@@ -79,6 +116,7 @@ class KeyRefService(
 
     async def create(self, values: Mapping[str, Any]) -> KeyRefDE:
         payload = dict(values)
+        allow_managed_create = bool(payload.pop("_allow_managed_create", False))
         payload["tenant_id"] = self._normalize_tenant_id(payload.get("tenant_id"))
         payload["purpose"] = self._normalize_required_text(
             payload.get("purpose"),
@@ -89,8 +127,18 @@ class KeyRefService(
             field_name="KeyId",
         )
         payload["provider"] = self._normalize_provider(payload.get("provider"))
+        if allow_managed_create is not True:
+            self._ensure_provider_allowed_for_scope(
+                tenant_id=payload["tenant_id"],
+                provider=payload["provider"],
+                operation="create",
+            )
         if payload.get("status") is None:
             payload["status"] = "active"
+        if payload.get("has_material") is None:
+            payload["has_material"] = bool(payload.get("encrypted_secret"))
+        if bool(payload.get("has_material")) is not True:
+            payload["encrypted_secret"] = None
         return await super().create(payload)
 
     async def _active_for_tenant(
@@ -145,8 +193,27 @@ class KeyRefService(
         provider: str,
         auth_user_id: uuid.UUID,
         attributes: dict[str, Any] | None,
+        secret_value: str | None = None,
     ) -> KeyRefDE:
         now = self._now_utc()
+        self._ensure_provider_allowed_for_scope(
+            tenant_id=tenant_id,
+            provider=provider,
+            operation="rotate",
+        )
+        if provider != "managed" and secret_value is not None:
+            abort(400, "SecretValue is only supported for provider 'managed'.")
+
+        encrypted_secret: str | None = None
+        has_material = False
+        if provider == "managed":
+            if secret_value is None:
+                abort(
+                    400,
+                    "SecretValue is required for provider 'managed'.",
+                )
+            encrypted_secret = self._managed_key_material_cipher.encrypt(secret_value)
+            has_material = True
 
         existing_active = await self._active_for_tenant(
             tenant_id=tenant_id,
@@ -157,6 +224,23 @@ class KeyRefService(
             and str(existing_active.key_id or "").lower() == key_id.lower()
             and str(existing_active.provider or "").lower() == provider.lower()
         ):
+            if provider == "managed":
+                try:
+                    updated_existing = await self.update(
+                        {"id": existing_active.id},
+                        {
+                            "attributes": attributes,
+                            "encrypted_secret": encrypted_secret,
+                            "has_material": has_material,
+                            "material_last_set_at": now,
+                            "material_last_set_by_user_id": auth_user_id,
+                        },
+                    )
+                except SQLAlchemyError:
+                    abort(500)
+                if updated_existing is None:
+                    abort(409, "Key rotation could not be applied.")
+                return updated_existing
             return existing_active
 
         try:
@@ -181,6 +265,7 @@ class KeyRefService(
             if candidate is None:
                 return await self.create(
                     {
+                        "_allow_managed_create": True,
                         "tenant_id": tenant_id,
                         "purpose": purpose,
                         "key_id": key_id,
@@ -193,6 +278,12 @@ class KeyRefService(
                         "destroyed_at": None,
                         "destroyed_by_user_id": None,
                         "destroy_reason": None,
+                        "encrypted_secret": encrypted_secret,
+                        "has_material": has_material,
+                        "material_last_set_at": now if has_material else None,
+                        "material_last_set_by_user_id": (
+                            auth_user_id if has_material else None
+                        ),
                         "attributes": attributes,
                     }
                 )
@@ -212,6 +303,16 @@ class KeyRefService(
                     "destroyed_at": None,
                     "destroyed_by_user_id": None,
                     "destroy_reason": None,
+                    "encrypted_secret": encrypted_secret,
+                    "has_material": has_material,
+                    "material_last_set_at": (
+                        now if has_material else candidate.material_last_set_at
+                    ),
+                    "material_last_set_by_user_id": (
+                        auth_user_id
+                        if has_material
+                        else candidate.material_last_set_by_user_id
+                    ),
                     "attributes": attributes,
                 },
             )
@@ -239,6 +340,9 @@ class KeyRefService(
             field_name="KeyId",
         )
         provider = self._normalize_provider(getattr(data, "provider", None))
+        secret_value = self._normalize_secret_value(
+            getattr(data, "secret_value", None)
+        )
         attributes = getattr(data, "attributes", None)
 
         row = await self._activate(
@@ -248,6 +352,7 @@ class KeyRefService(
             provider=provider,
             auth_user_id=auth_user_id,
             attributes=attributes,
+            secret_value=secret_value,
         )
 
         return {
@@ -343,6 +448,8 @@ class KeyRefService(
                     "destroyed_at": now,
                     "destroyed_by_user_id": auth_user_id,
                     "destroy_reason": reason,
+                    "encrypted_secret": None,
+                    "has_material": False,
                 },
             )
         except SQLAlchemyError:

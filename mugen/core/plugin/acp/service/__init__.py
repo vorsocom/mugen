@@ -15,6 +15,7 @@ __all__ = [
     "RefreshTokenService",
     "RoleService",
     "RoleMembershipService",
+    "RuntimeConfigProfileService",
     "SchemaBindingService",
     "SchemaDefinitionService",
     "SystemFlagService",
@@ -49,6 +50,9 @@ from mugen.core.plugin.acp.service.person import PersonService
 from mugen.core.plugin.acp.service.refresh_token import RefreshTokenService
 from mugen.core.plugin.acp.service.role import RoleService
 from mugen.core.plugin.acp.service.role_membership import RoleMembershipService
+from mugen.core.plugin.acp.service.runtime_config_profile import (
+    RuntimeConfigProfileService,
+)
 from mugen.core.plugin.acp.service.schema_binding import SchemaBindingService
 from mugen.core.plugin.acp.service.schema_definition import SchemaDefinitionService
 from mugen.core.plugin.acp.service.system_flag import SystemFlagService
@@ -73,6 +77,7 @@ REGISTRATIONS = [
     (RefreshTokenService, admin_model.RefreshToken),
     (RoleService, admin_model.Role),
     (RoleMembershipService, admin_model.RoleMembership),
+    (RuntimeConfigProfileService, admin_model.RuntimeConfigProfile),
     (SchemaBindingService, admin_model.SchemaBinding),
     (SchemaDefinitionService, admin_model.SchemaDefinition),
     (SystemFlagService, admin_model.SystemFlag),

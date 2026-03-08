@@ -37,6 +37,9 @@ Homeserver URLs, Matrix users, device ids, and credentials are owned by ACP
 `MessagingClientProfiles` plus `KeyRef` secrets. Zero active client profiles is
 valid at startup.
 
+Tenant-facing Matrix secrets should use ACP `KeyRef.provider = "managed"`.
+Operator-local `provider = "local"` remains bootstrap / emergency only.
+
 Matrix account display names are also owned by
 `MessagingClientProfiles.display_name`, not root config.
 
