@@ -344,6 +344,10 @@ contrib = "legacy.web.contrib"
                 "deterministic",
             )
             self.assertEqual(
+                rendered["mugen"]["modules"]["core"]["service"]["ingress"],
+                "default",
+            )
+            self.assertEqual(
                 [str(item) for item in rendered["mugen"]["platforms"]],
                 [str(item) for item in original["mugen"]["platforms"]],
             )
@@ -390,6 +394,10 @@ contrib = "legacy.web.contrib"
 
             rendered = tomlkit.parse(output.read_text(encoding="utf-8"))
             self.assertIn("web", [str(item) for item in rendered["mugen"]["platforms"]])
+            self.assertEqual(
+                rendered["mugen"]["modules"]["core"]["service"]["ingress"],
+                "default",
+            )
             self.assertEqual(
                 rendered["web"]["media"]["storage"]["path"],
                 ".tmp/ci/web_media",

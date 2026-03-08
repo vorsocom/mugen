@@ -36,7 +36,9 @@ __all__ = [
 ]
 
 import asyncio
+import hashlib
 import inspect
+import json
 import logging
 import random
 import re
@@ -87,6 +89,11 @@ from mugen.core.contract.client.whatsapp import IWhatsAppClient
 from mugen.core.contract.extension.registry import IExtensionRegistry
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
+from mugen.core.contract.service.ingress import (
+    IMessagingIngressService,
+    MessagingIngressEvent,
+    MessagingIngressStageEntry,
+)
 from mugen.core.contract.service.ipc import (
     IPCCommandRequest,
     IIPCService,
@@ -121,6 +128,10 @@ from mugen.core.utility.platforms import (
     SUPPORTED_CORE_PLATFORMS,
     normalize_platforms,
     unknown_platforms,
+)
+from mugen.core.utility.platform_runtime_profile import (
+    DEFAULT_RUNTIME_PROFILE_KEY,
+    get_platform_profile_section,
 )
 
 _WHATSAPP_RUNTIME_PROBE_INTERVAL_SECONDS = 15.0
@@ -198,6 +209,10 @@ def _web_runtime_store_provider():
     return di.container.web_runtime_store
 
 
+def _ingress_provider():
+    return getattr(di.container, "ingress_service", None)
+
+
 def _keyval_storage_gateway_provider():
     return di.container.keyval_storage_gateway
 
@@ -212,6 +227,116 @@ def _extension_enabled(ext: SimpleNamespace) -> bool:
         if normalized in {"false", "0", "no", "off"}:
             return False
     return bool(raw_enabled)
+
+
+def _nonempty_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized if normalized != "" else None
+
+
+def _json_hash(payload: object) -> str:
+    normalized = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _signal_envelope(payload: dict[str, object]) -> dict[str, object] | None:
+    params = payload.get("params")
+    if not isinstance(params, dict):
+        return None
+    envelope = params.get("envelope")
+    return envelope if isinstance(envelope, dict) else None
+
+
+def _signal_sender(envelope: dict[str, object]) -> str | None:
+    for key in ("sourceNumber", "sourceUuid", "source"):
+        sender = _nonempty_text(envelope.get(key))
+        if sender is not None:
+            return sender
+    return None
+
+
+def _signal_event_id(envelope: dict[str, object]) -> str | None:
+    timestamp = envelope.get("timestamp")
+    if isinstance(timestamp, bool):
+        return None
+    if not isinstance(timestamp, (int, float)):
+        return None
+    source = _signal_sender(envelope)
+    if source is not None:
+        return f"{source}:{int(timestamp)}"
+    return str(int(timestamp))
+
+
+def _signal_event_type(envelope: dict[str, object]) -> str:
+    data_message = envelope.get("dataMessage")
+    receipt_message = envelope.get("receiptMessage")
+    typing_message = envelope.get("typingMessage")
+    if isinstance(data_message, dict):
+        if isinstance(data_message.get("reaction"), dict):
+            return "reaction"
+        return "message"
+    if isinstance(receipt_message, dict):
+        return "receipt"
+    if isinstance(typing_message, dict):
+        return "typing"
+    return "event"
+
+
+def _extract_signal_stage_entries(
+    *,
+    config: SimpleNamespace,
+    payload: dict[str, object],
+) -> list[MessagingIngressStageEntry]:
+    envelope = _signal_envelope(payload)
+    if envelope is None:
+        return []
+    runtime_profile_key = (
+        _nonempty_text(payload.get("runtime_profile_key"))
+        or DEFAULT_RUNTIME_PROFILE_KEY
+    )
+    signal_cfg = get_platform_profile_section(
+        config,
+        platform="signal",
+        runtime_profile_key=runtime_profile_key,
+    )
+    account_number = _nonempty_text(getattr(signal_cfg, "account", None))
+    event_type = _signal_event_type(envelope)
+    event_id = _signal_event_id(envelope)
+    sender = _signal_sender(envelope)
+    return [
+        MessagingIngressStageEntry(
+            ipc_command="signal_ingress_event",
+            event=MessagingIngressEvent(
+                version=1,
+                platform="signal",
+                runtime_profile_key=runtime_profile_key,
+                source_mode="receive_loop",
+                event_type=event_type,
+                event_id=event_id,
+                dedupe_key=(
+                    f"{event_type}:{event_id.strip()}"
+                    if isinstance(event_id, str) and event_id.strip() != ""
+                    else f"{event_type}:{_json_hash(envelope)}"
+                ),
+                identifier_type="account_number",
+                identifier_value=account_number,
+                room_id=sender,
+                sender=sender,
+                payload=dict(payload),
+                provider_context={
+                    "runtime_profile_key": runtime_profile_key,
+                    "account_number": account_number,
+                },
+            ),
+        )
+    ]
 
 
 def _build_core_extension_instance(
@@ -698,6 +823,9 @@ async def bootstrap_app(
     optional_provider_failures: dict[str, str] = {}
     if readiness_report is not None:
         optional_provider_failures = dict(readiness_report.optional_failures)
+    ingress_service: IMessagingIngressService | None = _ingress_provider()
+    if ingress_service is not None:
+        await ingress_service.ensure_started()
 
     # Discover and register core plugins and
     # third-party extensions.
@@ -1738,16 +1866,27 @@ async def run_signal_client(
     config_provider=_config_provider,
     logger_provider=_logger_provider,
     signal_provider=_signal_provider,
-    ipc_provider=_ipc_provider,
+    ipc_provider=None,
+    ingress_provider=_ingress_provider,
     started_callback=None,
     degraded_callback=None,
     healthy_callback=None,
 ) -> None:
     """Run assistant for the Signal platform."""
-    config: SimpleNamespace = config_provider()
     logger: ILoggingGateway = logger_provider()
     signal_client: ISignalClient = signal_provider()
-    ipc_svc: IIPCService = ipc_provider()
+    ipc_svc: IIPCService | None = ipc_provider() if callable(ipc_provider) else None
+    ingress_svc: IMessagingIngressService | None = None
+    if ipc_svc is None:
+        config: SimpleNamespace = config_provider()
+        ingress_svc = ingress_provider() if callable(ingress_provider) else None
+        if ingress_svc is None:
+            raise RuntimeError("Signal ingress service unavailable.")
+    else:
+        try:
+            config = config_provider()
+        except Exception:  # pylint: disable=broad-exception-caught
+            config = SimpleNamespace()
     runtime_error: BaseException | None = None
 
     (
@@ -1778,19 +1917,26 @@ async def run_signal_client(
                         runtime_degraded = False
                     reconnect_delay_seconds = reconnect_base_seconds
 
-                    response = await ipc_svc.handle_ipc_request(
-                        IPCCommandRequest(
-                            platform="signal",
-                            command="signal_restapi_event",
-                            data=event,
+                    if ipc_svc is not None:
+                        response = await ipc_svc.handle_ipc_request(
+                            IPCCommandRequest(
+                                platform="signal",
+                                command="signal_restapi_event",
+                                data=event,
+                            )
                         )
-                    )
-                    if response.errors:
-                        logger.warning(
-                            "Signal receive event processed with IPC errors"
-                            " command=signal_restapi_event"
-                            f" error_count={len(response.errors)}"
+                        if response.errors:
+                            logger.warning(
+                                "Signal receive event processed with IPC errors"
+                                " command=signal_restapi_event"
+                                f" error_count={len(response.errors)}"
+                            )
+                    else:
+                        entries = _extract_signal_stage_entries(
+                            config=config,
+                            payload=event,
                         )
+                        await ingress_svc.stage(entries)
             except asyncio.exceptions.CancelledError:
                 raise
             except Exception as exc:  # pylint: disable=broad-exception-caught

@@ -18,26 +18,4 @@ class TestMugenLineMessagingapiContrib(unittest.TestCase):
             plugin_namespace="com.vorsocomputing.mugen.line",
         )
 
-        table_specs = [
-            call.args[0]
-            for call in registry.register_table_spec.call_args_list
-        ]
-        table_names = {spec.table_name for spec in table_specs}
-        table_providers = {spec.table_provider for spec in table_specs}
-
-        self.assertEqual(
-            table_names,
-            {
-                "line_messagingapi_event_dedup",
-                "line_messagingapi_event_dead_letter",
-            },
-        )
-        self.assertEqual(
-            table_providers,
-            {
-                "mugen.core.plugin.line.messagingapi.model.event_dedup:"
-                "LineMessagingAPIEventDedup",
-                "mugen.core.plugin.line.messagingapi.model.event_dead_letter:"
-                "LineMessagingAPIEventDeadLetter",
-            },
-        )
+        registry.register_table_spec.assert_not_called()

@@ -45,6 +45,12 @@ ct_trigger_prefilter_enabled = true
 timeout_seconds = 10.0
 max_timeout_seconds = 30.0
 
+[ingress]
+worker_poll_seconds = 0.5
+worker_lease_seconds = 60
+worker_batch_size = 50
+max_attempts = 5
+
 [mugen.modules.core]
 # Provider values are strict tokens (for example `bedrock`, `cerebras`,
 # `openai`, `azure_foundry`, `vertex`, `smtp`),
@@ -76,6 +82,7 @@ gateway.storage.relational = "sqlalchemy"
 gateway.storage.web_runtime = "relational"
 
 service.ipc = "default"
+service.ingress = "default"
 service.context_engine = "default"
 service.messaging = "default"
 service.nlp = "default"
@@ -150,6 +157,11 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 # [[mugen.modules.extensions]]
 # type = "ipc"
 # token = "core.ipc.signal_restapi"
+
+# Matrix platform IPC contract (required when `matrix` is active).
+# [[mugen.modules.extensions]]
+# type = "ipc"
+# token = "core.ipc.matrix_ingress"
 
 # WeChat platform FW/IPC contract (required when `wechat` is active).
 # [[mugen.modules.extensions]]
@@ -414,7 +426,7 @@ media.allowed_mimetypes = [
   "text/*",
 ]
 media.max_download_bytes = 20_971_520   # 20 MiB
-ipc.queue_size = 256
+receive.dedupe_ttl_seconds = 86400
 security.device_trust.mode = "strict_known"
 # Optional allowlist entries used when security.device_trust.mode = "allowlist".
 # [[matrix.security.device_trust.allowlist]]

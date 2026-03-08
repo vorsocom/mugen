@@ -1070,6 +1070,22 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             ],
         )
 
+    def test_resolve_readiness_provider_names_includes_ingress_for_external_messaging(
+        self,
+    ) -> None:
+        config = self._readiness_config(
+            profile="platform_full",
+            platforms=["matrix"],
+        )
+        self.assertEqual(
+            di._resolve_readiness_provider_names(config),
+            [
+                "completion_gateway",
+                "keyval_storage_gateway",
+                "ingress_service",
+            ],
+        )
+
     def test_await_readiness_probe_async_requires_awaitable(self) -> None:
         with self.assertRaises(di.ProviderBootstrapError) as raised:
             asyncio.run(
@@ -1406,6 +1422,22 @@ class TestMugenDIEdgeBranches(unittest.TestCase):
             di._build_shared_relational_runtime(
                 injector
             )  # pylint: disable=protected-access
+
+    def test_build_shared_relational_runtime_builds_runtime_when_config_present(
+        self,
+    ) -> None:
+        injector = di.injector.DependencyInjector(config=SimpleNamespace(dict={}))
+        runtime = object()
+
+        with patch.object(
+            di.SharedSQLAlchemyRuntime,
+            "from_config",
+            return_value=runtime,
+        ) as from_config:
+            di._build_shared_relational_runtime(injector)  # pylint: disable=protected-access
+
+        from_config.assert_called_once_with(injector.config)
+        self.assertIs(injector.relational_runtime, runtime)
 
     def test_injector_config_dict_validation_branches(self) -> None:
         with self.assertRaises(RuntimeError):

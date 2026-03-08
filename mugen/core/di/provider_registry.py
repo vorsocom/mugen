@@ -75,6 +75,12 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             class_name="DefaultIPCService",
         ),
     },
+    "ingress_service": {
+        "default": _ProviderTokenSpec(
+            module_path="mugen.core.service.ingress",
+            class_name="DefaultMessagingIngressService",
+        ),
+    },
     "keyval_storage_gateway": {
         "relational": _ProviderTokenSpec(
             module_path="mugen.core.gateway.storage.keyval.relational",

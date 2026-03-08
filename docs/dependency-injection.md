@@ -10,6 +10,10 @@ This note documents the core DI structure in `mugen/core/di/__init__.py` and the
 
 Keep `logging_gateway` as the bootstrap provider and keep the remaining providers in `_PROVIDER_BUILD_ORDER` dependency-safe order.
 
+`ingress_service` is now a first-class provider in that order for external
+messaging platforms. It must remain available before Matrix and before any
+transport path that stages canonical ingress rows.
+
 `context_engine_service` is now a first-class provider in that order.
 `messaging_service` must remain after `context_engine_service` because messaging
 depends on the context engine service boundary instead of legacy CTX/RAG
@@ -31,15 +35,19 @@ from `mugen/core/di/provider_registry.py` (never module paths):
 | `mugen.modules.core.gateway.storage.media` | `default` |
 | `mugen.modules.core.gateway.storage.relational` | `sqlalchemy` |
 | `mugen.modules.core.gateway.storage.web_runtime` | `relational` |
+| `mugen.modules.core.service.ingress` | `default` |
 | `mugen.modules.core.service.ipc` | `default` |
 | `mugen.modules.core.service.context_engine` | `default` |
 | `mugen.modules.core.service.messaging` | `default` |
 | `mugen.modules.core.service.nlp` | `default` |
 | `mugen.modules.core.service.platform` | `default` |
 | `mugen.modules.core.service.user` | `default` |
+| `mugen.modules.core.client.line` | `default` |
 | `mugen.modules.core.client.matrix` | `default` |
+| `mugen.modules.core.client.signal` | `default` |
 | `mugen.modules.core.client.telegram` | `default` |
 | `mugen.modules.core.client.web` | `default` |
+| `mugen.modules.core.client.wechat` | `default` |
 | `mugen.modules.core.client.whatsapp` | `default` |
 
 ## Runtime Shutdown Timeout Contract
@@ -92,6 +100,13 @@ Core DI participates in a strict clean-architecture contract that is enforced by
 - Adapters (`mugen.core.client.*`, `mugen.core.gateway.*`) must not import API-layer modules.
 
 When changing DI/provider wiring, maintain these boundaries first, then update implementation.
+
+The shared ingress foundation is part of that rule set:
+
+- orchestration may resolve `ingress_service` through DI, but should not import
+  service implementation modules directly;
+- service-layer code should depend on contracts and storage/runtime ports rather
+  than plugin or adapter implementations.
 
 ## Extension Services
 

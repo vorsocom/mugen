@@ -60,13 +60,17 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
     async def test_provider_helpers_return_from_di_container(self) -> None:
         container = SimpleNamespace(
             config="cfg",
+            ingress_service="ingress",
             ipc_service="ipc",
             logging_gateway="logger",
+            relational_storage_gateway="rsg",
         )
         with patch.object(webhook.di, "container", new=container):
             self.assertEqual(webhook._config_provider(), "cfg")
+            self.assertEqual(webhook._ingress_provider(), "ingress")
             self.assertEqual(webhook._ipc_provider(), "ipc")
             self.assertEqual(webhook._logger_provider(), "logger")
+            self.assertEqual(webhook._relational_storage_gateway_provider(), "rsg")
 
     async def test_signature_and_xml_helpers(self) -> None:
         signature = webhook._compute_signature(  # pylint: disable=protected-access
@@ -823,6 +827,71 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response, "success")
         logger.warning.assert_called_once()
+
+    async def test_handle_post_event_stages_ingress_entries_when_ipc_provider_is_absent(
+        self,
+    ) -> None:
+        logger = Mock()
+        ingress_service = SimpleNamespace(stage=AsyncMock())
+        entries = [object()]
+
+        with (
+            patch.object(
+                webhook,
+                "_resolve_inbound_payload_or_abort",
+                new=AsyncMock(return_value={"MsgType": "text"}),
+            ),
+            patch.object(
+                webhook,
+                "extract_wechat_stage_entries",
+                new=AsyncMock(return_value=entries),
+            ) as extractor,
+        ):
+            response = await webhook._handle_post_event(  # pylint: disable=protected-access
+                path_token="path-token",
+                provider="official_account",
+                command="wechat_official_account_event",
+                config_provider=lambda: _make_config(aes_enabled=False),
+                ipc_provider=None,
+                ingress_provider=lambda: ingress_service,
+                relational_storage_gateway_provider=lambda: "rsg",
+                logger_provider=lambda: logger,
+            )
+
+        self.assertEqual(response, "success")
+        extractor.assert_awaited_once()
+        ingress_service.stage.assert_awaited_once_with(entries)
+
+    async def test_handle_post_event_aborts_when_ingress_staging_fails(self) -> None:
+        logger = Mock()
+
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "_resolve_inbound_payload_or_abort",
+                new=AsyncMock(return_value={"MsgType": "text"}),
+            ),
+            patch.object(
+                webhook,
+                "extract_wechat_stage_entries",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await webhook._handle_post_event(  # pylint: disable=protected-access
+                    path_token="path-token",
+                    provider="official_account",
+                    command="wechat_official_account_event",
+                    config_provider=lambda: _make_config(aes_enabled=False),
+                    ipc_provider=None,
+                    ingress_provider=lambda: SimpleNamespace(stage=AsyncMock()),
+                    relational_storage_gateway_provider=lambda: "rsg",
+                    logger_provider=lambda: logger,
+                )
+
+        self.assertEqual(ex.exception.code, 500)
+        logger.error.assert_called_once()
 
     async def test_get_subscription_endpoints_invoke_verification_helper(self) -> None:
         official_endpoint = unwrap(webhook.wechat_official_account_subscription)

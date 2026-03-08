@@ -470,6 +470,66 @@ class TestMuGenMultiProfileMatrixClient(unittest.IsolatedAsyncioTestCase):
             cancelled_error_task.callback(cancelled_error_task)
             self.assertTrue(callback_client._failure_queue.empty())  # pylint: disable=protected-access
 
+    async def test_ingress_methods_route_by_runtime_profile_or_first_client(
+        self,
+    ) -> None:
+        config = _matrix_config(
+            {
+                "key": "default",
+                "client": {"user": "@bot-default:example.com"},
+            },
+            {
+                "key": "secondary",
+                "client": {"user": "@bot-secondary:example.com"},
+            },
+        )
+
+        with patch.object(matrix_mod, "DefaultMatrixClient", _FakeManagedMatrixClient):
+            client = matrix_mod.MultiProfileMatrixClient(config=config)
+            first = client.managed_clients()["default"]
+            second = client.managed_clients()["secondary"]
+
+            first.process_ingress_event = AsyncMock()
+            second.process_ingress_event = AsyncMock()
+            first.emit_ingress_processing_signal = AsyncMock()
+            first.send_ingress_responses = AsyncMock()
+            first.download_ingress_media = AsyncMock(return_value={"path": "first"})
+            second.download_ingress_media = AsyncMock(return_value={"path": "second"})
+
+            await client.process_ingress_event({"runtime_profile_key": "secondary"})
+            await client.process_ingress_event({})
+            await client.process_ingress_event("bad")  # type: ignore[arg-type]
+            await client.emit_ingress_processing_signal("!room:test", state="start")
+            await client.send_ingress_responses("!room:test", [{"type": "text"}])
+
+            self.assertEqual(
+                await client.download_ingress_media({"runtime_profile_key": "secondary"}),
+                {"path": "second"},
+            )
+            self.assertEqual(
+                await client.download_ingress_media({}),
+                {"path": "first"},
+            )
+            self.assertEqual(
+                await client.download_ingress_media("bad"),  # type: ignore[arg-type]
+                {"path": "first"},
+            )
+
+            second.process_ingress_event.assert_awaited_once_with(
+                {"runtime_profile_key": "secondary"}
+            )
+            self.assertEqual(first.process_ingress_event.await_count, 2)
+            first.process_ingress_event.assert_any_await({})
+            first.process_ingress_event.assert_any_await("bad")
+            first.emit_ingress_processing_signal.assert_awaited_once_with(
+                "!room:test",
+                state="start",
+            )
+            first.send_ingress_responses.assert_awaited_once_with(
+                "!room:test",
+                [{"type": "text"}],
+            )
+
     async def test_prepare_client_set_private_branch_paths(self) -> None:
         config = _matrix_config(
             {

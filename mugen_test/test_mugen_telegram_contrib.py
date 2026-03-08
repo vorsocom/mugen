@@ -18,26 +18,4 @@ class TestMugenTelegramContrib(unittest.TestCase):
             plugin_namespace="com.vorsocomputing.mugen.telegram",
         )
 
-        table_specs = [
-            call.args[0]
-            for call in registry.register_table_spec.call_args_list
-        ]
-        table_names = {spec.table_name for spec in table_specs}
-        table_providers = {spec.table_provider for spec in table_specs}
-
-        self.assertEqual(
-            table_names,
-            {
-                "telegram_botapi_event_dedup",
-                "telegram_botapi_event_dead_letter",
-            },
-        )
-        self.assertEqual(
-            table_providers,
-            {
-                "mugen.core.plugin.telegram.botapi.model.event_dedup:"
-                "TelegramBotAPIEventDedup",
-                "mugen.core.plugin.telegram.botapi.model.event_dead_letter:"
-                "TelegramBotAPIEventDeadLetter",
-            },
-        )
+        registry.register_table_spec.assert_not_called()

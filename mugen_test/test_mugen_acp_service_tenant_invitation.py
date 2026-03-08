@@ -209,6 +209,26 @@ class TestMugenAcpServiceTenantInvitation(unittest.IsolatedAsyncioTestCase):
                 svc._tenant_invitation_base_url()
             self.assertEqual(ex.exception.code, 503)
 
+        svc_none_config = TenantInvitationService(
+            table="admin_tenant_invitation",
+            rsg=SimpleNamespace(),
+            config_provider=lambda: None,
+            logger_provider=lambda: logger,
+            registry_provider=lambda: registry,
+        )
+        self.assertIsInstance(svc_none_config._config, SimpleNamespace)
+        self.assertEqual(svc_none_config._tenant_invitation_ttl_seconds(), 604800)
+
+        svc_provider_failures = TenantInvitationService(
+            table="admin_tenant_invitation",
+            rsg=SimpleNamespace(),
+            config_provider=Mock(side_effect=RuntimeError("config boom")),
+            logger_provider=Mock(side_effect=RuntimeError("logger boom")),
+            registry_provider=lambda: registry,
+        )
+        self.assertIsInstance(svc_provider_failures._config, SimpleNamespace)
+        self.assertTrue(callable(getattr(svc_provider_failures._logger, "warning", None)))
+
     async def test_create_delivery_policies_and_send_before_persist(self) -> None:
         svc = _service()
         tenant_id = uuid.uuid4()

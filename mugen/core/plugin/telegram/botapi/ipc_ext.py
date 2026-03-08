@@ -116,6 +116,7 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
     @property
     def ipc_commands(self) -> list[str]:
         return [
+            "telegram_ingress_event",
             "telegram_botapi_update",
         ]
 
@@ -546,9 +547,11 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
         update: dict,
         message: dict,
         ingress_route: dict[str, Any] | None = None,
+        *,
+        skip_dedupe: bool = False,
     ) -> None:
         ingress_route = self._normalize_ingress_route(ingress_route)
-        if await self._is_duplicate_event("message", message):
+        if skip_dedupe is not True and await self._is_duplicate_event("message", message):
             self._logging_gateway.debug("Skip duplicate Telegram message event.")
             return
 
@@ -701,6 +704,8 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
         update: dict,
         callback_query: dict,
         ingress_route: dict[str, Any] | None = None,
+        *,
+        skip_dedupe: bool = False,
     ) -> None:
         ingress_route = self._normalize_ingress_route(ingress_route)
         callback_query_id = callback_query.get("id")
@@ -708,7 +713,10 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
             # Ack quickly before downstream processing.
             await self._client.answer_callback_query(callback_query_id=callback_query_id)
 
-        if await self._is_duplicate_event("callback_query", callback_query):
+        if (
+            skip_dedupe is not True
+            and await self._is_duplicate_event("callback_query", callback_query)
+        ):
             self._logging_gateway.debug("Skip duplicate Telegram callback event.")
             return
 
@@ -798,6 +806,12 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
             f" {request.command}"
         )
         match request.command:
+            case "telegram_ingress_event":
+                await self._telegram_ingress_event(request)
+                return IPCHandlerResult(
+                    handler=handler_name,
+                    response={"response": "OK"},
+                )
             case "telegram_botapi_update":
                 await self._telegram_botapi_update(request)
                 return IPCHandlerResult(
@@ -810,6 +824,52 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
                     ok=False,
                     code="not_found",
                     error="Unsupported IPC command.",
+                )
+
+    async def _telegram_ingress_event(self, request: IPCCommandRequest) -> None:
+        payload = request.data if isinstance(request.data, dict) else {}
+        event_payload = payload.get("payload")
+        if not isinstance(event_payload, dict):
+            raise TypeError("Telegram ingress payload.event must be a dict.")
+
+        provider_context = payload.get("provider_context")
+        provider_context = provider_context if isinstance(provider_context, dict) else {}
+        ingress_route = self._normalize_ingress_route(provider_context.get("ingress_route"))
+        path_token = self._coerce_nonempty_string(provider_context.get("path_token"))
+        if ingress_route.get("runtime_profile_key") in [None, ""] and path_token is not None:
+            resolved = await self._resolve_ingress_route(
+                path_token=path_token,
+                webhook_payload=event_payload,
+            )
+            if resolved is not None:
+                ingress_route = resolved
+
+        runtime_profile_key = self._coerce_nonempty_string(
+            payload.get("runtime_profile_key")
+        ) or runtime_profile_key_from_ingress_route(ingress_route)
+        update = (
+            event_payload.get("update")
+            if isinstance(event_payload.get("update"), dict)
+            else event_payload
+        )
+
+        with runtime_profile_scope(runtime_profile_key):
+            message = event_payload.get("message")
+            if isinstance(message, dict):
+                await self._handle_message_update(
+                    update,
+                    message,
+                    ingress_route,
+                    skip_dedupe=True,
+                )
+
+            callback_query = event_payload.get("callback_query")
+            if isinstance(callback_query, dict):
+                await self._handle_callback_query_update(
+                    update,
+                    callback_query,
+                    ingress_route,
+                    skip_dedupe=True,
                 )
 
     async def _telegram_botapi_update(self, request: IPCCommandRequest) -> None:

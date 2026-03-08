@@ -211,9 +211,18 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
         ext = _new_extension(config=_make_config())
 
         self.assertEqual(ext.platforms, ["line"])
-        self.assertEqual(ext.ipc_commands, ["line_messagingapi_event"])
+        self.assertEqual(
+            ext.ipc_commands,
+            ["line_ingress_event", "line_messagingapi_event"],
+        )
 
-        with patch.object(ext, "_line_messagingapi_event", new=AsyncMock()) as event_handler:
+        with (
+            patch.object(ext, "_line_ingress_event", new=AsyncMock()) as ingress_handler,
+            patch.object(ext, "_line_messagingapi_event", new=AsyncMock()) as event_handler,
+        ):
+            handled_ingress = await ext.process_ipc_command(
+                _make_request({"events": []}, command="line_ingress_event")
+            )
             handled = await ext.process_ipc_command(
                 _make_request({"events": []}, command="line_messagingapi_event")
             )
@@ -221,11 +230,80 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 _make_request({}, command="unknown")
             )
 
+        ingress_handler.assert_awaited_once()
         event_handler.assert_awaited_once()
+        self.assertTrue(handled_ingress.ok)
+        self.assertEqual(handled_ingress.response, {"response": "OK"})
         self.assertTrue(handled.ok)
         self.assertEqual(handled.response, {"response": "OK"})
         self.assertFalse(unknown.ok)
         self.assertEqual(unknown.code, "not_found")
+
+    async def test_line_ingress_event_validates_payload_and_processes_event(self) -> None:
+        ext = _new_extension(config=_make_config())
+
+        with self.assertRaisesRegex(TypeError, "payload.event must be a dict"):
+            await ext._line_ingress_event(  # pylint: disable=protected-access
+                _make_request({"payload": []}, command="line_ingress_event")
+            )
+
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"runtime_profile_key": "line-a", "tenant_id": "tenant-a"}
+        )
+        ext._process_single_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._line_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "runtime_profile_key": "line-a",
+                    "payload": _message_event(),
+                    "provider_context": {
+                        "path_token": "line-path-token",
+                        "ingress_route": {},
+                    },
+                },
+                command="line_ingress_event",
+            )
+        )
+
+        ext._process_single_event.assert_awaited_once()
+        kwargs = ext._process_single_event.await_args.kwargs  # type: ignore[union-attr]
+        self.assertTrue(kwargs["skip_dedupe"])
+        self.assertEqual(kwargs["ingress_route"]["runtime_profile_key"], "line-a")
+
+        ext._process_single_event.reset_mock()
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value=None
+        )
+        await ext._line_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": _message_event(),
+                    "provider_context": {
+                        "path_token": "line-path-token",
+                        "ingress_route": {},
+                    },
+                },
+                command="line_ingress_event",
+            )
+        )
+        ext._resolve_ingress_route.assert_awaited_once()  # type: ignore[union-attr]
+
+        ext._process_single_event.reset_mock()
+        ext._resolve_ingress_route.reset_mock()  # type: ignore[union-attr]
+        await ext._line_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": _message_event(),
+                    "provider_context": {
+                        "path_token": "line-path-token",
+                        "ingress_route": {"runtime_profile_key": "line-a"},
+                    },
+                },
+                command="line_ingress_event",
+            )
+        )
+        ext._resolve_ingress_route.assert_not_awaited()  # type: ignore[union-attr]
 
     async def test_text_message_routes_and_registers_user(self) -> None:
         client = _make_client()

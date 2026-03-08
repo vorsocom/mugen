@@ -224,7 +224,74 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ipc_ext._relational_storage_gateway_provider(), "rsg")
             self.assertEqual(ipc_ext._messaging_service_provider(), "ms")
             self.assertEqual(ipc_ext._user_service_provider(), "us")
+
+    async def test_signal_ingress_event_validates_and_routes_event_types(self) -> None:
+        ext = _new_extension(config=_make_config(), logging_gateway=Mock())
+
+        with self.assertRaisesRegex(TypeError, "params.envelope"):
+            await ext._signal_ingress_event(  # pylint: disable=protected-access
+                _make_request({"payload": {}}, command="signal_ingress_event")
+            )
+
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"runtime_profile_key": "signal-a", "tenant_id": "tenant-a"}
+        )
+        ext._handle_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._signal_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "runtime_profile_key": "signal-a",
+                    "payload": _receive_payload(_text_envelope()),
+                    "provider_context": {"account_number": "+15550000001"},
+                },
+                command="signal_ingress_event",
+            )
+        )
+        ext._handle_message_event.assert_awaited_once()
+
+        await ext._signal_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": _receive_payload({"timestamp": 125, "receiptMessage": {}}),
+                    "provider_context": {"account_number": "+15550000001"},
+                },
+                command="signal_ingress_event",
+            )
+        )
+        ext._logging_gateway.debug.assert_any_call("Signal receipt event observed.")
+
+        await ext._signal_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": _receive_payload({"timestamp": 126}),
+                    "provider_context": {"account_number": "+15550000001"},
+                },
+                command="signal_ingress_event",
+            )
+        )
+        ext._logging_gateway.debug.assert_any_call(
+            "Signal event ignored (unsupported type)."
+        )
         self.assertIsNone(SignalRestAPIIPCExtension._coerce_nonempty_string(123))  # pylint: disable=protected-access
+
+        ext._signal_account_number = Mock(return_value=None)  # type: ignore[method-assign]  # pylint: disable=protected-access
+        ext._resolve_ingress_route.reset_mock()  # type: ignore[union-attr]
+        await ext._signal_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": _receive_payload(_text_envelope()),
+                    "provider_context": {
+                        "ingress_route": {
+                            "runtime_profile_key": "signal-fallback",
+                            "tenant_id": "tenant-a",
+                        }
+                    },
+                },
+                command="signal_ingress_event",
+            )
+        )
+        ext._resolve_ingress_route.assert_not_awaited()  # type: ignore[union-attr]
 
     async def test_signal_account_number_supports_profile_lookup_and_missing_profile(
         self,
@@ -254,9 +321,18 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         ext = _new_extension(config=_make_config())
 
         self.assertEqual(ext.platforms, ["signal"])
-        self.assertEqual(ext.ipc_commands, ["signal_restapi_event"])
+        self.assertEqual(
+            ext.ipc_commands,
+            ["signal_ingress_event", "signal_restapi_event"],
+        )
 
-        with patch.object(ext, "_signal_restapi_event", new=AsyncMock()) as event_handler:
+        with (
+            patch.object(ext, "_signal_ingress_event", new=AsyncMock()) as ingress_handler,
+            patch.object(ext, "_signal_restapi_event", new=AsyncMock()) as event_handler,
+        ):
+            handled_ingress = await ext.process_ipc_command(
+                _make_request({}, command="signal_ingress_event")
+            )
             handled = await ext.process_ipc_command(
                 _make_request({}, command="signal_restapi_event")
             )
@@ -264,7 +340,10 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 _make_request({}, command="unknown")
             )
 
+        ingress_handler.assert_awaited_once()
         event_handler.assert_awaited_once()
+        self.assertTrue(handled_ingress.ok)
+        self.assertEqual(handled_ingress.response, {"response": "OK"})
         self.assertTrue(handled.ok)
         self.assertEqual(handled.response, {"response": "OK"})
         self.assertFalse(unknown.ok)

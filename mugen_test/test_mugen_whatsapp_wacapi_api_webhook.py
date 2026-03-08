@@ -33,13 +33,17 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
     async def test_provider_helpers_return_from_di_container(self) -> None:
         container = SimpleNamespace(
             config="cfg",
+            ingress_service="ingress",
             ipc_service="ipc",
             logging_gateway="logger",
+            relational_storage_gateway="rsg",
         )
         with patch.object(webhook.di, "container", new=container):
             self.assertEqual(webhook._config_provider(), "cfg")
+            self.assertEqual(webhook._ingress_provider(), "ingress")
             self.assertEqual(webhook._ipc_provider(), "ipc")
             self.assertEqual(webhook._logger_provider(), "logger")
+            self.assertEqual(webhook._relational_storage_gateway_provider(), "rsg")
 
     async def test_subscription_validation_paths(self) -> None:
         endpoint = unwrap(webhook.whatsapp_wacapi_subscription)
@@ -251,3 +255,58 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response, {"response": "OK"})
         logger.warning.assert_called_once()
+
+    async def test_event_stages_ingress_entries_when_ipc_provider_is_absent(self) -> None:
+        endpoint = unwrap(webhook.whatsapp_wacapi_event)
+        logger = Mock()
+        ingress_service = SimpleNamespace(stage=AsyncMock())
+        entries = [object()]
+
+        with (
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
+            ),
+            patch.object(
+                webhook,
+                "extract_whatsapp_stage_entries",
+                new=AsyncMock(return_value=entries),
+            ) as extractor,
+        ):
+            response = await endpoint(
+                ingress_provider=lambda: ingress_service,
+                relational_storage_gateway_provider=lambda: "rsg",
+                logger_provider=lambda: logger,
+            )
+
+        self.assertEqual(response, {"response": "OK"})
+        extractor.assert_awaited_once()
+        ingress_service.stage.assert_awaited_once_with(entries)
+
+    async def test_event_aborts_when_ingress_staging_fails(self) -> None:
+        endpoint = unwrap(webhook.whatsapp_wacapi_event)
+        logger = Mock()
+
+        with (
+            patch.object(webhook, "abort", side_effect=_abort_raiser),
+            patch.object(
+                webhook,
+                "request",
+                new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
+            ),
+            patch.object(
+                webhook,
+                "extract_whatsapp_stage_entries",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await endpoint(
+                    ingress_provider=lambda: SimpleNamespace(stage=AsyncMock()),
+                    relational_storage_gateway_provider=lambda: "rsg",
+                    logger_provider=lambda: logger,
+                )
+
+        self.assertEqual(ex.exception.code, 500)
+        logger.error.assert_called_once()

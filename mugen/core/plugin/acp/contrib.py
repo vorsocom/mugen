@@ -132,6 +132,9 @@ from mugen.core.plugin.acp.contract.sdk.resource import (
 )
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.utility.ns import AdminNs
+from mugen.core.plugin.messaging_ingress.contrib import (
+    contribute as contribute_messaging_ingress,
+)
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
 _WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+|\d+")
@@ -820,3 +823,9 @@ def contribute(
                 init_kwargs={"table": f"admin_{obj_name}"},
             )
         )
+
+    contribute_messaging_ingress(
+        registry,
+        admin_namespace=admin_namespace,
+        plugin_namespace=plugin_namespace,
+    )

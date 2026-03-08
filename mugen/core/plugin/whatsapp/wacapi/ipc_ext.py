@@ -118,6 +118,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
     @property
     def ipc_commands(self) -> list[str]:
         return [
+            "whatsapp_ingress_event",
             "whatsapp_wacapi_event",
         ]
 
@@ -484,6 +485,8 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         event_value: dict,
         message: dict,
         ingress_route: dict[str, Any] | None = None,
+        *,
+        skip_dedupe: bool = False,
     ) -> None:
         if ingress_route is None:
             ingress_route = self._normalize_ingress_route(
@@ -510,7 +513,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             self._logging_gateway.error("Malformed WhatsApp message payload.")
             return
 
-        if await self._is_duplicate_event("message", message):
+        if skip_dedupe is not True and await self._is_duplicate_event("message", message):
             self._logging_gateway.debug("Skip duplicate WhatsApp message event.")
             return
 
@@ -711,6 +714,8 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         self,
         status: dict,
         ingress_route: dict[str, Any] | None = None,
+        *,
+        skip_dedupe: bool = False,
     ) -> None:
         if ingress_route is None:
             ingress_route = self._normalize_ingress_route(
@@ -724,7 +729,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             f"[cid={correlation_id}] Process WhatsApp status event "
             f"status={status.get('status')}."
         )
-        if await self._is_duplicate_event("status", status):
+        if skip_dedupe is not True and await self._is_duplicate_event("status", status):
             self._logging_gateway.debug("Skip duplicate WhatsApp status event.")
             return
 
@@ -924,6 +929,12 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             f" {request.command}"
         )
         match request.command:
+            case "whatsapp_ingress_event":
+                await self._whatsapp_ingress_event(request)
+                return IPCHandlerResult(
+                    handler=handler_name,
+                    response={"response": "OK"},
+                )
             case "whatsapp_wacapi_event":
                 await self._wacapi_event(request)
                 return IPCHandlerResult(
@@ -936,6 +947,60 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                     ok=False,
                     code="not_found",
                     error="Unsupported IPC command.",
+                )
+
+    async def _whatsapp_ingress_event(self, request: IPCCommandRequest) -> None:
+        payload = request.data if isinstance(request.data, dict) else {}
+        event_payload = payload.get("payload")
+        if not isinstance(event_payload, dict):
+            raise TypeError("WhatsApp ingress payload.event must be a dict.")
+
+        provider_context = payload.get("provider_context")
+        provider_context = provider_context if isinstance(provider_context, dict) else {}
+        ingress_route = self._normalize_ingress_route(provider_context.get("ingress_route"))
+        phone_number_id = self._coerce_nonempty_string(provider_context.get("phone_number_id"))
+        if (
+            ingress_route.get("runtime_profile_key") in [None, ""]
+            and phone_number_id is not None
+        ):
+            resolve_payload = (
+                event_payload.get("event_value")
+                if isinstance(event_payload.get("event_value"), dict)
+                else event_payload
+            )
+            resolved = await self._resolve_ingress_route(
+                phone_number_id=phone_number_id,
+                webhook_payload=resolve_payload,
+            )
+            if resolved is not None:
+                ingress_route = resolved
+
+        runtime_profile_key = self._coerce_nonempty_string(
+            payload.get("runtime_profile_key")
+        ) or runtime_profile_key_from_ingress_route(ingress_route)
+
+        with runtime_profile_scope(runtime_profile_key):
+            message = event_payload.get("message")
+            if isinstance(message, dict):
+                event_value = (
+                    event_payload.get("event_value")
+                    if isinstance(event_payload.get("event_value"), dict)
+                    else {}
+                )
+                await self._process_message_event(
+                    event_value,
+                    message,
+                    ingress_route,
+                    skip_dedupe=True,
+                )
+                return
+
+            status = event_payload.get("status")
+            if isinstance(status, dict):
+                await self._process_status_event(
+                    status,
+                    ingress_route,
+                    skip_dedupe=True,
                 )
 
     async def _wacapi_event(self, request: IPCCommandRequest) -> None:

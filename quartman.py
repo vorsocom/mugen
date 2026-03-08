@@ -61,6 +61,7 @@ from mugen.core.runtime.phase_b_shutdown import (
     PhaseBShutdownError,
     cancel_registered_platform_tasks,
     clear_phase_b_platform_tasks,
+    phase_b_platform_tasks,
     reconcile_phase_b_shutdown_state,
     shutdown_phase_b_runner_task,
 )
@@ -228,30 +229,32 @@ async def shutdown():
     state = _bootstrap_state()
     state[SHUTDOWN_REQUESTED_KEY] = True
     task = state.get(_PLATFORM_CLIENTS_TASK_KEY)
-    shutdown_timeout_seconds = _resolve_shutdown_timeout_seconds()
+    registered_platform_tasks = phase_b_platform_tasks(state)
     phase_b_shutdown_error: PhaseBShutdownError | None = None
     container_shutdown_error: Exception | None = None
-    if isinstance(task, asyncio.Task):
-        app.logger.debug(
-            "Cancelling platform client runner task timeout_seconds=%.2f",
-            shutdown_timeout_seconds,
-        )
-    try:
-        await cancel_registered_platform_tasks(
-            state,
-            timeout_seconds=shutdown_timeout_seconds,
-            logger=app.logger,
-        )
+    if isinstance(task, asyncio.Task) or registered_platform_tasks:
+        shutdown_timeout_seconds = _resolve_shutdown_timeout_seconds()
         if isinstance(task, asyncio.Task):
-            await shutdown_phase_b_runner_task(
+            app.logger.debug(
+                "Cancelling platform client runner task timeout_seconds=%.2f",
+                shutdown_timeout_seconds,
+            )
+        try:
+            await cancel_registered_platform_tasks(
                 state,
-                task=task,
                 timeout_seconds=shutdown_timeout_seconds,
                 logger=app.logger,
             )
-    except PhaseBShutdownError as exc:
-        phase_b_shutdown_error = exc
-        app.logger.error("Bootstrap phase_b shutdown failed error=%s", exc)
+            if isinstance(task, asyncio.Task):
+                await shutdown_phase_b_runner_task(
+                    state,
+                    task=task,
+                    timeout_seconds=shutdown_timeout_seconds,
+                    logger=app.logger,
+                )
+        except PhaseBShutdownError as exc:
+            phase_b_shutdown_error = exc
+            app.logger.error("Bootstrap phase_b shutdown failed error=%s", exc)
 
     if phase_b_shutdown_error is None:
         clear_phase_b_platform_tasks(state)

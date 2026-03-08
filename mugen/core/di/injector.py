@@ -23,6 +23,7 @@ from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
 from mugen.core.contract.gateway.storage.media import IMediaStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
+from mugen.core.contract.service.ingress import IMessagingIngressService
 from mugen.core.contract.service.ipc import IIPCService
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.nlp import INLPService
@@ -51,6 +52,7 @@ class DependencyInjector(IDependencyInjector):
         relational_runtime=None,
         relational_storage_gateway: IRelationalStorageGateway = None,
         web_runtime_store: IWebRuntimeStore = None,
+        ingress_service: IMessagingIngressService = None,
         nlp_service: INLPService = None,
         platform_service: IPlatformService = None,
         user_service: IUserService = None,
@@ -76,6 +78,7 @@ class DependencyInjector(IDependencyInjector):
         self.__relational_runtime = relational_runtime
         self.__relational_storage_gateway = relational_storage_gateway
         self.__web_runtime_store = web_runtime_store
+        self.__ingress_service = ingress_service
         self.__nlp_service = nlp_service
         self.__platform_service = platform_service
         self.__user_service = user_service
@@ -179,6 +182,14 @@ class DependencyInjector(IDependencyInjector):
     @web_runtime_store.setter
     def web_runtime_store(self, value: IWebRuntimeStore) -> None:
         self.__web_runtime_store = value
+
+    @property
+    def ingress_service(self) -> IMessagingIngressService:
+        return self.__ingress_service
+
+    @ingress_service.setter
+    def ingress_service(self, value: IMessagingIngressService) -> None:
+        self.__ingress_service = value
 
     @property
     def nlp_service(self) -> INLPService:

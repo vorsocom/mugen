@@ -1264,6 +1264,24 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertEqual(injector.whatsapp_client, whatsapp_client)
         self.assertEqual(injector.web_client, web_client)
 
+    def test_setters_cover_runtime_storage_and_web_runtime_store(self):
+        injector = di.injector.DependencyInjector()
+
+        media_storage_gateway = object()
+        relational_storage_gateway = object()
+        relational_runtime = object()
+        web_runtime_store = object()
+
+        injector.media_storage_gateway = media_storage_gateway
+        injector.relational_storage_gateway = relational_storage_gateway
+        injector.relational_runtime = relational_runtime
+        injector.web_runtime_store = web_runtime_store
+
+        self.assertIs(injector.media_storage_gateway, media_storage_gateway)
+        self.assertIs(injector.relational_storage_gateway, relational_storage_gateway)
+        self.assertIs(injector.relational_runtime, relational_runtime)
+        self.assertIs(injector.web_runtime_store, web_runtime_store)
+
     def test_register_get_ext_service_round_trip(self):
         """Test extension service registration and retrieval."""
         injector = di.injector.DependencyInjector()

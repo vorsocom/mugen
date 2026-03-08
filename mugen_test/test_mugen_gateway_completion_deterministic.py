@@ -23,6 +23,10 @@ class TestMugenGatewayCompletionDeterministic(unittest.IsolatedAsyncioTestCase):
         gateway = _gateway()
         await gateway.check_readiness()
 
+    async def test_aclose_is_noop(self) -> None:
+        gateway = _gateway()
+        self.assertIsNone(await gateway.aclose())
+
     async def test_get_completion_uses_vendor_override(self) -> None:
         gateway = _gateway()
         request = CompletionRequest(

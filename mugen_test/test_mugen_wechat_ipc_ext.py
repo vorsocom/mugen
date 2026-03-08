@@ -190,16 +190,105 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ipc_ext._messaging_service_provider(), "ms")
             self.assertEqual(ipc_ext._user_service_provider(), "us")
 
+    async def test_wechat_ingress_event_validates_provider_and_processes_message(self) -> None:
+        ext = _new_extension(config=_make_config())
+
+        with self.assertRaisesRegex(TypeError, "payload.event must be a dict"):
+            await ext._wechat_ingress_event(  # pylint: disable=protected-access
+                _make_request({"payload": []}, command="wechat_ingress_event")
+            )
+
+        with self.assertRaisesRegex(ValueError, "provider is required"):
+            await ext._wechat_ingress_event(  # pylint: disable=protected-access
+                _make_request(
+                    {"payload": {"MsgType": "text"}, "provider_context": {}},
+                    command="wechat_ingress_event",
+                )
+            )
+
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"runtime_profile_key": "wechat-a", "tenant_id": "tenant-a"}
+        )
+        ext._process_inbound_message = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._wechat_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "runtime_profile_key": "wechat-a",
+                    "payload": {"MsgType": "text", "FromUserName": "wechat-user"},
+                    "provider_context": {
+                        "provider": "official_account",
+                        "path_token": "wechat-path",
+                        "ingress_route": {},
+                    },
+                },
+                command="wechat_ingress_event",
+            )
+        )
+
+        ext._process_inbound_message.assert_awaited_once()
+        kwargs = ext._process_inbound_message.await_args.kwargs  # type: ignore[union-attr]
+        self.assertEqual(kwargs["provider"], "official_account")
+        self.assertTrue(kwargs["skip_dedupe"])
+
+        ext._process_inbound_message.reset_mock()
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value=None
+        )
+        await ext._wechat_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": {"MsgType": "text", "FromUserName": "wechat-user"},
+                    "provider_context": {
+                        "provider": "official_account",
+                        "path_token": "wechat-path",
+                        "ingress_route": {},
+                    },
+                },
+                command="wechat_ingress_event",
+            )
+        )
+        ext._resolve_ingress_route.assert_awaited_once()  # type: ignore[union-attr]
+
+        ext._resolve_ingress_route.reset_mock()  # type: ignore[union-attr]
+        await ext._wechat_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": {"MsgType": "text", "FromUserName": "wechat-user"},
+                    "provider_context": {
+                        "provider": "official_account",
+                        "path_token": "wechat-path",
+                        "ingress_route": {"runtime_profile_key": "wechat-a"},
+                    },
+                },
+                command="wechat_ingress_event",
+            )
+        )
+        ext._resolve_ingress_route.assert_not_awaited()  # type: ignore[union-attr]
+
     async def test_properties_and_process_command_dispatch(self) -> None:
         ext = _new_extension(config=_make_config())
 
         self.assertEqual(ext.platforms, ["wechat"])
         self.assertEqual(
             ext.ipc_commands,
-            ["wechat_official_account_event", "wechat_wecom_event"],
+            [
+                "wechat_ingress_event",
+                "wechat_official_account_event",
+                "wechat_wecom_event",
+            ],
         )
 
-        with patch.object(ext, "_wechat_event", new=AsyncMock()) as event_handler:
+        with (
+            patch.object(ext, "_wechat_ingress_event", new=AsyncMock()) as ingress_handler,
+            patch.object(ext, "_wechat_event", new=AsyncMock()) as event_handler,
+        ):
+            handled_ingress = await ext.process_ipc_command(
+                _make_request(
+                    {"provider": "official_account", "payload": _make_text_payload()},
+                    command="wechat_ingress_event",
+                )
+            )
             handled_oa = await ext.process_ipc_command(
                 _make_request(
                     {"provider": "official_account", "payload": _make_text_payload()},
@@ -216,7 +305,9 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
                 _make_request({}, command="unknown")
             )
 
+        ingress_handler.assert_awaited_once()
         self.assertEqual(event_handler.await_count, 2)
+        self.assertTrue(handled_ingress.ok)
         self.assertTrue(handled_oa.ok)
         self.assertTrue(handled_wecom.ok)
         self.assertEqual(handled_oa.response, {"response": "OK"})

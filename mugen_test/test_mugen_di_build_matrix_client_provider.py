@@ -76,6 +76,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
 
                 # New injector
                 injector = di.injector.DependencyInjector()
+                injector.ingress_service = unittest.mock.Mock()
 
                 # Attempt to build the Matrix service.
                 di._build_provider(config, injector, provider_name="matrix_client")
@@ -323,6 +324,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
 
                 # New injector
                 injector = di.injector.DependencyInjector()
+                injector.ingress_service = unittest.mock.Mock()
 
                 # Dummy subclasses
                 class DummyMatrixClientClass(IMatrixClient):
@@ -332,6 +334,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         self,
                         config,
                         ipc_service,
+                        ingress_service,
                         keyval_storage_gateway,
                         relational_storage_gateway,
                         logging_gateway,
@@ -341,6 +344,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         _ = (
                             config,
                             ipc_service,
+                            ingress_service,
                             keyval_storage_gateway,
                             relational_storage_gateway,
                             logging_gateway,

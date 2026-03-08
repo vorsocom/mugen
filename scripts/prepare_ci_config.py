@@ -318,6 +318,7 @@ def main() -> int:
     doc["mugen"]["modules"]["core"]["gateway"]["completion"] = (
         _CI_COMPLETION_GATEWAY_TOKEN
     )
+    doc["mugen"]["modules"]["core"]["service"]["ingress"] = "default"
 
     doc["quart"]["secret_key"] = args.quart_secret_key
 

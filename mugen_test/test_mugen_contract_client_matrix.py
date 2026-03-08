@@ -93,3 +93,15 @@ class TestMugenContractClientMatrix(unittest.IsolatedAsyncioTestCase):
     async def test_incomplete_port_cannot_be_instantiated(self) -> None:
         with self.assertRaises(TypeError):
             _IncompleteMatrixClientPort()
+
+    async def test_worker_owned_ingress_methods_raise_by_default(self) -> None:
+        client = _MatrixClientPort()
+
+        with self.assertRaises(NotImplementedError):
+            await client.process_ingress_event({})
+        with self.assertRaises(NotImplementedError):
+            await client.emit_ingress_processing_signal("!room:test", state="start")
+        with self.assertRaises(NotImplementedError):
+            await client.send_ingress_responses("!room:test", [])
+        with self.assertRaises(NotImplementedError):
+            await client.download_ingress_media({})

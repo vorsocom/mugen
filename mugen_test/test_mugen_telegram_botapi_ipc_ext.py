@@ -218,9 +218,21 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
         ext = _new_extension(config=_make_config())
 
         self.assertEqual(ext.platforms, ["telegram"])
-        self.assertEqual(ext.ipc_commands, ["telegram_botapi_update"])
+        self.assertEqual(
+            ext.ipc_commands,
+            ["telegram_ingress_event", "telegram_botapi_update"],
+        )
 
-        with patch.object(ext, "_telegram_botapi_update", new=AsyncMock()) as update_handler:
+        with (
+            patch.object(ext, "_telegram_ingress_event", new=AsyncMock()) as ingress_handler,
+            patch.object(ext, "_telegram_botapi_update", new=AsyncMock()) as update_handler,
+        ):
+            handled_ingress = await ext.process_ipc_command(
+                _make_request(
+                    {},
+                    command="telegram_ingress_event",
+                )
+            )
             handled = await ext.process_ipc_command(
                 _make_request(
                     {},
@@ -234,11 +246,92 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
+        ingress_handler.assert_awaited_once()
         update_handler.assert_awaited_once()
+        self.assertEqual(handled_ingress.response, {"response": "OK"})
+        self.assertTrue(handled_ingress.ok)
         self.assertEqual(handled.response, {"response": "OK"})
         self.assertTrue(handled.ok)
         self.assertFalse(unknown.ok)
         self.assertEqual(unknown.code, "not_found")
+
+    async def test_telegram_ingress_event_validates_and_dispatches_updates(self) -> None:
+        ext = _new_extension(config=_make_config())
+
+        with self.assertRaisesRegex(TypeError, "payload.event must be a dict"):
+            await ext._telegram_ingress_event(  # pylint: disable=protected-access
+                _make_request({"payload": []}, command="telegram_ingress_event")
+            )
+
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value={"runtime_profile_key": "telegram-a", "tenant_id": "tenant-a"}
+        )
+        ext._handle_message_update = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+        ext._handle_callback_query_update = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
+
+        await ext._telegram_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "runtime_profile_key": "telegram-a",
+                    "payload": {
+                        "update": {"update_id": 1},
+                        "message": {"chat": {"id": 1}, "from": {"id": 2}},
+                        "callback_query": {
+                            "id": "cb-1",
+                            "from": {"id": 3},
+                            "message": {"chat": {"id": 4}},
+                        },
+                    },
+                    "provider_context": {"path_token": "telegram-path", "ingress_route": {}},
+                },
+                command="telegram_ingress_event",
+            )
+        )
+
+        ext._handle_message_update.assert_awaited_once()
+        ext._handle_callback_query_update.assert_awaited_once()
+
+        ext._handle_message_update.reset_mock()
+        ext._handle_callback_query_update.reset_mock()
+        ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
+            return_value=None
+        )
+
+        await ext._telegram_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": {
+                        "update_id": 2,
+                        "callback_query": {
+                            "message": {},
+                        },
+                    },
+                    "provider_context": {"path_token": "telegram-path", "ingress_route": {}},
+                },
+                command="telegram_ingress_event",
+            )
+        )
+        ext._handle_message_update.assert_not_awaited()
+        ext._handle_callback_query_update.assert_awaited_once()
+
+        ext._handle_callback_query_update.reset_mock()
+        ext._resolve_ingress_route.reset_mock()  # type: ignore[union-attr]
+        await ext._telegram_ingress_event(  # pylint: disable=protected-access
+            _make_request(
+                {
+                    "payload": {
+                        "update_id": 3,
+                        "message": {"chat": {"id": 1}},
+                    },
+                    "provider_context": {
+                        "path_token": "telegram-path",
+                        "ingress_route": {"runtime_profile_key": "telegram-a"},
+                    },
+                },
+                command="telegram_ingress_event",
+            )
+        )
+        ext._resolve_ingress_route.assert_not_awaited()  # type: ignore[union-attr]
 
     async def test_text_message_routes_to_text_handler_and_registers_user(self) -> None:
         client = _make_client()

@@ -18,27 +18,4 @@ class TestMugenWeChatContrib(unittest.TestCase):
             plugin_namespace="com.vorsocomputing.mugen.wechat",
         )
 
-        table_specs = [
-            call.args[0]
-            for call in registry.register_table_spec.call_args_list
-        ]
-        table_names = {spec.table_name for spec in table_specs}
-        table_providers = {spec.table_provider for spec in table_specs}
-
-        self.assertEqual(
-            table_names,
-            {
-                "wechat_event_dedup",
-                "wechat_event_dead_letter",
-            },
-        )
-        self.assertEqual(
-            table_providers,
-            {
-                "mugen.core.plugin.wechat.model.event_dedup:"
-                "WeChatEventDedup",
-                "mugen.core.plugin.wechat.model.event_dead_letter:"
-                "WeChatEventDeadLetter",
-            },
-        )
-
+        registry.register_table_spec.assert_not_called()

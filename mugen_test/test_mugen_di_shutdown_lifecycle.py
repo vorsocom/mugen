@@ -453,6 +453,29 @@ class TestMugenDIShutdownLifecycleAsync(unittest.IsolatedAsyncioTestCase):
         self.assertIn("relational_runtime", str(ctx.exception))
         self.assertIs(injector.relational_runtime, relational_runtime)
 
+    async def test_shutdown_injector_async_clears_relational_runtime_on_success(
+        self,
+    ) -> None:
+        logger = Mock()
+        relational_runtime = object()
+        injector = SimpleNamespace(
+            config=SimpleNamespace(dict=_runtime_config_dict()),
+            logging_gateway=logger,
+            ext_services={},
+            relational_runtime=relational_runtime,
+        )
+
+        with (
+            patch("mugen.core.di._provider_specs_for_shutdown", return_value=[]),
+            patch(
+                "mugen.core.di._shutdown_provider_async",
+                new=AsyncMock(return_value=()),
+            ),
+        ):
+            await di._shutdown_injector_async(injector)  # pylint: disable=protected-access
+
+        self.assertIsNone(injector.relational_runtime)
+
     async def test_shutdown_injector_async_rejects_invalid_timeout_config(
         self,
     ) -> None:
