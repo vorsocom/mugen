@@ -40,6 +40,19 @@ valid at startup.
 Matrix account display names are also owned by
 `MessagingClientProfiles.display_name`, not root config.
 
+## Device Verification Reads
+
+- Global ACP administrators may read active runtime Matrix device verification
+  data from `/core/acp/v1/runtime/matrix/device-verification-data`.
+- Tenant owners and tenant admins may read their own tenant-owned active runtime
+  Matrix device verification data from
+  `/core/acp/v1/tenants/<tenant_id>/runtime/matrix/device-verification-data`.
+- The tenant-scoped endpoint accepts optional `client_profile_id=<uuid>`
+  filtering and fails closed when the requested runtime client profile is not
+  owned by that tenant.
+- These endpoints expose active runtime device state only; they do not read
+  durable verification material from ACP rows.
+
 ## Message Routing Contract
 
 - Ingress routing uses:

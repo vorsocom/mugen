@@ -106,3 +106,7 @@ Behavior by platform:
 Live reload still uses the `SystemFlags.reloadPlatformProfiles` ACP action, but
 the reload target is now the ACP-owned client profile catalog plus the current
 process-level config.
+
+For Matrix, device verification data is available through ACP runtime read
+endpoints, including tenant-scoped reads for tenant-owned active runtime client
+profiles.
