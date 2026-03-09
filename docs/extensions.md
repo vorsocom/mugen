@@ -253,10 +253,13 @@ than message-lifecycle extensions. The main ports live in
 - `IMemoryWriter`
 - `IContextCache`
 - `IContextTraceSink`
+- `IContextPolicyResolver`
+- `IContextStateStore`
 
 Context contributors emit typed `ContextCandidate` artifacts with provenance and
 estimated token cost. They are tenant-scoped by `ContextScope` and are composed
 through the context engine plugin’s runtime registry.
 
 See `docs/context-engine-design.md` for the runtime contract and control-plane
-shape.
+shape. For authoring, registration, control-plane mapping, and concrete runtime
+examples, see `docs/context-engine-authoring.md`.
