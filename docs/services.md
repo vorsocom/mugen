@@ -127,8 +127,9 @@ The compiled output targets the existing normalized completion contract
 (`CompletionRequest` / `CompletionMessage`) instead of provider-specific prompt
 logic.
 
-For collaborator authoring, registration, and current implementation examples,
-see `docs/context-engine-authoring.md`.
+Contract guarantee lives in `docs/context-engine-design.md`.
+Collaborator authoring and current reference-plugin details live in
+`docs/context-engine-authoring.md`.
 
 ## Context Engine Plugin
 
@@ -139,7 +140,11 @@ Runtime responsibilities:
 
 - register default contributors for persona/policy, state, recent turns,
   knowledge packs, orchestration overlays, case state, audit traces, and memory;
-- register state store, cache, memory writer, and trace sink services;
+- register renderers for the stable lane buckets;
+- register state store, commit store, cache, memory writer, and trace sink
+  services;
+- enforce single-owner runtime composition for policy resolver, state store,
+  commit store, memory writer, and cache;
 - keep all runtime records tenant-scoped and provenance-aware.
 
 ACP-managed resources:
@@ -150,8 +155,9 @@ ACP-managed resources:
 - `ContextSourceBindings`
 - `ContextTracePolicies`
 
-High-churn runtime internals remain behind service/storage layers rather than
-ACP CRUD resources.
+High-churn runtime internals stay behind service/storage layers rather than ACP
+CRUD resources. The plugin is the reference implementation for that runtime,
+not the complete service contract.
 
 ## Tenant Fallback Policy
 

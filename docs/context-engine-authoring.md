@@ -8,38 +8,53 @@ Audience: Downstream plugin authors, core maintainers
 
 This guide explains how to extend muGen's runtime context seam safely.
 
-Use it when you need to add tenant-scoped runtime context behavior through the
-core context engine instead of legacy CTX/RAG hooks.
+Use it when you need tenant-scoped runtime context behavior through the core
+context engine instead of legacy CTX/RAG hooks.
 
-For architecture and control-plane intent, see `docs/context-engine-design.md`.
-For the broader extension model, see `docs/extensions.md`.
+For hard runtime semantics, see `docs/context-engine-design.md`.
+For the decision log behind the current design, see
+`docs/context-engine-strengthening-decisions.md`.
+
+## Read This First
+
+Contract guarantee: the design doc defines the hard runtime contract.
+
+Default engine behavior: the core `DefaultContextEngine` implements that
+contract with one deterministic pipeline and one default selector.
+
+Current core plugin implementation: `mugen.core.plugin.context_engine` is the
+reference plugin. It is not the whole API surface.
+
+If you are unsure whether a behavior belongs in core or in collaborator space,
+prefer collaborator space first.
 
 ## Runtime Flow
 
-`DefaultContextEngine` runs one prepare phase and one commit phase.
-
-Prepare flow:
+Default engine behavior: prepare flow runs in this order:
 
 1. resolve `ContextPolicy`
 2. load bounded `ContextState`
 3. collect candidates from registered contributors
-4. apply guards
-5. apply rankers
-6. select within budget
-7. compile the selected bundle into `CompletionRequest.messages`
-8. emit retrieval/prefix cache entries when cache is enabled
-9. record prepare traces when tracing is enabled
+4. enforce source policy
+5. apply guards
+6. apply rankers
+7. deduplicate
+8. select within budget
+9. render selected artifacts into `CompletionRequest.messages`
+10. emit retrieval/prefix cache entries when enabled
+11. record prepare traces when enabled
 
-Commit flow:
+Default engine behavior: commit flow runs in this order:
 
-1. validate the commit token
+1. validate and acquire the issued commit token through `IContextCommitStore`
 2. save bounded state
 3. persist memory writes
 4. update working-set cache entries
-5. record commit traces
+5. finalize the commit ledger
+6. record commit traces
 
-Use the prepare phase for runtime context selection. Use the commit phase for
-post-turn persistence that depends on the final assistant-visible outcome.
+Use prepare for runtime context selection. Use commit for post-turn persistence
+that depends on the final assistant-visible outcome.
 
 ## Choose The Right Collaborator
 
@@ -51,21 +66,18 @@ completion.
 - Input: `ContextTurnRequest`, resolved `ContextPolicy`, current `ContextState`
 - Output: `list[ContextCandidate]`
 - Good fit: recent-turn replay, knowledge retrieval, ops overlays, memory recall
-- Do not use when the behavior belongs after final response generation
+- Do not use for post-turn persistence
 
 ### `IContextGuard`
 
-Use a guard when you need to remove candidates before ranking/selection.
+Use a guard when you need to veto or remove candidates before ranking and
+selection.
 
 - Input: current candidate list plus request/policy/state
-- Output: the candidate list that should continue
+- Output: `ContextGuardResult` preferred; `list[ContextCandidate]` is tolerated
+  only as a compatibility shape
 - Good fit: tenant isolation, sensitivity blocking, global-fallback safety
-- Do not use for storage or retrieval
-
-Important: the current engine records guard drops by comparing input and output
-artifact IDs. If a guard leaves a candidate in the returned list, that
-candidate continues through ranking and selection even if the guard attached a
-drop reason to it.
+- Do not use for storage, retrieval, or ranking
 
 ### `IContextRanker`
 
@@ -76,45 +88,16 @@ Use a ranker when you need to score already-collected candidates.
 - Good fit: trust/freshness heuristics, domain-specific scoring
 - Do not use to own retrieval or persistence
 
-Multiple rankers may run in sequence. Each ranker receives the output of the
-previous one.
+### `IContextArtifactRenderer`
 
-### `IMemoryWriter`
+Use a renderer when you need a selected artifact family to compile into a
+different message shape without adding a new core lane.
 
-Use a memory writer when you need post-turn long-term writeback after the final
-assistant response is known.
-
-- Input: request, prepared turn, completion result, final user responses, outcome
-- Output: `list[MemoryWrite]`
-- Good fit: episodic memory, preferences, facts, derived writeback
-- Do not use for pre-turn recall; that belongs in a contributor
-
-### `IContextCache`
-
-Use a cache when you need provider-neutral working-set or retrieval caching.
-
-- Input: namespace + tenant-safe key + payload
-- Output: cached values or invalidation counts
-- Good fit: working-set state hints, retrieval reuse, prefix fingerprints
-- Do not use as the source of truth for state or memory
-
-### `IContextTraceSink`
-
-Use a trace sink when you need prepare/commit observability.
-
-- Input: request plus prepared/commit payloads
-- Output: side-effectful trace persistence only
-- Good fit: trace rows, audit bridge writes, diagnostics
-- Do not use for primary business persistence
-
-### `IContextStateStore`
-
-Use a state store when you need bounded, scope-partitioned conversation state.
-
-- Input: one scoped request during prepare/commit
-- Output: loaded or saved `ContextState`
-- Good fit: current objective, unresolved slots, safety flags, recent-turn event log
-- Do not use for long-term memory or evidence retrieval
+- Input: selected candidates for one `render_class`
+- Output: `list[CompletionMessage]`
+- Good fit: structured system payloads, recent-turn replay, future MCP/skill
+  presentation adapters
+- Do not use for retrieval or selection
 
 ### `IContextPolicyResolver`
 
@@ -123,131 +106,256 @@ one effective `ContextPolicy`.
 
 - Input: `ContextTurnRequest`
 - Output: resolved `ContextPolicy`
-- Good fit: profile selection, budget/redaction/retention policy, contributor allow/deny
+- Good fit: profile selection, budget/redaction/retention policy, contributor
+  allow/deny, source rules, trace capture flags
 - Do not use to fetch per-turn evidence
 
-## Authoring Contract
+### `IContextStateStore`
 
-### Common Expectations
+Use a state store when you need bounded, scope-partitioned conversation state.
 
-- Keep all runtime behavior tenant-scoped through `ContextScope`.
-- Treat `ContextScope.tenant_id` as mandatory.
-- Keep collaborator `name` values stable over time. They are used by bindings,
-  traces, and operator-facing reasoning.
-- Prefer explicit dependency injection through constructor args, with runtime DI
-  fallback only where needed.
+- Input: one scoped request during prepare/commit
+- Output: loaded or saved `ContextState`
+- Good fit: current objective, unresolved slots, safety flags, routing state
+- Do not use for long-term memory or recent-turn replay history
 
-### Contributor Contract
+### `IContextCommitStore`
 
-Contributors emit `ContextCandidate` values that wrap `ContextArtifact`.
+Use a commit store when you need replay-safe commit-token issuance and
+validation.
 
-Each artifact should have:
+- Input: prepare fingerprint plus scoped commit lifecycle operations
+- Output: opaque tokens and `ContextCommitCheck`
+- Good fit: issued tokens, expiry, replay-safe duplicate delivery, failure
+  states
+- Do not hide these semantics inside the state store
 
-- a stable `artifact_id`
-- one of the currently compiled lanes:
-  - `system_persona_policy`
-  - `bounded_control_state`
-  - `operational_overlay`
-  - `evidence`
-  - `recent_turn`
-- a stable `kind`
-- `ContextProvenance` with contributor and source metadata
-- a realistic `estimated_token_cost`
+### `IMemoryWriter`
 
-Compilation behavior today:
+Use a memory writer when you need post-turn long-term writeback after the final
+assistant response is known.
 
-- `system_persona_policy`, `bounded_control_state`, `operational_overlay`, and
-  `evidence` compile into structured `system` messages
-- `recent_turn` compiles into normal completion messages using its `role` and
-  `content`
-- unknown lanes sort after known lanes and are not compiled into completion
-  messages by the current engine
+- Input: request, prepared turn, completion result, final user responses,
+  outcome
+- Output: `list[MemoryWrite]`
+- Good fit: episodic memory, preferences, facts, derived writeback
+- Do not use for pre-turn recall
 
-Contributor filtering today:
+### `IContextCache`
 
-- contributors with blank names are skipped
-- `ContextPolicy.contributor_allow` and `contributor_deny` are enforced by the
-  engine during collection
-- `ContextPolicy.source_allow` and `source_deny` are resolved into policy, but
-  the current `DefaultContextEngine` does not enforce them directly
+Use a cache when you need provider-neutral working-set or retrieval caching.
 
-Deduplication today uses `(artifact_id, provenance.source_kind)`. If more than
-one candidate shares that pair, the higher-score candidate survives and the
-other is dropped as a duplicate.
+- Input: namespace + tenant-safe key + payload
+- Output: cached values or invalidation counts
+- Good fit: working-set state hints, retrieval reuse, prefix fingerprints
+- Do not use as authoritative state
 
-### Guard Contract
+### `IContextTraceSink`
 
-- Return only the candidates that should continue.
-- Preserve candidate identity when passing candidates through.
-- Treat guards as fail-closed for tenant and sensitivity boundaries.
+Use a trace sink when you need prepare/commit observability.
 
-The engine records guard drops under the guard's `name` in the dropped bundle
-trace.
+- Input: request plus prepared/commit payloads
+- Output: trace persistence side effects only
+- Good fit: trace rows, audit bridge writes, diagnostics
+- Do not use for primary business persistence
 
-### Ranker Contract
+## Contributor Contract
 
-- Set or update `ContextCandidate.score`.
-- Keep scoring logic pure relative to the already-collected candidates.
-- Assume selection still happens later under lane priority and budget limits.
+Contract guarantee: contributors emit `ContextCandidate` values that wrap
+`ContextArtifact`.
 
-The current engine sorts by lane priority first, then score, then candidate
-priority. Rankers influence ordering within that selection model; they do not
-replace it.
+Each artifact should declare:
 
-### Memory Writer Contract
+- stable `artifact_id`
+- one of the five core lane buckets
+- stable `kind`
+- realistic `estimated_token_cost`
+- `ContextProvenance`
+- `render_class` when the built-in lane mapping is not enough
 
-- Write only during `commit_turn`.
-- Derive writes from the completed turn outcome, not from speculative prepare
-  data alone.
-- Populate `MemoryWrite.provenance`, `scope_partition`, and TTL/tag metadata
-  deliberately.
+### Lane vs Render Class
 
-### Cache Contract
+Contract guarantee: lane is a budgeting/ordering primitive.
 
-- Keep keys tenant-safe regardless of backing store.
-- Support the namespaces the engine uses today:
-  - `working_set`
-  - `retrieval`
-  - `prefix_fingerprint`
+Contract guarantee: `render_class` is the presentation hook.
 
-The built-in relational cache enforces keys in the form
-`tenant:<uuid>:<rest-of-key>`. Custom caches should preserve the same tenant
-partitioning guarantee even if their internal key format differs.
+Guidance:
 
-### Trace Sink Contract
+- use an existing lane whenever the new source family fits the existing budget
+  semantics;
+- add a new renderer before you propose a new lane;
+- change core lanes only when the new source family truly needs new selection
+  semantics, not just different formatting.
 
-- Record prepare/commit observability only when tracing is enabled.
-- Preserve selected/dropped artifact provenance and commit outcomes.
-- Keep trace side effects isolated from primary runtime correctness.
+### Source Identity
 
-### State Store Contract
+Contract guarantee: source policy and dedupe work best when contributors emit
+`ContextSourceRef` explicitly.
 
-- Partition state by scope, not just tenant.
-- Keep bounded state small and operationally useful.
-- Save state during commit, after the final turn outcome is known.
+Populate:
 
-### Policy Resolver Contract
+- `kind`
+- `source_key` when operators need a stable allow/deny handle
+- `source_id` when the backing record has its own stable ID
+- `canonical_locator` when there is a natural external or cross-system locator
+- `segment_id` for sub-document or sub-record fragments
+- `locale` / `category` when policy should be able to target them
 
-- Resolve one effective policy per turn.
-- Merge profile, policy row, contributor bindings, source bindings, and trace
-  policy into one `ContextPolicy`.
-- Keep defaults tenant-safe, especially under global fallback.
+Do not rely on ad hoc metadata keys when a field already exists on
+`ContextSourceRef`.
+
+### Dedupe Expectations
+
+Default engine behavior:
+
+- ranking runs before dedupe;
+- dedupe groups by lane + render class + canonical source identity;
+- if canonical source identity is absent, the engine falls back to content
+  fingerprinting.
+
+Implication for authors: if you want cross-contributor dedupe to be stable, emit
+stable source identity.
+
+## Guard Contract
+
+Contract guarantee: guards are for hard vetoes, not annotations.
+
+Preferred behavior:
+
+- return `ContextGuardResult`
+- keep passed candidates untouched
+- emit dropped candidates with explicit `selection_reason` and `reason_detail`
+
+Compatibility behavior:
+
+- returning `list[ContextCandidate]` still works
+- candidates omitted from the returned list are treated as dropped
+
+Do not rely on leaving a blocked candidate in the returned list with a drop
+reason attached. That shape is no longer the primary contract.
+
+## Ranker Contract
+
+- set or update `ContextCandidate.score`
+- keep scoring logic pure relative to the already-collected candidates
+- assume selection still happens later under lane priority and budget limits
+
+Current default engine behavior: selection sorts by lane priority first, then
+score, then candidate priority. Rankers influence ordering inside that model;
+they do not replace it.
+
+## Renderer Contract
+
+- declare stable `render_class`
+- validate that the received candidates match the renderer's expectations
+- produce only normalized `CompletionMessage` values
+- keep provider-specific prompting out of the renderer contract
+
+Current core plugin implementation:
+
+- structured lane renderers emit one `system` message per lane bucket
+- recent-turn renderer emits replay messages from stored `role` and `content`
+
+## State vs History
+
+Contract guarantee:
+
+- `ContextState` is compact operational control state
+- recent-turn replay remains event/history material
+
+Keep in bounded state:
+
+- objective
+- entities
+- constraints
+- unresolved slots
+- commitments
+- safety flags
+- routing
+- explicit compact summaries
+
+Keep in history/event material:
+
+- user transcript
+- assistant transcript
+- replayable turn content
+- evidence bodies and raw retrieval payloads
+
+Do not automatically promote assistant text, raw transcript, or retrieval
+evidence into durable state.
+
+## Budget Contract
+
+Contract guarantee: token estimation is a collaborator obligation.
+
+Set `estimated_token_cost` realistically enough that:
+
+- hard budgets stay deterministic
+- lane reservations behave predictably
+- trace explanations remain credible to operators
+
+Default engine behavior supports:
+
+- hard totals
+- soft totals
+- per-lane minima/maxima
+- per-lane token reservations
+- spillover control
+- `budget_hints` that tighten but do not widen policy ceilings
+
+Current core plugin implementation leaves `adaptive_trimming="none"` by
+default.
+
+## Commit Token Contract
+
+Contract guarantee:
+
+- prepare issues one opaque token
+- commit validates scope binding and prepared fingerprint
+- successful duplicates may replay stored results
+- expiry and failed/in-flight states fail closed
+
+Implications for authors:
+
+- do not mint commit tokens yourself
+- do not treat the token as a deterministic checksum
+- do not write state or memory outside the commit path if you expect
+  replay-safe semantics
+
+## Trace Contract
+
+- respect `trace_enabled`
+- respect prepare vs commit capture flags
+- respect selected vs dropped item capture flags
+- keep trace persistence non-authoritative
+
+Current core plugin implementation filters selected/dropped payloads before
+persistent trace writes.
 
 ## Registration Path
 
 Runtime collaborators are registered through an FW extension. The built-in
 `core.fw.context_engine` extension is the reference shape.
 
-Current registry cardinality:
+Registry cardinality:
 
 - many contributors
 - many guards
 - many rankers
+- many renderers
 - many trace sinks
 - one policy resolver
 - one state store
+- one commit store
 - one memory writer
 - one cache
+
+Single-owner guidance:
+
+- treat policy resolver, state store, commit store, memory writer, and cache as
+  one engine-visible owner each
+- if you need multiple internal implementations, compose them behind one owner
+  instead of registering silent competitors
 
 Minimal registration pattern:
 
@@ -269,36 +377,44 @@ class MyContextFWExtension(IFWExtension):
         registry.register_contributor(MyContributor(...))
         registry.register_guard(MyGuard(...))
         registry.register_ranker(MyRanker(...))
+        registry.register_renderer(MyRenderer(...), owner="my_plugin")
 ```
 
-If you need to replace the policy resolver, state store, memory writer, or
-cache, set that single-slot collaborator intentionally and document the
-ownership boundary. Do not silently register competing implementations.
+If you replace a single-owner collaborator, pass an explicit owner and document
+that ownership boundary.
 
-## Control-Plane Mapping
+## ACP Inputs vs Current Plugin Mapping
 
-The context engine plugin resolves ACP-managed resources into runtime behavior.
+### ACP Inputs The Engine Contract Understands
+
+- profile selection inputs
+- budget data
+- redaction data
+- retention data
+- contributor allow/deny
+- source rules
+- trace capture flags
+
+### Current Core Plugin Mapping
 
 - `ContextProfiles`
   - select assistant persona by `platform`, `channel_key`, and optional
     `client_profile_key`
 - `ContextPolicies`
-  - provide explicit budget, redaction, retention, contributor allow/deny,
-    source allow/deny, trace, and cache settings
+  - provide budget, redaction, retention, contributor allow/deny, source
+    allow/deny, trace, and cache settings
 - `ContextContributorBindings`
   - contribute scope-aware contributor allow rules
 - `ContextSourceBindings`
-  - contribute scope-aware source-kind allow rules into resolved policy
+  - contribute scope-aware source allow rules with optional `source_key`,
+    `locale`, and `category`
 - `ContextTracePolicies`
-  - influence trace capture enablement and trace metadata
+  - influence prepare/commit capture and selected/dropped trace detail
 
-Current implementation detail:
+Current core plugin implementation detail: `ContextSourceBindings` map to allow
+rules. Deny rules still come from `ContextPolicies`.
 
-- contributor allow/deny is enforced during collection
-- source allow/deny is resolved into `ContextPolicy` and metadata, but it is not
-  applied by `DefaultContextEngine` unless a collaborator consults it itself
-
-## Practical Examples
+## Reference Implementations
 
 Reference implementations in core:
 
@@ -314,50 +430,41 @@ Reference implementations in core:
   `ChannelOrchestrationContributor`, `OpsCaseContributor`, `AuditContributor`
 - memory recall and writeback:
   `MemoryContributor`, `DefaultMemoryWriter`
-- default guard/ranker/cache:
-  `DefaultContextGuard`, `DefaultContextRanker`, `RelationalContextCache`
-- default state/trace services:
-  `RelationalContextStateStore`, `RelationalContextTraceSink`
+- default renderer, guard, ranker, cache, commit, state, and trace services:
+  `StructuredLaneRenderer`, `RecentTurnMessageRenderer`,
+  `DefaultContextGuard`, `DefaultContextRanker`, `RelationalContextCache`,
+  `RelationalContextCommitStore`, `RelationalContextStateStore`,
+  `RelationalContextTraceSink`
 
 Useful test coverage:
 
 - `mugen_test/test_mugen_service_context_engine.py`
-  - prepare/commit orchestration
-  - selection, dedupe, budget drops, trace recording
 - `mugen_test/test_mugen_context_engine_plugin_runtime.py`
-  - policy resolver behavior
-  - built-in contributor examples
-  - cache, trace sink, memory writer, guard, and ranker behavior
 - `mugen_test/test_mugen_context_engine_fw_ext.py`
-  - runtime registry wiring
 
 ## Guardrails
 
-- Keep all artifacts and persisted runtime records tenant-safe.
-- Use stable contributor/source identifiers so traces and ACP bindings remain
-  meaningful.
-- Choose an existing compiled lane unless you are also changing the engine's
-  message compiler.
-- Set `estimated_token_cost` realistically; selection budgets depend on it.
-- Do not rely on ranking alone to enforce safety. Use guards for hard vetoes.
-- Do not rely on cache entries for authoritative state.
-- Under `GLOBAL_TENANT_ID`, keep long-term memory partitioned by sender or
-  conversation unless you are deliberately changing the safety model.
-- Preserve provenance on selected evidence so downstream operators can explain
-  why context was included.
-- Expect dropped candidates to show up in bundle traces with explicit reasons
-  such as duplicate, guard, or budget.
+- keep all artifacts and persisted runtime records tenant-safe
+- use stable contributor and source identifiers so policy and trace behavior
+  stays explainable
+- choose an existing lane unless you truly need new budget semantics
+- choose a renderer before you propose a new lane
+- set `estimated_token_cost` realistically
+- use guards for hard safety boundaries
+- do not rely on cache entries for authoritative state
+- under `GLOBAL_TENANT_ID`, keep long-term memory partitioned by sender or
+  conversation unless you are deliberately changing the safety model
 
 ## When To Change Core Instead
 
 Change only collaborators when you are adding domain-specific retrieval,
 overlay, ranking, safety, tracing, or writeback behavior.
 
-Change the core engine itself only when you need to alter:
+Change the core engine only when you need to alter:
 
-- lane compilation semantics
+- source-policy enforcement semantics
+- lane bucket semantics
+- renderer dispatch semantics
 - selection order/budget behavior
-- commit-token semantics
-- registry ownership model
-- first-class enforcement of policy fields that the current engine only resolves
-
+- commit-token lifecycle semantics
+- registry ownership semantics

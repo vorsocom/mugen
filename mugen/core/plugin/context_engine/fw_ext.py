@@ -25,6 +25,7 @@ from mugen.core.plugin.context_engine.service import (
     AuditContributor,
     ChannelOrchestrationContributor,
     ContextCacheRecordService,
+    ContextCommitLedgerService,
     ContextComponentRegistry,
     ContextContributorBindingService,
     ContextEventLogService,
@@ -43,20 +44,26 @@ from mugen.core.plugin.context_engine.service import (
     MemoryContributor,
     OpsCaseContributor,
     PersonaPolicyContributor,
+    RecentTurnMessageRenderer,
     RecentTurnContributor,
     RelationalContextCache,
+    RelationalContextCommitStore,
     RelationalContextStateStore,
     RelationalContextTraceSink,
     StateContributor,
+    StructuredLaneRenderer,
 )
 from mugen.core.plugin.context_engine.model import (
     ContextCacheRecord,
+    ContextCommitLedger,
     ContextEventLog,
     ContextMemoryRecord,
     ContextStateSnapshot,
     ContextTrace,
 )
-from mugen.core.plugin.knowledge_pack.service.knowledge_scope import KnowledgeScopeService
+from mugen.core.plugin.knowledge_pack.service.knowledge_scope import (
+    KnowledgeScopeService,
+)
 from mugen.core.plugin.ops_case.service.case import CaseService
 from mugen.core.plugin.ops_case.service.case_event import CaseEventService
 
@@ -69,6 +76,7 @@ _STATE_TABLE = "context_engine_context_state_snapshot"
 _EVENT_TABLE = "context_engine_context_event_log"
 _MEMORY_TABLE = "context_engine_context_memory_record"
 _CACHE_TABLE = "context_engine_context_cache_record"
+_COMMIT_LEDGER_TABLE = "context_engine_context_commit_ledger"
 _TRACE_TABLE = "context_engine_context_trace"
 _KNOWLEDGE_SCOPE_TABLE = "knowledge_pack_knowledge_scope"
 _CONVERSATION_STATE_TABLE = "channel_orchestration_conversation_state"
@@ -119,10 +127,16 @@ class ContextEngineFWExtension(IFWExtension):  # pylint: disable=too-few-public-
             rsg=self._rsg,
         )
 
-        snapshot_service = ContextStateSnapshotService(table=_STATE_TABLE, rsg=self._rsg)
+        snapshot_service = ContextStateSnapshotService(
+            table=_STATE_TABLE, rsg=self._rsg
+        )
         event_log_service = ContextEventLogService(table=_EVENT_TABLE, rsg=self._rsg)
         memory_service = ContextMemoryRecordService(table=_MEMORY_TABLE, rsg=self._rsg)
         cache_service = ContextCacheRecordService(table=_CACHE_TABLE, rsg=self._rsg)
+        commit_ledger_service = ContextCommitLedgerService(
+            table=_COMMIT_LEDGER_TABLE,
+            rsg=self._rsg,
+        )
         trace_service = ContextTraceService(table=_TRACE_TABLE, rsg=self._rsg)
 
         knowledge_scope_service = KnowledgeScopeService(
@@ -142,6 +156,7 @@ class ContextEngineFWExtension(IFWExtension):  # pylint: disable=too-few-public-
         )
 
         registry = ContextComponentRegistry()
+        owner = "context_engine.plugin"
         registry.set_policy_resolver(
             DefaultContextPolicyResolver(
                 profile_service=profile_service,
@@ -149,21 +164,65 @@ class ContextEngineFWExtension(IFWExtension):  # pylint: disable=too-few-public-
                 contributor_binding_service=contributor_binding_service,
                 source_binding_service=source_binding_service,
                 trace_policy_service=trace_policy_service,
-            )
+            ),
+            owner=owner,
         )
         registry.set_state_store(
             RelationalContextStateStore(
                 snapshot_service=snapshot_service,
                 event_log_service=event_log_service,
-            )
+            ),
+            owner=owner,
         )
-        registry.set_memory_writer(DefaultMemoryWriter(memory_service=memory_service))
-        registry.set_cache(RelationalContextCache(cache_service=cache_service))
+        registry.set_memory_writer(
+            DefaultMemoryWriter(memory_service=memory_service),
+            owner=owner,
+        )
+        registry.set_cache(
+            RelationalContextCache(cache_service=cache_service),
+            owner=owner,
+        )
+        registry.set_commit_store(
+            RelationalContextCommitStore(ledger_service=commit_ledger_service),
+            owner=owner,
+        )
         registry.register_trace_sink(
             RelationalContextTraceSink(
                 trace_service=trace_service,
                 audit_trace_service=audit_trace_service,
             )
+        )
+        registry.register_renderer(
+            StructuredLaneRenderer(
+                render_class="system_persona_policy_items",
+                lane="system_persona_policy",
+            ),
+            owner=owner,
+        )
+        registry.register_renderer(
+            StructuredLaneRenderer(
+                render_class="bounded_control_state_items",
+                lane="bounded_control_state",
+            ),
+            owner=owner,
+        )
+        registry.register_renderer(
+            StructuredLaneRenderer(
+                render_class="operational_overlay_items",
+                lane="operational_overlay",
+            ),
+            owner=owner,
+        )
+        registry.register_renderer(
+            StructuredLaneRenderer(
+                render_class="evidence_items",
+                lane="evidence",
+            ),
+            owner=owner,
+        )
+        registry.register_renderer(
+            RecentTurnMessageRenderer(),
+            owner=owner,
         )
 
         registry.register_guard(DefaultContextGuard())
@@ -213,6 +272,7 @@ class ContextEngineFWExtension(IFWExtension):  # pylint: disable=too-few-public-
                     _EVENT_TABLE: ContextEventLog.__table__,
                     _MEMORY_TABLE: ContextMemoryRecord.__table__,
                     _CACHE_TABLE: ContextCacheRecord.__table__,
+                    _COMMIT_LEDGER_TABLE: ContextCommitLedger.__table__,
                     _TRACE_TABLE: ContextTrace.__table__,
                 }
             )

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 __all__ = [
+    "IContextArtifactRenderer",
     "IContextCache",
+    "IContextCommitStore",
     "IContextContributor",
     "IContextEngine",
     "IContextGuard",
@@ -17,14 +19,15 @@ __all__ = [
 from abc import ABC, abstractmethod
 from typing import Any
 
-from mugen.core.contract.context.artifact import ContextCandidate
+from mugen.core.contract.context.artifact import ContextCandidate, ContextGuardResult
 from mugen.core.contract.context.bundle import PreparedContextTurn
+from mugen.core.contract.context.commit import ContextCommitCheck
 from mugen.core.contract.context.memory import MemoryWrite
 from mugen.core.contract.context.policy import ContextPolicy
 from mugen.core.contract.context.result import ContextCommitResult, TurnOutcome
 from mugen.core.contract.context.state import ContextState
 from mugen.core.contract.context.turn import ContextTurnRequest
-from mugen.core.contract.gateway.completion import CompletionResponse
+from mugen.core.contract.gateway.completion import CompletionMessage, CompletionResponse
 
 
 class IContextEngine(ABC):
@@ -81,7 +84,7 @@ class IContextGuard(ABC):
         *,
         policy: ContextPolicy,
         state: ContextState | None,
-    ) -> list[ContextCandidate]:
+    ) -> list[ContextCandidate] | ContextGuardResult:
         """Apply guard decisions to candidate artifacts."""
 
 
@@ -103,6 +106,25 @@ class IContextRanker(ABC):
         state: ContextState | None,
     ) -> list[ContextCandidate]:
         """Return ranked candidates with updated score metadata."""
+
+
+class IContextArtifactRenderer(ABC):
+    """Renderer for one render_class of selected context artifacts."""
+
+    @property
+    @abstractmethod
+    def render_class(self) -> str:
+        """Stable render-class identifier used by the compiler."""
+
+    @abstractmethod
+    async def render(
+        self,
+        request: ContextTurnRequest,
+        candidates: list[ContextCandidate],
+        *,
+        policy: ContextPolicy,
+    ) -> list[CompletionMessage]:
+        """Render selected candidates into normalized completion messages."""
 
 
 class IMemoryWriter(ABC):
@@ -203,3 +225,49 @@ class IContextStateStore(ABC):
     @abstractmethod
     async def clear(self, request: ContextTurnRequest) -> None:
         """Reset the bounded state for a scoped conversation."""
+
+
+class IContextCommitStore(ABC):
+    """Store that issues, validates, and finalizes commit tokens."""
+
+    @abstractmethod
+    async def issue_token(
+        self,
+        *,
+        request: ContextTurnRequest,
+        prepared_fingerprint: str,
+        ttl_seconds: int | None = None,
+    ) -> str:
+        """Issue one opaque commit token for a prepared turn."""
+
+    @abstractmethod
+    async def begin_commit(
+        self,
+        *,
+        request: ContextTurnRequest,
+        prepared: PreparedContextTurn,
+        prepared_fingerprint: str,
+    ) -> ContextCommitCheck:
+        """Validate a prepared token and acquire the right to commit once."""
+
+    @abstractmethod
+    async def complete_commit(
+        self,
+        *,
+        request: ContextTurnRequest,
+        prepared: PreparedContextTurn,
+        prepared_fingerprint: str,
+        result: ContextCommitResult,
+    ) -> None:
+        """Finalize a commit token after successful persistence."""
+
+    @abstractmethod
+    async def fail_commit(
+        self,
+        *,
+        request: ContextTurnRequest,
+        prepared: PreparedContextTurn,
+        prepared_fingerprint: str,
+        error_message: str,
+    ) -> None:
+        """Mark a prepared token as failed after commit persistence aborts."""

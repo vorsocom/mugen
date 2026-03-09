@@ -24,6 +24,7 @@ from mugen.core.contract.context import (
     ContextPolicy,
     ContextProvenance,
     ContextState,
+    ContextSourceRef,
     ContextTurnRequest,
     IContextContributor,
 )
@@ -39,7 +40,9 @@ from mugen.core.plugin.context_engine.service.runtime import (
     ContextEventLogService,
     ContextMemoryRecordService,
 )
-from mugen.core.plugin.knowledge_pack.service.knowledge_scope import KnowledgeScopeService
+from mugen.core.plugin.knowledge_pack.service.knowledge_scope import (
+    KnowledgeScopeService,
+)
 from mugen.core.plugin.ops_case.service.case import CaseService
 from mugen.core.plugin.ops_case.service.case_event import CaseEventService
 from mugen.core.utility.context_runtime import scope_key
@@ -86,6 +89,89 @@ def _memory_partition_matches(partition: dict[str, Any] | None, scope) -> bool:
     return True
 
 
+def _memory_source_key(row: Any) -> str | None:
+    memory_key = getattr(row, "memory_key", None)
+    if isinstance(memory_key, str) and memory_key.strip() != "":
+        return memory_key.strip()
+    row_id = getattr(row, "id", None)
+    if row_id is None:
+        return None
+    return str(row_id)
+
+
+def _normalize_revision_source_key(revision: Any) -> str | None:
+    for attribute in (
+        "scope_key",
+        "knowledge_scope_key",
+        "knowledge_key",
+        "source_key",
+    ):
+        value = getattr(revision, attribute, None)
+        if isinstance(value, str) and value.strip() != "":
+            return value.strip()
+    revision_id = getattr(revision, "id", None)
+    if revision_id is None:
+        return None
+    return str(revision_id)
+
+
+def _source_ref(
+    *,
+    kind: str,
+    source_key: str | None = None,
+    source_id: str | None = None,
+    canonical_locator: str | None = None,
+    segment_id: str | None = None,
+    locale: str | None = None,
+    category: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> ContextSourceRef:
+    return ContextSourceRef(
+        kind=kind,
+        source_key=source_key,
+        source_id=source_id,
+        canonical_locator=canonical_locator,
+        segment_id=segment_id,
+        locale=locale,
+        category=category,
+        metadata=dict(metadata or {}),
+    )
+
+
+def _provenance(
+    *,
+    contributor: str,
+    source_kind: str,
+    tenant_id: str,
+    trace_id: str | None,
+    source_key: str | None = None,
+    source_id: str | None = None,
+    canonical_locator: str | None = None,
+    segment_id: str | None = None,
+    locale: str | None = None,
+    category: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> ContextProvenance:
+    return ContextProvenance(
+        contributor=contributor,
+        source_kind=source_kind,
+        source_id=source_id,
+        source=_source_ref(
+            kind=source_kind,
+            source_key=source_key,
+            source_id=source_id,
+            canonical_locator=canonical_locator,
+            segment_id=segment_id,
+            locale=locale,
+            category=category,
+            metadata=metadata,
+        ),
+        tenant_id=tenant_id,
+        trace_id=trace_id,
+        metadata=dict(metadata or {}),
+    )
+
+
 class PersonaPolicyContributor(IContextContributor):
     """Compile assistant persona plus resolved policy into the first system lane."""
 
@@ -120,12 +206,16 @@ class PersonaPolicyContributor(IContextContributor):
             artifact_id=f"persona-policy:{policy.policy_key or 'default'}",
             lane="system_persona_policy",
             kind="persona_policy",
+            render_class="system_persona_policy_items",
             title="Persona and policy",
             summary="Resolved assistant persona and context policy.",
             content=content,
-            provenance=ContextProvenance(
+            provenance=_provenance(
                 contributor=self.name,
                 source_kind="context_policy",
+                source_key=policy.policy_key or "default",
+                source_id=policy.policy_key or "default",
+                canonical_locator=f"context-policy:{policy.policy_key or 'default'}",
                 tenant_id=request.scope.tenant_id,
                 trace_id=request.trace_id,
             ),
@@ -133,7 +223,9 @@ class PersonaPolicyContributor(IContextContributor):
             freshness=1.0,
             estimated_token_cost=_estimate_token_cost(content),
         )
-        return [ContextCandidate(artifact=artifact, contributor=self.name, priority=100)]
+        return [
+            ContextCandidate(artifact=artifact, contributor=self.name, priority=100)
+        ]
 
 
 class StateContributor(IContextContributor):
@@ -156,6 +248,7 @@ class StateContributor(IContextContributor):
             artifact_id="bounded-state",
             lane="bounded_control_state",
             kind="state_snapshot",
+            render_class="bounded_control_state_items",
             title="Bounded control state",
             summary=state.summary,
             content={
@@ -168,9 +261,11 @@ class StateContributor(IContextContributor):
                 "routing": state.routing,
                 "summary": state.summary,
             },
-            provenance=ContextProvenance(
+            provenance=_provenance(
                 contributor=self.name,
                 source_kind="state_snapshot",
+                source_key=scope_key(request.scope),
+                canonical_locator=f"state-snapshot:{scope_key(request.scope)}",
                 tenant_id=request.scope.tenant_id,
                 trace_id=request.trace_id,
             ),
@@ -201,7 +296,9 @@ class RecentTurnContributor(IContextContributor):
         scope_key_value = scope_key(request.scope)
         rows = await self._event_log_service.list(
             filter_groups=[
-                FilterGroup(where={"tenant_id": tenant_id, "scope_key": scope_key_value}),
+                FilterGroup(
+                    where={"tenant_id": tenant_id, "scope_key": scope_key_value}
+                ),
             ],
             order_by=[OrderBy("occurred_at", descending=True)],
             limit=policy.budget.max_recent_messages,
@@ -212,13 +309,21 @@ class RecentTurnContributor(IContextContributor):
                 artifact_id=f"recent-turn:{row.id}",
                 lane="recent_turn",
                 kind="recent_turn",
+                render_class="recent_turn_messages",
                 title=None,
                 summary=None,
                 content={"role": row.role, "content": row.content},
-                provenance=ContextProvenance(
+                provenance=_provenance(
                     contributor=self.name,
                     source_kind="event_log",
+                    source_key=scope_key_value,
                     source_id=None if row.id is None else str(row.id),
+                    canonical_locator=(
+                        None
+                        if row.id is None
+                        else f"context-event-log:{scope_key_value}:{row.id}"
+                    ),
+                    segment_id=None if row.id is None else str(row.id),
                     tenant_id=request.scope.tenant_id,
                     trace_id=row.trace_id,
                 ),
@@ -282,13 +387,25 @@ class KnowledgePackContributor(IContextContributor):
                 artifact_id=f"knowledge:{revision.id}",
                 lane="evidence",
                 kind="knowledge_span",
+                render_class="evidence_items",
                 title=f"Knowledge revision {revision.revision_number}",
                 summary=excerpt[:160],
                 content=content,
-                provenance=ContextProvenance(
+                provenance=_provenance(
                     contributor=self.name,
                     source_kind="knowledge_pack_revision",
+                    source_key=(_normalize_revision_source_key(revision)),
                     source_id=None if revision.id is None else str(revision.id),
+                    canonical_locator=(
+                        None
+                        if revision.id is None
+                        else f"knowledge-pack-revision:{revision.id}"
+                    ),
+                    segment_id=(
+                        None if revision.id is None else str(revision.revision_number)
+                    ),
+                    locale=revision.locale,
+                    category=revision.category,
                     tenant_id=request.scope.tenant_id,
                     trace_id=request.trace_id,
                 ),
@@ -344,7 +461,9 @@ class ChannelOrchestrationContributor(IContextContributor):
         if request.trace_id:
             work_items = await self._work_item_service.list(
                 filter_groups=[
-                    FilterGroup(where={"tenant_id": tenant_id, "trace_id": request.trace_id}),
+                    FilterGroup(
+                        where={"tenant_id": tenant_id, "trace_id": request.trace_id}
+                    ),
                 ],
                 order_by=[OrderBy("updated_at", descending=True)],
                 limit=1,
@@ -392,12 +511,15 @@ class ChannelOrchestrationContributor(IContextContributor):
             artifact_id=f"channel-orchestration:{sender_key}",
             lane="operational_overlay",
             kind="channel_overlay",
+            render_class="operational_overlay_items",
             title="Operational channel overlay",
             summary="Conversation routing and work-item state.",
             content=content,
-            provenance=ContextProvenance(
+            provenance=_provenance(
                 contributor=self.name,
                 source_kind="channel_orchestration",
+                source_key=sender_key,
+                canonical_locator=f"channel-orchestration:{sender_key}",
                 tenant_id=request.scope.tenant_id,
                 trace_id=request.trace_id,
             ),
@@ -431,15 +553,21 @@ class OpsCaseContributor(IContextContributor):
     ) -> list[ContextCandidate]:
         _ = policy
         _ = state
-        case_id = request.scope.case_id or request.ingress_metadata.get("linked_case_id")
+        case_id = request.scope.case_id or request.ingress_metadata.get(
+            "linked_case_id"
+        )
         if not isinstance(case_id, str) or case_id.strip() == "":
             return []
         tenant_id = _parse_tenant_uuid(request.scope)
-        case = await self._case_service.get({"tenant_id": tenant_id, "id": uuid.UUID(case_id)})
+        case = await self._case_service.get(
+            {"tenant_id": tenant_id, "id": uuid.UUID(case_id)}
+        )
         if case is None:
             return []
         events = await self._case_event_service.list(
-            filter_groups=[FilterGroup(where={"tenant_id": tenant_id, "case_id": case.id})],
+            filter_groups=[
+                FilterGroup(where={"tenant_id": tenant_id, "case_id": case.id})
+            ],
             order_by=[OrderBy("occurred_at", descending=True)],
             limit=5,
         )
@@ -450,7 +578,9 @@ class OpsCaseContributor(IContextContributor):
             "priority": case.priority,
             "severity": case.severity,
             "queue_name": case.queue_name,
-            "owner_user_id": None if case.owner_user_id is None else str(case.owner_user_id),
+            "owner_user_id": (
+                None if case.owner_user_id is None else str(case.owner_user_id)
+            ),
             "resolution_summary": case.resolution_summary,
             "recent_events": [
                 {
@@ -466,13 +596,17 @@ class OpsCaseContributor(IContextContributor):
             artifact_id=f"case:{case.id}",
             lane="operational_overlay",
             kind="case_overlay",
+            render_class="operational_overlay_items",
             title=case.title,
             summary=case.resolution_summary or case.status,
             content=content,
-            provenance=ContextProvenance(
+            provenance=_provenance(
                 contributor=self.name,
                 source_kind="ops_case",
+                source_key=case.case_number or str(case.id),
                 source_id=str(case.id),
+                canonical_locator=f"ops-case:{case.id}",
+                category=case.queue_name,
                 tenant_id=request.scope.tenant_id,
                 trace_id=request.trace_id,
             ),
@@ -505,7 +639,9 @@ class AuditContributor(IContextContributor):
         tenant_id = _parse_tenant_uuid(request.scope)
         rows = await self._audit_trace_service.list(
             filter_groups=[
-                FilterGroup(where={"tenant_id": tenant_id, "trace_id": request.trace_id}),
+                FilterGroup(
+                    where={"tenant_id": tenant_id, "trace_id": request.trace_id}
+                ),
             ],
             order_by=[OrderBy("occurred_at", descending=True)],
             limit=10,
@@ -527,13 +663,16 @@ class AuditContributor(IContextContributor):
             artifact_id=f"audit:{request.trace_id}",
             lane="operational_overlay",
             kind="audit_trace",
+            render_class="operational_overlay_items",
             title="Audit trace",
             summary="Recent business trace events.",
             content=content,
-            provenance=ContextProvenance(
+            provenance=_provenance(
                 contributor=self.name,
                 source_kind="audit_biz_trace",
+                source_key=request.trace_id,
                 source_id=request.trace_id,
+                canonical_locator=f"audit-trace:{request.trace_id}",
                 tenant_id=request.scope.tenant_id,
                 trace_id=request.trace_id,
             ),
@@ -565,7 +704,9 @@ class MemoryContributor(IContextContributor):
             return []
         tenant_id = _parse_tenant_uuid(request.scope)
         rows = await self._memory_service.list(
-            filter_groups=[FilterGroup(where={"tenant_id": tenant_id, "is_deleted": False})],
+            filter_groups=[
+                FilterGroup(where={"tenant_id": tenant_id, "is_deleted": False})
+            ],
             order_by=[OrderBy("updated_at", descending=True)],
             limit=50,
         )
@@ -588,16 +729,23 @@ class MemoryContributor(IContextContributor):
                 artifact_id=f"memory:{row.id}",
                 lane="evidence",
                 kind="memory",
+                render_class="evidence_items",
                 title=row.subject,
-                summary=None if row.memory_type is None else f"Memory: {row.memory_type}",
+                summary=(
+                    None if row.memory_type is None else f"Memory: {row.memory_type}"
+                ),
                 content=content,
-                provenance=ContextProvenance(
+                provenance=_provenance(
                     contributor=self.name,
                     source_kind="memory_record",
+                    source_key=_memory_source_key(row),
                     source_id=None if row.id is None else str(row.id),
+                    canonical_locator=(
+                        None if row.id is None else f"context-memory:{row.id}"
+                    ),
+                    metadata=dict(row.provenance or {}),
                     tenant_id=request.scope.tenant_id,
                     trace_id=request.trace_id,
-                    metadata=dict(row.provenance or {}),
                 ),
                 trust=float(row.confidence or 0.8),
                 freshness=0.8,

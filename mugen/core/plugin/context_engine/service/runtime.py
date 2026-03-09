@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "ContextCacheRecordService",
+    "ContextCommitLedgerService",
     "ContextEventLogService",
     "ContextMemoryRecordService",
     "ContextStateSnapshotService",
@@ -12,9 +13,12 @@ __all__ = [
     "DefaultContextPolicyResolver",
     "DefaultContextRanker",
     "DefaultMemoryWriter",
+    "RecentTurnMessageRenderer",
     "RelationalContextCache",
+    "RelationalContextCommitStore",
     "RelationalContextStateStore",
     "RelationalContextTraceSink",
+    "StructuredLaneRenderer",
 ]
 
 from dataclasses import asdict
@@ -26,14 +30,24 @@ from mugen.core.constants import GLOBAL_TENANT_ID
 from mugen.core.contract.context import (
     ContextBudget,
     ContextCandidate,
+    ContextCommitCheck,
     ContextCommitResult,
+    ContextCommitState,
+    ContextGuardResult,
+    ContextLaneBudget,
     ContextPolicy,
+    ContextProvenance,
     ContextRedactionPolicy,
     ContextRetentionPolicy,
     ContextSelectionReason,
     ContextState,
+    ContextSourcePolicyEffect,
+    ContextSourceRef,
+    ContextSourceRule,
     ContextTurnRequest,
+    IContextArtifactRenderer,
     IContextCache,
+    IContextCommitStore,
     IContextGuard,
     IContextPolicyResolver,
     IContextRanker,
@@ -45,7 +59,7 @@ from mugen.core.contract.context import (
     PreparedContextTurn,
     TurnOutcome,
 )
-from mugen.core.contract.gateway.completion import CompletionResponse
+from mugen.core.contract.gateway.completion import CompletionMessage, CompletionResponse
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
 from mugen.core.contract.gateway.storage.rdbms.types import FilterGroup, OrderBy
@@ -54,6 +68,7 @@ from mugen.core.plugin.audit.service.audit_biz_trace_event import (
 )
 from mugen.core.plugin.context_engine.domain import (
     ContextCacheRecordDE,
+    ContextCommitLedgerDE,
     ContextContributorBindingDE,
     ContextEventLogDE,
     ContextMemoryRecordDE,
@@ -166,6 +181,20 @@ class ContextCacheRecordService(  # pylint: disable=too-few-public-methods
         super().__init__(de_type=ContextCacheRecordDE, table=table, rsg=rsg, **kwargs)
 
 
+class ContextCommitLedgerService(  # pylint: disable=too-few-public-methods
+    IRelationalService[ContextCommitLedgerDE]
+):
+    """CRUD service for context commit-ledger rows."""
+
+    def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs) -> None:
+        super().__init__(
+            de_type=ContextCommitLedgerDE,
+            table=table,
+            rsg=rsg,
+            **kwargs,
+        )
+
+
 class ContextTraceService(  # pylint: disable=too-few-public-methods
     IRelationalService[ContextTraceDE]
 ):
@@ -198,13 +227,17 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
         client_profile_key = _request_client_profile_key(request)
 
         profiles = await self._profile_service.list(
-            filter_groups=[FilterGroup(where={"tenant_id": tenant_id, "is_active": True})],
+            filter_groups=[
+                FilterGroup(where={"tenant_id": tenant_id, "is_active": True})
+            ],
             limit=200,
         )
         profile = self._select_profile(request.scope, client_profile_key, profiles)
 
         policies = await self._policy_service.list(
-            filter_groups=[FilterGroup(where={"tenant_id": tenant_id, "is_active": True})],
+            filter_groups=[
+                FilterGroup(where={"tenant_id": tenant_id, "is_active": True})
+            ],
             limit=200,
         )
         policy_row = self._select_policy(profile, policies)
@@ -222,7 +255,9 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             limit=500,
         )
         trace_policies = await self._trace_policy_service.list(
-            filter_groups=[FilterGroup(where={"tenant_id": tenant_id, "is_active": True})],
+            filter_groups=[
+                FilterGroup(where={"tenant_id": tenant_id, "is_active": True})
+            ],
             limit=50,
         )
 
@@ -238,9 +273,35 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             if self._source_binding_matches_scope(binding, request.scope)
             and binding.source_kind is not None
         )
+        source_rules = tuple(
+            self._source_rule_from_binding(binding)
+            for binding in source_bindings
+            if self._source_binding_matches_scope(binding, request.scope)
+            and binding.source_kind is not None
+        )
 
         default_policy = self._default_policy(scope=request.scope)
         trace_policy = trace_policies[0] if trace_policies else None
+        trace_capture_prepare = (
+            default_policy.trace_capture_prepare
+            if trace_policy is None
+            else bool(trace_policy.capture_prepare)
+        )
+        trace_capture_commit = (
+            default_policy.trace_capture_commit
+            if trace_policy is None
+            else bool(trace_policy.capture_commit)
+        )
+        trace_capture_selected = (
+            default_policy.trace_capture_selected
+            if trace_policy is None
+            else bool(trace_policy.capture_selected_items)
+        )
+        trace_capture_dropped = (
+            default_policy.trace_capture_dropped
+            if trace_policy is None
+            else bool(trace_policy.capture_dropped_items)
+        )
         if policy_row is None:
             return ContextPolicy(
                 profile_key=None if profile is None else profile.name,
@@ -248,24 +309,35 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
                 budget=default_policy.budget,
                 redaction=default_policy.redaction,
                 retention=default_policy.retention,
-                contributor_allow=contributor_allow,
-                source_allow=source_allow,
-                trace_enabled=(
-                    default_policy.trace_enabled
-                    if trace_policy is None
-                    else bool(trace_policy.capture_prepare or trace_policy.capture_commit)
-                ),
+                contributor_allow=self._dedupe_texts(contributor_allow),
+                source_allow=self._dedupe_texts(source_allow),
+                source_rules=source_rules,
+                trace_enabled=bool(trace_capture_prepare or trace_capture_commit),
+                trace_capture_prepare=trace_capture_prepare,
+                trace_capture_commit=trace_capture_commit,
+                trace_capture_selected=trace_capture_selected,
+                trace_capture_dropped=trace_capture_dropped,
                 cache_enabled=default_policy.cache_enabled,
                 metadata={
                     "profile_name": None if profile is None else profile.name,
-                    "persona": None if profile is None else getattr(profile, "persona", None),
-                    "trace_policy_name": None if trace_policy is None else trace_policy.name,
+                    "persona": (
+                        None if profile is None else getattr(profile, "persona", None)
+                    ),
+                    "trace_policy_name": (
+                        None if trace_policy is None else trace_policy.name
+                    ),
+                    "source_bindings": [
+                        binding.source_key for binding in source_bindings
+                    ],
                 },
             )
 
         budget = self._budget_from_row(policy_row, default_policy.budget)
         redaction = self._redaction_from_row(policy_row, default_policy.redaction)
         retention = self._retention_from_row(policy_row, default_policy.retention)
+        resolved_trace_enabled = bool(policy_row.trace_enabled) and bool(
+            trace_capture_prepare or trace_capture_commit
+        )
         return ContextPolicy(
             profile_key=None if profile is None else profile.name,
             policy_key=policy_row.policy_key,
@@ -273,17 +345,34 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             redaction=redaction,
             retention=retention,
             contributor_allow=(
-                tuple(policy_row.contributor_allow or ()) or contributor_allow
+                self._dedupe_texts(tuple(policy_row.contributor_allow or ()))
+                or self._dedupe_texts(contributor_allow)
             ),
             contributor_deny=tuple(policy_row.contributor_deny or ()),
-            source_allow=tuple(policy_row.source_allow or ()) or source_allow,
+            source_allow=(
+                self._dedupe_texts(tuple(policy_row.source_allow or ()))
+                or self._dedupe_texts(source_allow)
+            ),
             source_deny=tuple(policy_row.source_deny or ()),
-            trace_enabled=bool(policy_row.trace_enabled),
+            source_rules=self._merge_source_rules(
+                binding_rules=source_rules,
+                allow_kinds=tuple(policy_row.source_allow or ()),
+                deny_kinds=tuple(policy_row.source_deny or ()),
+            ),
+            trace_enabled=resolved_trace_enabled,
+            trace_capture_prepare=trace_capture_prepare,
+            trace_capture_commit=trace_capture_commit,
+            trace_capture_selected=trace_capture_selected,
+            trace_capture_dropped=trace_capture_dropped,
             cache_enabled=bool(policy_row.cache_enabled),
             metadata={
                 "profile_name": None if profile is None else profile.name,
-                "persona": None if profile is None else getattr(profile, "persona", None),
-                "trace_policy_name": None if trace_policy is None else trace_policy.name,
+                "persona": (
+                    None if profile is None else getattr(profile, "persona", None)
+                ),
+                "trace_policy_name": (
+                    None if trace_policy is None else trace_policy.name
+                ),
                 "trace_capture_selected": (
                     None
                     if trace_policy is None
@@ -309,7 +398,8 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             for profile in profiles
             if getattr(profile, "platform", None) in (None, scope.platform)
             and getattr(profile, "channel_key", None) in (None, scope.channel_id)
-            and getattr(profile, "client_profile_key", None) in (None, client_profile_key)
+            and getattr(profile, "client_profile_key", None)
+            in (None, client_profile_key)
         ]
         if not matches:
             return None
@@ -319,7 +409,8 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
                 0 if getattr(profile, "channel_key", None) == scope.channel_id else 1,
                 (
                     0
-                    if getattr(profile, "client_profile_key", None) == client_profile_key
+                    if getattr(profile, "client_profile_key", None)
+                    == client_profile_key
                     else 1
                 ),
                 0 if getattr(profile, "is_default", None) else 1,
@@ -362,12 +453,18 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
     ) -> ContextBudget:
         payload = dict(row.budget_json or {})
         return ContextBudget(
-            max_total_tokens=int(payload.get("max_total_tokens", default_budget.max_total_tokens)),
+            max_total_tokens=int(
+                payload.get("max_total_tokens", default_budget.max_total_tokens)
+            ),
             max_selected_artifacts=int(
                 payload.get(
                     "max_selected_artifacts",
                     default_budget.max_selected_artifacts,
                 )
+            ),
+            soft_max_total_tokens=payload.get(
+                "soft_max_total_tokens",
+                default_budget.soft_max_total_tokens,
             ),
             max_recent_turns=int(
                 payload.get("max_recent_turns", default_budget.max_recent_turns)
@@ -380,6 +477,24 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             ),
             max_prefix_tokens=int(
                 payload.get("max_prefix_tokens", default_budget.max_prefix_tokens)
+            ),
+            adaptive_trimming=str(
+                payload.get("adaptive_trimming", default_budget.adaptive_trimming)
+            ),
+            lane_budgets=tuple(
+                ContextLaneBudget(
+                    lane=str(item.get("lane", "")).strip(),
+                    min_items=int(item.get("min_items", 0)),
+                    max_items=(
+                        None
+                        if item.get("max_items") in (None, "")
+                        else int(item["max_items"])
+                    ),
+                    reserved_tokens=int(item.get("reserved_tokens", 0)),
+                    allow_spillover=bool(item.get("allow_spillover", True)),
+                )
+                for item in payload.get("lane_budgets", ())
+                if isinstance(item, dict) and str(item.get("lane", "")).strip() != ""
             ),
         )
 
@@ -438,6 +553,10 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
                 "cache_ttl_seconds",
                 default_policy.cache_ttl_seconds,
             ),
+            commit_token_ttl_seconds=payload.get(
+                "commit_token_ttl_seconds",
+                default_policy.commit_token_ttl_seconds,
+            ),
         )
 
     @staticmethod
@@ -448,6 +567,7 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             cache_ttl_seconds=300,
             trace_ttl_seconds=86400,
             memory_ttl_seconds=None,
+            commit_token_ttl_seconds=900,
         )
         if scope.tenant_id == str(GLOBAL_TENANT_ID):
             retention = ContextRetentionPolicy(
@@ -456,6 +576,7 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
                 cache_ttl_seconds=300,
                 trace_ttl_seconds=86400,
                 memory_ttl_seconds=None,
+                commit_token_ttl_seconds=900,
             )
         return ContextPolicy(
             budget=ContextBudget(),
@@ -464,9 +585,499 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             ),
             retention=retention,
             trace_enabled=True,
+            trace_capture_prepare=True,
+            trace_capture_commit=True,
+            trace_capture_selected=True,
+            trace_capture_dropped=True,
             cache_enabled=True,
             metadata={"default_policy": True},
         )
+
+    @staticmethod
+    def _source_rule_from_binding(binding: ContextSourceBindingDE) -> ContextSourceRule:
+        return ContextSourceRule(
+            effect=ContextSourcePolicyEffect.ALLOW,
+            kind=getattr(binding, "source_kind", None),
+            source_key=getattr(binding, "source_key", None),
+            locale=getattr(binding, "locale", None),
+            category=getattr(binding, "category", None),
+            metadata=dict(getattr(binding, "attributes", None) or {}),
+        )
+
+    @staticmethod
+    def _merge_source_rules(
+        *,
+        binding_rules: tuple[ContextSourceRule, ...],
+        allow_kinds: tuple[str, ...],
+        deny_kinds: tuple[str, ...],
+    ) -> tuple[ContextSourceRule, ...]:
+        merged = list(binding_rules)
+        merged.extend(
+            ContextSourceRule(
+                effect=ContextSourcePolicyEffect.ALLOW,
+                kind=source_kind,
+            )
+            for source_kind in allow_kinds
+        )
+        merged.extend(
+            ContextSourceRule(
+                effect=ContextSourcePolicyEffect.DENY,
+                kind=source_kind,
+            )
+            for source_kind in deny_kinds
+        )
+        return tuple(merged)
+
+    @staticmethod
+    def _dedupe_texts(values: tuple[str | None, ...]) -> tuple[str, ...]:
+        deduped: list[str] = []
+        for value in values:
+            normalized = _normalize_optional_text(value)
+            if normalized is None or normalized in deduped:
+                continue
+            deduped.append(normalized)
+        return tuple(deduped)
+
+
+def _serialize_source_ref(source: ContextSourceRef | None) -> dict[str, Any] | None:
+    if source is None:
+        return None
+    return {
+        "kind": source.kind,
+        "source_key": source.source_key,
+        "source_id": source.source_id,
+        "canonical_locator": source.canonical_locator,
+        "segment_id": source.segment_id,
+        "locale": source.locale,
+        "category": source.category,
+        "metadata": dict(source.metadata),
+    }
+
+
+def _deserialize_source_ref(payload: object) -> ContextSourceRef | None:
+    if not isinstance(payload, dict):
+        return None
+    source_kind = payload.get("kind")
+    if not isinstance(source_kind, str) or source_kind.strip() == "":
+        return None
+    return ContextSourceRef(
+        kind=source_kind,
+        source_key=payload.get("source_key"),
+        source_id=payload.get("source_id"),
+        canonical_locator=payload.get("canonical_locator"),
+        segment_id=payload.get("segment_id"),
+        locale=payload.get("locale"),
+        category=payload.get("category"),
+        metadata=payload.get("metadata"),
+    )
+
+
+def _serialize_provenance(provenance: ContextProvenance) -> dict[str, Any]:
+    return {
+        "contributor": provenance.contributor,
+        "source_kind": provenance.source_kind,
+        "source_id": provenance.source_id,
+        "source": _serialize_source_ref(provenance.source),
+        "title": provenance.title,
+        "uri": provenance.uri,
+        "tenant_id": provenance.tenant_id,
+        "trace_id": provenance.trace_id,
+        "metadata": dict(provenance.metadata),
+    }
+
+
+def _deserialize_provenance(payload: object) -> ContextProvenance:
+    data = dict(payload or {})
+    return ContextProvenance(
+        contributor=str(data.get("contributor") or "context_engine"),
+        source_kind=str(data.get("source_kind") or "turn_commit"),
+        source_id=_normalize_optional_text(data.get("source_id")),
+        source=_deserialize_source_ref(data.get("source")),
+        title=_normalize_optional_text(data.get("title")),
+        uri=_normalize_optional_text(data.get("uri")),
+        tenant_id=_normalize_optional_text(data.get("tenant_id")),
+        trace_id=_normalize_optional_text(data.get("trace_id")),
+        metadata=dict(data.get("metadata") or {}),
+    )
+
+
+def _serialize_memory_write(write: MemoryWrite) -> dict[str, Any]:
+    return {
+        "write_type": write.write_type.value,
+        "content": write.content,
+        "provenance": _serialize_provenance(write.provenance),
+        "scope_partition": dict(write.scope_partition),
+        "key": write.key,
+        "subject": write.subject,
+        "confidence": write.confidence,
+        "ttl_seconds": write.ttl_seconds,
+        "tags": list(write.tags),
+        "metadata": dict(write.metadata),
+    }
+
+
+def _deserialize_memory_write(payload: object) -> MemoryWrite:
+    data = dict(payload or {})
+    write_type = data.get("write_type")
+    if not isinstance(write_type, str):
+        raise RuntimeError("Stored context commit result is missing write_type.")
+    return MemoryWrite(
+        write_type=MemoryWriteType(write_type),
+        content=data.get("content"),
+        provenance=_deserialize_provenance(data.get("provenance")),
+        scope_partition=dict(data.get("scope_partition") or {}),
+        key=_normalize_optional_text(data.get("key")),
+        subject=_normalize_optional_text(data.get("subject")),
+        confidence=data.get("confidence"),
+        ttl_seconds=data.get("ttl_seconds"),
+        tags=tuple(data.get("tags") or ()),
+        metadata=dict(data.get("metadata") or {}),
+    )
+
+
+def _serialize_commit_result(result: ContextCommitResult) -> dict[str, Any]:
+    return {
+        "commit_token": result.commit_token,
+        "state_revision": result.state_revision,
+        "memory_writes": [
+            _serialize_memory_write(write) for write in result.memory_writes
+        ],
+        "cache_updates": dict(result.cache_updates),
+        "warnings": list(result.warnings),
+    }
+
+
+def _deserialize_commit_result(payload: object) -> ContextCommitResult:
+    data = dict(payload or {})
+    commit_token = data.get("commit_token")
+    if not isinstance(commit_token, str) or commit_token.strip() == "":
+        raise RuntimeError("Stored context commit result is missing commit_token.")
+    return ContextCommitResult(
+        commit_token=commit_token,
+        state_revision=data.get("state_revision"),
+        memory_writes=tuple(
+            _deserialize_memory_write(write) for write in data.get("memory_writes", ())
+        ),
+        cache_updates=dict(data.get("cache_updates") or {}),
+        warnings=tuple(data.get("warnings") or ()),
+    )
+
+
+def _trace_payload_for_policy(
+    payload: dict[str, Any],
+    *,
+    policy: ContextPolicy,
+) -> tuple[dict[str, Any], list[dict[str, Any]] | None, list[dict[str, Any]] | None]:
+    normalized_payload = dict(payload)
+    selected_items: list[dict[str, Any]] | None = None
+    dropped_items: list[dict[str, Any]] | None = None
+
+    selected_payload = normalized_payload.get("selected")
+    if policy.trace_capture_selected is True and isinstance(selected_payload, list):
+        selected_items = [
+            dict(item) for item in selected_payload if isinstance(item, dict)
+        ]
+    else:
+        normalized_payload.pop("selected", None)
+
+    dropped_payload = normalized_payload.get("dropped")
+    if policy.trace_capture_dropped is True and isinstance(dropped_payload, list):
+        dropped_items = [
+            dict(item) for item in dropped_payload if isinstance(item, dict)
+        ]
+    else:
+        normalized_payload.pop("dropped", None)
+
+    return normalized_payload, selected_items, dropped_items
+
+
+class StructuredLaneRenderer(IContextArtifactRenderer):
+    """Render one structured lane into a single system message."""
+
+    def __init__(self, *, render_class: str, lane: str) -> None:
+        self._render_class = render_class
+        self._lane = lane
+
+    @property
+    def render_class(self) -> str:
+        return self._render_class
+
+    async def render(
+        self,
+        request: ContextTurnRequest,
+        candidates: list[ContextCandidate],
+        *,
+        policy: ContextPolicy,
+    ) -> list[CompletionMessage]:
+        _ = request
+        _ = policy
+        if not candidates:
+            return []
+        items: list[dict[str, Any]] = []
+        for candidate in candidates:
+            if candidate.artifact.lane != self._lane:
+                raise RuntimeError(
+                    "StructuredLaneRenderer received unexpected lane "
+                    f"{candidate.artifact.lane!r} "
+                    f"for render_class={self._render_class!r}."
+                )
+            items.append(self._artifact_payload(candidate))
+        return [
+            CompletionMessage(
+                role="system",
+                content={
+                    "context_lane": self._lane,
+                    "render_class": self._render_class,
+                    "items": items,
+                },
+            )
+        ]
+
+    @staticmethod
+    def _artifact_payload(candidate: ContextCandidate) -> dict[str, Any]:
+        artifact = candidate.artifact
+        return {
+            "artifact_id": artifact.artifact_id,
+            "kind": artifact.kind,
+            "title": artifact.title,
+            "summary": artifact.summary,
+            "content": artifact.content,
+            "provenance": _serialize_provenance(artifact.provenance),
+            "trust": artifact.trust,
+            "freshness": artifact.freshness,
+            "estimated_token_cost": artifact.estimated_token_cost,
+            "metadata": dict(artifact.metadata),
+        }
+
+
+class RecentTurnMessageRenderer(IContextArtifactRenderer):
+    """Render recent-turn artifacts into replayable completion messages."""
+
+    render_class = "recent_turn_messages"
+
+    async def render(
+        self,
+        request: ContextTurnRequest,
+        candidates: list[ContextCandidate],
+        *,
+        policy: ContextPolicy,
+    ) -> list[CompletionMessage]:
+        _ = request
+        _ = policy
+        messages: list[CompletionMessage] = []
+        for candidate in candidates:
+            payload = candidate.artifact.content
+            if not isinstance(payload, dict):
+                raise RuntimeError("Recent-turn artifacts must have dict content.")
+            role = payload.get("role")
+            if not isinstance(role, str) or role.strip() == "":
+                raise RuntimeError("Recent-turn artifacts must declare a string role.")
+            content = payload.get("content")
+            if content is not None and not isinstance(content, (str, dict, list)):
+                raise RuntimeError(
+                    "Recent-turn artifact content must be string, object, "
+                    "list, or null."
+                )
+            messages.append(CompletionMessage(role=role, content=content))
+        return messages
+
+
+class RelationalContextCommitStore(IContextCommitStore):
+    """Relational commit-token ledger with replay-safe duplicate handling."""
+
+    def __init__(self, *, ledger_service: ContextCommitLedgerService) -> None:
+        self._ledger_service = ledger_service
+
+    async def issue_token(
+        self,
+        *,
+        request: ContextTurnRequest,
+        prepared_fingerprint: str,
+        ttl_seconds: int | None = None,
+    ) -> str:
+        commit_token = f"ctxcmt_{uuid.uuid4().hex}"
+        await self._ledger_service.create(
+            {
+                "tenant_id": _parse_tenant_uuid(request.scope.tenant_id),
+                "scope_key": scope_key(request.scope),
+                "commit_token": commit_token,
+                "prepared_fingerprint": prepared_fingerprint,
+                "commit_state": ContextCommitState.PREPARED.value,
+                "expires_at": self._expires_at(ttl_seconds),
+                "last_error": None,
+                "result_json": None,
+            }
+        )
+        return commit_token
+
+    async def begin_commit(
+        self,
+        *,
+        request: ContextTurnRequest,
+        prepared: PreparedContextTurn,
+        prepared_fingerprint: str,
+    ) -> ContextCommitCheck:
+        row = await self._get_valid_row(
+            request=request,
+            prepared=prepared,
+            prepared_fingerprint=prepared_fingerprint,
+            allow_terminal_replay=True,
+        )
+        if row.commit_state == ContextCommitState.COMMITTED.value:
+            if row.result_json is None:
+                raise RuntimeError(
+                    "Invalid context commit token: committed result missing."
+                )
+            return ContextCommitCheck(
+                state=ContextCommitState.COMMITTED,
+                replay_result=_deserialize_commit_result(row.result_json),
+            )
+        if row.commit_state == ContextCommitState.COMMITTING.value:
+            raise RuntimeError(
+                "Invalid context commit token: commit already in progress."
+            )
+        if row.commit_state == ContextCommitState.FAILED.value:
+            raise RuntimeError("Invalid context commit token: previous commit failed.")
+
+        updated = await self._update_row(
+            row=row,
+            changes={
+                "commit_state": ContextCommitState.COMMITTING.value,
+                "last_error": None,
+            },
+        )
+        if updated is None:
+            raise RuntimeError(
+                "Invalid context commit token: commit transition failed."
+            )
+        return ContextCommitCheck(state=ContextCommitState.COMMITTING)
+
+    async def complete_commit(
+        self,
+        *,
+        request: ContextTurnRequest,
+        prepared: PreparedContextTurn,
+        prepared_fingerprint: str,
+        result: ContextCommitResult,
+    ) -> None:
+        row = await self._get_valid_row(
+            request=request,
+            prepared=prepared,
+            prepared_fingerprint=prepared_fingerprint,
+            allow_terminal_replay=False,
+        )
+        serialized_result = _serialize_commit_result(result)
+        if row.commit_state == ContextCommitState.COMMITTED.value:
+            if row.result_json == serialized_result:
+                return
+            raise RuntimeError("Invalid context commit token: already committed.")
+        if row.commit_state != ContextCommitState.COMMITTING.value:
+            raise RuntimeError("Invalid context commit token: commit not in progress.")
+        updated = await self._update_row(
+            row=row,
+            changes={
+                "commit_state": ContextCommitState.COMMITTED.value,
+                "last_error": None,
+                "result_json": serialized_result,
+            },
+        )
+        if updated is None:
+            raise RuntimeError("Invalid context commit token: commit finalize failed.")
+
+    async def fail_commit(
+        self,
+        *,
+        request: ContextTurnRequest,
+        prepared: PreparedContextTurn,
+        prepared_fingerprint: str,
+        error_message: str,
+    ) -> None:
+        row = await self._get_valid_row(
+            request=request,
+            prepared=prepared,
+            prepared_fingerprint=prepared_fingerprint,
+            allow_terminal_replay=True,
+            raise_on_missing=False,
+        )
+        if row is None or row.commit_state == ContextCommitState.COMMITTED.value:
+            return
+        await self._update_row(
+            row=row,
+            changes={
+                "commit_state": ContextCommitState.FAILED.value,
+                "last_error": error_message[:1024],
+            },
+        )
+
+    async def _get_valid_row(
+        self,
+        *,
+        request: ContextTurnRequest,
+        prepared: PreparedContextTurn,
+        prepared_fingerprint: str,
+        allow_terminal_replay: bool,
+        raise_on_missing: bool = True,
+    ) -> ContextCommitLedgerDE | None:
+        tenant_id = _parse_tenant_uuid(request.scope.tenant_id)
+        row = await self._ledger_service.get(
+            {"tenant_id": tenant_id, "commit_token": prepared.commit_token}
+        )
+        if row is None:
+            if raise_on_missing:
+                raise RuntimeError("Invalid context commit token.")
+            return None
+        expected_scope_key = scope_key(request.scope)
+        if _normalize_optional_text(row.scope_key) != expected_scope_key:
+            raise RuntimeError("Invalid context commit token: scope mismatch.")
+        if (
+            prepared.state_handle is not None
+            and prepared.state_handle != expected_scope_key
+        ):
+            raise RuntimeError("Invalid context commit token: prepared state mismatch.")
+        if row.prepared_fingerprint != prepared_fingerprint:
+            raise RuntimeError("Invalid context commit token: prepared mismatch.")
+        if row.expires_at is not None and row.expires_at <= _utc_now():
+            if row.commit_state != ContextCommitState.COMMITTED.value:
+                await self._update_row(
+                    row=row,
+                    changes={
+                        "commit_state": ContextCommitState.FAILED.value,
+                        "last_error": "expired",
+                    },
+                )
+                raise RuntimeError("Invalid context commit token: expired.")
+            if not allow_terminal_replay:
+                raise RuntimeError("Invalid context commit token: expired.")
+        return row
+
+    async def _update_row(
+        self,
+        *,
+        row: ContextCommitLedgerDE,
+        changes: dict[str, Any],
+    ) -> ContextCommitLedgerDE | None:
+        tenant_id = getattr(row, "tenant_id", None)
+        if row.id is None or not isinstance(tenant_id, uuid.UUID):
+            return None
+        row_version = getattr(row, "row_version", None)
+        if hasattr(self._ledger_service, "update_with_row_version") and isinstance(
+            row_version, int
+        ):
+            return await self._ledger_service.update_with_row_version(
+                {"tenant_id": tenant_id, "id": row.id},
+                expected_row_version=row_version,
+                changes=changes,
+            )
+        return await self._ledger_service.update(
+            {"tenant_id": tenant_id, "id": row.id},
+            changes,
+        )
+
+    @staticmethod
+    def _expires_at(ttl_seconds: int | None) -> datetime | None:
+        if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
+            return None
+        return _utc_now().replace(microsecond=0) + timedelta(seconds=ttl_seconds)
 
 
 class RelationalContextStateStore(IContextStateStore):
@@ -542,7 +1153,7 @@ class RelationalContextStateStore(IContextStateStore):
                 "workflow_id": request.scope.workflow_id,
                 "tenant_resolution": request.ingress_metadata.get("tenant_resolution"),
             },
-            summary=assistant_response,
+            summary=None if existing is None else existing.summary,
             revision=next_revision,
             metadata={
                 "message_id": request.message_id,
@@ -593,9 +1204,14 @@ class RelationalContextStateStore(IContextStateStore):
         await self._snapshot_service.delete(
             {"tenant_id": tenant_id, "scope_key": scope_key_value}
         )
-        await self._event_log_service._rsg.delete_many(  # pylint: disable=protected-access
+        # The base service does not expose a bulk-delete helper.
+        # pylint: disable=protected-access
+        await self._event_log_service._rsg.delete_many(
             self._event_log_service.table,
-            {"tenant_id": tenant_id, "scope_key": scope_key_value},
+            {
+                "tenant_id": tenant_id,
+                "scope_key": scope_key_value,
+            },
         )
 
     async def _append_turn_events(
@@ -704,7 +1320,9 @@ class RelationalContextCache(IContextCache):
         )
         expires_at = None
         if isinstance(ttl_seconds, int) and ttl_seconds > 0:
-            expires_at = _utc_now().replace(microsecond=0) + timedelta(seconds=ttl_seconds)
+            expires_at = _utc_now().replace(microsecond=0) + timedelta(
+                seconds=ttl_seconds
+            )
         payload = {
             "tenant_id": tenant_id,
             "namespace": namespace,
@@ -764,14 +1382,19 @@ class RelationalContextTraceSink(IContextTraceSink):
         request: ContextTurnRequest,
         prepared: PreparedContextTurn,
     ) -> None:
-        if not prepared.bundle.policy.trace_enabled:
+        policy = prepared.bundle.policy
+        if not policy.trace_enabled:
             return
+        payload, selected_items, dropped_items = _trace_payload_for_policy(
+            dict(prepared.trace),
+            policy=policy,
+        )
         await self._persist_trace(
             request=request,
             stage="prepare",
-            payload=prepared.trace,
-            selected_items=prepared.trace.get("selected", []),
-            dropped_items=prepared.trace.get("dropped", []),
+            payload=payload,
+            selected_items=selected_items,
+            dropped_items=dropped_items,
         )
 
     async def record_commit(
@@ -784,26 +1407,28 @@ class RelationalContextTraceSink(IContextTraceSink):
         outcome: TurnOutcome,
         result: ContextCommitResult,
     ) -> None:
-        if not prepared.bundle.policy.trace_enabled:
+        policy = prepared.bundle.policy
+        if not policy.trace_enabled:
             return
         payload = {
             "completion_model": None if completion is None else completion.model,
-            "completion_stop_reason": None if completion is None else completion.stop_reason,
+            "completion_stop_reason": (
+                None if completion is None else completion.stop_reason
+            ),
             "final_user_responses": final_user_responses,
             "outcome": outcome.value,
-            "commit_result": {
-                "commit_token": result.commit_token,
-                "state_revision": result.state_revision,
-                "memory_writes": [asdict(write) for write in result.memory_writes],
-                "cache_updates": result.cache_updates,
-            },
+            "commit_result": _serialize_commit_result(result),
         }
+        _, selected_items, dropped_items = _trace_payload_for_policy(
+            dict(prepared.trace),
+            policy=policy,
+        )
         await self._persist_trace(
             request=request,
             stage="commit",
             payload=payload,
-            selected_items=prepared.trace.get("selected", []),
-            dropped_items=prepared.trace.get("dropped", []),
+            selected_items=selected_items,
+            dropped_items=dropped_items,
         )
 
     async def _persist_trace(
@@ -812,8 +1437,8 @@ class RelationalContextTraceSink(IContextTraceSink):
         request: ContextTurnRequest,
         stage: str,
         payload: dict[str, Any],
-        selected_items: list[dict[str, Any]],
-        dropped_items: list[dict[str, Any]],
+        selected_items: list[dict[str, Any]] | None,
+        dropped_items: list[dict[str, Any]] | None,
     ) -> None:
         tenant_id = _parse_tenant_uuid(request.scope.tenant_id)
         trace_id = request.trace_id or request.message_id or str(uuid.uuid4())
@@ -907,9 +1532,11 @@ class DefaultMemoryWriter(IMemoryWriter):
         prepared: PreparedContextTurn,
         assistant_response: str | None,
     ) -> list[MemoryWrite]:
-        provenance = prepared.bundle.selected_candidates[0].artifact.provenance if (
-            prepared.bundle.selected_candidates
-        ) else None
+        provenance = (
+            prepared.bundle.selected_candidates[0].artifact.provenance
+            if (prepared.bundle.selected_candidates)
+            else None
+        )
         if provenance is None:
             from mugen.core.contract.context import ContextProvenance
 
@@ -978,14 +1605,19 @@ class DefaultContextGuard(IContextGuard):
         *,
         policy: ContextPolicy,
         state: ContextState | None,
-    ) -> list[ContextCandidate]:
+    ) -> ContextGuardResult:
         _ = state
+        allowed = set(policy.redaction.allowed_sensitivity_labels)
+        blocked = set(policy.redaction.blocked_sensitivity_labels).difference(allowed)
         guarded: list[ContextCandidate] = []
-        blocked = set(policy.redaction.blocked_sensitivity_labels)
+        dropped: list[ContextCandidate] = []
         for candidate in candidates:
             provenance_tenant = candidate.artifact.provenance.tenant_id
-            if provenance_tenant is not None and provenance_tenant != request.scope.tenant_id:
-                guarded.append(
+            if (
+                provenance_tenant is not None
+                and provenance_tenant != request.scope.tenant_id
+            ):
+                dropped.append(
                     ContextCandidate(
                         artifact=candidate.artifact,
                         contributor=candidate.contributor,
@@ -1001,7 +1633,7 @@ class DefaultContextGuard(IContextGuard):
 
             sensitivity = set(candidate.artifact.sensitivity)
             if blocked and sensitivity.intersection(blocked):
-                guarded.append(
+                dropped.append(
                     ContextCandidate(
                         artifact=candidate.artifact,
                         contributor=candidate.contributor,
@@ -1020,7 +1652,7 @@ class DefaultContextGuard(IContextGuard):
                 and candidate.artifact.kind == "memory"
                 and not (request.scope.sender_id or request.scope.conversation_id)
             ):
-                guarded.append(
+                dropped.append(
                     ContextCandidate(
                         artifact=candidate.artifact,
                         contributor=candidate.contributor,
@@ -1035,7 +1667,10 @@ class DefaultContextGuard(IContextGuard):
                 continue
 
             guarded.append(candidate)
-        return guarded
+        return ContextGuardResult(
+            passed_candidates=tuple(guarded),
+            dropped_candidates=tuple(dropped),
+        )
 
 
 class DefaultContextRanker(IContextRanker):

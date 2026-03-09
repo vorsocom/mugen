@@ -20,6 +20,7 @@ from mugen.core.plugin.context_engine.service.contributor import (
 from mugen.core.plugin.context_engine.service.registry import ContextComponentRegistry
 from mugen.core.plugin.context_engine.service.runtime import (
     ContextCacheRecordService,
+    ContextCommitLedgerService,
     ContextEventLogService,
     ContextMemoryRecordService,
     ContextStateSnapshotService,
@@ -28,15 +29,19 @@ from mugen.core.plugin.context_engine.service.runtime import (
     DefaultContextPolicyResolver,
     DefaultContextRanker,
     DefaultMemoryWriter,
+    RecentTurnMessageRenderer,
     RelationalContextCache,
+    RelationalContextCommitStore,
     RelationalContextStateStore,
     RelationalContextTraceSink,
+    StructuredLaneRenderer,
 )
 
 __all__ = [
     "AuditContributor",
     "ChannelOrchestrationContributor",
     "ContextCacheRecordService",
+    "ContextCommitLedgerService",
     "ContextComponentRegistry",
     "ContextContributorBindingService",
     "ContextEventLogService",
@@ -55,9 +60,12 @@ __all__ = [
     "MemoryContributor",
     "OpsCaseContributor",
     "PersonaPolicyContributor",
+    "RecentTurnMessageRenderer",
     "RecentTurnContributor",
     "RelationalContextCache",
+    "RelationalContextCommitStore",
     "RelationalContextStateStore",
     "RelationalContextTraceSink",
     "StateContributor",
+    "StructuredLaneRenderer",
 ]
