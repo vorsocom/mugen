@@ -16,25 +16,39 @@ class _Registry:
         self.state_store = None
         self.memory_writer = None
         self.cache = None
+        self.commit_store = None
         self.trace_sinks: list[object] = []
         self.guards: list[object] = []
         self.rankers: list[object] = []
         self.contributors: list[object] = []
+        self.renderers: list[object] = []
 
-    def set_policy_resolver(self, value) -> None:
+    def set_policy_resolver(self, value, *, owner=None) -> None:
+        _ = owner
         self.policy_resolver = value
 
-    def set_state_store(self, value) -> None:
+    def set_state_store(self, value, *, owner=None) -> None:
+        _ = owner
         self.state_store = value
 
-    def set_memory_writer(self, value) -> None:
+    def set_memory_writer(self, value, *, owner=None) -> None:
+        _ = owner
         self.memory_writer = value
 
-    def set_cache(self, value) -> None:
+    def set_cache(self, value, *, owner=None) -> None:
+        _ = owner
         self.cache = value
+
+    def set_commit_store(self, value, *, owner=None) -> None:
+        _ = owner
+        self.commit_store = value
 
     def register_trace_sink(self, value) -> None:
         self.trace_sinks.append(value)
+
+    def register_renderer(self, value, *, owner=None) -> None:
+        _ = owner
+        self.renderers.append(value)
 
     def register_guard(self, value) -> None:
         self.guards.append(value)
@@ -64,13 +78,16 @@ class TestMugenContextEngineFWExtension(unittest.IsolatedAsyncioTestCase):
         patches = {
             "ContextProfileService": _ctor("ContextProfileService"),
             "ContextPolicyService": _ctor("ContextPolicyService"),
-            "ContextContributorBindingService": _ctor("ContextContributorBindingService"),
+            "ContextContributorBindingService": _ctor(
+                "ContextContributorBindingService"
+            ),
             "ContextSourceBindingService": _ctor("ContextSourceBindingService"),
             "ContextTracePolicyService": _ctor("ContextTracePolicyService"),
             "ContextStateSnapshotService": _ctor("ContextStateSnapshotService"),
             "ContextEventLogService": _ctor("ContextEventLogService"),
             "ContextMemoryRecordService": _ctor("ContextMemoryRecordService"),
             "ContextCacheRecordService": _ctor("ContextCacheRecordService"),
+            "ContextCommitLedgerService": _ctor("ContextCommitLedgerService"),
             "ContextTraceService": _ctor("ContextTraceService"),
             "KnowledgeScopeService": _ctor("KnowledgeScopeService"),
             "ConversationStateService": _ctor("ConversationStateService"),
@@ -82,7 +99,10 @@ class TestMugenContextEngineFWExtension(unittest.IsolatedAsyncioTestCase):
             "RelationalContextStateStore": _ctor("RelationalContextStateStore"),
             "DefaultMemoryWriter": _ctor("DefaultMemoryWriter"),
             "RelationalContextCache": _ctor("RelationalContextCache"),
+            "RelationalContextCommitStore": _ctor("RelationalContextCommitStore"),
             "RelationalContextTraceSink": _ctor("RelationalContextTraceSink"),
+            "StructuredLaneRenderer": _ctor("StructuredLaneRenderer"),
+            "RecentTurnMessageRenderer": _ctor("RecentTurnMessageRenderer"),
             "DefaultContextGuard": _ctor("DefaultContextGuard"),
             "DefaultContextRanker": _ctor("DefaultContextRanker"),
             "PersonaPolicyContributor": _ctor("PersonaPolicyContributor"),
@@ -98,19 +118,38 @@ class TestMugenContextEngineFWExtension(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(fw_ext_module.di, "container", new=container),
-            patch.object(fw_ext_module, "_config_provider", side_effect=lambda: container.config),
-            patch.object(fw_ext_module, "_rsg_provider", side_effect=lambda: container.relational_storage_gateway),
+            patch.object(
+                fw_ext_module, "_config_provider", side_effect=lambda: container.config
+            ),
+            patch.object(
+                fw_ext_module,
+                "_rsg_provider",
+                side_effect=lambda: container.relational_storage_gateway,
+            ),
             patch.multiple(fw_ext_module, **patches),
         ):
             ext = ContextEngineFWExtension()
             self.assertEqual(ext.platforms, [])
             await ext.setup(app=Mock())
 
-        self.assertEqual(registry.policy_resolver, "DefaultContextPolicyResolver-instance")
+        self.assertEqual(
+            registry.policy_resolver, "DefaultContextPolicyResolver-instance"
+        )
         self.assertEqual(registry.state_store, "RelationalContextStateStore-instance")
         self.assertEqual(registry.memory_writer, "DefaultMemoryWriter-instance")
         self.assertEqual(registry.cache, "RelationalContextCache-instance")
+        self.assertEqual(registry.commit_store, "RelationalContextCommitStore-instance")
         self.assertEqual(registry.trace_sinks, ["RelationalContextTraceSink-instance"])
+        self.assertEqual(
+            registry.renderers,
+            [
+                "StructuredLaneRenderer-instance",
+                "StructuredLaneRenderer-instance",
+                "StructuredLaneRenderer-instance",
+                "StructuredLaneRenderer-instance",
+                "RecentTurnMessageRenderer-instance",
+            ],
+        )
         self.assertEqual(registry.guards, ["DefaultContextGuard-instance"])
         self.assertEqual(registry.rankers, ["DefaultContextRanker-instance"])
         self.assertEqual(
@@ -128,7 +167,9 @@ class TestMugenContextEngineFWExtension(unittest.IsolatedAsyncioTestCase):
         )
         container.register_ext_service.assert_called_once()
 
-    async def test_register_runtime_tables_handles_non_sqla_and_value_error(self) -> None:
+    async def test_register_runtime_tables_handles_non_sqla_and_value_error(
+        self,
+    ) -> None:
         ext = ContextEngineFWExtension(
             config_provider=lambda: SimpleNamespace(),
             rsg_provider=lambda: object(),
@@ -139,7 +180,9 @@ class TestMugenContextEngineFWExtension(unittest.IsolatedAsyncioTestCase):
             def __init__(self, *, side_effect=None) -> None:
                 self.register_tables = Mock(side_effect=side_effect)
 
-        with patch.object(fw_ext_module, "SQLAlchemyRelationalStorageGateway", _Gateway):
+        with patch.object(
+            fw_ext_module, "SQLAlchemyRelationalStorageGateway", _Gateway
+        ):
             gateway = _Gateway()
             ext = ContextEngineFWExtension(
                 config_provider=lambda: SimpleNamespace(),

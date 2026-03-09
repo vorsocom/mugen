@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = [
     "ContextArtifact",
     "ContextCandidate",
+    "ContextGuardResult",
     "ContextProvenance",
     "ContextSelectionReason",
 ]
@@ -12,6 +13,8 @@ __all__ = [
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+
+from mugen.core.contract.context.source import ContextSourceRef
 
 ContextArtifactContent = str | dict[str, Any] | list[dict[str, Any]] | None
 
@@ -24,6 +27,7 @@ class ContextSelectionReason(str, Enum):
     DROPPED_DUPLICATE = "dropped_duplicate"
     DROPPED_GUARD = "dropped_guard"
     DROPPED_POLICY = "dropped_policy"
+    DROPPED_SOURCE_POLICY = "dropped_source_policy"
     DROPPED_TENANT_MISMATCH = "dropped_tenant_mismatch"
     REDACTED = "redacted"
     VETOED = "vetoed"
@@ -36,6 +40,7 @@ class ContextProvenance:
     contributor: str
     source_kind: str
     source_id: str | None = None
+    source: ContextSourceRef | None = None
     title: str | None = None
     uri: str | None = None
     tenant_id: str | None = None
@@ -52,6 +57,7 @@ class ContextArtifact:
     kind: str
     content: ContextArtifactContent
     provenance: ContextProvenance
+    render_class: str | None = None
     title: str | None = None
     summary: str | None = None
     trust: float | None = None
@@ -74,3 +80,11 @@ class ContextCandidate:
     selection_reason: ContextSelectionReason | None = None
     reason_detail: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ContextGuardResult:
+    """Explicit pass/drop result returned by a guard implementation."""
+
+    passed_candidates: tuple[ContextCandidate, ...]
+    dropped_candidates: tuple[ContextCandidate, ...] = ()

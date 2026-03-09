@@ -15,6 +15,7 @@ from mugen.core.contract.context import (
     ContextBudget,
     ContextCandidate,
     ContextCommitResult,
+    ContextCommitState,
     ContextPolicy,
     ContextProvenance,
     ContextRedactionPolicy,
@@ -22,6 +23,8 @@ from mugen.core.contract.context import (
     ContextScope,
     ContextSelectionReason,
     ContextState,
+    ContextSourcePolicyEffect,
+    ContextSourceRef,
     ContextTurnRequest,
     MemoryWrite,
     MemoryWriteType,
@@ -36,6 +39,7 @@ from mugen.core.contract.gateway.completion import (
 import mugen.core.plugin.context_engine.service.contributor as contributor_module
 from mugen.core.plugin.context_engine.model import (
     ContextCacheRecord,
+    ContextCommitLedger,
     ContextContributorBinding,
     ContextEventLog,
     ContextMemoryRecord,
@@ -63,9 +67,12 @@ from mugen.core.plugin.context_engine.service.runtime import (
     DefaultContextPolicyResolver,
     DefaultContextRanker,
     DefaultMemoryWriter,
+    RecentTurnMessageRenderer,
     RelationalContextCache,
+    RelationalContextCommitStore,
     RelationalContextStateStore,
     RelationalContextTraceSink,
+    StructuredLaneRenderer,
 )
 
 
@@ -193,7 +200,9 @@ def _candidate(
     )
 
 
-def _prepared(*, trace_enabled: bool = True, selected_candidates=()) -> PreparedContextTurn:
+def _prepared(
+    *, trace_enabled: bool = True, selected_candidates=()
+) -> PreparedContextTurn:
     bundle = ContextBundle(
         policy=_policy(trace_enabled=trace_enabled),
         state=_state(),
@@ -228,6 +237,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             ContextEventLog.__table__,
             ContextMemoryRecord.__table__,
             ContextCacheRecord.__table__,
+            ContextCommitLedger.__table__,
             ContextTrace.__table__,
         )
 
@@ -235,7 +245,9 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertIn("client_profile_key", ContextProfile.__table__.c)
         self.assertIn("persona", ContextProfile.__table__.c)
 
-    async def test_policy_resolver_covers_default_and_configured_policy_paths(self) -> None:
+    async def test_policy_resolver_covers_default_and_configured_policy_paths(
+        self,
+    ) -> None:
         profile_service = SimpleNamespace(
             list=AsyncMock(
                 side_effect=[
@@ -277,7 +289,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                             is_default=False,
                             is_active=True,
                             policy_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
-                        )
+                        ),
                     ],
                 ]
             )
@@ -399,6 +411,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(default_policy.profile_key, "matrix-default")
         self.assertEqual(default_policy.contributor_allow, ("persona_policy",))
         self.assertEqual(default_policy.source_allow, ("knowledge",))
+        self.assertEqual(default_policy.source_rules[0].source_key, "source-a")
         self.assertTrue(default_policy.trace_enabled)
         self.assertEqual(default_policy.metadata["persona"], "Default persona.")
         self.assertEqual(default_policy.metadata["trace_policy_name"], "trace-default")
@@ -427,26 +440,71 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(configured_policy.contributor_deny, ("audit",))
         self.assertEqual(configured_policy.source_allow, ("knowledge",))
         self.assertEqual(configured_policy.source_deny, ("memory",))
+        self.assertEqual(
+            configured_policy.source_rules[-1].effect,
+            ContextSourcePolicyEffect.DENY,
+        )
         self.assertFalse(configured_policy.trace_enabled)
         self.assertFalse(configured_policy.cache_enabled)
         self.assertEqual(configured_policy.metadata["persona"], "Escalation persona.")
-        self.assertEqual(configured_policy.metadata["trace_policy_name"], "trace-strict")
+        self.assertEqual(
+            configured_policy.metadata["trace_policy_name"], "trace-strict"
+        )
         self.assertFalse(configured_policy.metadata["trace_capture_selected"])
         self.assertTrue(configured_policy.metadata["trace_capture_dropped"])
-        self.assertEqual(configured_policy.metadata["source_bindings"], ["source-a", "source-b"])
+        self.assertEqual(
+            configured_policy.metadata["source_bindings"], ["source-a", "source-b"]
+        )
 
-    async def test_runtime_and_contributor_helpers_cover_remaining_edge_paths(self) -> None:
+    async def test_runtime_and_contributor_helpers_cover_remaining_edge_paths(
+        self,
+    ) -> None:
         circular: list[object] = []
         circular.append(circular)
 
-        self.assertEqual(contributor_module._estimate_token_cost(None), 0)  # pylint: disable=protected-access
-        self.assertEqual(contributor_module._estimate_token_cost(circular), 32)  # pylint: disable=protected-access
+        self.assertEqual(
+            contributor_module._estimate_token_cost(None), 0
+        )  # pylint: disable=protected-access
+        self.assertEqual(
+            contributor_module._estimate_token_cost(circular), 32
+        )  # pylint: disable=protected-access
         self.assertTrue(
-            contributor_module._memory_partition_matches(None, _scope())  # pylint: disable=protected-access
+            contributor_module._memory_partition_matches(
+                None, _scope()
+            )  # pylint: disable=protected-access
         )
         self.assertEqual(
-            contributor_module._excerpt_text("  short  "),  # pylint: disable=protected-access
+            contributor_module._excerpt_text(
+                "  short  "
+            ),  # pylint: disable=protected-access
             "short",
+        )
+        self.assertEqual(
+            contributor_module._memory_source_key(
+                SimpleNamespace(memory_key=" mem-1 ", id=uuid.uuid4())
+            ),
+            "mem-1",
+        )
+        self.assertIsNone(
+            contributor_module._memory_source_key(
+                SimpleNamespace(memory_key=" ", id=None)
+            )
+        )
+        self.assertEqual(
+            contributor_module._normalize_revision_source_key(
+                SimpleNamespace(source_key=" rev-source ")
+            ),
+            "rev-source",
+        )
+        self.assertIsNone(
+            contributor_module._normalize_revision_source_key(SimpleNamespace())
+        )
+        # pylint: disable=protected-access
+        self.assertEqual(
+            DefaultContextPolicyResolver._dedupe_texts(
+                (" allow ", None, "allow", " deny ")
+            ),
+            ("allow", "deny"),
         )
         self.assertEqual(
             runtime_module._assistant_text(  # pylint: disable=protected-access
@@ -466,12 +524,15 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        global_default = DefaultContextPolicyResolver._default_policy(  # pylint: disable=protected-access
+        # pylint: disable=protected-access
+        global_default = DefaultContextPolicyResolver._default_policy(
             _scope(tenant_id=str(GLOBAL_TENANT_ID))
         )
         self.assertTrue(global_default.retention.require_partition_for_global_memory)
+        request_client_profile_key = runtime_module._request_client_profile_key
+        select_profile = DefaultContextPolicyResolver._select_profile
         self.assertEqual(
-            runtime_module._request_client_profile_key(  # pylint: disable=protected-access
+            request_client_profile_key(  # pylint: disable=protected-access
                 _request(
                     ingress_metadata={
                         "ingress_route": {"client_profile_key": " matrix-route "},
@@ -482,13 +543,13 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             "matrix-route",
         )
         self.assertEqual(
-            runtime_module._request_client_profile_key(  # pylint: disable=protected-access
+            request_client_profile_key(  # pylint: disable=protected-access
                 _request(ingress_metadata={"client_profile_key": " matrix-top-level "})
             ),
             "matrix-top-level",
         )
         self.assertIsNone(
-            DefaultContextPolicyResolver._select_profile(  # pylint: disable=protected-access
+            select_profile(  # pylint: disable=protected-access
                 _scope(),
                 None,
                 [],
@@ -509,7 +570,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             is_default=False,
         )
         self.assertIs(
-            DefaultContextPolicyResolver._select_profile(  # pylint: disable=protected-access
+            select_profile(  # pylint: disable=protected-access
                 _scope(),
                 "matrix-primary",
                 [wildcard_profile, exact_profile],
@@ -517,7 +578,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             exact_profile,
         )
         self.assertIs(
-            DefaultContextPolicyResolver._select_profile(  # pylint: disable=protected-access
+            select_profile(  # pylint: disable=protected-access
                 _scope(),
                 None,
                 [wildcard_profile, exact_profile],
@@ -526,20 +587,28 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         )
         profile = SimpleNamespace(policy_id=uuid.uuid4())
         self.assertIsNone(
-            DefaultContextPolicyResolver._select_policy(profile, [])  # pylint: disable=protected-access
+            DefaultContextPolicyResolver._select_policy(
+                profile, []
+            )  # pylint: disable=protected-access
         )
         fallback_policy = SimpleNamespace(id=uuid.uuid4(), is_default=False)
         self.assertIs(
-            DefaultContextPolicyResolver._select_policy(profile, [fallback_policy]),  # pylint: disable=protected-access
+            DefaultContextPolicyResolver._select_policy(
+                profile, [fallback_policy]
+            ),  # pylint: disable=protected-access
             fallback_policy,
         )
         default_policy = SimpleNamespace(is_default=True)
         self.assertIs(
-            DefaultContextPolicyResolver._select_policy(None, [default_policy]),  # pylint: disable=protected-access
+            DefaultContextPolicyResolver._select_policy(
+                None, [default_policy]
+            ),  # pylint: disable=protected-access
             default_policy,
         )
 
-    async def test_state_store_load_save_and_clear_cover_snapshot_and_event_paths(self) -> None:
+    async def test_state_store_load_save_and_clear_cover_snapshot_and_event_paths(
+        self,
+    ) -> None:
         existing_row = SimpleNamespace(
             id=uuid.uuid4(),
             revision=2,
@@ -595,7 +664,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             final_user_responses=[],
             outcome=TurnOutcome.COMPLETED,
         )
-        self.assertEqual(updated_state.summary, "assistant answer")
+        self.assertEqual(updated_state.summary, "summary")
         self.assertEqual(updated_state.routing["tenant_resolution"], None)
         snapshot_service.update.assert_awaited_once()
         self.assertEqual(event_log_service.create.await_count, 3)
@@ -604,7 +673,9 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         snapshot_service.delete.assert_awaited()
         event_log_rsg.delete_many.assert_awaited()
         self.assertEqual(
-            store._objective_from_request(_request(user_message={"nested": True})),  # pylint: disable=protected-access
+            store._objective_from_request(
+                _request(user_message={"nested": True})
+            ),  # pylint: disable=protected-access
             "{'nested': True}",
         )
 
@@ -649,27 +720,35 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(await cache.get(namespace="working_set", key=key))
         self.assertIsNone(await cache.get(namespace="working_set", key=key))
-        self.assertEqual(await cache.get(namespace="working_set", key=key), {"value": 1})
+        self.assertEqual(
+            await cache.get(namespace="working_set", key=key), {"value": 1}
+        )
         cache_service.update.assert_awaited()
 
-        await cache.put(namespace="working_set", key=key, value={"a": 1}, ttl_seconds=10)
-        await cache.put(namespace="working_set", key=key, value={"b": 2}, ttl_seconds=None)
+        await cache.put(
+            namespace="working_set", key=key, value={"a": 1}, ttl_seconds=10
+        )
+        await cache.put(
+            namespace="working_set", key=key, value={"b": 2}, ttl_seconds=None
+        )
         cache_service.create.assert_awaited_once()
         cache_service.update.assert_awaited()
 
-        deleted = await cache.invalidate(namespace="working_set", key_prefix=f"tenant:{tenant_id}:prefix:")
+        deleted = await cache.invalidate(
+            namespace="working_set", key_prefix=f"tenant:{tenant_id}:prefix:"
+        )
         self.assertEqual(deleted, 1)
 
-    async def test_trace_sink_memory_writer_guard_and_ranker_cover_edge_paths(self) -> None:
+    async def test_trace_sink_memory_writer_guard_and_ranker_cover_edge_paths(
+        self,
+    ) -> None:
         trace_service = SimpleNamespace(create=AsyncMock())
         audit_service = SimpleNamespace(create=AsyncMock())
         sink = RelationalContextTraceSink(
             trace_service=trace_service,
             audit_trace_service=audit_service,
         )
-        selected = (
-            _candidate(artifact_id="selected-1", lane="evidence"),
-        )
+        selected = (_candidate(artifact_id="selected-1", lane="evidence"),)
         prepared = _prepared(trace_enabled=True, selected_candidates=selected)
         request = _request(user_message="I prefer tea and my name is Alex")
         result = ContextCommitResult(
@@ -724,7 +803,13 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         writer = DefaultMemoryWriter(memory_service=memory_service)
         self.assertEqual(
             await writer.persist(
-                request=_request(scope=_scope(tenant_id=str(GLOBAL_TENANT_ID), sender_id=None, conversation_id=None)),
+                request=_request(
+                    scope=_scope(
+                        tenant_id=str(GLOBAL_TENANT_ID),
+                        sender_id=None,
+                        conversation_id=None,
+                    )
+                ),
                 prepared=_prepared(),
                 completion=CompletionResponse(content="done"),
                 final_user_responses=[],
@@ -739,7 +824,10 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             final_user_responses=[],
             outcome=TurnOutcome.COMPLETED,
         )
-        self.assertEqual([write.write_type for write in writes], [MemoryWriteType.EPISODE, MemoryWriteType.PREFERENCE, MemoryWriteType.FACT])
+        self.assertEqual(
+            [write.write_type for write in writes],
+            [MemoryWriteType.EPISODE, MemoryWriteType.PREFERENCE, MemoryWriteType.FACT],
+        )
         self.assertEqual(memory_service.create.await_count, 3)
         self.assertIsNone(writer._expires_at(None))  # pylint: disable=protected-access
         self.assertIsNotNone(writer._expires_at(1))  # pylint: disable=protected-access
@@ -770,7 +858,9 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             ),
             1,
         )
-        writer._derive_writes = Mock(return_value=[])  # type: ignore[method-assign]  # pylint: disable=protected-access
+        writer._derive_writes = Mock(  # type: ignore[method-assign]
+            return_value=[]
+        )  # pylint: disable=protected-access
         self.assertEqual(
             await writer.persist(
                 request=request,
@@ -794,16 +884,31 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
 
         guard = DefaultContextGuard()
         guarded = await guard.apply(
-            _request(scope=_scope(tenant_id=str(GLOBAL_TENANT_ID), sender_id=None, conversation_id=None)),
+            _request(
+                scope=_scope(
+                    tenant_id=str(GLOBAL_TENANT_ID),
+                    sender_id=None,
+                    conversation_id=None,
+                )
+            ),
             [
-                _candidate(artifact_id="tenant-mismatch", lane="evidence", tenant_id="other-tenant"),
+                _candidate(
+                    artifact_id="tenant-mismatch",
+                    lane="evidence",
+                    tenant_id="other-tenant",
+                ),
                 _candidate(
                     artifact_id="blocked",
                     lane="evidence",
                     tenant_id=str(GLOBAL_TENANT_ID),
                     sensitivity=("secret",),
                 ),
-                _candidate(artifact_id="global-memory", lane="evidence", kind="memory", tenant_id=str(GLOBAL_TENANT_ID)),
+                _candidate(
+                    artifact_id="global-memory",
+                    lane="evidence",
+                    kind="memory",
+                    tenant_id=str(GLOBAL_TENANT_ID),
+                ),
                 _candidate(
                     artifact_id="kept",
                     lane="recent_turn",
@@ -813,20 +918,29 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             policy=_policy(blocked_sensitivity_labels=("secret",)),
             state=None,
         )
+        self.assertEqual(
+            [candidate.artifact.artifact_id for candidate in guarded.passed_candidates],
+            ["kept"],
+        )
         reasons = {
             candidate.artifact.artifact_id: candidate.selection_reason
-            for candidate in guarded
+            for candidate in guarded.dropped_candidates
         }
-        self.assertEqual(reasons["tenant-mismatch"], ContextSelectionReason.DROPPED_TENANT_MISMATCH)
+        self.assertEqual(
+            reasons["tenant-mismatch"], ContextSelectionReason.DROPPED_TENANT_MISMATCH
+        )
         self.assertEqual(reasons["blocked"], ContextSelectionReason.DROPPED_GUARD)
-        self.assertEqual(reasons["global-memory"], ContextSelectionReason.DROPPED_POLICY)
-        self.assertIsNone(reasons["kept"])
+        self.assertEqual(
+            reasons["global-memory"], ContextSelectionReason.DROPPED_POLICY
+        )
 
         ranked = await DefaultContextRanker().rank(
             _request(),
             [
                 _candidate(artifact_id="recent", lane="recent_turn", score=0.0),
-                _candidate(artifact_id="system", lane="system_persona_policy", score=0.0),
+                _candidate(
+                    artifact_id="system", lane="system_persona_policy", score=0.0
+                ),
             ],
             policy=_policy(),
             state=None,
@@ -839,10 +953,19 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         registry.register_guard("guard")
         registry.register_ranker("ranker")
         registry.register_trace_sink("trace")
-        registry.set_policy_resolver("resolver")
-        registry.set_state_store("store")
-        registry.set_memory_writer("writer")
-        registry.set_cache("cache")
+        registry.set_policy_resolver("resolver", owner="owner-a")
+        registry.set_state_store("store", owner="owner-a")
+        registry.set_memory_writer("writer", owner="owner-a")
+        registry.set_cache("cache", owner="owner-a")
+        registry.set_commit_store("commit-store", owner="owner-a")
+        registry.register_renderer(
+            StructuredLaneRenderer(
+                render_class="system_persona_policy_items",
+                lane="system_persona_policy",
+            ),
+            owner="owner-a",
+        )
+        registry.register_renderer(RecentTurnMessageRenderer(), owner="owner-a")
         self.assertEqual(registry.contributors, ["contributor"])
         self.assertEqual(registry.guards, ["guard"])
         self.assertEqual(registry.rankers, ["ranker"])
@@ -851,10 +974,38 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.state_store, "store")
         self.assertEqual(registry.memory_writer, "writer")
         self.assertEqual(registry.cache, "cache")
+        self.assertEqual(registry.commit_store, "commit-store")
+        self.assertEqual(len(registry.renderers), 2)
+        self.assertEqual(
+            ContextComponentRegistry._owner_name(  # pylint: disable=protected-access
+                owner=None,
+                value=object(),
+            ),
+            "builtins.object",
+        )
+        with self.assertRaisesRegex(
+            RuntimeError, "already has 'policy_resolver' owned"
+        ):
+            registry.set_policy_resolver("other", owner="owner-b")
+        with self.assertRaisesRegex(RuntimeError, "already has renderer"):
+            registry.register_renderer(
+                StructuredLaneRenderer(
+                    render_class="system_persona_policy_items",
+                    lane="system_persona_policy",
+                ),
+                owner="owner-b",
+            )
+        with self.assertRaisesRegex(RuntimeError, "require render_class"):
+            registry.register_renderer(
+                SimpleNamespace(render_class=" "),
+                owner="owner-a",
+            )
 
         policy = _policy()
         request = _request(
-            ingress_metadata={"tenant_resolution": {"mode": "resolved", "source": "test"}}
+            ingress_metadata={
+                "tenant_resolution": {"mode": "resolved", "source": "test"}
+            }
         )
 
         persona_candidates = await PersonaPolicyContributor().collect(
@@ -862,24 +1013,53 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             policy=_policy(persona="Be concise."),
             state=None,
         )
-        self.assertEqual(persona_candidates[0].artifact.content["persona"], "Be concise.")
+        self.assertEqual(
+            persona_candidates[0].artifact.content["persona"], "Be concise."
+        )
+        self.assertEqual(
+            persona_candidates[0].artifact.render_class,
+            "system_persona_policy_items",
+        )
+        self.assertEqual(
+            persona_candidates[0].artifact.provenance.source.source_key,
+            "default",
+        )
 
-        self.assertEqual(await StateContributor().collect(request, policy=policy, state=None), [])
-        state_candidates = await StateContributor().collect(request, policy=policy, state=_state())
+        self.assertEqual(
+            await StateContributor().collect(request, policy=policy, state=None), []
+        )
+        state_candidates = await StateContributor().collect(
+            request, policy=policy, state=_state()
+        )
         self.assertEqual(state_candidates[0].artifact.lane, "bounded_control_state")
+        self.assertEqual(
+            state_candidates[0].artifact.render_class,
+            "bounded_control_state_items",
+        )
 
         event_log_service = SimpleNamespace(
             list=AsyncMock(
                 return_value=[
-                    SimpleNamespace(id=1, role="assistant", content="second", trace_id="trace-2"),
-                    SimpleNamespace(id=2, role="user", content="first", trace_id="trace-1"),
+                    SimpleNamespace(
+                        id=1, role="assistant", content="second", trace_id="trace-2"
+                    ),
+                    SimpleNamespace(
+                        id=2, role="user", content="first", trace_id="trace-1"
+                    ),
                 ]
             )
         )
         recent_candidates = await RecentTurnContributor(
             event_log_service=event_log_service
         ).collect(request, policy=policy, state=None)
-        self.assertEqual([c.artifact.content["content"] for c in recent_candidates], ["first", "second"])
+        self.assertEqual(
+            [c.artifact.content["content"] for c in recent_candidates],
+            ["first", "second"],
+        )
+        self.assertEqual(
+            recent_candidates[0].artifact.render_class,
+            "recent_turn_messages",
+        )
 
         knowledge_scope_service = SimpleNamespace(
             list_published_revisions=AsyncMock(
@@ -925,7 +1105,12 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             state=None,
         )
         self.assertEqual(len(knowledge_candidates), 2)
-        self.assertTrue(knowledge_candidates[0].artifact.content["excerpt"].endswith("..."))
+        self.assertTrue(
+            knowledge_candidates[0].artifact.content["excerpt"].endswith("...")
+        )
+        self.assertEqual(
+            knowledge_candidates[0].artifact.render_class, "evidence_items"
+        )
 
         conversation_state_service = SimpleNamespace(
             list=AsyncMock(
@@ -962,7 +1147,9 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel_candidates[0].artifact.lane, "operational_overlay")
         self.assertEqual(
             await ChannelOrchestrationContributor(
-                conversation_state_service=SimpleNamespace(list=AsyncMock(return_value=[])),
+                conversation_state_service=SimpleNamespace(
+                    list=AsyncMock(return_value=[])
+                ),
                 work_item_service=SimpleNamespace(list=AsyncMock(return_value=[])),
             ).collect(
                 _request(
@@ -987,7 +1174,9 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(no_trace_channel[0].artifact.content["work_item"], None)
         self.assertEqual(
             await ChannelOrchestrationContributor(
-                conversation_state_service=SimpleNamespace(list=AsyncMock(return_value=[])),
+                conversation_state_service=SimpleNamespace(
+                    list=AsyncMock(return_value=[])
+                ),
                 work_item_service=SimpleNamespace(list=AsyncMock(return_value=[])),
             ).collect(_request(trace_id=None), policy=policy, state=None),
             [],
@@ -1025,7 +1214,9 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             case_service=case_service,
             case_event_service=case_event_service,
         )
-        self.assertEqual(await ops_case.collect(_request(), policy=policy, state=None), [])
+        self.assertEqual(
+            await ops_case.collect(_request(), policy=policy, state=None), []
+        )
         case_candidates = await ops_case.collect(
             _request(scope=_scope(case_id=case_id)),
             policy=policy,
@@ -1036,7 +1227,9 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             await OpsCaseContributor(
                 case_service=SimpleNamespace(get=AsyncMock(return_value=None)),
                 case_event_service=case_event_service,
-            ).collect(_request(scope=_scope(case_id=case_id)), policy=policy, state=None),
+            ).collect(
+                _request(scope=_scope(case_id=case_id)), policy=policy, state=None
+            ),
             [],
         )
 
@@ -1052,7 +1245,9 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                 ]
             )
         )
-        audit_candidates = await AuditContributor(audit_trace_service=audit_service).collect(
+        audit_candidates = await AuditContributor(
+            audit_trace_service=audit_service
+        ).collect(
             request,
             policy=policy,
             state=None,
@@ -1118,15 +1313,25 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         )
         memory_contributor = MemoryContributor(memory_service=memory_service)
         self.assertEqual(
-            await memory_contributor.collect(request, policy=_policy(allow_long_term_memory=False), state=None),
+            await memory_contributor.collect(
+                request, policy=_policy(allow_long_term_memory=False), state=None
+            ),
             [],
         )
-        kept_memory = await memory_contributor.collect(request, policy=policy, state=None)
+        kept_memory = await memory_contributor.collect(
+            request, policy=policy, state=None
+        )
         self.assertEqual(len(kept_memory), 2)
         global_request = _request(
-            scope=_scope(tenant_id=str(GLOBAL_TENANT_ID), sender_id="user-1", conversation_id="room-1")
+            scope=_scope(
+                tenant_id=str(GLOBAL_TENANT_ID),
+                sender_id="user-1",
+                conversation_id="room-1",
+            )
         )
-        global_kept = await memory_contributor.collect(global_request, policy=policy, state=None)
+        global_kept = await memory_contributor.collect(
+            global_request, policy=policy, state=None
+        )
         self.assertEqual(len(global_kept), 1)
         self.assertEqual(
             await MemoryContributor(
@@ -1160,3 +1365,716 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             ),
             [],
         )
+
+    async def test_renderers_and_commit_store_cover_new_runtime_collaborators(
+        self,
+    ) -> None:
+        structured_messages = await StructuredLaneRenderer(
+            render_class="evidence_items",
+            lane="evidence",
+        ).render(
+            _request(),
+            [_candidate(artifact_id="e1", lane="evidence", content={"x": 1})],
+            policy=_policy(),
+        )
+        self.assertEqual(structured_messages[0].content["context_lane"], "evidence")
+
+        recent_messages = await RecentTurnMessageRenderer().render(
+            _request(),
+            [
+                ContextCandidate(
+                    artifact=ContextArtifact(
+                        artifact_id="recent-1",
+                        lane="recent_turn",
+                        kind="recent_turn",
+                        render_class="recent_turn_messages",
+                        content={"role": "assistant", "content": "hello"},
+                        provenance=ContextProvenance(
+                            contributor="recent_turns",
+                            source_kind="event_log",
+                            tenant_id=str(_tenant_uuid()),
+                        ),
+                    ),
+                    contributor="recent_turns",
+                )
+            ],
+            policy=_policy(),
+        )
+        self.assertEqual(recent_messages[0].content, "hello")
+
+        class _LedgerService:
+            def __init__(self) -> None:
+                self.rows: dict[str, SimpleNamespace] = {}
+
+            async def create(self, payload):
+                row = SimpleNamespace(
+                    id=uuid.uuid4(),
+                    row_version=1,
+                    **payload,
+                )
+                self.rows[payload["commit_token"]] = row
+                return row
+
+            async def get(self, where):
+                return self.rows.get(where["commit_token"])
+
+            async def update_with_row_version(
+                self, where, *, expected_row_version, changes
+            ):
+                for row in self.rows.values():
+                    if row.id != where["id"] or row.tenant_id != where["tenant_id"]:
+                        continue
+                    if row.row_version != expected_row_version:
+                        return None
+                    for key, value in changes.items():
+                        setattr(row, key, value)
+                    row.row_version += 1
+                    return row
+                return None
+
+            async def update(self, where, changes):
+                for row in self.rows.values():
+                    if row.id != where["id"] or row.tenant_id != where["tenant_id"]:
+                        continue
+                    for key, value in changes.items():
+                        setattr(row, key, value)
+                    row.row_version += 1
+                    return row
+                return None
+
+        ledger_service = _LedgerService()
+        commit_store = RelationalContextCommitStore(ledger_service=ledger_service)
+        request = _request()
+        token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="prepared-fp",
+            ttl_seconds=30,
+        )
+        prepared = PreparedContextTurn(
+            completion_request=CompletionRequest(
+                messages=[CompletionMessage(role="user", content="hello")]
+            ),
+            bundle=ContextBundle(
+                policy=_policy(),
+                state=None,
+                selected_candidates=(),
+                dropped_candidates=(),
+                prefix_fingerprint="prefix-1",
+                cache_hints={},
+                trace={},
+            ),
+            state_handle=runtime_module.scope_key(request.scope),
+            commit_token=token,
+            trace={},
+        )
+        begin = await commit_store.begin_commit(
+            request=request,
+            prepared=prepared,
+            prepared_fingerprint="prepared-fp",
+        )
+        self.assertEqual(begin.state, ContextCommitState.COMMITTING)
+        result = ContextCommitResult(commit_token=token, state_revision=4)
+        await commit_store.complete_commit(
+            request=request,
+            prepared=prepared,
+            prepared_fingerprint="prepared-fp",
+            result=result,
+        )
+        await commit_store.complete_commit(
+            request=request,
+            prepared=prepared,
+            prepared_fingerprint="prepared-fp",
+            result=result,
+        )
+        replay = await commit_store.begin_commit(
+            request=request,
+            prepared=prepared,
+            prepared_fingerprint="prepared-fp",
+        )
+        self.assertEqual(replay.state, ContextCommitState.COMMITTED)
+        self.assertEqual(replay.replay_result, result)
+
+        failed_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="prepared-fp-2",
+            ttl_seconds=30,
+        )
+        failed_prepared = PreparedContextTurn(
+            completion_request=prepared.completion_request,
+            bundle=prepared.bundle,
+            state_handle=prepared.state_handle,
+            commit_token=failed_token,
+            trace={},
+        )
+        await commit_store.fail_commit(
+            request=request,
+            prepared=failed_prepared,
+            prepared_fingerprint="prepared-fp-2",
+            error_message="boom",
+        )
+        with self.assertRaisesRegex(RuntimeError, "previous commit failed"):
+            await commit_store.begin_commit(
+                request=request,
+                prepared=failed_prepared,
+                prepared_fingerprint="prepared-fp-2",
+            )
+
+    async def test_runtime_helper_and_commit_store_edge_paths(self) -> None:
+        rsg = Mock()
+        self.assertEqual(
+            runtime_module.ContextStateSnapshotService(
+                table="context_state_snapshot",
+                rsg=rsg,
+            ).table,
+            "context_state_snapshot",
+        )
+        self.assertEqual(
+            runtime_module.ContextEventLogService(
+                table="context_event_log",
+                rsg=rsg,
+            ).table,
+            "context_event_log",
+        )
+        self.assertEqual(
+            runtime_module.ContextMemoryRecordService(
+                table="context_memory_record",
+                rsg=rsg,
+            ).table,
+            "context_memory_record",
+        )
+        self.assertEqual(
+            runtime_module.ContextCacheRecordService(
+                table="context_cache_record",
+                rsg=rsg,
+            ).table,
+            "context_cache_record",
+        )
+        self.assertEqual(
+            runtime_module.ContextCommitLedgerService(
+                table="context_commit_ledger",
+                rsg=rsg,
+            ).table,
+            "context_commit_ledger",
+        )
+        self.assertEqual(
+            runtime_module.ContextTraceService(
+                table="context_trace",
+                rsg=rsg,
+            ).table,
+            "context_trace",
+        )
+
+        source_ref = ContextSourceRef(
+            kind="knowledge",
+            source_key="kb-main",
+            source_id="doc-1",
+            canonical_locator="https://example.invalid/doc-1",
+            metadata={"rank": 1},
+        )
+        self.assertEqual(
+            runtime_module._serialize_source_ref(
+                source_ref
+            ),  # pylint: disable=protected-access
+            {
+                "kind": "knowledge",
+                "source_key": "kb-main",
+                "source_id": "doc-1",
+                "canonical_locator": "https://example.invalid/doc-1",
+                "segment_id": None,
+                "locale": None,
+                "category": None,
+                "metadata": {"rank": 1},
+            },
+        )
+        self.assertIsNone(
+            runtime_module._deserialize_source_ref(
+                None
+            )  # pylint: disable=protected-access
+        )
+        self.assertIsNone(
+            runtime_module._deserialize_source_ref(  # pylint: disable=protected-access
+                {"kind": " "}
+            )
+        )
+        restored_source = (
+            runtime_module._deserialize_source_ref(  # pylint: disable=protected-access
+                {
+                    "kind": "knowledge",
+                    "source_key": "kb-main",
+                    "source_id": "doc-1",
+                    "canonical_locator": "https://example.invalid/doc-1",
+                    "metadata": {"rank": 1},
+                }
+            )
+        )
+        self.assertEqual(
+            restored_source.canonical_locator, source_ref.canonical_locator
+        )
+        restored_provenance = (
+            runtime_module._deserialize_provenance(  # pylint: disable=protected-access
+                None
+            )
+        )
+        self.assertEqual(restored_provenance.contributor, "context_engine")
+        with self.assertRaisesRegex(RuntimeError, "missing write_type"):
+            runtime_module._deserialize_memory_write(
+                {}
+            )  # pylint: disable=protected-access
+        valid_memory_write = runtime_module._deserialize_memory_write(
+            {
+                "write_type": MemoryWriteType.FACT.value,
+                "content": {"statement": "prefers tea"},
+                "provenance": {
+                    "contributor": "context_engine",
+                    "source_kind": "turn_commit",
+                },
+                "scope_partition": {"sender_id": "user-1"},
+                "tags": ["preference"],
+            }
+        )  # pylint: disable=protected-access
+        self.assertEqual(valid_memory_write.write_type, MemoryWriteType.FACT)
+        serialized_result = (
+            runtime_module._serialize_commit_result(  # pylint: disable=protected-access
+                ContextCommitResult(commit_token="commit-1", state_revision=1)
+            )
+        )
+        deserialized_result = runtime_module._deserialize_commit_result(
+            serialized_result
+        )  # pylint: disable=protected-access
+        self.assertEqual(
+            deserialized_result.commit_token,
+            "commit-1",
+        )
+        with self.assertRaisesRegex(RuntimeError, "missing commit_token"):
+            runtime_module._deserialize_commit_result(
+                {}
+            )  # pylint: disable=protected-access
+        trace_payload, selected_items, dropped_items = (
+            runtime_module._trace_payload_for_policy(
+                {
+                    "scope": {"tenant_id": str(_tenant_uuid())},
+                    "selected": [{"artifact_id": "selected-1"}],
+                    "dropped": [{"artifact_id": "dropped-1"}],
+                },
+                policy=ContextPolicy(
+                    trace_capture_selected=False,
+                    trace_capture_dropped=False,
+                ),
+            )  # pylint: disable=protected-access
+        )
+        self.assertEqual(trace_payload, {"scope": {"tenant_id": str(_tenant_uuid())}})
+        self.assertIsNone(selected_items)
+        self.assertIsNone(dropped_items)
+
+        structured_renderer = StructuredLaneRenderer(
+            render_class="evidence_items",
+            lane="evidence",
+        )
+        self.assertEqual(
+            await structured_renderer.render(_request(), [], policy=_policy()),
+            [],
+        )
+        with self.assertRaisesRegex(RuntimeError, "unexpected lane"):
+            await structured_renderer.render(
+                _request(),
+                [_candidate(artifact_id="wrong-lane", lane="recent_turn")],
+                policy=_policy(),
+            )
+
+        def _recent_candidate(content) -> ContextCandidate:
+            return ContextCandidate(
+                artifact=ContextArtifact(
+                    artifact_id="recent-edge",
+                    lane="recent_turn",
+                    kind="recent_turn",
+                    render_class="recent_turn_messages",
+                    content=content,
+                    provenance=ContextProvenance(
+                        contributor="recent_turns",
+                        source_kind="event_log",
+                        tenant_id=str(_tenant_uuid()),
+                    ),
+                ),
+                contributor="recent_turns",
+            )
+
+        recent_renderer = RecentTurnMessageRenderer()
+        with self.assertRaisesRegex(RuntimeError, "dict content"):
+            await recent_renderer.render(
+                _request(),
+                [_recent_candidate("bad")],
+                policy=_policy(),
+            )
+        with self.assertRaisesRegex(RuntimeError, "string role"):
+            await recent_renderer.render(
+                _request(),
+                [_recent_candidate({"content": "hello"})],
+                policy=_policy(),
+            )
+        with self.assertRaisesRegex(RuntimeError, "string, object, list, or null"):
+            await recent_renderer.render(
+                _request(),
+                [_recent_candidate({"role": "assistant", "content": 123})],
+                policy=_policy(),
+            )
+
+        class _EdgeLedgerService:
+            def __init__(self, *, return_none_on_update: bool = False) -> None:
+                self.return_none_on_update = return_none_on_update
+                self.rows: dict[str, SimpleNamespace] = {}
+
+            async def create(self, payload):
+                row = SimpleNamespace(
+                    id=uuid.uuid4(),
+                    row_version=1,
+                    **payload,
+                )
+                self.rows[payload["commit_token"]] = row
+                return row
+
+            async def get(self, where):
+                return self.rows.get(where["commit_token"])
+
+            async def update_with_row_version(
+                self,
+                where,
+                *,
+                expected_row_version,
+                changes,
+            ):
+                if self.return_none_on_update:
+                    return None
+                for row in self.rows.values():
+                    if row.id != where["id"] or row.tenant_id != where["tenant_id"]:
+                        continue
+                    if row.row_version != expected_row_version:
+                        return None
+                    for key, value in changes.items():
+                        setattr(row, key, value)
+                    row.row_version += 1
+                    return row
+                return None
+
+            async def update(self, where, changes):
+                if self.return_none_on_update:
+                    return None
+                for row in self.rows.values():
+                    if row.id != where["id"] or row.tenant_id != where["tenant_id"]:
+                        continue
+                    for key, value in changes.items():
+                        setattr(row, key, value)
+                    row.row_version += 1
+                    return row
+                return None
+
+        request = _request()
+
+        def _prepared_for(
+            commit_token: str,
+            *,
+            scope: ContextScope | None = None,
+            state_handle: str | None = None,
+        ) -> PreparedContextTurn:
+            prepared_scope = scope or request.scope
+            return PreparedContextTurn(
+                completion_request=CompletionRequest(
+                    messages=[CompletionMessage(role="user", content="hello")]
+                ),
+                bundle=ContextBundle(
+                    policy=_policy(),
+                    state=None,
+                    selected_candidates=(),
+                    dropped_candidates=(),
+                    prefix_fingerprint="prefix-1",
+                    cache_hints={},
+                    trace={},
+                ),
+                state_handle=state_handle or runtime_module.scope_key(prepared_scope),
+                commit_token=commit_token,
+                trace={},
+            )
+
+        commit_store = RelationalContextCommitStore(ledger_service=_EdgeLedgerService())
+        with self.assertRaisesRegex(RuntimeError, "^Invalid context commit token\\.$"):
+            await commit_store.begin_commit(
+                request=request,
+                prepared=_prepared_for("missing-token"),
+                prepared_fingerprint="fp-missing-token",
+            )
+        missing_result_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-missing-result",
+            ttl_seconds=30,
+        )
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            missing_result_token
+        ].commit_state = ContextCommitState.COMMITTED.value
+        with self.assertRaisesRegex(RuntimeError, "committed result missing"):
+            await commit_store.begin_commit(
+                request=request,
+                prepared=_prepared_for(missing_result_token),
+                prepared_fingerprint="fp-missing-result",
+            )
+
+        in_progress_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-in-progress",
+            ttl_seconds=30,
+        )
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            in_progress_token
+        ].commit_state = ContextCommitState.COMMITTING.value
+        with self.assertRaisesRegex(RuntimeError, "already in progress"):
+            await commit_store.begin_commit(
+                request=request,
+                prepared=_prepared_for(in_progress_token),
+                prepared_fingerprint="fp-in-progress",
+            )
+
+        scope_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-scope",
+            ttl_seconds=30,
+        )
+        with self.assertRaisesRegex(RuntimeError, "scope mismatch"):
+            await commit_store.begin_commit(
+                request=_request(scope=_scope(conversation_id="room-2")),
+                prepared=_prepared_for(scope_token),
+                prepared_fingerprint="fp-scope",
+            )
+
+        state_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-state",
+            ttl_seconds=30,
+        )
+        with self.assertRaisesRegex(RuntimeError, "prepared state mismatch"):
+            await commit_store.begin_commit(
+                request=request,
+                prepared=_prepared_for(
+                    state_token,
+                    state_handle="wrong-state",
+                ),
+                prepared_fingerprint="fp-state",
+            )
+
+        prepared_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-prepared",
+            ttl_seconds=30,
+        )
+        with self.assertRaisesRegex(RuntimeError, "prepared mismatch"):
+            await commit_store.begin_commit(
+                request=request,
+                prepared=_prepared_for(prepared_token),
+                prepared_fingerprint="wrong-fingerprint",
+            )
+
+        expired_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-expired",
+            ttl_seconds=30,
+        )
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            expired_token
+        ].expires_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        with self.assertRaisesRegex(RuntimeError, "expired"):
+            await commit_store.begin_commit(
+                request=request,
+                prepared=_prepared_for(expired_token),
+                prepared_fingerprint="fp-expired",
+            )
+        expired_row = commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            expired_token
+        ]
+        self.assertEqual(
+            expired_row.commit_state,
+            ContextCommitState.FAILED.value,
+        )
+        self.assertEqual(
+            expired_row.last_error,
+            "expired",
+        )
+
+        await commit_store.fail_commit(
+            request=request,
+            prepared=_prepared_for("missing-token"),
+            prepared_fingerprint="fp-missing-token",
+            error_message="boom",
+        )
+
+        committed_fail_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-committed-fail",
+            ttl_seconds=30,
+        )
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            committed_fail_token
+        ].commit_state = ContextCommitState.COMMITTED.value
+        await commit_store.fail_commit(
+            request=request,
+            prepared=_prepared_for(committed_fail_token),
+            prepared_fingerprint="fp-committed-fail",
+            error_message="boom",
+        )
+
+        already_committed_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-already-committed",
+            ttl_seconds=30,
+        )
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            already_committed_token
+        ].commit_state = ContextCommitState.COMMITTED.value
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            already_committed_token
+        ].result_json = runtime_module._serialize_commit_result(
+            ContextCommitResult(
+                commit_token=already_committed_token,
+                state_revision=1,
+            )
+        )  # pylint: disable=protected-access
+        with self.assertRaisesRegex(RuntimeError, "already committed"):
+            await commit_store.complete_commit(
+                request=request,
+                prepared=_prepared_for(already_committed_token),
+                prepared_fingerprint="fp-already-committed",
+                result=ContextCommitResult(
+                    commit_token=already_committed_token,
+                    state_revision=2,
+                ),
+            )
+
+        not_in_progress_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-not-in-progress",
+            ttl_seconds=30,
+        )
+        with self.assertRaisesRegex(RuntimeError, "commit not in progress"):
+            await commit_store.complete_commit(
+                request=request,
+                prepared=_prepared_for(not_in_progress_token),
+                prepared_fingerprint="fp-not-in-progress",
+                result=ContextCommitResult(
+                    commit_token=not_in_progress_token,
+                    state_revision=3,
+                ),
+            )
+
+        expired_committed_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-expired-committed",
+            ttl_seconds=30,
+        )
+        expired_result = ContextCommitResult(
+            commit_token=expired_committed_token,
+            state_revision=4,
+        )
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            expired_committed_token
+        ].commit_state = ContextCommitState.COMMITTED.value
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            expired_committed_token
+        ].result_json = runtime_module._serialize_commit_result(
+            expired_result
+        )  # pylint: disable=protected-access
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            expired_committed_token
+        ].expires_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        with self.assertRaisesRegex(RuntimeError, "expired"):
+            await commit_store.complete_commit(
+                request=request,
+                prepared=_prepared_for(expired_committed_token),
+                prepared_fingerprint="fp-expired-committed",
+                result=expired_result,
+            )
+        replayable_expired_token = await commit_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-replayable-expired",
+            ttl_seconds=30,
+        )
+        replayable_result = ContextCommitResult(
+            commit_token=replayable_expired_token,
+            state_revision=6,
+        )
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            replayable_expired_token
+        ].commit_state = ContextCommitState.COMMITTED.value
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            replayable_expired_token
+        ].result_json = runtime_module._serialize_commit_result(
+            replayable_result
+        )  # pylint: disable=protected-access
+        commit_store._ledger_service.rows[  # type: ignore[attr-defined]
+            replayable_expired_token
+        ].expires_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        replay = await commit_store.begin_commit(
+            request=request,
+            prepared=_prepared_for(replayable_expired_token),
+            prepared_fingerprint="fp-replayable-expired",
+        )
+        self.assertEqual(replay.replay_result, replayable_result)
+
+        transition_store = RelationalContextCommitStore(
+            ledger_service=_EdgeLedgerService(return_none_on_update=True)
+        )
+        transition_token = await transition_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-transition",
+            ttl_seconds=30,
+        )
+        with self.assertRaisesRegex(RuntimeError, "transition failed"):
+            await transition_store.begin_commit(
+                request=request,
+                prepared=_prepared_for(transition_token),
+                prepared_fingerprint="fp-transition",
+            )
+
+        finalize_store = RelationalContextCommitStore(
+            ledger_service=_EdgeLedgerService(return_none_on_update=True)
+        )
+        finalize_token = await finalize_store.issue_token(
+            request=request,
+            prepared_fingerprint="fp-finalize",
+            ttl_seconds=30,
+        )
+        finalize_store._ledger_service.rows[  # type: ignore[attr-defined]
+            finalize_token
+        ].commit_state = ContextCommitState.COMMITTING.value
+        with self.assertRaisesRegex(RuntimeError, "finalize failed"):
+            await finalize_store.complete_commit(
+                request=request,
+                prepared=_prepared_for(finalize_token),
+                prepared_fingerprint="fp-finalize",
+                result=ContextCommitResult(
+                    commit_token=finalize_token,
+                    state_revision=5,
+                ),
+            )
+
+        self.assertIsNone(
+            await commit_store._update_row(  # pylint: disable=protected-access
+                row=SimpleNamespace(
+                    id=None,
+                    tenant_id=_tenant_uuid(),
+                    row_version=1,
+                ),
+                changes={"commit_state": ContextCommitState.FAILED.value},
+            )
+        )
+        fallback_service = SimpleNamespace(update=AsyncMock(return_value="updated"))
+        fallback_store = RelationalContextCommitStore(ledger_service=fallback_service)
+        self.assertEqual(
+            await fallback_store._update_row(  # pylint: disable=protected-access
+                row=SimpleNamespace(
+                    id=uuid.uuid4(),
+                    tenant_id=_tenant_uuid(),
+                ),
+                changes={"commit_state": ContextCommitState.COMMITTING.value},
+            ),
+            "updated",
+        )
+        fallback_service.update.assert_awaited_once()
+        self.assertIsNone(
+            commit_store._expires_at(0)
+        )  # pylint: disable=protected-access

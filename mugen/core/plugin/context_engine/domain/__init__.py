@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "ContextCacheRecordDE",
+    "ContextCommitLedgerDE",
     "ContextContributorBindingDE",
     "ContextEventLogDE",
     "ContextMemoryRecordDE",
@@ -168,6 +169,19 @@ class ContextCacheRecordDE(BaseDE, TenantScopedDEMixin):
     expires_at: datetime | None = None
     last_hit_at: datetime | None = None
     hit_count: int | None = None
+
+
+@dataclass
+class ContextCommitLedgerDE(BaseDE, TenantScopedDEMixin):
+    """Runtime commit-token ledger record."""
+
+    scope_key: str | None = None
+    commit_token: str | None = None
+    prepared_fingerprint: str | None = None
+    commit_state: str | None = None
+    expires_at: datetime | None = None
+    last_error: str | None = None
+    result_json: dict[str, Any] | None = None
 
 
 @dataclass

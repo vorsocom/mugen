@@ -38,6 +38,7 @@ from mugen.core.plugin.context_engine.service.admin_resource import (
 )
 from mugen.core.plugin.context_engine.service.runtime import (
     ContextCacheRecordService,
+    ContextCommitLedgerService,
     ContextEventLogService,
     ContextMemoryRecordService,
     ContextStateSnapshotService,
@@ -83,6 +84,7 @@ class TestMugenRelationalServiceCtorSmoke(unittest.TestCase):
             ContextEventLogService,
             ContextMemoryRecordService,
             ContextCacheRecordService,
+            ContextCommitLedgerService,
             ContextTraceService,
         ]
 

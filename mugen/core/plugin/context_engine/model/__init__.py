@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "ContextCacheRecord",
+    "ContextCommitLedger",
     "ContextContributorBinding",
     "ContextEventLog",
     "ContextMemoryRecord",
@@ -41,7 +42,9 @@ from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
 _SCHEMA = "mugen"
 
 
-class ContextProfile(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-public-methods
+class ContextProfile(
+    ModelBase, TenantScopedMixin
+):  # pylint: disable=too-few-public-methods
     """ACP-managed context profile row."""
 
     __tablename__ = "context_engine_context_profile"
@@ -49,7 +52,9 @@ class ContextProfile(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-p
     name: Mapped[str] = mapped_column(CITEXT(128), nullable=False)
     description: Mapped[str | None] = mapped_column(String(512), nullable=True)
     platform: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
-    channel_key: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
+    channel_key: Mapped[str | None] = mapped_column(
+        CITEXT(64), nullable=True, index=True
+    )
     client_profile_key: Mapped[str | None] = mapped_column(
         CITEXT(64),
         nullable=True,
@@ -82,7 +87,9 @@ class ContextProfile(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-p
     )
 
 
-class ContextPolicy(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-public-methods
+class ContextPolicy(
+    ModelBase, TenantScopedMixin
+):  # pylint: disable=too-few-public-methods
     """ACP-managed context policy row."""
 
     __tablename__ = "context_engine_context_policy"
@@ -120,7 +127,9 @@ class ContextPolicy(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-pu
     attributes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("tenant_id", "policy_key", name="ux_ctxeng_policy__tenant_key"),
+        UniqueConstraint(
+            "tenant_id", "policy_key", name="ux_ctxeng_policy__tenant_key"
+        ),
         CheckConstraint(
             "length(btrim(policy_key)) > 0",
             name="ck_ctxeng_policy__policy_key",
@@ -138,9 +147,13 @@ class ContextContributorBinding(
     __tablename__ = "context_engine_context_contributor_binding"
 
     binding_key: Mapped[str] = mapped_column(CITEXT(128), nullable=False)
-    contributor_key: Mapped[str] = mapped_column(CITEXT(128), nullable=False, index=True)
+    contributor_key: Mapped[str] = mapped_column(
+        CITEXT(128), nullable=False, index=True
+    )
     platform: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
-    channel_key: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
+    channel_key: Mapped[str | None] = mapped_column(
+        CITEXT(64), nullable=True, index=True
+    )
     priority: Mapped[int] = mapped_column(
         BigInteger,
         nullable=False,
@@ -172,7 +185,9 @@ class ContextContributorBinding(
     )
 
 
-class ContextSourceBinding(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-public-methods
+class ContextSourceBinding(
+    ModelBase, TenantScopedMixin
+):  # pylint: disable=too-few-public-methods
     """ACP-managed source binding row."""
 
     __tablename__ = "context_engine_context_source_binding"
@@ -180,7 +195,9 @@ class ContextSourceBinding(ModelBase, TenantScopedMixin):  # pylint: disable=too
     source_kind: Mapped[str] = mapped_column(CITEXT(128), nullable=False, index=True)
     source_key: Mapped[str] = mapped_column(CITEXT(128), nullable=False)
     platform: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
-    channel_key: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
+    channel_key: Mapped[str | None] = mapped_column(
+        CITEXT(64), nullable=True, index=True
+    )
     locale: Mapped[str | None] = mapped_column(CITEXT(32), nullable=True, index=True)
     category: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
     is_enabled: Mapped[bool] = mapped_column(
@@ -210,7 +227,9 @@ class ContextSourceBinding(ModelBase, TenantScopedMixin):  # pylint: disable=too
     )
 
 
-class ContextTracePolicy(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-public-methods
+class ContextTracePolicy(
+    ModelBase, TenantScopedMixin
+):  # pylint: disable=too-few-public-methods
     """ACP-managed trace policy row."""
 
     __tablename__ = "context_engine_context_trace_policy"
@@ -265,9 +284,13 @@ class ContextStateSnapshot(
 
     scope_key: Mapped[str] = mapped_column(CITEXT(255), nullable=False)
     platform: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
-    channel_id: Mapped[str | None] = mapped_column(CITEXT(128), nullable=True, index=True)
+    channel_id: Mapped[str | None] = mapped_column(
+        CITEXT(128), nullable=True, index=True
+    )
     room_id: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True, index=True)
-    sender_id: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True, index=True)
+    sender_id: Mapped[str | None] = mapped_column(
+        CITEXT(255), nullable=True, index=True
+    )
     conversation_id: Mapped[str | None] = mapped_column(
         CITEXT(255), nullable=True, index=True
     )
@@ -293,7 +316,9 @@ class ContextStateSnapshot(
     attributes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("tenant_id", "scope_key", name="ux_ctxeng_state__tenant_scope"),
+        UniqueConstraint(
+            "tenant_id", "scope_key", name="ux_ctxeng_state__tenant_scope"
+        ),
         CheckConstraint(
             "length(btrim(scope_key)) > 0",
             name="ck_ctxeng_state__scope_key",
@@ -302,7 +327,9 @@ class ContextStateSnapshot(
     )
 
 
-class ContextEventLog(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-public-methods
+class ContextEventLog(
+    ModelBase, TenantScopedMixin
+):  # pylint: disable=too-few-public-methods
     """Runtime recent-turn event log."""
 
     __tablename__ = "context_engine_context_event_log"
@@ -311,7 +338,9 @@ class ContextEventLog(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-
     sequence_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
     role: Mapped[str] = mapped_column(CITEXT(32), nullable=False)
     content: Mapped[dict | list | str | None] = mapped_column(JSONB, nullable=True)
-    message_id: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True, index=True)
+    message_id: Mapped[str | None] = mapped_column(
+        CITEXT(255), nullable=True, index=True
+    )
     trace_id: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True, index=True)
     source: Mapped[str | None] = mapped_column(CITEXT(128), nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(
@@ -353,7 +382,9 @@ class ContextMemoryRecord(
 
     scope_partition: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     memory_type: Mapped[str] = mapped_column(CITEXT(64), nullable=False, index=True)
-    memory_key: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True, index=True)
+    memory_key: Mapped[str | None] = mapped_column(
+        CITEXT(255), nullable=True, index=True
+    )
     subject: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True, index=True)
     content: Mapped[dict | str | None] = mapped_column(JSONB, nullable=True)
     provenance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -382,7 +413,9 @@ class ContextMemoryRecord(
     )
 
 
-class ContextCacheRecord(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-public-methods
+class ContextCacheRecord(
+    ModelBase, TenantScopedMixin
+):  # pylint: disable=too-few-public-methods
     """Runtime context cache record."""
 
     __tablename__ = "context_engine_context_cache_record"
@@ -424,14 +457,63 @@ class ContextCacheRecord(ModelBase, TenantScopedMixin):  # pylint: disable=too-f
     )
 
 
-class ContextTrace(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-public-methods
+class ContextCommitLedger(
+    ModelBase, TenantScopedMixin
+):  # pylint: disable=too-few-public-methods
+    """Runtime commit-token ledger."""
+
+    __tablename__ = "context_engine_context_commit_ledger"
+
+    scope_key: Mapped[str] = mapped_column(CITEXT(255), nullable=False, index=True)
+    commit_token: Mapped[str] = mapped_column(CITEXT(255), nullable=False)
+    prepared_fingerprint: Mapped[str] = mapped_column(CITEXT(255), nullable=False)
+    commit_state: Mapped[str] = mapped_column(CITEXT(32), nullable=False, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    last_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    result_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "commit_token",
+            name="ux_ctxeng_commit_ledger__tenant_token",
+        ),
+        CheckConstraint(
+            "length(btrim(scope_key)) > 0",
+            name="ck_ctxeng_commit_ledger__scope_key",
+        ),
+        CheckConstraint(
+            "length(btrim(commit_token)) > 0",
+            name="ck_ctxeng_commit_ledger__commit_token",
+        ),
+        CheckConstraint(
+            "length(btrim(prepared_fingerprint)) > 0",
+            name="ck_ctxeng_commit_ledger__prepared_fingerprint",
+        ),
+        CheckConstraint(
+            "length(btrim(commit_state)) > 0",
+            name="ck_ctxeng_commit_ledger__commit_state",
+        ),
+        {"schema": _SCHEMA},
+    )
+
+
+class ContextTrace(
+    ModelBase, TenantScopedMixin
+):  # pylint: disable=too-few-public-methods
     """Runtime context trace record."""
 
     __tablename__ = "context_engine_context_trace"
 
     scope_key: Mapped[str] = mapped_column(CITEXT(255), nullable=False, index=True)
     trace_id: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True, index=True)
-    message_id: Mapped[str | None] = mapped_column(CITEXT(255), nullable=True, index=True)
+    message_id: Mapped[str | None] = mapped_column(
+        CITEXT(255), nullable=True, index=True
+    )
     stage: Mapped[str] = mapped_column(CITEXT(64), nullable=False, index=True)
     selected_items: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     dropped_items: Mapped[list | None] = mapped_column(JSONB, nullable=True)
@@ -458,6 +540,7 @@ class ContextTrace(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-pub
         {"schema": _SCHEMA},
     )
 
+
 metadata = MetaData()
 for table in (
     ContextPolicy.__table__,
@@ -469,6 +552,7 @@ for table in (
     ContextEventLog.__table__,
     ContextMemoryRecord.__table__,
     ContextCacheRecord.__table__,
+    ContextCommitLedger.__table__,
     ContextTrace.__table__,
 ):
     table.to_metadata(metadata)
