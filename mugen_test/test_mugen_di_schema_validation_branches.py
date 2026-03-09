@@ -387,6 +387,14 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         ]
         cases.append((cfg, ".migration_track must be a non-empty string"))
 
+        cfg = _valid_core_config()
+        cfg["acp"] = {"plugin_name": "com.vorsocomputing.mugen.acp"}
+        cases.append((cfg, "acp.plugin_name is no longer supported"))
+
+        cfg = _valid_core_config()
+        cfg["acp"] = {"namespace": "com.vorsocomputing.mugen.acp"}
+        cases.append((cfg, "acp.namespace is no longer supported"))
+
         for candidate, message in cases:
             with self.subTest(message=message):
                 with self.assertRaisesRegex(RuntimeError, re.escape(message)):

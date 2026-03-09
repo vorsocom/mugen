@@ -19,6 +19,7 @@ from sqlalchemy import create_engine, text
 from mugen.core.plugin.acp.migration.apply_manifest import apply_manifest
 from mugen.core.plugin.acp.migration.loader import contribute_all
 from mugen.core.plugin.acp.sdk.registry import AdminRegistry
+from mugen.core.plugin.acp.utility.identity import resolve_acp_admin_namespace
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _NAMESPACE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
@@ -55,19 +56,16 @@ def _fetch_plugin_grant_counts(
     plugin_namespace: str,
 ) -> tuple[int, int]:
     pobj_count = conn.execute(
-        text(
-            f"""
+        text(f"""
             SELECT count(*)
             FROM {schema}.admin_permission_object
             WHERE namespace = :plugin_namespace
-            """
-        ),
+            """),
         {"plugin_namespace": plugin_namespace},
     ).scalar_one()
 
     grant_count = conn.execute(
-        text(
-            f"""
+        text(f"""
             SELECT count(*)
             FROM {schema}.admin_global_permission_entry g
             JOIN {schema}.admin_permission_object o
@@ -77,8 +75,7 @@ def _fetch_plugin_grant_counts(
             WHERE o.namespace = :plugin_namespace
               AND r.namespace = :admin_namespace
               AND r.name = 'administrator'
-            """
-        ),
+            """),
         {
             "plugin_namespace": plugin_namespace,
             "admin_namespace": admin_namespace,
@@ -122,7 +119,7 @@ def reseed_manifest(
         return 0
 
     db_url = mugen_cfg["rdbms"]["alembic"]["url"]
-    admin_namespace = mugen_cfg["acp"]["namespace"]
+    admin_namespace = resolve_acp_admin_namespace(mugen_cfg, enabled_only=True)
 
     engine = create_engine(db_url)
     with engine.begin() as conn:

@@ -57,6 +57,22 @@ class _FakeRegistryWithTypeLookup:
         return object()
 
 
+def _config(namespace: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        mugen=SimpleNamespace(
+            modules=SimpleNamespace(
+                extensions=[
+                    SimpleNamespace(
+                        type="fw",
+                        token="core.fw.acp",
+                        namespace=namespace,
+                    )
+                ]
+            )
+        )
+    )
+
+
 class TestACPDiRuntimeRegression(unittest.IsolatedAsyncioTestCase):
     """Lock runtime DI behavior for ACP modules and auth code paths."""
 
@@ -122,7 +138,7 @@ class TestACPDiRuntimeRegression(unittest.IsolatedAsyncioTestCase):
         )
         user_svc = _FakeUserService(user)
         registry = _FakeRegistry(user_svc=user_svc)
-        config = SimpleNamespace(acp=SimpleNamespace(namespace=" Com.Test.Admin "))
+        config = _config(" Com.Test.Admin ")
         logger = SimpleNamespace(debug=lambda *_: None, error=lambda *_: None)
 
         result = await auth_decorator._require_user_from_token(
@@ -138,7 +154,7 @@ class TestACPDiRuntimeRegression(unittest.IsolatedAsyncioTestCase):
 
     def test_authorization_service_uses_admin_ns_for_edm_service_keys(self) -> None:
         registry = _FakeRegistry()
-        config = SimpleNamespace(acp=SimpleNamespace(namespace=" Com.Test.Admin "))
+        config = _config(" Com.Test.Admin ")
 
         AuthorizationService(
             config_provider=lambda: config,

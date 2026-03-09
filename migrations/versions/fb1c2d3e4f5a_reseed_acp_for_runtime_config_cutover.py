@@ -34,16 +34,14 @@ _ACP_KMS_SEED_SOURCE = "runtime_config_cutover_default_acp_kms_grant"
 
 def _seed_default_acp_kms_capability_grant(conn, *, plugin_key: str) -> None:
     existing = conn.execute(
-        text(
-            f"""
+        text(f"""
             SELECT id
             FROM {_SCHEMA}.admin_plugin_capability_grant
             WHERE tenant_id = :tenant_id
               AND lower(plugin_key) = lower(:plugin_key)
               AND revoked_at IS NULL
             LIMIT 1
-            """
-        ),
+            """),
         {
             "tenant_id": _GLOBAL_TENANT_ID,
             "plugin_key": plugin_key,
@@ -53,8 +51,7 @@ def _seed_default_acp_kms_capability_grant(conn, *, plugin_key: str) -> None:
         return
 
     conn.execute(
-        text(
-            f"""
+        text(f"""
             INSERT INTO {_SCHEMA}.admin_plugin_capability_grant (
                 tenant_id,
                 plugin_key,
@@ -69,8 +66,7 @@ def _seed_default_acp_kms_capability_grant(conn, *, plugin_key: str) -> None:
                 NULL,
                 CAST(:attributes AS jsonb)
             )
-            """
-        ),
+            """),
         {
             "tenant_id": _GLOBAL_TENANT_ID,
             "plugin_key": plugin_key,
@@ -103,15 +99,17 @@ def upgrade() -> None:
     from mugen.core.plugin.acp.migration.apply_manifest import apply_manifest
     from mugen.core.plugin.acp.migration.loader import contribute_all
     from mugen.core.plugin.acp.sdk.registry import AdminRegistry
+    from mugen.core.plugin.acp.utility.identity import resolve_acp_identity
 
     conn = op.get_bind()
     registry = AdminRegistry(strict_permission_decls=True)
     contribute_all(registry, mugen_cfg=mugen_cfg)
     manifest = registry.build_seed_manifest()
     apply_manifest(conn, manifest, schema=_SCHEMA)
+    acp_identity = resolve_acp_identity(mugen_cfg, enabled_only=True)
     _seed_default_acp_kms_capability_grant(
         conn,
-        plugin_key=str(acp_cfg.get("plugin_name") or acp_cfg.get("namespace")),
+        plugin_key=acp_identity.name or acp_identity.namespace,
     )
 
 
@@ -122,13 +120,11 @@ def downgrade() -> None:
 
     conn = op.get_bind()
     conn.execute(
-        text(
-            f"""
+        text(f"""
             DELETE FROM {_SCHEMA}.admin_plugin_capability_grant
             WHERE tenant_id = :tenant_id
               AND attributes @> CAST(:attributes AS jsonb)
-            """
-        ),
+            """),
         {
             "tenant_id": _GLOBAL_TENANT_ID,
             "attributes": json.dumps({"seed_source": _ACP_KMS_SEED_SOURCE}),

@@ -30,7 +30,19 @@ def _abort_raiser(code: int, *_args, **_kwargs):
 
 
 def _config() -> SimpleNamespace:
-    return SimpleNamespace(acp=SimpleNamespace(namespace=_ACP_NAMESPACE))
+    return SimpleNamespace(
+        mugen=SimpleNamespace(
+            modules=SimpleNamespace(
+                extensions=[
+                    SimpleNamespace(
+                        type="fw",
+                        token="core.fw.acp",
+                        namespace=_ACP_NAMESPACE,
+                    )
+                ]
+            )
+        )
+    )
 
 
 def _entry(
@@ -143,9 +155,7 @@ class TestMugenAcpFuncRuntimeMatrix(unittest.IsolatedAsyncioTestCase):
     async def test_endpoint_lists_active_runtime_profiles(self) -> None:
         endpoint = func_runtime_matrix.matrix_device_verification_data.__wrapped__
         matrix_client = SimpleNamespace(
-            active_device_verification_data=AsyncMock(
-                return_value=[_entry()]
-            )
+            active_device_verification_data=AsyncMock(return_value=[_entry()])
         )
         logger = Mock()
 
@@ -698,17 +708,19 @@ class TestMugenAcpFuncRuntimeMatrix(unittest.IsolatedAsyncioTestCase):
     async def test_collect_device_verification_data_falls_back_to_single_client(
         self,
     ) -> None:
-        entries = await (  # pylint: disable=protected-access
-            func_runtime_matrix._collect_device_verification_data(
-                SimpleNamespace(
-                    device_verification_data=Mock(
-                        return_value={
-                            **_entry(client_profile_id=_PROFILE_A_ID),
-                            "ignored": "value",
-                        }
-                    )
-                ),
-                client_profile_id=_PROFILE_A_ID,
+        entries = (
+            await (  # pylint: disable=protected-access
+                func_runtime_matrix._collect_device_verification_data(
+                    SimpleNamespace(
+                        device_verification_data=Mock(
+                            return_value={
+                                **_entry(client_profile_id=_PROFILE_A_ID),
+                                "ignored": "value",
+                            }
+                        )
+                    ),
+                    client_profile_id=_PROFILE_A_ID,
+                )
             )
         )
 
@@ -729,10 +741,12 @@ class TestMugenAcpFuncRuntimeMatrix(unittest.IsolatedAsyncioTestCase):
     async def test_collect_device_verification_data_returns_empty_without_resolver(
         self,
     ) -> None:
-        entries = await (  # pylint: disable=protected-access
-            func_runtime_matrix._collect_device_verification_data(
-                SimpleNamespace(),
-                client_profile_id=None,
+        entries = (
+            await (  # pylint: disable=protected-access
+                func_runtime_matrix._collect_device_verification_data(
+                    SimpleNamespace(),
+                    client_profile_id=None,
+                )
             )
         )
 
@@ -741,14 +755,16 @@ class TestMugenAcpFuncRuntimeMatrix(unittest.IsolatedAsyncioTestCase):
     async def test_collect_device_verification_data_rejects_invalid_single_entry(
         self,
     ) -> None:
-        entries = await (  # pylint: disable=protected-access
-            func_runtime_matrix._collect_device_verification_data(
-                SimpleNamespace(
-                    device_verification_data=Mock(
-                        return_value={"client_profile_key": "default"}
-                    )
-                ),
-                client_profile_id=None,
+        entries = (
+            await (  # pylint: disable=protected-access
+                func_runtime_matrix._collect_device_verification_data(
+                    SimpleNamespace(
+                        device_verification_data=Mock(
+                            return_value={"client_profile_key": "default"}
+                        )
+                    ),
+                    client_profile_id=None,
+                )
             )
         )
 
@@ -757,17 +773,19 @@ class TestMugenAcpFuncRuntimeMatrix(unittest.IsolatedAsyncioTestCase):
     async def test_collect_device_verification_data_rejects_mismatched_profile(
         self,
     ) -> None:
-        entries = await (  # pylint: disable=protected-access
-            func_runtime_matrix._collect_device_verification_data(
-                SimpleNamespace(
-                    device_verification_data=Mock(
-                        return_value={
-                            "client_profile_id": _PROFILE_A_ID,
-                            "client_profile_key": "default",
-                        }
-                    )
-                ),
-                client_profile_id=_PROFILE_B_ID,
+        entries = (
+            await (  # pylint: disable=protected-access
+                func_runtime_matrix._collect_device_verification_data(
+                    SimpleNamespace(
+                        device_verification_data=Mock(
+                            return_value={
+                                "client_profile_id": _PROFILE_A_ID,
+                                "client_profile_key": "default",
+                            }
+                        )
+                    ),
+                    client_profile_id=_PROFILE_B_ID,
+                )
             )
         )
 
@@ -800,15 +818,9 @@ class TestMugenAcpFuncRuntimeMatrix(unittest.IsolatedAsyncioTestCase):
             )
         )
         # pylint: disable=protected-access
-        self.assertIsNone(
-            func_runtime_matrix._normalize_uuid_value(None)
-        )
-        self.assertIsNone(
-            func_runtime_matrix._normalize_uuid_value("")
-        )
-        self.assertFalse(
-            func_runtime_matrix._is_global_admin(None, config=_config())
-        )
+        self.assertIsNone(func_runtime_matrix._normalize_uuid_value(None))
+        self.assertIsNone(func_runtime_matrix._normalize_uuid_value(""))
+        self.assertFalse(func_runtime_matrix._is_global_admin(None, config=_config()))
 
     def test_internal_entry_helpers_filter_and_strip_tenant_metadata(self) -> None:
         # pylint: disable=protected-access
@@ -835,9 +847,7 @@ class TestMugenAcpFuncRuntimeMatrix(unittest.IsolatedAsyncioTestCase):
             func_runtime_matrix._normalize_entries(internal_entries),
             [
                 _entry(),
-                _entry(
-                    client_profile_id="00000000-0000-0000-0000-000000000124"
-                ),
+                _entry(client_profile_id="00000000-0000-0000-0000-000000000124"),
             ],
         )
         self.assertEqual(

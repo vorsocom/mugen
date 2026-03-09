@@ -30,7 +30,9 @@ class _BadSub:
 
 
 class _FakeCapabilities:
-    def __init__(self, *, allowed_ops: set[str] | None = None, actions: dict | None = None):
+    def __init__(
+        self, *, allowed_ops: set[str] | None = None, actions: dict | None = None
+    ):
         self.allowed_ops = set(allowed_ops or [])
         self.actions = actions or {}
         self.last_op: str | None = None
@@ -41,8 +43,12 @@ class _FakeCapabilities:
 
 
 class _FakeRegistry:
-    def __init__(self, *, schema_index: dict | None = None, resource=None, user_svc=None):
-        self.schema_index = schema_index if schema_index is not None else {"Users": object()}
+    def __init__(
+        self, *, schema_index: dict | None = None, resource=None, user_svc=None
+    ):
+        self.schema_index = (
+            schema_index if schema_index is not None else {"Users": object()}
+        )
         self._resource = resource
         self._user_svc = user_svc
 
@@ -57,7 +63,19 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
     """Covers helper functions and permission decorator branches."""
 
     def _config(self):
-        return SimpleNamespace(acp=SimpleNamespace(namespace="Com.Test.Admin"))
+        return SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    extensions=[
+                        SimpleNamespace(
+                            type="fw",
+                            token="core.fw.acp",
+                            namespace="Com.Test.Admin",
+                        )
+                    ]
+                )
+            )
+        )
 
     async def test_provider_helpers_return_from_di_container(self) -> None:
         services = {
@@ -85,7 +103,9 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             patch.object(auth_decorator, "request", new=SimpleNamespace(headers={})),
         ):
             with self.assertRaises(_AbortCalled) as ex:
-                auth_decorator._get_bearer_token_from_header(logger_provider=lambda: logger)
+                auth_decorator._get_bearer_token_from_header(
+                    logger_provider=lambda: logger
+                )
             self.assertEqual(ex.exception.code, 401)
             logger.debug.assert_called_once_with("Authorization header missing.")
 
@@ -99,7 +119,9 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             with self.assertRaises(_AbortCalled) as ex:
-                auth_decorator._get_bearer_token_from_header(logger_provider=lambda: logger)
+                auth_decorator._get_bearer_token_from_header(
+                    logger_provider=lambda: logger
+                )
             self.assertEqual(ex.exception.code, 401)
             logger.debug.assert_called_once_with("Invalid authorization header format.")
 
@@ -109,14 +131,20 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             new=SimpleNamespace(headers={"Authorization": "Bearer abc.def.ghi"}),
         ):
             self.assertEqual(
-                auth_decorator._get_bearer_token_from_header(logger_provider=lambda: Mock()),
+                auth_decorator._get_bearer_token_from_header(
+                    logger_provider=lambda: Mock()
+                ),
                 "abc.def.ghi",
             )
 
     async def test_decode_access_token_paths(self) -> None:
         valid_sub = str(uuid.uuid4())
-        jwt_svc = SimpleNamespace(verify=Mock(return_value={"sub": valid_sub, "token_version": 1}))
-        with patch.object(auth_decorator, "_get_bearer_token_from_header", return_value="tok"):
+        jwt_svc = SimpleNamespace(
+            verify=Mock(return_value={"sub": valid_sub, "token_version": 1})
+        )
+        with patch.object(
+            auth_decorator, "_get_bearer_token_from_header", return_value="tok"
+        ):
             token = auth_decorator._decode_access_token(
                 logger_provider=lambda: Mock(),
                 jwt_provider=lambda: jwt_svc,
@@ -124,7 +152,9 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(token["sub"], valid_sub)
 
         with (
-            patch.object(auth_decorator, "_get_bearer_token_from_header", return_value="tok"),
+            patch.object(
+                auth_decorator, "_get_bearer_token_from_header", return_value="tok"
+            ),
             patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
         ):
             logger = Mock()
@@ -138,7 +168,9 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             logger.debug.assert_called_once_with("Unauthorized request. Token expired.")
 
         with (
-            patch.object(auth_decorator, "_get_bearer_token_from_header", return_value="tok"),
+            patch.object(
+                auth_decorator, "_get_bearer_token_from_header", return_value="tok"
+            ),
             patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
         ):
             logger = Mock()
@@ -152,7 +184,9 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             logger.debug.assert_called_once_with("Unauthorized request. Invalid token.")
 
         with (
-            patch.object(auth_decorator, "_get_bearer_token_from_header", return_value="tok"),
+            patch.object(
+                auth_decorator, "_get_bearer_token_from_header", return_value="tok"
+            ),
             patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
         ):
             logger = Mock()
@@ -166,7 +200,9 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             logger.error.assert_called_once_with("Invalid token subject type.")
 
         with (
-            patch.object(auth_decorator, "_get_bearer_token_from_header", return_value="tok"),
+            patch.object(
+                auth_decorator, "_get_bearer_token_from_header", return_value="tok"
+            ),
             patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
         ):
             logger = Mock()
@@ -220,9 +256,7 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
         )
         user_svc.get_expanded.assert_awaited_once()
 
-        with (
-            patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
-        ):
+        with (patch.object(auth_decorator, "abort", side_effect=_abort_raiser),):
             bad_svc = SimpleNamespace(
                 get=AsyncMock(side_effect=SQLAlchemyError("boom")),
                 get_expanded=AsyncMock(side_effect=SQLAlchemyError("boom")),
@@ -335,7 +369,11 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
 
         wrapped = auth_decorator.global_auth_required(endpoint)
         with (
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(user_id)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",
@@ -348,7 +386,9 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
 
         admin_user = SimpleNamespace(
             id=user_id,
-            global_roles=[SimpleNamespace(namespace="com.test.admin", name="administrator")],
+            global_roles=[
+                SimpleNamespace(namespace="com.test.admin", name="administrator")
+            ],
         )
         global_admin_wrapped = auth_decorator.global_admin_required(
             endpoint,
@@ -356,7 +396,11 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             logger_provider=lambda: Mock(),
         )
         with (
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(user_id)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",
@@ -370,7 +414,11 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
         non_admin_user = SimpleNamespace(id=user_id, global_roles=[])
         with (
             patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(user_id)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",
@@ -383,7 +431,11 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
 
         factory_auth_wrapped = auth_decorator.global_auth_required()(endpoint)
         with (
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(user_id)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",
@@ -397,7 +449,11 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             logger_provider=lambda: Mock(),
         )(endpoint)
         with (
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(user_id)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",
@@ -438,7 +494,11 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
         )(endpoint)
 
         with (
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(user_id)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",
@@ -463,7 +523,11 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             auth_provider=lambda: auth_svc,
         )(endpoint)
         with (
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(user_id)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",
@@ -488,7 +552,11 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
         )(endpoint)
         tenant_id = str(uuid.uuid4())
         with (
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(user_id)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",
@@ -500,7 +568,9 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
         ):
-            tenant_result = await wrapped_tenant(entity_set="Users", tenant_id=tenant_id)
+            tenant_result = await wrapped_tenant(
+                entity_set="Users", tenant_id=tenant_id
+            )
         self.assertEqual(tenant_result["auth_user"], str(user_id))
 
         wrapped_admin_bypass = auth_decorator.permission_required(
@@ -513,7 +583,11 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
         )(endpoint)
         auth_svc.has_permission.reset_mock()
         with (
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(user_id)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",
@@ -531,7 +605,11 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(user_id)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",

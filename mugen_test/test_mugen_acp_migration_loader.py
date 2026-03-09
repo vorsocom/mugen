@@ -34,8 +34,7 @@ def _cfg(*, ext: list[dict] | None = None) -> dict:
                 "core": {},
                 "extensions": list(ext or []),
             }
-        },
-        "acp": {"plugin_name": "com.vorsocomputing.mugen.acp"},
+        }
     }
 
 
@@ -195,6 +194,41 @@ class TestAcpMigrationLoader(unittest.TestCase):
             plugin_namespace="com.vorsocomputing.mugen.audit",
         )
 
+    def test_contribute_all_identifies_admin_plugin_by_token(self) -> None:
+        cfg = _cfg(
+            ext=[
+                _fw_entry(
+                    token="core.fw.acp",
+                    name="renamed.acp.plugin",
+                    namespace="com.vorsocomputing.mugen.acp",
+                    contrib="mugen.core.plugin.acp.contrib",
+                ),
+                _fw_entry(
+                    token="core.fw.audit",
+                    name="com.vorsocomputing.mugen.audit",
+                    namespace="com.vorsocomputing.mugen.audit",
+                    contrib="mugen.core.plugin.audit.contrib",
+                ),
+            ],
+        )
+        registry = object()
+        acp_fn = Mock()
+        audit_fn = Mock()
+
+        with patch.object(loader, "_import_callable", side_effect=[acp_fn, audit_fn]):
+            loader.contribute_all(registry, mugen_cfg=cfg)
+
+        acp_fn.assert_called_once_with(
+            registry,
+            admin_namespace="com.vorsocomputing.mugen.acp",
+            plugin_namespace="com.vorsocomputing.mugen.acp",
+        )
+        audit_fn.assert_called_once_with(
+            registry,
+            admin_namespace="com.vorsocomputing.mugen.acp",
+            plugin_namespace="com.vorsocomputing.mugen.audit",
+        )
+
     def test_contribute_all_requires_admin_plugin(self) -> None:
         cfg = _cfg(
             ext=[
@@ -207,5 +241,8 @@ class TestAcpMigrationLoader(unittest.TestCase):
             ]
         )
 
-        with self.assertRaisesRegex(RuntimeError, "admin plugin is required"):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "enabled framework extension token 'core.fw.acp' is required",
+        ):
             loader.contribute_all(object(), mugen_cfg=cfg)
