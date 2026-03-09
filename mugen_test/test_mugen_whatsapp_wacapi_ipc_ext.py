@@ -16,23 +16,34 @@ from mugen.core.contract.service.ingress_routing import (
 from mugen.core.contract.service.ipc import IPCCommandRequest
 from mugen.core.plugin.whatsapp.wacapi import ipc_ext
 from mugen.core.plugin.whatsapp.wacapi.ipc_ext import WhatsAppWACAPIIPCExtension
+from mugen.core.utility.messaging_client_user_access import (
+    MessagingClientUserAccessPolicy,
+)
 
 _CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000204")
 
 
 def _make_config(
-    *, beta_active: bool, beta_users=None, beta_message: str = "Beta only"
+    *,
+    beta_active: bool,
+    beta_users=None,
+    beta_message: str = "Beta only",
+    access_mode: str | None = None,
+    access_users=None,
+    denied_message: str | None = None,
 ):
+    if access_mode is None:
+        access_mode = "allow-only" if beta_active else "allow-all"
+    if access_users is None:
+        access_users = beta_users
+    if denied_message is None and beta_active:
+        denied_message = beta_message
     return SimpleNamespace(
-        mugen=SimpleNamespace(
-            beta=SimpleNamespace(
-                active=beta_active,
-                message=beta_message,
-            )
-        ),
         whatsapp=SimpleNamespace(
-            beta=SimpleNamespace(
-                users=list(beta_users or []),
+            user_access=SimpleNamespace(
+                mode=access_mode,
+                users=list(access_users or []),
+                denied_message=denied_message,
             ),
             business=SimpleNamespace(phone_number_id="pnid-1"),
         ),
@@ -140,6 +151,7 @@ def _make_client():
             return_value=_ok_payload({"messages": [{"id": "m11"}]})
         ),
         emit_processing_signal=AsyncMock(return_value=True),
+        user_access_policy=AsyncMock(return_value=MessagingClientUserAccessPolicy()),
     )
 
 
@@ -540,12 +552,22 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_beta_gate_replies_and_returns_early(self) -> None:
+    async def test_user_access_policy_replies_and_returns_early(self) -> None:
         client = _make_client()
+        client.user_access_policy.return_value = MessagingClientUserAccessPolicy(
+            mode="allow-only",
+            users=("15550002",),
+            denied_message="Not enabled",
+        )
         messaging_service = _make_messaging_service()
         user_service = _make_user_service()
         ext = _new_extension(
-            config=_make_config(beta_active=True, beta_users=["15550002"]),
+            config=_make_config(
+                beta_active=False,
+                access_mode="allow-only",
+                access_users=["15550002"],
+                denied_message="Not enabled",
+            ),
             client=client,
             messaging_service=messaging_service,
             user_service=user_service,
@@ -564,11 +586,99 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         await ext._wacapi_event(payload)  # pylint: disable=protected-access
 
         client.send_text_message.assert_awaited_once_with(
-            message="Beta only",
+            message="Not enabled",
             recipient="15550001",
         )
         messaging_service.handle_text_message.assert_not_awaited()
         user_service.add_known_user.assert_not_awaited()
+
+    async def test_user_access_policy_denies_without_reply_when_no_message(self) -> None:
+        client = _make_client()
+        client.user_access_policy.return_value = MessagingClientUserAccessPolicy(
+            mode="allow-only",
+            users=("15550002",),
+            denied_message=None,
+        )
+        messaging_service = _make_messaging_service()
+        ext = _new_extension(
+            config=_make_config(
+                beta_active=False,
+                access_mode="allow-only",
+                access_users=["15550002"],
+            ),
+            client=client,
+            messaging_service=messaging_service,
+            user_service=_make_user_service(),
+        )
+
+        await ext._process_message_event(  # pylint: disable=protected-access
+            {
+                "contacts": [
+                    {
+                        "wa_id": "15550001",
+                        "profile": {"name": "Test User"},
+                    }
+                ]
+            },
+            {
+                "id": "wamid-no-reply",
+                "from": "15550001",
+                "type": "text",
+                "text": {"body": "hello"},
+            },
+            {},
+            skip_dedupe=True,
+        )
+
+        client.send_text_message.assert_not_awaited()
+        messaging_service.handle_text_message.assert_not_awaited()
+
+    async def test_invalid_user_access_policy_is_logged_and_dropped(self) -> None:
+        client = _make_client()
+        client.user_access_policy.return_value = "invalid"
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+            messaging_service=_make_messaging_service(),
+            user_service=_make_user_service(),
+        )
+
+        await ext._process_message_event(  # pylint: disable=protected-access
+            {
+                "contacts": [
+                    {
+                        "wa_id": "15550001",
+                        "profile": {"name": "Test User"},
+                    }
+                ]
+            },
+            {
+                "id": "wamid-invalid-policy",
+                "from": "15550001",
+                "type": "text",
+                "text": {"body": "hello"},
+            },
+            {},
+            skip_dedupe=True,
+        )
+
+        client.send_text_message.assert_not_awaited()
+        self.assertIn(
+            "Invalid user access policy",
+            ext._logging_gateway.warning.call_args.args[0],  # pylint: disable=protected-access
+        )
+
+    async def test_resolve_user_access_policy_handles_none_and_invalid_results(self) -> None:
+        client = _make_client()
+        client.user_access_policy.return_value = None
+        ext = _new_extension(config=_make_config(beta_active=False), client=client)
+
+        policy = await ext._resolve_user_access_policy()  # pylint: disable=protected-access
+        self.assertEqual(policy, MessagingClientUserAccessPolicy())
+
+        client.user_access_policy.return_value = "invalid"
+        with self.assertRaisesRegex(RuntimeError, "returned an invalid result"):
+            await ext._resolve_user_access_policy()  # pylint: disable=protected-access
 
     async def test_text_event_processes_and_sends_all_response_types(self) -> None:
         client = _make_client()
@@ -1754,11 +1864,21 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="15550010",
         )
 
-    async def test_beta_active_user_in_allow_list_continues_processing(self) -> None:
+    async def test_allowed_user_continues_processing(self) -> None:
         client = _make_client()
+        client.user_access_policy.return_value = MessagingClientUserAccessPolicy(
+            mode="allow-only",
+            users=("15550011",),
+            denied_message="Not enabled",
+        )
         messaging_service = _make_messaging_service()
         ext = _new_extension(
-            config=_make_config(beta_active=True, beta_users=["15550011"]),
+            config=_make_config(
+                beta_active=False,
+                access_mode="allow-only",
+                access_users=["15550011"],
+                denied_message="Not enabled",
+            ),
             client=client,
             messaging_service=messaging_service,
             user_service=_make_user_service(known_users={"15550011": "known"}),

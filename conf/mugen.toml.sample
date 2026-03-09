@@ -1,7 +1,5 @@
 [mugen]
 assistant.persona = ""
-beta.active = true
-beta.message = ""
 debug_conversation = false
 environment = "development"
 logger.level = 10
@@ -416,7 +414,6 @@ api.read_timeout_seconds = 30.0
 
 # === Matrix ===
 [matrix]
-beta.users = []
 domain = ""
 domains.allowed = []
 domains.denied = []
@@ -439,6 +436,8 @@ security.device_trust.mode = "strict_known"
 storage.olm.path = "/absolute/path/to/data/.olmstore"
 # Matrix homeserver, user, device, and credentials are managed through ACP
 # MessagingClientProfiles and KeyRefs.
+# Optional sender gating also lives per client profile in
+# MessagingClientProfiles.Settings.user_access.
 # Required whenever Matrix platform is enabled.
 security.credentials.encryption_key = "<set-secret-encryption-key>"
 
@@ -729,7 +728,6 @@ hf.home = "/absolute/path/to/hf/cache"
 
 # === WhatsApp ===
 [whatsapp]
-beta.users = []
 graphapi.base_url = "https://graph.facebook.com"
 graphapi.version = "v20.0"
 # Graph API request timeout in seconds.
@@ -751,6 +749,8 @@ webhook.dedupe_ttl_seconds = 86400
 # WhatsApp webhook path tokens, verification tokens, app secrets, phone-number
 # ids, and Graph API access tokens are managed through ACP
 # MessagingClientProfiles and KeyRefs.
+# Optional sender gating and deny replies also live per client profile in
+# MessagingClientProfiles.Settings.user_access.
 
 # === Web ===
 [web]

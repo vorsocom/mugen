@@ -31,7 +31,6 @@ When `whatsapp` is enabled in `mugen.platforms`, startup is fail-closed unless:
    - `whatsapp.servers.allowed` when `verify_ip=true`
    - `whatsapp.servers.trust_forwarded_for`
    - `whatsapp.webhook.dedupe_ttl_seconds`
-   - `whatsapp.beta.users` when `mugen.beta.active=true`
 2. DI provider path resolves:
    - `mugen.modules.core.client.whatsapp`
 3. required extension tokens are registered:
@@ -41,6 +40,10 @@ When `whatsapp` is enabled in `mugen.platforms`, startup is fail-closed unless:
 Webhook path tokens, verification tokens, app secrets, phone-number ids, and
 Graph API access tokens are owned by ACP `MessagingClientProfiles` plus
 `KeyRef` secrets. Zero active client profiles is valid at startup.
+
+Optional sender gating is owned per `MessagingClientProfiles.settings` using
+`user_access.mode`, `user_access.users`, and optional
+`user_access.denied_message`.
 
 ## Webhook Security Contract
 

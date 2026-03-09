@@ -70,13 +70,13 @@ def _make_config() -> SimpleNamespace:
                     startup_timeout_seconds=30.0,
                 ),
             ),
-            beta=SimpleNamespace(
-                active=False,
-                message="Beta only",
-            )
         ),
         whatsapp=SimpleNamespace(
-            beta=SimpleNamespace(users=[]),
+            user_access=SimpleNamespace(
+                mode="allow-all",
+                users=[],
+                denied_message=None,
+            ),
             graphapi=SimpleNamespace(
                 base_url="https://graph.example.com",
                 version="v19.0",

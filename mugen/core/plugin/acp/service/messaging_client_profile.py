@@ -28,9 +28,12 @@ from mugen.core.plugin.acp.service.runtime_config_profile import (
 from mugen.core.service.platform_runtime_reload import reload_platform_runtime_profiles
 from mugen.core.utility.platform_runtime_profile import build_config_namespace
 from mugen.core.plugin.acp.utility.runtime_config_policy import (
+    normalize_messaging_client_profile_settings,
     normalize_messaging_platform_key,
     normalize_secret_ref_map,
-    normalize_tenant_messaging_settings,
+)
+from mugen.core.utility.messaging_client_user_access import (
+    normalize_messaging_client_user_access,
 )
 
 _TABLE_KEY_REF = "admin_key_ref"
@@ -200,10 +203,19 @@ class MessagingClientProfileService(
         platform_key: object,
         value: object,
     ) -> dict[str, Any]:
-        return normalize_tenant_messaging_settings(
+        normalized_platform_key = normalize_messaging_platform_key(platform_key)
+        payload = normalize_messaging_client_profile_settings(
             platform_key=platform_key,
             value=value,
         )
+        user_access = payload.get("user_access")
+        if user_access is not None:
+            payload["user_access"] = normalize_messaging_client_user_access(
+                user_access,
+                field_name="Settings.user_access",
+                allow_denied_message=normalized_platform_key == "whatsapp",
+            )
+        return payload
 
     @staticmethod
     def _plain_data(value: Any) -> Any:

@@ -186,9 +186,42 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             profile_mod.MessagingClientProfileService._normalize_settings(
                 platform_key="matrix",
-                value={"client": {"device": "dev-box"}},
+                value={
+                    "client": {"device": "dev-box"},
+                    "user_access": {
+                        "mode": "allow-only",
+                        "users": ["@u:example.com", "@u:example.com"],
+                    },
+                },
             ),
-            {"client": {"device": "dev-box"}},
+            {
+                "client": {"device": "dev-box"},
+                "user_access": {
+                    "mode": "allow-only",
+                    "users": ["@u:example.com"],
+                },
+            },
+        )
+        self.assertEqual(
+            profile_mod.MessagingClientProfileService._normalize_settings(
+                platform_key="whatsapp",
+                value={
+                    "app": {"id": "app-id"},
+                    "user_access": {
+                        "mode": "allow-all-except",
+                        "users": ["15550000001"],
+                        "denied_message": "Not enabled",
+                    },
+                },
+            ),
+            {
+                "app": {"id": "app-id"},
+                "user_access": {
+                    "mode": "allow-all-except",
+                    "users": ["15550000001"],
+                    "denied_message": "Not enabled",
+                },
+            },
         )
         self.assertEqual(
             profile_mod.MessagingClientProfileService._normalize_platform_secret_refs(
@@ -213,6 +246,16 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             profile_mod.MessagingClientProfileService._normalize_platform_secret_refs(
                 platform_key="line",
                 value={"client.password": str(_KEY_REF_ID)},
+            )
+        with self.assertRaisesRegex(RuntimeError, "Settings.user_access"):
+            profile_mod.MessagingClientProfileService._normalize_settings(
+                platform_key="matrix",
+                value={
+                    "user_access": {
+                        "mode": "allow-all",
+                        "users": ["@u:example.com"],
+                    }
+                },
             )
 
         identifier_payload = {
@@ -415,6 +458,10 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                     "assistant": {"name": "settings-name"},
                     "profile_displayname": "settings-display-name",
                     "client": {"device": "device-default"},
+                    "user_access": {
+                        "mode": "allow-only",
+                        "users": ["@allowed:example.com"],
+                    },
                 },
                 secret_refs={},
                 path_token=None,
@@ -423,6 +470,13 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(matrix_section["client"]["user"], "@bot:example.com")
         self.assertEqual(matrix_section["client"]["device"], "device-default")
+        self.assertEqual(
+            matrix_section["user_access"],
+            {
+                "mode": "allow-only",
+                "users": ["@allowed:example.com"],
+            },
+        )
         self.assertEqual(
             matrix_section["profile_displayname"],
             "Profile Display Name",
@@ -444,6 +498,10 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                     "assistant": {"name": "settings-name"},
                     "profile_displayname": "settings-display-name",
                     "client": {"device": "device-default"},
+                    "user_access": {
+                        "mode": "allow-only",
+                        "users": ["@allowed:example.com"],
+                    },
                 },
                 secret_refs={},
                 path_token=None,

@@ -66,6 +66,25 @@ class TestRuntimeConfigPolicy(unittest.TestCase):
             {"webhook": {"aes_enabled": True}},
         )
         self.assertEqual(
+            policy.normalize_messaging_client_profile_settings(
+                platform_key="matrix",
+                value={
+                    "Client": {"Device": "device-1"},
+                    "User_Access": {
+                        "Mode": "allow-only",
+                        "Users": ["@user:example.com"],
+                    },
+                },
+            ),
+            {
+                "client": {"device": "device-1"},
+                "user_access": {
+                    "mode": "allow-only",
+                    "users": ["@user:example.com"],
+                },
+            },
+        )
+        self.assertEqual(
             policy.normalize_secret_ref_map(
                 platform_key="matrix",
                 value={"CLIENT.PASSWORD": key_ref_id},
@@ -87,6 +106,15 @@ class TestRuntimeConfigPolicy(unittest.TestCase):
             policy.normalize_tenant_messaging_settings(
                 platform_key="telegram",
                 value={"Webhook": {"PathToken": "blocked"}},
+            )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "SettingsJson path 'user_access.mode' is not allowed",
+        ):
+            policy.normalize_runtime_config_settings(
+                category="messaging.platform_defaults",
+                profile_key="matrix",
+                value={"User_Access": {"Mode": "allow-only"}},
             )
 
         with self.assertRaisesRegex(RuntimeError, "SecretRefs must be a JSON object"):

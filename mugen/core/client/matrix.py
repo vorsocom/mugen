@@ -103,6 +103,10 @@ from mugen.core.service.context_scope_resolution import (
 )
 from mugen.core.service.ingress_routing import DefaultIngressRoutingService
 from mugen.core.utility.client_profile_runtime import normalize_client_profile_id
+from mugen.core.utility.messaging_client_user_access import (
+    MessagingClientUserAccessPolicy,
+    resolve_messaging_client_user_access_policy,
+)
 from mugen.core.utility.platforms import normalize_platforms
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
@@ -1316,6 +1320,16 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
         return parsed_allowlist
 
+    def _resolve_user_access_policy(self) -> MessagingClientUserAccessPolicy:
+        return resolve_messaging_client_user_access_policy(
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()),
+                "user_access",
+                None,
+            ),
+            field_name="matrix.user_access",
+        )
+
     def _log_untrusted_device(
         self,
         user_id: str,
@@ -1773,24 +1787,37 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             )
             return
 
-        # If the assistant is in limited-beta mode, only process invites from the
-        # list of selected beta users.
-        if self._config.mugen.beta.active:
-            beta_users: list = self._config.matrix.beta.users
-            if event.sender not in beta_users:
-                await self.room_leave(room.room_id)
-                self._track_matrix_decision(
-                    domain="invites",
-                    action="rejected",
-                    reason="non_beta_user",
-                    sender=event.sender,
-                    room_id=room.room_id,
-                )
-                self._logging_gateway.warning(
-                    "InviteMemberEvent: Rejected invitation. Reason:"
-                    f" Non-beta user. ({event.sender})"
-                )
-                return
+        try:
+            user_access_policy = self._resolve_user_access_policy()
+        except RuntimeError as exc:
+            await self.room_leave(room.room_id)
+            self._track_matrix_decision(
+                domain="invites",
+                action="rejected",
+                reason="invalid_user_access_policy",
+                sender=event.sender,
+                room_id=room.room_id,
+            )
+            self._logging_gateway.warning(
+                "InviteMemberEvent: Rejected invitation. Reason: Invalid user"
+                f" access policy. ({event.sender}) error={exc}"
+            )
+            return
+
+        if not user_access_policy.allows(event.sender):
+            await self.room_leave(room.room_id)
+            self._track_matrix_decision(
+                domain="invites",
+                action="rejected",
+                reason="user_access_denied",
+                sender=event.sender,
+                room_id=room.room_id,
+            )
+            self._logging_gateway.warning(
+                "InviteMemberEvent: Rejected invitation. Reason: User access"
+                f" denied. ({event.sender})"
+            )
+            return
 
         # Only accept invites to Direct Messages for now.
         if self._direct_invites_only():

@@ -34,6 +34,10 @@ from mugen.core.utility.config_value import (
     parse_nonnegative_finite_float,
     parse_optional_positive_finite_float,
 )
+from mugen.core.utility.messaging_client_user_access import (
+    MessagingClientUserAccessPolicy,
+    resolve_messaging_client_user_access_policy,
+)
 from mugen.core.utility.processing_signal import (
     PROCESSING_STATE_START,
     PROCESSING_STATE_STOP,
@@ -175,6 +179,18 @@ class DefaultWhatsAppClient(IWhatsAppClient):
     def _resolve_shutdown_timeout_seconds(self) -> float:
         settings = parse_runtime_bootstrap_settings(self._config)
         return float(settings.shutdown_timeout_seconds)
+
+    def user_access_policy(self) -> MessagingClientUserAccessPolicy:
+        """Return the active sender access policy for this client profile."""
+        return resolve_messaging_client_user_access_policy(
+            getattr(
+                getattr(self._config, "whatsapp", SimpleNamespace()),
+                "user_access",
+                None,
+            ),
+            field_name="whatsapp.user_access",
+            allow_denied_message=True,
+        )
 
     @staticmethod
     def _format_recipient(recipient: str) -> str:
@@ -1143,6 +1159,14 @@ class MultiProfileWhatsAppClient(SimpleProfileClientManager, IWhatsAppClient):
             state=state,
             message_id=message_id,
         )
+
+    async def user_access_policy(self) -> MessagingClientUserAccessPolicy:
+        """Return the sender access policy for the active client profile."""
+        await self.init()
+        policy_provider = getattr(self._client_for(), "user_access_policy", None)
+        if callable(policy_provider):
+            return policy_provider()
+        return MessagingClientUserAccessPolicy()
 
     async def upload_media(
         self,
