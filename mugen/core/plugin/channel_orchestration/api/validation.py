@@ -30,6 +30,33 @@ class EvaluateIntakeValidation(IValidationBase):
         return self
 
 
+class IngressBindingCreateValidation(IValidationBase):
+    """Validate create payloads for ingress bindings."""
+
+    tenant_id: uuid.UUID
+
+    channel_profile_id: uuid.UUID | None = None
+    channel_key: str
+    identifier_type: str
+    identifier_value: str
+
+    @model_validator(mode="after")
+    def _validate_required_strings(self) -> "IngressBindingCreateValidation":
+        self.channel_key = self.channel_key.strip()
+        if self.channel_key == "":
+            raise ValueError("ChannelKey must be non-empty.")
+
+        self.identifier_type = self.identifier_type.strip()
+        if self.identifier_type == "":
+            raise ValueError("IdentifierType must be non-empty.")
+
+        self.identifier_value = self.identifier_value.strip()
+        if self.identifier_value == "":
+            raise ValueError("IdentifierValue must be non-empty.")
+
+        return self
+
+
 class RouteConversationValidation(IValidationBase):
     """Validate payload for route actions."""
 

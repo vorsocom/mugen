@@ -27,6 +27,7 @@ from mugen.core.plugin.channel_orchestration.api.validation import (
     BlockSenderActionValidation,
     EscalateConversationValidation,
     EvaluateIntakeValidation,
+    IngressBindingCreateValidation,
     RouteConversationValidation,
     SetFallbackValidation,
     UnblockSenderActionValidation,
@@ -103,12 +104,7 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "ChannelKey",
-                    "IdentifierType",
-                    "IdentifierValue",
-                ),
+                create_schema=IngressBindingCreateValidation,
                 update_schema=(
                     "ChannelProfileId",
                     "ChannelKey",
