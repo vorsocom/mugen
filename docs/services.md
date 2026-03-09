@@ -130,6 +130,8 @@ logic.
 Contract guarantee lives in `docs/context-engine-design.md`.
 Collaborator authoring and current reference-plugin details live in
 `docs/context-engine-authoring.md`.
+Operational runtime examples across prepare and commit live in
+`docs/context-engine-user-stories.md`.
 
 ## Context Engine Plugin
 

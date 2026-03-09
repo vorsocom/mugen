@@ -12,6 +12,8 @@ service boundary.
 
 Use this document for hard runtime semantics. Use
 `docs/context-engine-authoring.md` for collaborator authoring and registration.
+Use `docs/context-engine-user-stories.md` for story-driven runtime walkthroughs
+that show how these guarantees behave on real turns.
 Use `docs/context-engine-strengthening-decisions.md` for the decision log that
 explains why the current design took this shape.
 
@@ -115,6 +117,12 @@ Default engine behavior: `DefaultContextEngine` executes prepare in this order:
 8. select within budget
 9. render selected artifacts into `CompletionRequest.messages`
 10. emit cache hints and prepare trace
+
+## Operational Walkthroughs
+
+For end-to-end examples that connect resolver, state, contributors, source
+policy, guards, rankers, compilation, cache, memory, and trace behavior, see
+`docs/context-engine-user-stories.md`.
 
 Contract guarantee: blocked artifacts do not reach completion compilation.
 

@@ -12,6 +12,8 @@ Use it when you need tenant-scoped runtime context behavior through the core
 context engine instead of legacy CTX/RAG hooks.
 
 For hard runtime semantics, see `docs/context-engine-design.md`.
+For concrete examples of when each collaborator should own behavior, read
+`docs/context-engine-user-stories.md` before authoring a new runtime component.
 For the decision log behind the current design, see
 `docs/context-engine-strengthening-decisions.md`.
 
@@ -57,6 +59,9 @@ Use prepare for runtime context selection. Use commit for post-turn persistence
 that depends on the final assistant-visible outcome.
 
 ## Choose The Right Collaborator
+
+The story guide in `docs/context-engine-user-stories.md` shows these
+collaborator choices in realistic multi-tenant runtime flows.
 
 ### `IContextContributor`
 
