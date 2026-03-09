@@ -110,6 +110,39 @@ class _LifecycleClient:
             raise RuntimeError(self.close_error)
 
 
+class _DependencyCaptureClient:
+    instances: list["_DependencyCaptureClient"] = []
+
+    def __init__(
+        self,
+        config: SimpleNamespace = None,
+        relational_storage_gateway=None,
+        logging_gateway=None,
+        messaging_service=None,
+        **_kwargs,
+    ) -> None:
+        platform = next(
+            key
+            for key in vars(config).keys()
+            if not key.startswith("_") and key != "dict"
+        )
+        platform_cfg = getattr(config, platform)
+        self.client_profile_id = str(platform_cfg.client_profile_id)
+        self.relational_storage_gateway = relational_storage_gateway
+        self.logging_gateway = logging_gateway
+        self.messaging_service = messaging_service
+        _DependencyCaptureClient.instances.append(self)
+
+    async def init(self) -> None:
+        return None
+
+    async def verify_startup(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        return None
+
+
 class _DelegationClient:
     _method_names = (
         "answer_callback_query",
@@ -183,6 +216,7 @@ class TestSimpleProfileClientManager(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         _LifecycleClient.instances.clear()
+        _DependencyCaptureClient.instances.clear()
 
     async def test_manager_allows_zero_profiles_and_resolves_client_ids(self) -> None:
         empty_service = _MessagingClientProfileServiceStub(())
@@ -332,6 +366,47 @@ class TestSimpleProfileClientManager(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manager._clients, {})  # pylint: disable=protected-access
             self.assertEqual(manager._profile_snapshots, {})  # pylint: disable=protected-access
             self.assertFalse(manager._initialized)  # pylint: disable=protected-access
+
+    async def test_manager_forwards_shared_dependencies_to_profile_clients(
+        self,
+    ) -> None:
+        service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "whatsapp",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+            )
+        )
+        relational_storage_gateway = object()
+        logging_gateway = object()
+        messaging_service = object()
+
+        with patch.object(
+            rpm_mod,
+            "MessagingClientProfileService",
+            return_value=service,
+        ):
+            manager = rpm_mod.SimpleProfileClientManager(
+                platform="whatsapp",
+                client_cls=_DependencyCaptureClient,
+                config=_root_config(),
+                relational_storage_gateway=relational_storage_gateway,
+                logging_gateway=logging_gateway,
+                messaging_service=messaging_service,
+            )
+            await manager.init()
+
+        self.assertEqual(len(_DependencyCaptureClient.instances), 1)
+        client = _DependencyCaptureClient.instances[0]
+        self.assertEqual(client.client_profile_id, str(_DEFAULT_ID))
+        self.assertIs(
+            client.relational_storage_gateway,
+            relational_storage_gateway,
+        )
+        self.assertIs(client.logging_gateway, logging_gateway)
+        self.assertIs(client.messaging_service, messaging_service)
 
     async def test_service_class_helper_and_manager_without_relational_gateway(
         self,

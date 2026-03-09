@@ -127,9 +127,14 @@ class SimpleProfileClientManager:
         )
         for spec in specs:
             client_profile_id = str(spec.client_profile_id)
+            client_kwargs = dict(self._client_kwargs)
+            client_kwargs["relational_storage_gateway"] = (
+                self._relational_storage_gateway
+            )
+            client_kwargs["logging_gateway"] = self._logging_gateway
             clients[client_profile_id] = self._client_cls(
                 config=spec.config,
-                **self._client_kwargs,
+                **client_kwargs,
             )
             snapshots[client_profile_id] = dict(spec.snapshot)
         return clients, snapshots
