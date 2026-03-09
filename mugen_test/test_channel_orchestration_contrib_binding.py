@@ -9,6 +9,9 @@ from mugen.core.plugin.acp.contract.sdk.permission import (
 from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 from mugen.core.plugin.acp.sdk.runtime_binder import AdminRuntimeBinder
 from mugen.core.plugin.acp.utility.ns import AdminNs
+from mugen.core.plugin.channel_orchestration.api.validation import (
+    IngressBindingCreateValidation,
+)
 from mugen.core.plugin.channel_orchestration.contrib import contribute
 from mugen.core.plugin.channel_orchestration.service.blocklist_entry import (
     BlocklistEntryService,
@@ -130,6 +133,10 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
         self.assertIsInstance(
             registry.get_edm_service(events.service_key),
             OrchestrationEventService,
+        )
+        self.assertIs(
+            ingress_bindings.crud.create_schema,
+            IngressBindingCreateValidation,
         )
 
         self.assertIn("evaluate_intake", states.capabilities.actions)
