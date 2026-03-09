@@ -53,15 +53,6 @@ class _ExtensionClassRef:
     class_name: str
 
 
-_CORE_EXTENSION_TOKEN_REGISTRY: dict[str, _ExtensionClassRef] = {
-    "core.cp.clear_history": _ExtensionClassRef(
-        "cp",
-        ICPExtension,
-        "mugen.core.extension.cp.clear_history",
-        "ClearChatHistoryICPExtension",
-    ),
-}
-
 _PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE: dict[str, _ExtensionClassRef] | None = None
 
 
@@ -169,17 +160,9 @@ def resolve_extension_spec(
     normalized_token = _normalize_extension_token(token)
     normalized_scope = str(scope or "").strip().lower()
 
-    if normalized_scope == "core":
-        registry = _CORE_EXTENSION_TOKEN_REGISTRY
-    elif normalized_scope == "plugin":
-        registry = _plugin_extension_token_registry()
-    elif normalized_scope == "any":
-        registry = {
-            **_CORE_EXTENSION_TOKEN_REGISTRY,
-            **_plugin_extension_token_registry(),
-        }
-    else:
+    if normalized_scope not in {"", "any", "core", "plugin"}:
         raise RuntimeError("Invalid extension token scope.")
+    registry = _plugin_extension_token_registry()
 
     return _resolve_extension_spec_from_registry(
         token=normalized_token,
@@ -271,8 +254,21 @@ class DefaultExtensionRegistry(IExtensionRegistry):
         )
 
 
-def configured_core_extensions(config: SimpleNamespace) -> list[SimpleNamespace]:
-    """Return core-owned extension configuration rows."""
+def _namespace_has_explicit_attr(namespace: object, attr: str) -> bool:
+    namespace_dict = getattr(namespace, "__dict__", None)
+    return isinstance(namespace_dict, dict) and attr in namespace_dict
+
+
+def _legacy_core_extension_error(attr: str) -> RuntimeError:
+    return RuntimeError(
+        "Invalid extension configuration: "
+        f"mugen.modules.core.{attr} is no longer supported; "
+        "use mugen.modules.extensions."
+    )
+
+
+def configured_extensions(config: SimpleNamespace) -> list[SimpleNamespace]:
+    """Return unified extension configuration rows."""
     modules_config = getattr(
         getattr(config, "mugen", SimpleNamespace()),
         "modules",
@@ -280,36 +276,16 @@ def configured_core_extensions(config: SimpleNamespace) -> list[SimpleNamespace]
     )
     core_modules_config = getattr(modules_config, "core", SimpleNamespace())
 
-    core_extensions = getattr(core_modules_config, "extensions", [])
-    if core_extensions is None:
-        core_extensions = []
-    if not isinstance(core_extensions, list):
-        raise RuntimeError(
-            "Invalid extension configuration: mugen.modules.core.extensions must be a list."
-        )
-    return list(core_extensions)
+    if _namespace_has_explicit_attr(core_modules_config, "plugins"):
+        raise _legacy_core_extension_error("plugins")
+    if _namespace_has_explicit_attr(core_modules_config, "extensions"):
+        raise _legacy_core_extension_error("extensions")
 
-
-def configured_downstream_extensions(config: SimpleNamespace) -> list[SimpleNamespace]:
-    """Return plugin/downstream extension configuration rows."""
-    modules_config = getattr(
-        getattr(config, "mugen", SimpleNamespace()),
-        "modules",
-        SimpleNamespace(),
-    )
-    downstream_extensions = getattr(modules_config, "extensions", [])
-    if downstream_extensions is None:
-        downstream_extensions = []
-    if not isinstance(downstream_extensions, list):
+    extensions = getattr(modules_config, "extensions", [])
+    if extensions is None:
+        extensions = []
+    if not isinstance(extensions, list):
         raise RuntimeError(
             "Invalid extension configuration: mugen.modules.extensions must be a list."
         )
-    return list(downstream_extensions)
-
-
-def configured_extensions(config: SimpleNamespace) -> list[SimpleNamespace]:
-    """Return merged extension configuration rows."""
-    return (
-        configured_core_extensions(config)
-        + configured_downstream_extensions(config)
-    )
+    return list(extensions)

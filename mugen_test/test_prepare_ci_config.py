@@ -75,22 +75,11 @@ class TestPrepareCiConfig(unittest.TestCase):
 
         self.assertEqual([str(item) for item in doc["mugen"]["platforms"]], ["matrix", "web"])
 
-    def test_ensure_framework_extension_repairs_sections_and_deduplicates_matches(
+    def test_ensure_framework_extension_repairs_unified_section_when_broken(
         self,
     ) -> None:
         doc = _load_sample_doc()
-        doc["mugen"]["modules"]["core"]["extensions"] = "broken"
-        doc["mugen"]["modules"]["extensions"] = tomlkit.aot()
-
-        duplicate = tomlkit.table()
-        duplicate["type"] = "fw"
-        duplicate["token"] = "core.fw.context_engine"
-        duplicate["enabled"] = True
-        duplicate["name"] = "duplicate"
-        duplicate["namespace"] = "duplicate"
-        duplicate["models"] = "duplicate.module"
-        duplicate["contrib"] = "duplicate.contrib"
-        doc["mugen"]["modules"]["extensions"].append(duplicate)
+        doc["mugen"]["modules"]["extensions"] = "broken"
 
         prepare_ci_config._ensure_framework_extension(  # pylint: disable=protected-access
             doc,
@@ -98,40 +87,20 @@ class TestPrepareCiConfig(unittest.TestCase):
             name="com.vorsocomputing.mugen.context_engine",
             namespace="com.vorsocomputing.mugen.context_engine",
             models="",
+            migration_track="",
             contrib="mugen.core.plugin.context_engine.contrib",
         )
 
-        plugins = doc["mugen"]["modules"]["core"]["extensions"] + doc["mugen"][
-            "modules"
-        ]["extensions"]
+        plugins = doc["mugen"]["modules"]["extensions"]
         matches = [
             plugin for plugin in plugins if plugin.get("token") == "core.fw.context_engine"
         ]
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["contrib"], "mugen.core.plugin.context_engine.contrib")
         self.assertNotIn("models", matches[0])
-        self.assertEqual(
-            len(
-                [
-                    plugin
-                    for plugin in doc["mugen"]["modules"]["core"]["extensions"]
-                    if plugin.get("token") == "core.fw.context_engine"
-                ]
-            ),
-            0,
-        )
-        self.assertEqual(
-            len(
-                [
-                    plugin
-                    for plugin in doc["mugen"]["modules"]["extensions"]
-                    if plugin.get("token") == "core.fw.context_engine"
-                ]
-            ),
-            1,
-        )
+        self.assertNotIn("migration_track", matches[0])
 
-    def test_ensure_framework_extension_prunes_duplicate_matches_across_sections(
+    def test_ensure_framework_extension_prunes_duplicate_matches_and_sets_track(
         self,
     ) -> None:
         doc = _load_sample_doc()
@@ -147,6 +116,7 @@ class TestPrepareCiConfig(unittest.TestCase):
         duplicate["name"] = "com.vorsocomputing.mugen.acp"
         duplicate["namespace"] = "com.vorsocomputing.mugen.acp"
         duplicate["models"] = "mugen.core.plugin.acp.model"
+        duplicate["migration_track"] = "wrong"
         duplicate["contrib"] = "mugen.core.plugin.acp.contrib"
         doc["mugen"]["modules"]["extensions"].append(duplicate)
 
@@ -156,78 +126,58 @@ class TestPrepareCiConfig(unittest.TestCase):
             name="com.vorsocomputing.mugen.acp",
             namespace="com.vorsocomputing.mugen.acp",
             models="mugen.core.plugin.acp.model",
+            migration_track="core",
             contrib="mugen.core.plugin.acp.contrib",
         )
 
-        plugins = doc["mugen"]["modules"]["core"].get("extensions", []) + doc["mugen"][
-            "modules"
-        ].get("extensions", [])
+        plugins = doc["mugen"]["modules"].get("extensions", [])
         self.assertEqual(
             len([plugin for plugin in plugins if plugin.get("token") == "core.fw.acp"]),
             1,
         )
-        self.assertEqual(
-            len(
-                [
-                    plugin
-                    for plugin in doc["mugen"]["modules"]["core"].get("extensions", [])
-                    if plugin.get("token") == "core.fw.acp"
-                ]
-            ),
-            0,
+        acp_entry = next(
+            plugin
+            for plugin in plugins
+            if plugin.get("token") == "core.fw.acp"
         )
-        self.assertEqual(
-            len(
-                [
-                    plugin
-                    for plugin in doc["mugen"]["modules"].get("extensions", [])
-                    if plugin.get("token") == "core.fw.acp"
-                ]
-            ),
-            1,
-        )
+        self.assertEqual(acp_entry["migration_track"], "core")
 
-    def test_ensure_framework_extension_moves_core_only_fw_entry_to_plugin_section(
+    def test_ensure_framework_extension_removes_models_and_track_when_empty(
         self,
     ) -> None:
         doc = tomlkit.parse(
             """
 [mugen]
 [mugen.modules]
-[mugen.modules.core]
-[[mugen.modules.core.extensions]]
+[[mugen.modules.extensions]]
 type = "fw"
-token = "core.fw.web"
+token = "core.fw.context_engine"
 enabled = true
-name = "legacy.web"
-namespace = "legacy.web"
-contrib = "legacy.web.contrib"
+name = "com.vorsocomputing.mugen.context_engine"
+namespace = "com.vorsocomputing.mugen.context_engine"
+models = "obsolete.models"
+migration_track = "core"
+contrib = "obsolete.contrib"
 """
         )
 
         prepare_ci_config._ensure_framework_extension(  # pylint: disable=protected-access
             doc,
-            token="core.fw.web",
-            name="com.vorsocomputing.mugen.web",
-            namespace="com.vorsocomputing.mugen.web",
-            models="mugen.core.plugin.web.model",
-            contrib="mugen.core.plugin.web.contrib",
+            token="core.fw.context_engine",
+            name="com.vorsocomputing.mugen.context_engine",
+            namespace="com.vorsocomputing.mugen.context_engine",
+            models="",
+            migration_track="",
+            contrib="mugen.core.plugin.context_engine.contrib",
         )
 
+        context_entry = doc["mugen"]["modules"]["extensions"][0]
+        self.assertNotIn("models", context_entry)
+        self.assertNotIn("migration_track", context_entry)
         self.assertEqual(
-            len(doc["mugen"]["modules"]["core"].get("extensions", [])),
-            0,
+            context_entry["contrib"],
+            "mugen.core.plugin.context_engine.contrib",
         )
-        self.assertEqual(
-            len(doc["mugen"]["modules"].get("extensions", [])),
-            1,
-        )
-        plugin_entry = doc["mugen"]["modules"]["extensions"][0]
-        self.assertEqual(plugin_entry["token"], "core.fw.web")
-        self.assertEqual(plugin_entry["name"], "com.vorsocomputing.mugen.web")
-        self.assertEqual(plugin_entry["namespace"], "com.vorsocomputing.mugen.web")
-        self.assertEqual(plugin_entry["models"], "mugen.core.plugin.web.model")
-        self.assertEqual(plugin_entry["contrib"], "mugen.core.plugin.web.contrib")
 
     def test_ensure_framework_extension_appends_without_models_when_missing(self) -> None:
         doc = tomlkit.parse("[mugen]\n[mugen.modules]\n[mugen.modules.core]\n")
@@ -238,12 +188,14 @@ contrib = "legacy.web.contrib"
             name="com.vorsocomputing.mugen.context_engine",
             namespace="com.vorsocomputing.mugen.context_engine",
             models="",
+            migration_track="",
             contrib="mugen.core.plugin.context_engine.contrib",
         )
 
         appended = doc["mugen"]["modules"]["extensions"][0]
         self.assertEqual(appended["token"], "core.fw.context_engine")
         self.assertNotIn("models", appended)
+        self.assertNotIn("migration_track", appended)
 
     def test_enable_ci_framework_plugins_updates_existing_fw_entries_without_duplicates(
         self,
@@ -252,9 +204,7 @@ contrib = "legacy.web.contrib"
 
         prepare_ci_config._enable_ci_framework_plugins(doc)  # pylint: disable=protected-access
 
-        plugins = doc["mugen"]["modules"]["core"].get("extensions", []) + doc["mugen"][
-            "modules"
-        ].get("extensions", [])
+        plugins = doc["mugen"]["modules"].get("extensions", [])
         fw_plugins = [
             plugin
             for plugin in plugins
@@ -305,12 +255,24 @@ contrib = "legacy.web.contrib"
             len(
                 [
                     plugin
-                    for plugin in doc["mugen"]["modules"]["core"].get("extensions", [])
-                    if str(plugin.get("type", "")).strip().lower() == "fw"
+                    for plugin in doc["mugen"]["modules"].get("extensions", [])
+                    if plugin.get("token") == "core.fw.acp"
                 ]
             ),
-            0,
+            1,
         )
+        acp_entry = next(
+            plugin
+            for plugin in doc["mugen"]["modules"]["extensions"]
+            if plugin.get("token") == "core.fw.acp"
+        )
+        self.assertEqual(acp_entry["migration_track"], "core")
+        context_entry = next(
+            plugin
+            for plugin in doc["mugen"]["modules"]["extensions"]
+            if plugin.get("token") == "core.fw.context_engine"
+        )
+        self.assertNotIn("migration_track", context_entry)
 
     def test_main_writes_ci_config_without_web_platform_when_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -361,11 +323,11 @@ contrib = "legacy.web.contrib"
                 len(
                     [
                         plugin
-                        for plugin in rendered["mugen"]["modules"]["core"]["extensions"]
-                        if str(plugin.get("type", "")).strip().lower() == "fw"
+                        for plugin in rendered["mugen"]["modules"]["extensions"]
+                        if plugin.get("token") == "core.fw.acp"
                     ]
                 ),
-                0,
+                1,
             )
             self.assertEqual(
                 rendered["acp"]["key_management"]["providers"]["managed"][
@@ -373,6 +335,7 @@ contrib = "legacy.web.contrib"
                 ],
                 "ci-acp-managed-secret-root-key-0123456789",
             )
+            self.assertNotIn("extensions", rendered["mugen"]["modules"]["core"])
 
     def test_main_writes_ci_config_with_web_platform_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -421,11 +384,11 @@ contrib = "legacy.web.contrib"
                 len(
                     [
                         plugin
-                        for plugin in rendered["mugen"]["modules"]["core"]["extensions"]
-                        if str(plugin.get("type", "")).strip().lower() == "fw"
+                        for plugin in rendered["mugen"]["modules"]["extensions"]
+                        if plugin.get("token") == "core.fw.acp"
                     ]
                 ),
-                0,
+                1,
             )
             self.assertEqual(
                 len(
@@ -443,6 +406,13 @@ contrib = "legacy.web.contrib"
                 ],
                 "ci-acp-managed-secret-root-key-0123456789",
             )
+            self.assertNotIn("extensions", rendered["mugen"]["modules"]["core"])
+            acp_entry = next(
+                plugin
+                for plugin in rendered["mugen"]["modules"]["extensions"]
+                if plugin.get("token") == "core.fw.acp"
+            )
+            self.assertEqual(acp_entry["migration_track"], "core")
             self.assertEqual(
                 len(
                     [

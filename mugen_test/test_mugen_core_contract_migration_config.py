@@ -96,95 +96,65 @@ class TestMigrationConfigContract(unittest.TestCase):
                 ):
                     migration_config.load_mugen_config(config_file)
 
-    def test_core_extension_entries_returns_empty_when_modules_not_mapping(self) -> None:
+    def test_extension_entries_returns_empty_when_modules_not_mapping(self) -> None:
         self.assertEqual(
-            migration_config.configured_core_extension_entries(
+            migration_config.configured_extension_entries(
                 {"mugen": {"modules": []}}
             ),
             [],
         )
 
-    def test_core_extension_entries_returns_empty_when_core_not_mapping(self) -> None:
+    def test_extension_entries_ignores_non_mapping_core_config(self) -> None:
+        entries = [{"models": "downstream.model"}]
         self.assertEqual(
-            migration_config.configured_core_extension_entries(
-                {"mugen": {"modules": {"core": []}}}
-            ),
-            [],
-        )
-
-    def test_core_extension_entries_rejects_legacy_plugins_key(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "core.plugins is no longer supported"):
-            migration_config.configured_core_extension_entries(
-                {"mugen": {"modules": {"core": {"plugins": []}}}}
-            )
-
-    def test_core_extension_entries_allows_none_as_empty(self) -> None:
-        self.assertEqual(
-            migration_config.configured_core_extension_entries(
-                {"mugen": {"modules": {"core": {"extensions": None}}}}
-            ),
-            [],
-        )
-
-    def test_core_extension_entries_rejects_non_list(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "core.extensions must be an array"):
-            migration_config.configured_core_extension_entries(
-                {"mugen": {"modules": {"core": {"extensions": {}}}}}
-            )
-
-    def test_core_extension_entries_rejects_non_table_rows(self) -> None:
-        with self.assertRaisesRegex(
-            RuntimeError,
-            "core.extensions\\[0\\] must be a table",
-        ):
-            migration_config.configured_core_extension_entries(
-                {"mugen": {"modules": {"core": {"extensions": ["bad"]}}}}
-            )
-
-    def test_core_extension_entries_returns_rows(self) -> None:
-        entries = [{"models": "core.model"}]
-        self.assertEqual(
-            migration_config.configured_core_extension_entries(
-                {"mugen": {"modules": {"core": {"extensions": entries}}}}
+            migration_config.configured_extension_entries(
+                {"mugen": {"modules": {"core": [], "extensions": entries}}}
             ),
             entries,
         )
 
-    def test_downstream_extension_entries_returns_empty_when_modules_not_mapping(self) -> None:
-        self.assertEqual(
-            migration_config.configured_downstream_extension_entries(
-                {"mugen": {"modules": []}}
-            ),
-            [],
-        )
+    def test_extension_entries_rejects_legacy_plugins_key(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "core.plugins is no longer supported"):
+            migration_config.configured_extension_entries(
+                {"mugen": {"modules": {"core": {"plugins": []}}}}
+            )
 
-    def test_downstream_extension_entries_allows_none_as_empty(self) -> None:
+    def test_extension_entries_rejects_legacy_extensions_key(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "core.extensions is no longer supported",
+        ):
+            migration_config.configured_extension_entries(
+                {"mugen": {"modules": {"core": {"extensions": []}}}}
+            )
+
+    def test_extension_entries_allows_none_as_empty(self) -> None:
         self.assertEqual(
-            migration_config.configured_downstream_extension_entries(
+            migration_config.configured_extension_entries(
                 {"mugen": {"modules": {"extensions": None}}}
             ),
             [],
         )
 
-    def test_downstream_extension_entries_rejects_non_list(self) -> None:
+    def test_extension_entries_rejects_non_list(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "modules.extensions must be an array"):
-            migration_config.configured_downstream_extension_entries(
+            migration_config.configured_extension_entries(
                 {"mugen": {"modules": {"extensions": {}}}}
             )
 
-    def test_downstream_extension_entries_rejects_non_table_rows(self) -> None:
+    def test_extension_entries_rejects_non_table_rows(self) -> None:
         with self.assertRaisesRegex(
             RuntimeError,
             "modules.extensions\\[0\\] must be a table",
         ):
-            migration_config.configured_downstream_extension_entries(
+            migration_config.configured_extension_entries(
                 {"mugen": {"modules": {"extensions": ["bad"]}}}
             )
 
-    def test_downstream_extension_entries_returns_rows(self) -> None:
+    def test_extension_entries_returns_rows(self) -> None:
         entries = [{"models": "downstream.model"}]
         self.assertEqual(
-            migration_config.configured_downstream_extension_entries(
+            migration_config.configured_extension_entries(
                 {"mugen": {"modules": {"extensions": entries}}}
             ),
             entries,

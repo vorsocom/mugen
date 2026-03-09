@@ -213,7 +213,14 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
             logger.error.assert_called_once_with("WhatsApp app secret not found.")
 
         logger = Mock()
-        with patch.object(whatsapp_decorator, "abort", side_effect=_abort_raiser):
+        with (
+            patch.object(whatsapp_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                whatsapp_decorator,
+                "_client_profile_service",
+                return_value=object(),
+            ),
+        ):
             guarded = whatsapp_decorator.whatsapp_request_signature_verification_required(
                 _ok_handler,
                 config_provider=lambda: _make_config(),

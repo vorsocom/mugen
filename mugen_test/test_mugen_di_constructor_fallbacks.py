@@ -44,9 +44,22 @@ class TestClearHistoryFallbacks(unittest.TestCase):
             provider,
         )
 
-    def test_missing_dependencies_are_rejected(self) -> None:
-        with self.assertRaises(TypeError):
-            ClearChatHistoryICPExtension()
+    def test_missing_config_uses_container_provider(self) -> None:
+        config = SimpleNamespace(mugen=SimpleNamespace(commands=SimpleNamespace(clear="/clear")))
+        provider = object()
+        with patch(
+            "mugen.core.extension.cp.clear_history.di.container",
+            new=SimpleNamespace(config=config),
+        ):
+            ext = ClearChatHistoryICPExtension(
+                context_component_registry_provider=provider,
+            )
+
+        self.assertIs(ext._config, config)  # pylint: disable=protected-access
+        self.assertIs(  # pylint: disable=protected-access
+            ext._context_component_registry_provider,
+            provider,
+        )
 
 
 class TestDefaultTextMessageHandlerFallbacks(unittest.TestCase):

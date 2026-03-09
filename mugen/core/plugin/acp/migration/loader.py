@@ -18,7 +18,6 @@ Configuration structure expected
 --------------------------------
 `mugen_cfg` must include, at minimum:
 
-mugen_cfg["mugen"]["modules"]["core"]["extensions"]    -> list[dict]
 mugen_cfg["mugen"]["modules"]["extensions"]            -> list[dict] (optional)
 
 Each plugin dict is expected to contain:
@@ -141,8 +140,7 @@ def _load_enabled_framework_plugins(mugen_cfg: dict) -> list[PluginSpec]:
     Load the enabled framework ("fw") plugin specs from the host config.
 
     This function searches:
-    - core fw entries: mugen_cfg["mugen"]["modules"]["core"]["extensions"]
-    - extensions: mugen_cfg["mugen"]["modules"]["extensions"] (if present)
+    - unified extension entries: mugen_cfg["mugen"]["modules"]["extensions"]
 
     Filtering rules
     ---------------
@@ -161,9 +159,7 @@ def _load_enabled_framework_plugins(mugen_cfg: dict) -> list[PluginSpec]:
         If required config keys are missing.
     """
     out_by_token: dict[str, PluginSpec] = {}
-    plugins = mugen_cfg["mugen"]["modules"]["core"].get("extensions", []) + mugen_cfg[
-        "mugen"
-    ]["modules"].get("extensions", [])
+    plugins = mugen_cfg["mugen"]["modules"].get("extensions", [])
     for p in plugins:
         if not p.get("enabled", False) or p.get("type", "") != "fw":
             continue

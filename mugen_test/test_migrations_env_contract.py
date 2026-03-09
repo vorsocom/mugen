@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 
 from mugen.core.contract.migration_config import (
-    configured_core_extension_entries,
+    configured_extension_entries,
     migration_schema_bootstrap_order,
 )
 
@@ -29,7 +29,24 @@ class TestMigrationsEnvContract(unittest.TestCase):
             RuntimeError,
             "mugen.modules.core.plugins is no longer supported",
         ):
-            configured_core_extension_entries(config)
+            configured_extension_entries(config)
+
+    def test_rejects_legacy_core_extensions_key(self) -> None:
+        config = {
+            "mugen": {
+                "modules": {
+                    "core": {
+                        "extensions": [{"models": "legacy.module"}],
+                    }
+                }
+            }
+        }
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mugen.modules.core.extensions is no longer supported",
+        ):
+            configured_extension_entries(config)
 
     def test_bootstrap_order_includes_distinct_version_schema(self) -> None:
         self.assertEqual(

@@ -375,6 +375,7 @@ class _DummySignalClient(ISignalClient):
 class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
     def test_plugin_token_registry_contains_wechat_extensions(self) -> None:
         token_registry = get_plugin_extension_token_registry()
+        self.assertIn("core.cp.clear_history", token_registry)
         self.assertIn("core.fw.wechat", token_registry)
         self.assertIn("core.ipc.wechat", token_registry)
         self.assertIn("core.fw.line_messagingapi", token_registry)
@@ -410,10 +411,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             module_path="dummy.module",
             class_name="DummyClass",
         )
-        with patch.dict(
-            ext_mod._CORE_EXTENSION_TOKEN_REGISTRY,  # pylint: disable=protected-access
-            {"test.cp.dummy": class_ref},
-            clear=False,
+        with patch(
+            "mugen.core.bootstrap.extensions._plugin_extension_token_registry",
+            return_value={"test.cp.dummy": class_ref},
         ):
             with patch(
                 "mugen.core.bootstrap.extensions.importlib.import_module",
@@ -422,7 +422,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(
                     RuntimeError, "Invalid extension class binding"
                 ):
-                    ext_mod.resolve_extension_spec("test.cp.dummy", scope="core")
+                    ext_mod.resolve_extension_spec("test.cp.dummy")
 
             with patch(
                 "mugen.core.bootstrap.extensions.importlib.import_module",
@@ -431,7 +431,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(
                     RuntimeError, "Invalid extension class binding"
                 ):
-                    ext_mod.resolve_extension_spec("test.cp.dummy", scope="core")
+                    ext_mod.resolve_extension_spec("test.cp.dummy")
 
             with patch(
                 "mugen.core.bootstrap.extensions.importlib.import_module",
@@ -440,7 +440,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(
                     RuntimeError, "Invalid extension class binding"
                 ):
-                    ext_mod.resolve_extension_spec("test.cp.dummy", scope="core")
+                    ext_mod.resolve_extension_spec("test.cp.dummy")
 
     def test_resolve_extension_spec_success(self) -> None:
         class_ref = ext_mod._ExtensionClassRef(  # pylint: disable=protected-access
@@ -449,16 +449,14 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             module_path="dummy.module",
             class_name="DummyClass",
         )
-        with patch.dict(
-            ext_mod._CORE_EXTENSION_TOKEN_REGISTRY,  # pylint: disable=protected-access
-            {"test.cp.ok": class_ref},
-            clear=False,
+        with patch(
+            "mugen.core.bootstrap.extensions._plugin_extension_token_registry",
+            return_value={"test.cp.ok": class_ref},
+        ), patch(
+            "mugen.core.bootstrap.extensions.importlib.import_module",
+            return_value=SimpleNamespace(DummyClass=_DummyCPExt),
         ):
-            with patch(
-                "mugen.core.bootstrap.extensions.importlib.import_module",
-                return_value=SimpleNamespace(DummyClass=_DummyCPExt),
-            ):
-                spec = ext_mod.resolve_extension_spec("test.cp.ok", scope="core")
+            spec = ext_mod.resolve_extension_spec("test.cp.ok")
         self.assertEqual(spec.extension_type, "cp")
         self.assertIs(spec.interface, ICPExtension)
         self.assertIs(spec.extension_class, _DummyCPExt)
@@ -538,7 +536,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             ):
                 ext_mod._plugin_extension_token_registry()  # pylint: disable=protected-access
 
-    def test_resolve_extension_spec_plugin_scope_and_invalid_scope(self) -> None:
+    def test_resolve_extension_spec_legacy_scopes_and_invalid_scope(self) -> None:
         plugin_registry = {
             "plugin.cp.ok": ext_mod._ExtensionClassRef(  # pylint: disable=protected-access
                 extension_type="cp",
@@ -554,10 +552,12 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             "mugen.core.bootstrap.extensions.importlib.import_module",
             return_value=SimpleNamespace(PluginCPExt=_DummyCPExt),
         ):
-            spec = ext_mod.resolve_extension_spec("plugin.cp.ok", scope="plugin")
+            core_spec = ext_mod.resolve_extension_spec("plugin.cp.ok", scope="core")
+            plugin_spec = ext_mod.resolve_extension_spec("plugin.cp.ok", scope="plugin")
 
-        self.assertEqual(spec.extension_type, "cp")
-        self.assertIs(spec.extension_class, _DummyCPExt)
+        self.assertEqual(core_spec.extension_type, "cp")
+        self.assertIs(core_spec.extension_class, _DummyCPExt)
+        self.assertIs(plugin_spec.extension_class, _DummyCPExt)
         with self.assertRaisesRegex(RuntimeError, "Invalid extension token scope"):
             ext_mod.resolve_extension_spec("plugin.cp.ok", scope="legacy")
 
@@ -745,7 +745,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(
             mugen=SimpleNamespace(
                 modules=SimpleNamespace(
-                    core=SimpleNamespace(extensions=None),
+                    core=SimpleNamespace(),
                     extensions=None,
                 )
             )
@@ -760,13 +760,23 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-        with self.assertRaisesRegex(RuntimeError, "core.extensions must be a list"):
+        with self.assertRaisesRegex(RuntimeError, "core.extensions is no longer supported"):
             ext_mod.configured_extensions(bad_core)
+
+        bad_plugins = SimpleNamespace(
+            mugen=SimpleNamespace(
+                modules=SimpleNamespace(
+                    core=SimpleNamespace(plugins=[]),
+                )
+            )
+        )
+        with self.assertRaisesRegex(RuntimeError, "core.plugins is no longer supported"):
+            ext_mod.configured_extensions(bad_plugins)
 
         bad_ext = SimpleNamespace(
             mugen=SimpleNamespace(
                 modules=SimpleNamespace(
-                    core=SimpleNamespace(extensions=[]),
+                    core=SimpleNamespace(),
                     extensions="bad",
                 )
             )

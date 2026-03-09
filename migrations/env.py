@@ -11,8 +11,7 @@ from sqlalchemy import MetaData
 
 from alembic import context
 from mugen.core.contract.migration_config import (
-    configured_core_extension_entries,
-    configured_downstream_extension_entries,
+    configured_extension_entries,
     load_mugen_config,
     migration_schema_bootstrap_order,
     resolve_mugen_config_path,
@@ -42,12 +41,8 @@ def _import_extension_models(cfg: dict) -> None:
         return
 
     requested_track = _get_track_name()
-    # Core extension entries default to the "core" migration track.
-    for entry in configured_core_extension_entries(cfg):
-        _maybe_import_model(entry, default_track="core", requested_track=requested_track)
-
-    # Extension entries default to the "downstream" migration track.
-    for entry in configured_downstream_extension_entries(cfg):
+    # Unified extension entries default to the "downstream" migration track.
+    for entry in configured_extension_entries(cfg):
         _maybe_import_model(
             entry,
             default_track="downstream",

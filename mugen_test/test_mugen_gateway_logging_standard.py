@@ -60,3 +60,27 @@ class TestMugenGatewayLoggingStandard(unittest.TestCase):
         logger.error.assert_called_once_with("error")
         logger.info.assert_called_once_with("info")
         logger.warning.assert_called_once_with("warning")
+
+    def test_init_skips_new_handler_when_marked_console_handler_exists(self) -> None:
+        existing_handler = Mock()
+        setattr(
+            existing_handler,
+            StandardLoggingGateway._handler_marker,  # pylint: disable=protected-access
+            True,
+        )
+        logger = Mock()
+        logger.handlers = [existing_handler]
+
+        with (
+            patch(
+                "mugen.core.gateway.logging.standard.logging.getLogger",
+                return_value=logger,
+            ) as get_logger,
+            patch("mugen.core.gateway.logging.standard.logging.StreamHandler") as handler_cls,
+        ):
+            StandardLoggingGateway(_config())
+
+        get_logger.assert_called_once_with("mugen.test.logger")
+        logger.setLevel.assert_called_once_with(10)
+        handler_cls.assert_not_called()
+        logger.addHandler.assert_not_called()

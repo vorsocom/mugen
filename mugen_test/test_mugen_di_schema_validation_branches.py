@@ -63,7 +63,6 @@ def _valid_core_config() -> dict:
                         "platform": "default",
                         "user": "default",
                     },
-                    "extensions": [],
                 },
                 "extensions": [],
             },
@@ -233,6 +232,48 @@ def _valid_core_config() -> dict:
 class TestDISchemaValidationBranches(unittest.TestCase):
     """Exercise strict schema failure branches added for tokenized DI."""
 
+    def test_validate_extension_entry_schema_rejects_invalid_shapes_and_tokens(
+        self,
+    ) -> None:
+        cases: tuple[tuple[object, str], ...] = (
+            (
+                "bad",
+                "mugen.modules.extensions\\[0\\] entries must be tables",
+            ),
+            (
+                {"type": "fw"},
+                "mugen.modules.extensions\\[0\\].token is required and must be a string",
+            ),
+            (
+                {"type": "fw", "token": "module:Class"},
+                "mugen.modules.extensions\\[0\\].token must be a token",
+            ),
+            (
+                {"type": 1, "token": "core.fw.web"},
+                "mugen.modules.extensions\\[0\\].type must be a string",
+            ),
+        )
+
+        for entry, pattern in cases:
+            with self.subTest(entry=entry):
+                with self.assertRaisesRegex(RuntimeError, pattern):
+                    di._validate_extension_entry_schema(  # pylint: disable=protected-access
+                        entry,
+                        path="mugen.modules.extensions[0]",
+                    )
+
+    def test_validate_extension_entry_schema_accepts_non_empty_migration_track(
+        self,
+    ) -> None:
+        di._validate_extension_entry_schema(  # pylint: disable=protected-access
+            {
+                "type": "fw",
+                "token": "core.fw.acp",
+                "migration_track": "core",
+            },
+            path="mugen.modules.extensions[0]",
+        )
+
     def test_core_schema_rejects_invalid_shapes_and_tokens(self) -> None:
         cases: list[tuple[dict, str]] = []
 
@@ -329,30 +370,22 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cases.append((cfg, "gateway.sms must be a token"))
 
         cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["extensions"] = {}
-        cases.append((cfg, "core.extensions must be an array"))
+        cfg["mugen"]["modules"]["core"]["plugins"] = []
+        cases.append((cfg, "core.plugins is no longer supported"))
 
         cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["extensions"] = [123]
-        cases.append((cfg, "entries must be tables"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["extensions"] = [{"type": "cp"}]
-        cases.append((cfg, ".token is required and must be a string"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["extensions"] = [
-            {"type": "cp", "token": "mod:Cls"}
-        ]
-        cases.append((cfg, ".token must be a token"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["extensions"] = [{"type": 123, "token": "t"}]
-        cases.append((cfg, ".type must be a string"))
+        cfg["mugen"]["modules"]["core"]["extensions"] = []
+        cases.append((cfg, "core.extensions is no longer supported"))
 
         cfg = _valid_core_config()
         cfg["mugen"]["modules"]["extensions"] = {}
         cases.append((cfg, "modules.extensions must be an array"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["modules"]["extensions"] = [
+            {"type": "fw", "token": "core.fw.web", "migration_track": ""}
+        ]
+        cases.append((cfg, ".migration_track must be a non-empty string"))
 
         for candidate, message in cases:
             with self.subTest(message=message):
@@ -361,7 +394,6 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
     def test_core_schema_handles_none_core_and_extension_lists(self) -> None:
         cfg = _valid_core_config()
-        cfg["mugen"]["modules"]["core"]["extensions"] = None
         cfg["mugen"]["modules"]["extensions"] = None
         di._validate_core_module_schema(cfg)
 

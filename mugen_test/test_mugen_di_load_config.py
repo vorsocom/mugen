@@ -56,7 +56,6 @@ def _minimal_core_config() -> dict:
                         "platform": "default",
                         "user": "default",
                     },
-                    "extensions": [],
                 },
                 "extensions": [],
             },

@@ -35,3 +35,9 @@ class TestDIBuildConfigProvider(unittest.TestCase):
     def test_bootstrap_logger_falls_back_to_root_when_config_not_dict(self) -> None:
         logger = di._get_bootstrap_provider_logger(config=[])
         self.assertEqual(logger.name, "root")
+
+    def test_bootstrap_logger_uses_configured_name(self) -> None:
+        logger = di._get_bootstrap_provider_logger(
+            config={"mugen": {"logger": {"name": "bootstrap.test"}}}
+        )
+        self.assertEqual(logger.name, "bootstrap.test")

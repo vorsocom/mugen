@@ -89,18 +89,18 @@ service.nlp = "default"
 service.platform = "default"
 service.user = "default"
 
-# Core-owned extensions.
-[[mugen.modules.core.extensions]]
+# Unified extensions.
+[[mugen.modules.extensions]]
 type = "cp"
 token = "core.cp.clear_history"
 
-# Plugin-owned FW/IPC entries belong under `mugen.modules.extensions`.
 # Framework entries may optionally declare:
 # enabled = true
 # name = "com.vorsocomputing.mugen.plugin_name"
 # namespace = "com.vorsocomputing.mugen.plugin_name"
 # contrib = "mugen.core.plugin.plugin_name.contrib"
-# models = ["mugen.core.plugin.plugin_name.model"]
+# models = "mugen.core.plugin.plugin_name.model"
+# migration_track = "core"
 #
 # Web platform FW contract (required when `web` is active).
 [[mugen.modules.extensions]]
