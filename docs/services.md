@@ -132,6 +132,9 @@ Collaborator authoring and current reference-plugin details live in
 `docs/context-engine-authoring.md`.
 Operational runtime examples across prepare and commit live in
 `docs/context-engine-user-stories.md`.
+For production debugging of selected/dropped artifacts, fallback-global
+behavior, commit-token failures, and trace interpretation, see
+`docs/context-engine-debugging-playbook.md`.
 
 ## Context Engine Plugin
 

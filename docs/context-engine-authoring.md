@@ -14,6 +14,8 @@ context engine instead of legacy CTX/RAG hooks.
 For hard runtime semantics, see `docs/context-engine-design.md`.
 For concrete examples of when each collaborator should own behavior, read
 `docs/context-engine-user-stories.md` before authoring a new runtime component.
+If you are debugging why a collaborator did or did not affect a turn, see
+`docs/context-engine-debugging-playbook.md`.
 For the decision log behind the current design, see
 `docs/context-engine-strengthening-decisions.md`.
 
@@ -62,6 +64,9 @@ that depends on the final assistant-visible outcome.
 
 The story guide in `docs/context-engine-user-stories.md` shows these
 collaborator choices in realistic multi-tenant runtime flows.
+The operator-focused debugging workflow for policy resolution, source-policy
+drops, guard behavior, ranking, budgeting, commit failures, and trace
+interpretation lives in `docs/context-engine-debugging-playbook.md`.
 
 ### `IContextContributor`
 
