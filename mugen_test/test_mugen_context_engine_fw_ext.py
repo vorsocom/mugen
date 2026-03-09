@@ -55,7 +55,7 @@ class TestMugenContextEngineFWExtension(unittest.IsolatedAsyncioTestCase):
 
     async def test_setup_registers_runtime_components_and_ext_service(self) -> None:
         container = SimpleNamespace(
-            config=SimpleNamespace(mugen=SimpleNamespace(assistant=SimpleNamespace(persona="hi"))),
+            config=SimpleNamespace(),
             relational_storage_gateway="rsg",
             register_ext_service=Mock(),
         )

@@ -114,7 +114,11 @@ def _policy(
     cache_enabled: bool = True,
     allow_long_term_memory: bool = True,
     blocked_sensitivity_labels: tuple[str, ...] = (),
+    persona: str | None = None,
 ) -> ContextPolicy:
+    metadata = {"policy": "test"}
+    if persona is not None:
+        metadata["persona"] = persona
     return ContextPolicy(
         budget=ContextBudget(
             max_total_tokens=128,
@@ -137,7 +141,7 @@ def _policy(
         ),
         trace_enabled=trace_enabled,
         cache_enabled=cache_enabled,
-        metadata={"policy": "test"},
+        metadata=metadata,
     )
 
 
@@ -228,6 +232,8 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(all(table.schema == "mugen" for table in tables))
+        self.assertIn("client_profile_key", ContextProfile.__table__.c)
+        self.assertIn("persona", ContextProfile.__table__.c)
 
     async def test_policy_resolver_covers_default_and_configured_policy_paths(self) -> None:
         profile_service = SimpleNamespace(
@@ -240,6 +246,8 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                             name="matrix-default",
                             platform="matrix",
                             channel_key=None,
+                            client_profile_key=None,
+                            persona="Default persona.",
                             is_default=True,
                             is_active=True,
                             policy_id=None,
@@ -249,10 +257,24 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                         SimpleNamespace(
                             id=uuid.uuid4(),
                             tenant_id=_tenant_uuid(),
+                            name="matrix-fallback",
+                            platform="matrix",
+                            channel_key="matrix",
+                            client_profile_key=None,
+                            persona="Fallback persona.",
+                            is_default=True,
+                            is_active=True,
+                            policy_id=None,
+                        ),
+                        SimpleNamespace(
+                            id=uuid.uuid4(),
+                            tenant_id=_tenant_uuid(),
                             name="matrix-policy",
                             platform="matrix",
                             channel_key="matrix",
-                            is_default=True,
+                            client_profile_key="matrix-primary",
+                            persona="Escalation persona.",
+                            is_default=False,
                             is_active=True,
                             policy_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
                         )
@@ -378,9 +400,18 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(default_policy.contributor_allow, ("persona_policy",))
         self.assertEqual(default_policy.source_allow, ("knowledge",))
         self.assertTrue(default_policy.trace_enabled)
+        self.assertEqual(default_policy.metadata["persona"], "Default persona.")
         self.assertEqual(default_policy.metadata["trace_policy_name"], "trace-default")
 
-        configured_policy = await resolver.resolve_policy(_request())
+        configured_policy = await resolver.resolve_policy(
+            _request(
+                ingress_metadata={
+                    "ingress_route": {
+                        "client_profile_key": "matrix-primary",
+                    }
+                }
+            )
+        )
         self.assertEqual(configured_policy.policy_key, "strict")
         self.assertEqual(configured_policy.profile_key, "matrix-policy")
         self.assertEqual(configured_policy.budget.max_total_tokens, 42)
@@ -398,6 +429,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(configured_policy.source_deny, ("memory",))
         self.assertFalse(configured_policy.trace_enabled)
         self.assertFalse(configured_policy.cache_enabled)
+        self.assertEqual(configured_policy.metadata["persona"], "Escalation persona.")
         self.assertEqual(configured_policy.metadata["trace_policy_name"], "trace-strict")
         self.assertFalse(configured_policy.metadata["trace_capture_selected"])
         self.assertTrue(configured_policy.metadata["trace_capture_dropped"])
@@ -438,11 +470,59 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             _scope(tenant_id=str(GLOBAL_TENANT_ID))
         )
         self.assertTrue(global_default.retention.require_partition_for_global_memory)
+        self.assertEqual(
+            runtime_module._request_client_profile_key(  # pylint: disable=protected-access
+                _request(
+                    ingress_metadata={
+                        "ingress_route": {"client_profile_key": " matrix-route "},
+                        "client_profile_key": "matrix-top-level",
+                    }
+                )
+            ),
+            "matrix-route",
+        )
+        self.assertEqual(
+            runtime_module._request_client_profile_key(  # pylint: disable=protected-access
+                _request(ingress_metadata={"client_profile_key": " matrix-top-level "})
+            ),
+            "matrix-top-level",
+        )
         self.assertIsNone(
             DefaultContextPolicyResolver._select_profile(  # pylint: disable=protected-access
                 _scope(),
+                None,
                 [],
             )
+        )
+        wildcard_profile = SimpleNamespace(
+            name="wildcard",
+            platform="matrix",
+            channel_key="matrix",
+            client_profile_key=None,
+            is_default=True,
+        )
+        exact_profile = SimpleNamespace(
+            name="exact",
+            platform="matrix",
+            channel_key="matrix",
+            client_profile_key="matrix-primary",
+            is_default=False,
+        )
+        self.assertIs(
+            DefaultContextPolicyResolver._select_profile(  # pylint: disable=protected-access
+                _scope(),
+                "matrix-primary",
+                [wildcard_profile, exact_profile],
+            ),
+            exact_profile,
+        )
+        self.assertIs(
+            DefaultContextPolicyResolver._select_profile(  # pylint: disable=protected-access
+                _scope(),
+                None,
+                [wildcard_profile, exact_profile],
+            ),
+            wildcard_profile,
         )
         profile = SimpleNamespace(policy_id=uuid.uuid4())
         self.assertIsNone(
@@ -777,9 +857,11 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             ingress_metadata={"tenant_resolution": {"mode": "resolved", "source": "test"}}
         )
 
-        persona_candidates = await PersonaPolicyContributor(
-            config=SimpleNamespace(mugen=SimpleNamespace(assistant=SimpleNamespace(persona="Be concise.")))
-        ).collect(request, policy=policy, state=None)
+        persona_candidates = await PersonaPolicyContributor().collect(
+            request,
+            policy=_policy(persona="Be concise."),
+            state=None,
+        )
         self.assertEqual(persona_candidates[0].artifact.content["persona"], "Be concise.")
 
         self.assertEqual(await StateContributor().collect(request, policy=policy, state=None), [])

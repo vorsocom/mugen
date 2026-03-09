@@ -85,6 +85,24 @@ def _parse_tenant_uuid(value: str) -> uuid.UUID:
     return uuid.UUID(str(value))
 
 
+def _normalize_optional_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _request_client_profile_key(request: ContextTurnRequest) -> str | None:
+    ingress_metadata = dict(request.ingress_metadata or {})
+    ingress_route = ingress_metadata.get("ingress_route")
+    route_value = None
+    if isinstance(ingress_route, dict):
+        route_value = _normalize_optional_text(ingress_route.get("client_profile_key"))
+    if route_value is not None:
+        return route_value
+    return _normalize_optional_text(ingress_metadata.get("client_profile_key"))
+
+
 def _assistant_text(
     *,
     completion: CompletionResponse | None,
@@ -177,12 +195,13 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
 
     async def resolve_policy(self, request: ContextTurnRequest) -> ContextPolicy:
         tenant_id = _parse_tenant_uuid(request.scope.tenant_id)
+        client_profile_key = _request_client_profile_key(request)
 
         profiles = await self._profile_service.list(
             filter_groups=[FilterGroup(where={"tenant_id": tenant_id, "is_active": True})],
             limit=200,
         )
-        profile = self._select_profile(request.scope, profiles)
+        profile = self._select_profile(request.scope, client_profile_key, profiles)
 
         policies = await self._policy_service.list(
             filter_groups=[FilterGroup(where={"tenant_id": tenant_id, "is_active": True})],
@@ -239,6 +258,7 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
                 cache_enabled=default_policy.cache_enabled,
                 metadata={
                     "profile_name": None if profile is None else profile.name,
+                    "persona": None if profile is None else getattr(profile, "persona", None),
                     "trace_policy_name": None if trace_policy is None else trace_policy.name,
                 },
             )
@@ -262,6 +282,7 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             cache_enabled=bool(policy_row.cache_enabled),
             metadata={
                 "profile_name": None if profile is None else profile.name,
+                "persona": None if profile is None else getattr(profile, "persona", None),
                 "trace_policy_name": None if trace_policy is None else trace_policy.name,
                 "trace_capture_selected": (
                     None
@@ -278,20 +299,30 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
         )
 
     @staticmethod
-    def _select_profile(scope, profiles: list[ContextProfileDE]) -> ContextProfileDE | None:
+    def _select_profile(
+        scope,
+        client_profile_key: str | None,
+        profiles: list[ContextProfileDE],
+    ) -> ContextProfileDE | None:
         matches = [
             profile
             for profile in profiles
-            if profile.platform in (None, scope.platform)
-            and profile.channel_key in (None, scope.channel_id)
+            if getattr(profile, "platform", None) in (None, scope.platform)
+            and getattr(profile, "channel_key", None) in (None, scope.channel_id)
+            and getattr(profile, "client_profile_key", None) in (None, client_profile_key)
         ]
         if not matches:
             return None
         matches.sort(
             key=lambda profile: (
-                0 if profile.platform == scope.platform else 1,
-                0 if profile.channel_key == scope.channel_id else 1,
-                0 if profile.is_default else 1,
+                0 if getattr(profile, "platform", None) == scope.platform else 1,
+                0 if getattr(profile, "channel_key", None) == scope.channel_id else 1,
+                (
+                    0
+                    if getattr(profile, "client_profile_key", None) == client_profile_key
+                    else 1
+                ),
+                0 if getattr(profile, "is_default", None) else 1,
             )
         )
         return matches[0]

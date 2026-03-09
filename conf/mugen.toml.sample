@@ -1,5 +1,5 @@
 [mugen]
-assistant.persona = ""
+# Assistant persona is ACP-managed through context_engine ContextProfiles.Persona.
 debug_conversation = false
 environment = "development"
 logger.level = 10
