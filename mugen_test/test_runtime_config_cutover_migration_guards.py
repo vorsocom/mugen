@@ -7,7 +7,9 @@ import unittest
 class TestRuntimeConfigCutoverMigrationGuards(unittest.TestCase):
     """Verifies the schema and reseed migrations contain required cutover wiring."""
 
-    def test_schema_migration_contains_runtime_profile_and_key_material_changes(self) -> None:
+    def test_schema_migration_contains_runtime_profile_and_key_material_changes(
+        self,
+    ) -> None:
         migration = (
             Path(__file__).resolve().parents[1]
             / "migrations"
@@ -46,9 +48,25 @@ class TestRuntimeConfigCutoverMigrationGuards(unittest.TestCase):
         self.assertIn("contribute_all", text)
         self.assertIn("build_seed_manifest", text)
         self.assertIn("apply_manifest", text)
+        self.assertIn("resolve_acp_identity", text)
         self.assertIn("admin_plugin_capability_grant", text)
         self.assertIn("kms.key.rotate", text)
         self.assertIn("runtime_config_cutover_default_acp_kms_grant", text)
+        self.assertNotIn('acp_cfg.get("plugin_name")', text)
+        self.assertNotIn('acp_cfg.get("namespace")', text)
+
+    def test_seed_admin_user_migration_uses_unified_acp_identity(self) -> None:
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "migrations"
+            / "versions"
+            / "41dc50b08af1_seed_admin_user.py"
+        )
+        text = migration.read_text(encoding="utf8")
+
+        self.assertIn("resolve_acp_admin_namespace", text)
+        self.assertNotIn('acp_cfg.get("namespace"', text)
+        self.assertNotIn("admin.namespace must be in config.", text)
 
 
 if __name__ == "__main__":

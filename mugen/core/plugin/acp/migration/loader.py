@@ -6,7 +6,7 @@ This module provides a thin discovery + dispatch layer that:
 - discovers enabled framework plugins
 - imports each plugin's contributor module
 - calls `contribute(...)` with both:
-    - admin_namespace: derived from the admin plugin spec
+    - admin_namespace: derived from the `core.fw.acp` plugin spec
     - plugin_namespace: derived from the contributing plugin spec
 
 This design ensures:
@@ -44,7 +44,7 @@ the loader accordingly.
 
 Error behavior
 --------------
-- Raises RuntimeError if no admin plugin is found or multiple admin plugins exist.
+- Raises RuntimeError if the ACP framework plugin cannot be resolved uniquely.
 - Raises ImportError / AttributeError / TypeError if contributor modules cannot
   be imported or do not expose a callable `contribute`.
 
@@ -60,6 +60,7 @@ from importlib import import_module
 from typing import Callable
 
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
+from mugen.core.plugin.acp.utility.identity import resolve_acp_identity
 
 Contributor = Callable[..., None]
 
@@ -75,7 +76,7 @@ class PluginSpec:
         Plugin namespace used for plugin-owned nouns/flags (and optionally roles).
 
     name:
-        Plugin identifier (used to locate the 'admin' plugin).
+        Plugin identifier metadata from extension configuration.
 
     contrib:
         Importable Python module path that exports a `contribute` callable.
@@ -188,8 +189,8 @@ def contribute_all(registry: IAdminRegistry, *, mugen_cfg: dict) -> None:
     Workflow
     --------
     1) Discover enabled framework plugins via `_load_enabled_framework_plugins`.
-    2) Identify the admin plugin; its namespace becomes the canonical `admin_namespace`
-       passed to every contributor.
+    2) Resolve the enabled `core.fw.acp` plugin; its namespace becomes the
+       canonical `admin_namespace` passed to every contributor.
     3) For each enabled plugin:
        - import its contributor module
        - call contributor with:
@@ -208,22 +209,18 @@ def contribute_all(registry: IAdminRegistry, *, mugen_cfg: dict) -> None:
     Raises
     ------
     RuntimeError:
-        If the admin plugin is missing or ambiguous (not exactly one).
+        If the enabled ACP framework plugin is missing or ambiguous.
 
     ImportError / AttributeError / TypeError:
         If any contributor cannot be imported or is not callable.
     """
     plugins = _load_enabled_framework_plugins(mugen_cfg)
-    admin = [p for p in plugins if p.name == mugen_cfg["acp"]["plugin_name"]]
+    admin = resolve_acp_identity(mugen_cfg, enabled_only=True)
 
-    if admin and len(admin) == 1:
-        admin = admin[0]
-        for spec in plugins:
-            fn = _import_callable(spec.contrib)
-            fn(
-                registry,
-                admin_namespace=admin.namespace,
-                plugin_namespace=spec.namespace,
-            )
-    else:
-        raise RuntimeError("admin plugin is required for ACP seeding.")
+    for spec in plugins:
+        fn = _import_callable(spec.contrib)
+        fn(
+            registry,
+            admin_namespace=admin.namespace,
+            plugin_namespace=spec.namespace,
+        )

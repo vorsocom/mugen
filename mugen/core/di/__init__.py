@@ -564,6 +564,17 @@ def _validate_core_module_schema(config: dict) -> None:
             path=f"mugen.modules.extensions[{index}]",
         )
 
+    acp_cfg = config.get("acp")
+    if isinstance(acp_cfg, dict):
+        for removed_key in ("plugin_name", "namespace"):
+            if removed_key in acp_cfg:
+                raise RuntimeError(
+                    "Invalid configuration: "
+                    f"acp.{removed_key} is no longer supported; "
+                    "configure ACP identity on mugen.modules.extensions "
+                    "token 'core.fw.acp'."
+                )
+
     active_platforms = normalize_platforms(mugen_cfg.get("platforms", []))
     if "line" in active_platforms:
         validate_line_enabled_runtime_config(config)

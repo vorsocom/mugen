@@ -19,6 +19,7 @@ from mugen.core.plugin.acp.contract.service.jwt import (
     JwtVerifyParams,
     JwtVerifyProfile,
 )
+from mugen.core.plugin.acp.utility.identity import resolve_acp_admin_namespace
 from mugen.core.plugin.acp.utility.ns import AdminNs
 
 _ROLE_ADMINISTRATOR = "administrator"
@@ -58,7 +59,7 @@ def global_admin_required(
         async def wrapper(*args, **kwargs):
             config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
-            admin_ns = AdminNs(config.acp.namespace)
+            admin_ns = AdminNs(resolve_acp_admin_namespace(config))
 
             token = _decode_access_token()
             user = await _require_user_from_token(token, expanded=True)
@@ -121,7 +122,7 @@ def permission_required(  # pylint: disable=too-many-arguments
             config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
             registry: IAdminRegistry = registry_provider()
-            admin_ns = AdminNs(config.acp.namespace)
+            admin_ns = AdminNs(resolve_acp_admin_namespace(config))
 
             entity_set: str = kwargs.get("entity_set")
 
@@ -272,7 +273,7 @@ async def _require_user_from_token(
     logger: ILoggingGateway = logger_provider()
     registry: IAdminRegistry = registry_provider()
 
-    admin_ns = AdminNs(config.acp.namespace)
+    admin_ns = AdminNs(resolve_acp_admin_namespace(config))
     user_svc: IUserService = registry.get_edm_service(admin_ns.key(_EDM_USER))
 
     user_id = token["sub"]

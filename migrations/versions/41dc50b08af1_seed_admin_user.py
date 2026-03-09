@@ -58,9 +58,11 @@ def upgrade() -> None:
         return
 
     # ACP seeding was run. Do admin user seeding.
-    admin_namespace = acp_cfg.get("namespace", None)
-    if admin_namespace is None:
-        raise ValueError("admin.namespace must be in config.")
+    from mugen.core.plugin.acp.utility.identity import (
+        resolve_acp_admin_namespace,
+    )
+
+    admin_namespace = resolve_acp_admin_namespace(mugen_cfg, enabled_only=True)
 
     admin_username = acp_cfg.get("admin_username", None)
     if admin_username is None:
@@ -335,7 +337,9 @@ def downgrade() -> None:
     try:
         conn.execute(rmship_stmt)
     except SQLAlchemyError as exc:
-        raise RuntimeError("Could not execute delete role memberships statement.") from exc
+        raise RuntimeError(
+            "Could not execute delete role memberships statement."
+        ) from exc
 
     delete_user_stmt = sa.delete(utable).where(utable.c.id == user_mapping["id"])
     try:
@@ -347,7 +351,9 @@ def downgrade() -> None:
     try:
         has_refs = conn.execute(person_ref_stmt).first() is not None
     except SQLAlchemyError as exc:
-        raise RuntimeError("Could not execute person reference check statement.") from exc
+        raise RuntimeError(
+            "Could not execute person reference check statement."
+        ) from exc
 
     if not has_refs:
         delete_person_stmt = sa.delete(ptable).where(ptable.c.id == person_id)

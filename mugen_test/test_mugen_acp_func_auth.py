@@ -27,13 +27,23 @@ def _abort_raiser(code: int, message: str | None = None):
 
 def _config() -> SimpleNamespace:
     return SimpleNamespace(
+        mugen=SimpleNamespace(
+            modules=SimpleNamespace(
+                extensions=[
+                    SimpleNamespace(
+                        type="fw",
+                        token="core.fw.acp",
+                        namespace="com.test.admin",
+                    )
+                ]
+            )
+        ),
         acp=SimpleNamespace(
-            namespace="com.test.admin",
             login_dummy_hash="dummy-hash",
             login_access_expiry=30,
             login_refresh_expiry=60,
             jwt=SimpleNamespace(issuer="issuer", audience="aud"),
-        )
+        ),
     )
 
 
@@ -147,7 +157,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 func_auth,
                 "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"Username": "alice"})),
+                new=SimpleNamespace(
+                    get_json=AsyncMock(return_value={"Username": "alice"})
+                ),
             ),
         ):
             with self.assertRaises(_AbortCalled) as ex:
@@ -257,7 +269,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
             func_auth,
             "request",
             new=SimpleNamespace(
-                get_json=AsyncMock(return_value={"Username": "alice", "Password": "secret"})
+                get_json=AsyncMock(
+                    return_value={"Username": "alice", "Password": "secret"}
+                )
             ),
         ):
             body, status = await func_auth.user_login(
@@ -339,7 +353,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             func_auth,
             "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+            new=SimpleNamespace(
+                get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+            ),
         ):
             body, status = await endpoint(
                 auth_user=auth_user,
@@ -350,13 +366,17 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual((body, status), ("", 204))
 
-        jwt_svc.verify = Mock(return_value={"sub": str(uuid.uuid4()), "jti": str(uuid.uuid4())})
+        jwt_svc.verify = Mock(
+            return_value={"sub": str(uuid.uuid4()), "jti": str(uuid.uuid4())}
+        )
         with (
             patch.object(func_auth, "abort", side_effect=_abort_raiser),
             patch.object(
                 func_auth,
                 "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+                new=SimpleNamespace(
+                    get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+                ),
             ),
         ):
             with self.assertRaises(_AbortCalled) as ex:
@@ -373,7 +393,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             func_auth,
             "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+            new=SimpleNamespace(
+                get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+            ),
         ):
             body, status = await endpoint(
                 auth_user=auth_user,
@@ -391,7 +413,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 func_auth,
                 "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+                new=SimpleNamespace(
+                    get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+                ),
             ),
         ):
             with self.assertRaises(_AbortCalled) as ex:
@@ -408,7 +432,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             func_auth,
             "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+            new=SimpleNamespace(
+                get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+            ),
         ):
             body, status = await endpoint(
                 auth_user=auth_user,
@@ -460,7 +486,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 func_auth,
                 "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+                new=SimpleNamespace(
+                    get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+                ),
             ),
         ):
             with self.assertRaises(_AbortCalled) as ex:
@@ -476,7 +504,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             func_auth,
             "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+            new=SimpleNamespace(
+                get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+            ),
         ):
             body, status = await endpoint(
                 config_provider=_config,
@@ -507,14 +537,18 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((body, status), ("", 204))
 
         jti = str(uuid.uuid4())
-        jwt_svc.verify = Mock(return_value={"sub": str(uuid.uuid4()), "jti": jti, "token_version": 2})
+        jwt_svc.verify = Mock(
+            return_value={"sub": str(uuid.uuid4()), "jti": jti, "token_version": 2}
+        )
         refresh_svc.get = AsyncMock(side_effect=SQLAlchemyError("db"))
         with (
             patch.object(func_auth, "abort", side_effect=_abort_raiser),
             patch.object(
                 func_auth,
                 "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+                new=SimpleNamespace(
+                    get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+                ),
             ),
         ):
             with self.assertRaises(_AbortCalled) as ex:
@@ -530,7 +564,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             func_auth,
             "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+            new=SimpleNamespace(
+                get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+            ),
         ):
             body, status = await endpoint(
                 config_provider=_config,
@@ -546,7 +582,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             func_auth,
             "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+            new=SimpleNamespace(
+                get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+            ),
         ):
             body, status = await endpoint(
                 config_provider=_config,
@@ -563,7 +601,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 func_auth,
                 "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+                new=SimpleNamespace(
+                    get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+                ),
             ),
         ):
             with self.assertRaises(_AbortCalled) as ex:
@@ -579,7 +619,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             func_auth,
             "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+            new=SimpleNamespace(
+                get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+            ),
         ):
             body, status = await endpoint(
                 config_provider=_config,
@@ -594,7 +636,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             func_auth,
             "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+            new=SimpleNamespace(
+                get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+            ),
         ):
             body, status = await endpoint(
                 config_provider=_config,
@@ -604,7 +648,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual((body, status), ("", 204))
 
-        jwt_svc.verify = Mock(return_value={"sub": str(user_id), "jti": jti, "token_version": 4})
+        jwt_svc.verify = Mock(
+            return_value={"sub": str(user_id), "jti": jti, "token_version": 4}
+        )
         locked_user = _user(user_id=user_id, token_version=4, locked_at=object())
         user_svc.get_expanded = AsyncMock(return_value=locked_user)
         with (
@@ -612,7 +658,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 func_auth,
                 "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+                new=SimpleNamespace(
+                    get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+                ),
             ),
         ):
             with self.assertRaises(_AbortCalled) as ex:
@@ -637,7 +685,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 func_auth,
                 "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+                new=SimpleNamespace(
+                    get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+                ),
             ),
         ):
             with self.assertRaises(_AbortCalled) as ex:
@@ -655,7 +705,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             func_auth,
             "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"RefreshToken": "rt"})),
+            new=SimpleNamespace(
+                get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+            ),
         ):
             body, status = await endpoint(
                 config_provider=_config,
@@ -777,7 +829,9 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
             token="abc",
         )
 
-        invitation_svc.redeem_authenticated = AsyncMock(side_effect=SQLAlchemyError("db"))
+        invitation_svc.redeem_authenticated = AsyncMock(
+            side_effect=SQLAlchemyError("db")
+        )
         with (
             patch.object(func_auth, "abort", side_effect=_abort_raiser),
             patch.object(
@@ -811,7 +865,11 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch.object(auth_decorator, "_decode_access_token", return_value={"sub": str(auth_user)}),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(auth_user)},
+            ),
             patch.object(
                 auth_decorator,
                 "_require_user_from_token",

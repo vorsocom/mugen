@@ -15,13 +15,30 @@ def _row_with_id(value: uuid.UUID):
     return SimpleNamespace(id=value)
 
 
+def _config() -> SimpleNamespace:
+    return SimpleNamespace(
+        mugen=SimpleNamespace(
+            modules=SimpleNamespace(
+                extensions=[
+                    SimpleNamespace(
+                        type="fw",
+                        token="core.fw.acp",
+                        namespace="com.vorso",
+                    )
+                ]
+            )
+        )
+    )
+
+
 class TestMugenAcpServiceAuthorization(unittest.IsolatedAsyncioTestCase):
     """Covers permission lookup caching and has_permission decision branches."""
 
     def _new_service(self):
-        config = SimpleNamespace(acp=SimpleNamespace(namespace="com.vorso"))
         services = {
-            "ACP.GlobalPermissionEntry": SimpleNamespace(list=AsyncMock(return_value=[])),
+            "ACP.GlobalPermissionEntry": SimpleNamespace(
+                list=AsyncMock(return_value=[])
+            ),
             "ACP.GlobalRoleMembership": SimpleNamespace(
                 get_role_memberships_by_user=AsyncMock(return_value=[])
             ),
@@ -38,7 +55,7 @@ class TestMugenAcpServiceAuthorization(unittest.IsolatedAsyncioTestCase):
             get_edm_service=lambda key: services[key.split(":", 1)[1]]
         )
         svc = AuthorizationService(
-            config_provider=lambda: config,
+            config_provider=_config,
             registry_provider=lambda: registry,
         )
         return svc, services
@@ -54,34 +71,52 @@ class TestMugenAcpServiceAuthorization(unittest.IsolatedAsyncioTestCase):
                 get_required_ext_service=lambda _name: fake_registry,
             ),
         ):
-            self.assertIs(auth_mod._config_provider(), fake_config)  # pylint: disable=protected-access
-            self.assertIs(auth_mod._registry_provider(), fake_registry)  # pylint: disable=protected-access
+            self.assertIs(
+                auth_mod._config_provider(), fake_config
+            )  # pylint: disable=protected-access
+            self.assertIs(
+                auth_mod._registry_provider(), fake_registry
+            )  # pylint: disable=protected-access
 
     async def test_permission_id_caching_helpers(self) -> None:
         svc, services = self._new_service()
         obj_id = uuid.uuid4()
         typ_id = uuid.uuid4()
-        services["ACP.PermissionObject"].get = AsyncMock(return_value=_row_with_id(obj_id))
-        services["ACP.PermissionType"].get = AsyncMock(return_value=_row_with_id(typ_id))
+        services["ACP.PermissionObject"].get = AsyncMock(
+            return_value=_row_with_id(obj_id)
+        )
+        services["ACP.PermissionType"].get = AsyncMock(
+            return_value=_row_with_id(typ_id)
+        )
 
-        resolved_obj = await svc._get_perm_obj_id("com.vorso", "users")  # pylint: disable=protected-access
-        resolved_obj_cached = await svc._get_perm_obj_id(  # pylint: disable=protected-access
+        resolved_obj = await svc._get_perm_obj_id(
             "com.vorso", "users"
+        )  # pylint: disable=protected-access
+        resolved_obj_cached = (
+            await svc._get_perm_obj_id(  # pylint: disable=protected-access
+                "com.vorso", "users"
+            )
         )
         self.assertEqual(resolved_obj, obj_id)
         self.assertEqual(resolved_obj_cached, obj_id)
         services["ACP.PermissionObject"].get.assert_awaited_once()
 
-        resolved_typ = await svc._get_perm_type_id("com.vorso", "read")  # pylint: disable=protected-access
-        resolved_typ_cached = await svc._get_perm_type_id(  # pylint: disable=protected-access
+        resolved_typ = await svc._get_perm_type_id(
             "com.vorso", "read"
+        )  # pylint: disable=protected-access
+        resolved_typ_cached = (
+            await svc._get_perm_type_id(  # pylint: disable=protected-access
+                "com.vorso", "read"
+            )
         )
         self.assertEqual(resolved_typ, typ_id)
         self.assertEqual(resolved_typ_cached, typ_id)
         services["ACP.PermissionType"].get.assert_awaited_once()
 
         services["ACP.PermissionObject"].get = AsyncMock(return_value=None)
-        missing_obj = await svc._get_perm_obj_id("com.vorso", "missing")  # pylint: disable=protected-access
+        missing_obj = await svc._get_perm_obj_id(
+            "com.vorso", "missing"
+        )  # pylint: disable=protected-access
         self.assertIsNone(missing_obj)
 
     async def test_has_permission_short_circuits_and_global_admin(self) -> None:

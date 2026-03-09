@@ -21,8 +21,8 @@ from mugen.core.plugin.acp.contract.service import (
     IRoleMembershipService,
     IUserService,
 )
+from mugen.core.plugin.acp.utility.identity import resolve_acp_admin_namespace
 from mugen.core.plugin.acp.utility.ns import AdminNs
-
 
 _ROLE_ADMINISTRATOR = "administrator"
 
@@ -50,6 +50,7 @@ class AuthorizationService(IAuthorizationService):
 
     _perm_obj_id_cache: dict[tuple[str, str], uuid.UUID]
     _perm_type_id_cache: dict[tuple[str, str], uuid.UUID]
+    _admin_namespace: str
 
     def __init__(
         self,
@@ -62,7 +63,8 @@ class AuthorizationService(IAuthorizationService):
         self._perm_obj_id_cache = {}
         self._perm_type_id_cache = {}
 
-        admin_ns = AdminNs(self._config.acp.namespace)
+        admin_ns = AdminNs(resolve_acp_admin_namespace(self._config))
+        self._admin_namespace = admin_ns.ns
         self._admin_fqn = admin_ns.key(_ROLE_ADMINISTRATOR)
 
         self._gperm_entry_svc: IGlobalPermissionEntryService = (
@@ -128,13 +130,13 @@ class AuthorizationService(IAuthorizationService):
     ) -> bool:
         try:
             if permission_object.startswith(":"):
-                obj_ns = self._config.acp.namespace
+                obj_ns = self._admin_namespace
                 obj_name = permission_object[1:]
             else:
                 obj_ns, obj_name = permission_object.split(":", 1)
 
             if permission_type.startswith(":"):
-                typ_ns = self._config.acp.namespace
+                typ_ns = self._admin_namespace
                 typ_name = permission_type[1:]
             else:
                 typ_ns, typ_name = permission_type.split(":", 1)

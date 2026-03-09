@@ -21,6 +21,7 @@ from mugen.core.plugin.acp.contract.service import (
     ITenantMembershipService,
     IUserService,
 )
+from mugen.core.plugin.acp.utility.identity import resolve_acp_admin_namespace
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.utility.client_profile_runtime import normalize_client_profile_id
 
@@ -218,9 +219,9 @@ async def _authorize_tenant_runtime_lookup(
         )
         abort(403)
 
-    role_in_tenant = str(
-        getattr(membership, "role_in_tenant", "") or ""
-    ).strip().lower()
+    role_in_tenant = (
+        str(getattr(membership, "role_in_tenant", "") or "").strip().lower()
+    )
     if role_in_tenant not in _TENANT_ADMIN_ROLES:
         logger.warning(
             "Unauthorized tenant Matrix device verification lookup."
@@ -376,7 +377,7 @@ def _is_global_admin(
 ) -> bool:
     if user is None:
         return False
-    admin_ns = AdminNs(config.acp.namespace)
+    admin_ns = AdminNs(resolve_acp_admin_namespace(config))
     global_roles = [
         f"{role.namespace}:{role.name}"
         for role in (getattr(user, "global_roles", None) or [])

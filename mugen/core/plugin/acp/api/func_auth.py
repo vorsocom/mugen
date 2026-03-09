@@ -23,6 +23,7 @@ from mugen.core.plugin.acp.contract.service.jwt import (
     JwtVerifyParams,
     JwtVerifyProfile,
 )
+from mugen.core.plugin.acp.utility.identity import resolve_acp_admin_namespace
 from mugen.core.plugin.acp.utility.ns import AdminNs
 
 _EDM_REFRESH_TOKEN = "ACP.RefreshToken"
@@ -68,7 +69,7 @@ async def user_login(  # pylint: disable=too-many-locals
     jwt_svc: IJwtService = jwt_provider()
     registry: IAdminRegistry = registry_provider()
 
-    admin_ns = AdminNs(config.acp.namespace)
+    admin_ns = AdminNs(resolve_acp_admin_namespace(config))
     rtoken_svc: IRefreshTokenService = registry.get_edm_service(
         admin_ns.key(_EDM_REFRESH_TOKEN)
     )
@@ -253,7 +254,7 @@ async def user_logout(
     jwt_svc: IJwtService = jwt_provider()
     registry: IAdminRegistry = registry_provider()
 
-    admin_ns = AdminNs(config.acp.namespace)
+    admin_ns = AdminNs(resolve_acp_admin_namespace(config))
     rtoken_svc: IRefreshTokenService = registry.get_edm_service(
         admin_ns.key(_EDM_REFRESH_TOKEN)
     )
@@ -317,7 +318,7 @@ async def user_refresh_login(
     jwt_svc: IJwtService = jwt_provider()
     registry: IAdminRegistry = registry_provider()
 
-    admin_ns = AdminNs(config.acp.namespace)
+    admin_ns = AdminNs(resolve_acp_admin_namespace(config))
     rtoken_svc: IRefreshTokenService = registry.get_edm_service(
         admin_ns.key(_EDM_REFRESH_TOKEN)
     )
