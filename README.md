@@ -80,6 +80,7 @@ The core messaging path now depends on a dedicated context engine service:
 - `mugen.modules.core.service.messaging = "default"`
 
 The default context engine is provider-neutral and composes pluggable contributors, guards, rankers, caches, and trace sinks behind typed contracts.
+Plugin authors extending that seam should start with `docs/context-engine-authoring.md`.
 
 ## Quick Start
 

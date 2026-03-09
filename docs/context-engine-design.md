@@ -1,7 +1,7 @@
 # Context Engine Design
 
 Status: Active
-Last Updated: 2026-03-06
+Last Updated: 2026-03-09
 Audience: Core maintainers, plugin authors, downstream platform teams
 
 ## Purpose
@@ -47,6 +47,9 @@ Primary interfaces:
 - `IContextTraceSink`
 - `IContextPolicyResolver`
 - `IContextStateStore`
+
+For implementation guidance on these collaborators, registration, and built-in
+examples, see `docs/context-engine-authoring.md`.
 
 The engine contract is two-phase:
 
@@ -125,6 +128,10 @@ Built-in contributors include:
 They may target `platform`, `channel_key`, and optional
 `client_profile_key`, and each selected profile may point to a
 `ContextPolicy`.
+
+Plugin authors extending this seam should use `docs/context-engine-authoring.md`
+for collaborator-specific guidance instead of treating this design note as the
+authoring contract.
 
 ## Tenant Isolation and Global Fallback
 

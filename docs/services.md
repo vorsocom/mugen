@@ -1,7 +1,7 @@
 # Working with muGen Services
 
 Status: Draft
-Last Updated: 2026-03-08
+Last Updated: 2026-03-09
 Audience: Core and downstream plugin teams
 
 ## Purpose
@@ -126,6 +126,9 @@ The default engine composes typed collaborators behind ports:
 The compiled output targets the existing normalized completion contract
 (`CompletionRequest` / `CompletionMessage`) instead of provider-specific prompt
 logic.
+
+For collaborator authoring, registration, and current implementation examples,
+see `docs/context-engine-authoring.md`.
 
 ## Context Engine Plugin
 
