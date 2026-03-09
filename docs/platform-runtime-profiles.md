@@ -21,7 +21,7 @@ Messaging transport accounts now live in the ACP `MessagingClientProfiles`
 entity set.
 
 - Config keeps only process-level platform settings such as timeouts, allow
-  lists, media limits, and bind/runtime switches.
+  media limits, and bind/runtime switches.
 - Tenant-owned transport credentials, webhook selectors, and account identifiers
   live in ACP rows plus ACP `KeyRef` secrets.
 - A deployment may start with zero active client profiles for any enabled
@@ -38,10 +38,11 @@ Each `MessagingClientProfiles` row owns:
 - lookup identifiers such as `path_token`, `recipient_user_id`,
   `account_number`, `phone_number_id`, and `provider`
 
-Client-profile-specific sender gates also live in `settings` when supported by
-the platform:
+Client-profile-specific sender and federation gates also live in `settings`
+when supported by the platform:
 
-- Matrix: `user_access.mode` plus `user_access.users`
+- Matrix: `federation.allowed`, optional `federation.denied`, and
+  `user_access.mode` plus `user_access.users`
 - WhatsApp: `user_access.mode`, `user_access.users`, and optional
   `user_access.denied_message`
 

@@ -45,23 +45,6 @@ def _require_non_empty_string_list(*, value: object, path: str) -> list[str]:
             )
         normalized.append(item.strip())
     return normalized
-
-
-def _require_string_list(*, value: object, path: str) -> list[str]:
-    if not isinstance(value, list):
-        raise RuntimeError(
-            f"Invalid configuration: {path} must be an array of strings."
-        )
-    normalized: list[str] = []
-    for index, item in enumerate(value):
-        if not isinstance(item, str) or item.strip() == "":
-            raise RuntimeError(
-                f"Invalid configuration: {path}[{index}] must be a non-empty string."
-            )
-        normalized.append(item.strip())
-    return normalized
-
-
 def _require_bool(*, value: object, path: str) -> bool:
     if isinstance(value, bool) is not True:
         raise RuntimeError(f"Invalid configuration: {path} must be a boolean.")
@@ -114,16 +97,6 @@ def _validate_matrix_device_trust_allowlist(*, allowlist: object) -> None:
 def validate_matrix_enabled_runtime_config(config: Mapping[str, Any]) -> None:
     """Validate strict matrix runtime config when matrix platform is enabled."""
     matrix_cfg = _require_table(config.get("matrix"), path="matrix")
-
-    domains_cfg = _require_table(matrix_cfg.get("domains"), path="matrix.domains")
-    _require_non_empty_string_list(
-        value=domains_cfg.get("allowed"),
-        path="matrix.domains.allowed",
-    )
-    _require_string_list(
-        value=domains_cfg.get("denied"),
-        path="matrix.domains.denied",
-    )
 
     invites_cfg = _require_table(matrix_cfg.get("invites"), path="matrix.invites")
     _require_bool(

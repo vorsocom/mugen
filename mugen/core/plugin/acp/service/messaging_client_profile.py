@@ -26,6 +26,9 @@ from mugen.core.plugin.acp.service.runtime_config_profile import (
     RuntimeConfigProfileService,
 )
 from mugen.core.service.platform_runtime_reload import reload_platform_runtime_profiles
+from mugen.core.utility.messaging_client_federation import (
+    normalize_messaging_client_federation,
+)
 from mugen.core.utility.platform_runtime_profile import build_config_namespace
 from mugen.core.plugin.acp.utility.runtime_config_policy import (
     normalize_messaging_client_profile_settings,
@@ -202,12 +205,21 @@ class MessagingClientProfileService(
         *,
         platform_key: object,
         value: object,
+        is_active: bool = True,
     ) -> dict[str, Any]:
         normalized_platform_key = normalize_messaging_platform_key(platform_key)
         payload = normalize_messaging_client_profile_settings(
             platform_key=platform_key,
             value=value,
         )
+        if normalized_platform_key == "matrix":
+            federation = payload.get("federation")
+            if federation is not None or is_active is True:
+                payload["federation"] = normalize_messaging_client_federation(
+                    federation if federation is not None else {},
+                    field_name="Settings.federation",
+                    require_allowed=is_active,
+                )
         user_access = payload.get("user_access")
         if user_access is not None:
             payload["user_access"] = normalize_messaging_client_user_access(
@@ -486,7 +498,15 @@ class MessagingClientProfileService(
 
         if platform_key == "matrix":
             self._delete_nested(merged, ("assistant", "name"))
+            self._delete_nested(merged, ("domains",))
             self._delete_nested(merged, ("profile_displayname",))
+            federation = merged.get("federation")
+            if federation is not None or bool(client_profile.is_active):
+                merged["federation"] = normalize_messaging_client_federation(
+                    federation if federation is not None else {},
+                    field_name="matrix.federation",
+                    require_allowed=bool(client_profile.is_active),
+                )
             display_name = self._normalize_optional_text(client_profile.display_name)
             if display_name is not None:
                 merged["profile_displayname"] = display_name
@@ -627,9 +647,11 @@ class MessagingClientProfileService(
             payload["display_name"] = self._normalize_optional_text(
                 payload.get("display_name")
             )
+            payload["is_active"] = bool(payload.get("is_active", True))
             payload["settings"] = self._normalize_settings(
                 platform_key=payload["platform_key"],
                 value=payload.get("settings"),
+                is_active=payload["is_active"],
             )
             payload["secret_refs"] = self._normalize_platform_secret_refs(
                 platform_key=payload["platform_key"],
@@ -673,15 +695,16 @@ class MessagingClientProfileService(
                 "display_name": self._normalize_optional_text(
                     changes.get("display_name", current.display_name)
                 ),
+                "is_active": bool(changes.get("is_active", current.is_active)),
                 "settings": self._normalize_settings(
                     platform_key=changes.get("platform_key", current.platform_key),
                     value=changes.get("settings", current.settings or {}),
+                    is_active=bool(changes.get("is_active", current.is_active)),
                 ),
                 "secret_refs": self._normalize_platform_secret_refs(
                     platform_key=changes.get("platform_key", current.platform_key),
                     value=changes.get("secret_refs", current.secret_refs or {}),
                 ),
-                "is_active": bool(changes.get("is_active", current.is_active)),
                 "path_token": changes.get("path_token", current.path_token),
                 "recipient_user_id": changes.get(
                     "recipient_user_id",
@@ -741,15 +764,16 @@ class MessagingClientProfileService(
                 "display_name": self._normalize_optional_text(
                     changes.get("display_name", current.display_name)
                 ),
+                "is_active": bool(changes.get("is_active", current.is_active)),
                 "settings": self._normalize_settings(
                     platform_key=changes.get("platform_key", current.platform_key),
                     value=changes.get("settings", current.settings or {}),
+                    is_active=bool(changes.get("is_active", current.is_active)),
                 ),
                 "secret_refs": self._normalize_platform_secret_refs(
                     platform_key=changes.get("platform_key", current.platform_key),
                     value=changes.get("secret_refs", current.secret_refs or {}),
                 ),
-                "is_active": bool(changes.get("is_active", current.is_active)),
                 "path_token": changes.get("path_token", current.path_token),
                 "recipient_user_id": changes.get(
                     "recipient_user_id",

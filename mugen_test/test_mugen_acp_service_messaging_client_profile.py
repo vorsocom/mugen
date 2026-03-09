@@ -188,6 +188,10 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                 platform_key="matrix",
                 value={
                     "client": {"device": "dev-box"},
+                    "federation": {
+                        "allowed": ["example.com", "example.com"],
+                        "denied": ["blocked.example.com"],
+                    },
                     "user_access": {
                         "mode": "allow-only",
                         "users": ["@u:example.com", "@u:example.com"],
@@ -196,11 +200,23 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             ),
             {
                 "client": {"device": "dev-box"},
+                "federation": {
+                    "allowed": ["example.com"],
+                    "denied": ["blocked.example.com"],
+                },
                 "user_access": {
                     "mode": "allow-only",
                     "users": ["@u:example.com"],
                 },
             },
+        )
+        self.assertEqual(
+            profile_mod.MessagingClientProfileService._normalize_settings(
+                platform_key="matrix",
+                value={},
+                is_active=False,
+            ),
+            {},
         )
         self.assertEqual(
             profile_mod.MessagingClientProfileService._normalize_settings(
@@ -251,11 +267,20 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             profile_mod.MessagingClientProfileService._normalize_settings(
                 platform_key="matrix",
                 value={
+                    "federation": {
+                        "allowed": ["example.com"],
+                        "denied": [],
+                    },
                     "user_access": {
                         "mode": "allow-all",
                         "users": ["@u:example.com"],
                     }
                 },
+            )
+        with self.assertRaisesRegex(RuntimeError, "Settings.federation.allowed"):
+            profile_mod.MessagingClientProfileService._normalize_settings(
+                platform_key="matrix",
+                value={},
             )
 
         identifier_payload = {
@@ -447,6 +472,10 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             config={
                 "matrix": {
                     "assistant": {"name": "Legacy Root Name"},
+                    "domains": {
+                        "allowed": ["legacy.example.com"],
+                        "denied": [],
+                    },
                     "profile_displayname": "legacy-root-name",
                 }
             },
@@ -458,6 +487,10 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                     "assistant": {"name": "settings-name"},
                     "profile_displayname": "settings-display-name",
                     "client": {"device": "device-default"},
+                    "federation": {
+                        "allowed": ["example.com"],
+                        "denied": ["blocked.example.com"],
+                    },
                     "user_access": {
                         "mode": "allow-only",
                         "users": ["@allowed:example.com"],
@@ -471,6 +504,13 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(matrix_section["client"]["user"], "@bot:example.com")
         self.assertEqual(matrix_section["client"]["device"], "device-default")
         self.assertEqual(
+            matrix_section["federation"],
+            {
+                "allowed": ["example.com"],
+                "denied": ["blocked.example.com"],
+            },
+        )
+        self.assertEqual(
             matrix_section["user_access"],
             {
                 "mode": "allow-only",
@@ -482,11 +522,16 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             "Profile Display Name",
         )
         self.assertNotIn("assistant", matrix_section)
+        self.assertNotIn("domains", matrix_section)
 
         matrix_section_without_display_name = await svc.build_runtime_platform_section(
             config={
                 "matrix": {
                     "assistant": {"name": "Legacy Root Name"},
+                    "domains": {
+                        "allowed": ["legacy.example.com"],
+                        "denied": [],
+                    },
                     "profile_displayname": "legacy-root-name",
                 }
             },
@@ -498,6 +543,10 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                     "assistant": {"name": "settings-name"},
                     "profile_displayname": "settings-display-name",
                     "client": {"device": "device-default"},
+                    "federation": {
+                        "allowed": ["example.com"],
+                        "denied": [],
+                    },
                     "user_access": {
                         "mode": "allow-only",
                         "users": ["@allowed:example.com"],
@@ -512,11 +561,50 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             matrix_section_without_display_name["client"]["user"],
             "@bot:example.com",
         )
+        self.assertEqual(
+            matrix_section_without_display_name["federation"],
+            {
+                "allowed": ["example.com"],
+                "denied": [],
+            },
+        )
         self.assertNotIn("assistant", matrix_section_without_display_name)
+        self.assertNotIn("domains", matrix_section_without_display_name)
         self.assertNotIn(
             "profile_displayname",
             matrix_section_without_display_name,
         )
+
+        inactive_matrix_section = await svc.build_runtime_platform_section(
+            config={
+                "matrix": {
+                    "domains": {
+                        "allowed": ["legacy.example.com"],
+                        "denied": [],
+                    }
+                }
+            },
+            client_profile=_profile(
+                platform_key="matrix",
+                profile_key="inactive",
+                display_name=None,
+                is_active=False,
+                settings={"client": {"device": "device-inactive"}},
+                secret_refs={},
+                path_token=None,
+                recipient_user_id="@bot:example.com",
+            ),
+        )
+        self.assertEqual(
+            inactive_matrix_section["client"]["user"],
+            "@bot:example.com",
+        )
+        self.assertEqual(
+            inactive_matrix_section["client"]["device"],
+            "device-inactive",
+        )
+        self.assertNotIn("domains", inactive_matrix_section)
+        self.assertNotIn("federation", inactive_matrix_section)
 
         wechat_section = await svc.build_runtime_platform_section(
             config={"wechat": {}},
@@ -637,6 +725,35 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_runtime_specs_fail_closed_for_active_matrix_without_federation(
+        self,
+    ) -> None:
+        svc, _ = _make_service()
+        svc.list = AsyncMock(  # type: ignore[method-assign]
+            return_value=[
+                _profile(
+                    platform_key="matrix",
+                    profile_key="matrix-default",
+                    settings={"client": {"device": "device-default"}},
+                    path_token=None,
+                    recipient_user_id="@bot:example.com",
+                )
+            ]
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "matrix.federation.allowed"):
+            await svc.list_active_runtime_specs(
+                config={
+                    "matrix": {
+                        "domains": {
+                            "allowed": ["legacy.example.com"],
+                            "denied": [],
+                        }
+                    }
+                },
+                platform_key="matrix",
+            )
+
     async def test_create_update_and_delete_lifecycle_paths(self) -> None:
         svc, key_ref_service = _make_service()
         key_ref_service.get = AsyncMock(
@@ -671,6 +788,7 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                 "platform_key": "line",
                 "profile_key": "support",
                 "display_name": "Support",
+                "is_active": True,
                 "settings": {},
                 "secret_refs": {"channel.secret": str(_KEY_REF_ID)},
                 "path_token": "line-path",
@@ -696,6 +814,20 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(ctx.exception.code, 400)
         self.assertIn("Settings path 'webhook.path_token'", str(ctx.exception))
+
+        with self.assertRaises(HTTPException) as ctx:
+            await svc.create(
+                {
+                    "tenant_id": _TENANT_ID,
+                    "platform_key": "matrix",
+                    "profile_key": "default",
+                    "settings": {"client": {"device": "dev-box"}},
+                    "secret_refs": {},
+                    "recipient_user_id": "@bot:example.com",
+                }
+            )
+        self.assertEqual(ctx.exception.code, 400)
+        self.assertIn("Settings.federation.allowed", str(ctx.exception))
 
         current = _profile(
             platform_key="line",
@@ -765,7 +897,14 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                 {"id": _PROFILE_ID},
                 {
                     "platform_key": "matrix",
+                    "settings": {
+                        "federation": {
+                            "allowed": ["example.com"],
+                            "denied": [],
+                        }
+                    },
                     "secret_refs": {"bot.token": str(_KEY_REF_ID)},
+                    "recipient_user_id": "@bot:example.com",
                 },
             )
         self.assertEqual(ctx.exception.code, 400)
@@ -778,7 +917,14 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                 expected_row_version=6,
                 changes={
                     "platform_key": "matrix",
+                    "settings": {
+                        "federation": {
+                            "allowed": ["example.com"],
+                            "denied": [],
+                        }
+                    },
                     "secret_refs": {"bot.token": str(_KEY_REF_ID)},
+                    "recipient_user_id": "@bot:example.com",
                 },
             )
         self.assertEqual(ctx.exception.code, 400)

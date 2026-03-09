@@ -501,7 +501,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                     device="device",
                 ),
                 storage=SimpleNamespace(olm=SimpleNamespace(path="olm")),
-                domains=SimpleNamespace(
+                federation=SimpleNamespace(
                     allowed=["example.com"],
                     denied=[],
                 ),
@@ -2468,6 +2468,94 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIn("event_type", payload.data)
             self.assertNotIn("event", payload.data)
+
+    async def test_non_core_to_device_callbacks_drop_disallowed_sender(self) -> None:
+        client = self._client()
+        client._matrix_ipc_queue = asyncio.Queue(maxsize=32)
+        client._start_matrix_ipc_worker = Mock()
+
+        await client._cb_key_verification_event(
+            SimpleNamespace(sender="@u:blocked.com")
+        )
+
+        self.assertEqual(client._matrix_ipc_queue.qsize(), 0)
+        self.assertEqual(
+            client._matrix_metrics["matrix.to_device.dropped.domain_not_allowed"],
+            1,  # pylint: disable=protected-access
+        )
+        self.assertIn(
+            "Matrix to-device callback dropped. Reason: Domain not allowed.",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+    async def test_non_core_to_device_callbacks_drop_malformed_sender(self) -> None:
+        client = self._client()
+        client._matrix_ipc_queue = asyncio.Queue(maxsize=32)
+        client._start_matrix_ipc_worker = Mock()
+
+        await client._cb_key_verification_event(
+            SimpleNamespace(sender="malformed-sender")
+        )
+
+        self.assertEqual(client._matrix_ipc_queue.qsize(), 0)
+        self.assertEqual(
+            client._matrix_metrics["matrix.to_device.dropped.malformed_sender"],
+            1,  # pylint: disable=protected-access
+        )
+        self.assertIn(
+            "Matrix to-device callback dropped. Reason: Malformed sender.",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+    async def test_non_core_to_device_callbacks_drop_invalid_federation_policy(
+        self,
+    ) -> None:
+        client = self._client()
+        client._config.matrix.federation.allowed = []
+        client._dispatch_matrix_event_hook = AsyncMock()  # pylint: disable=protected-access
+        client._queue_sync_ingress_entry = AsyncMock()  # pylint: disable=protected-access
+        client._ingress_service = object()
+
+        await client._handle_non_core_event_callback(  # pylint: disable=protected-access
+            callback_name="_cb_key_verification_event",
+            event=SimpleNamespace(sender="@u:example.com"),
+        )
+
+        client._dispatch_matrix_event_hook.assert_not_awaited()  # pylint: disable=protected-access
+        client._queue_sync_ingress_entry.assert_not_awaited()  # pylint: disable=protected-access
+        self.assertEqual(
+            client._matrix_metrics[
+                "matrix.to_device.dropped.invalid_federation_policy"
+            ],
+            1,  # pylint: disable=protected-access
+        )
+        self.assertIn(
+            "Matrix to-device callback dropped. Reason: Invalid federation",
+            client._logging_gateway.warning.call_args.args[0],
+        )
+
+    async def test_cb_invite_member_event_rejects_invalid_federation_policy(
+        self,
+    ) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        client._config.matrix.federation.allowed = []
+        event = SimpleNamespace(
+            content={"membership": "invite", "is_direct": True},
+            sender="@u:example.com",
+        )
+
+        await client._cb_invite_member_event(room, event)
+
+        client.room_leave.assert_awaited_once_with("!room:test")
+        self.assertEqual(
+            client._matrix_metrics["matrix.invites.rejected.invalid_federation_policy"],
+            1,  # pylint: disable=protected-access
+        )
+        self.assertIn(
+            "InviteMemberEvent: Rejected invitation. Reason: Invalid federation",
+            client._logging_gateway.warning.call_args.args[0],
+        )
 
     async def test_dispatch_matrix_event_hook_handles_missing_ipc_service_paths(
         self,

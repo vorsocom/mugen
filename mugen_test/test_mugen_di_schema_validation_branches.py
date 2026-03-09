@@ -74,10 +74,6 @@ def _valid_core_config() -> dict:
                 "user": "@assistant:example.com",
                 "password": "matrix-password",
             },
-            "domains": {
-                "allowed": ["example.com"],
-                "denied": [],
-            },
             "invites": {
                 "direct_only": True,
             },
@@ -559,16 +555,6 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["matrix"]
-        cfg["matrix"]["domains"]["allowed"] = []
-        cases.append((cfg, "matrix.domains.allowed"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["matrix"]
-        cfg["matrix"]["domains"]["denied"] = "example.com"
-        cases.append((cfg, "matrix.domains.denied"))
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["matrix"]
         cfg["matrix"]["invites"]["direct_only"] = "true"
         cases.append((cfg, "matrix.invites.direct_only"))
 
@@ -619,6 +605,14 @@ class TestDISchemaValidationBranches(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(RuntimeError, re.escape(message)):
                     di._validate_core_module_schema(candidate)
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["platforms"] = ["matrix"]
+        cfg["matrix"]["domains"] = {
+            "allowed": [],
+            "denied": "example.com",
+        }
+        di._validate_core_module_schema(cfg)
 
     def test_core_schema_requires_strict_telegram_runtime_contract_when_enabled(
         self,

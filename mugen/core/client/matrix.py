@@ -103,6 +103,11 @@ from mugen.core.service.context_scope_resolution import (
 )
 from mugen.core.service.ingress_routing import DefaultIngressRoutingService
 from mugen.core.utility.client_profile_runtime import normalize_client_profile_id
+from mugen.core.utility.messaging_client_federation import (
+    MessagingClientFederationPolicy,
+    parse_matrix_sender_domain,
+    resolve_messaging_client_federation_policy,
+)
 from mugen.core.utility.messaging_client_user_access import (
     MessagingClientUserAccessPolicy,
     resolve_messaging_client_user_access_policy,
@@ -157,6 +162,13 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
     _sync_key: str = "matrix_client_sync_next_batch"
     _sync_checkpoint_key: str = "sync_token"
     _encrypted_secret_prefix: str = "enc:v1:"
+    _federation_guarded_to_device_callbacks = frozenset(
+        {
+            "_cb_key_verification_event",
+            "_cb_room_key_event",
+            "_cb_room_key_request",
+        }
+    )
 
     # pylint: disable=too-many-arguments
     def __init__(
@@ -1347,18 +1359,17 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
     @staticmethod
     def _parse_sender_domain(sender_id: str) -> str | None:
-        if not isinstance(sender_id, str):
-            return None
+        return parse_matrix_sender_domain(sender_id)
 
-        local_part, separator, domain_part = sender_id.partition(":")
-        if (
-            separator == ""
-            or not local_part.startswith("@")
-            or domain_part.strip() == ""
-        ):
-            return None
-
-        return domain_part
+    def _resolve_federation_policy(self) -> MessagingClientFederationPolicy:
+        return resolve_messaging_client_federation_policy(
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()),
+                "federation",
+                {},
+            ),
+            field_name="matrix.federation",
+        )
 
     def _direct_invites_only(self) -> bool:
         direct_only = getattr(
@@ -1538,6 +1549,72 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             f" {structured_fields}"
         )
 
+    def _allow_non_core_event_callback(
+        self,
+        *,
+        callback_name: str,
+        event: object = None,
+    ) -> bool:
+        if callback_name not in self._federation_guarded_to_device_callbacks:
+            return True
+
+        sender_id = self._coerce_optional_string(getattr(event, "sender", None))
+        if sender_id is None:
+            return True
+
+        sender_domain = self._parse_sender_domain(sender_id)
+        if sender_domain is None:
+            self._track_matrix_decision(
+                domain="to_device",
+                action="dropped",
+                reason="malformed_sender",
+                callback=callback_name,
+                sender=sender_id,
+            )
+            self._logging_gateway.warning(
+                "Matrix to-device callback dropped. Reason: Malformed sender."
+                f" callback={callback_name}"
+                f" sender={sender_id}"
+            )
+            return False
+
+        try:
+            federation_policy = self._resolve_federation_policy()
+        except RuntimeError as exc:
+            self._track_matrix_decision(
+                domain="to_device",
+                action="dropped",
+                reason="invalid_federation_policy",
+                callback=callback_name,
+                sender=sender_id,
+                sender_domain=sender_domain,
+            )
+            self._logging_gateway.warning(
+                "Matrix to-device callback dropped. Reason: Invalid federation"
+                f" policy. callback={callback_name}"
+                f" sender={sender_id}"
+                f" error={exc}"
+            )
+            return False
+
+        if federation_policy.allows_domain(sender_domain):
+            return True
+
+        self._track_matrix_decision(
+            domain="to_device",
+            action="dropped",
+            reason="domain_not_allowed",
+            callback=callback_name,
+            sender=sender_id,
+            sender_domain=sender_domain,
+        )
+        self._logging_gateway.warning(
+            "Matrix to-device callback dropped. Reason: Domain not allowed."
+            f" callback={callback_name}"
+            f" sender={sender_id}"
+        )
+        return False
+
     def _ingress_router(self) -> IIngressRoutingService:
         if self._ingress_routing_service is not None:
             return self._ingress_routing_service
@@ -1687,6 +1764,11 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         room: MatrixRoom | MatrixInvitedRoom | None = None,
         reason: str = _callback_skip_reason_dm_scope,
     ) -> None:
+        if not self._allow_non_core_event_callback(
+            callback_name=callback_name,
+            event=event,
+        ):
+            return
         self._log_skipped_callback(
             callback_name=callback_name,
             event=event,
@@ -1750,11 +1832,23 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             )
             return
 
-        # Only process invites from allowed domains.
-        # Federated servers need to be in the allowed domains list for their users
-        # to initiate conversations with the assistant.
-        allowed_domains: list = self._config.matrix.domains.allowed
-        denied_domains: list = self._config.matrix.domains.denied
+        try:
+            federation_policy = self._resolve_federation_policy()
+        except RuntimeError as exc:
+            await self.room_leave(room.room_id)
+            self._track_matrix_decision(
+                domain="invites",
+                action="rejected",
+                reason="invalid_federation_policy",
+                sender=event.sender,
+                room_id=room.room_id,
+            )
+            self._logging_gateway.warning(
+                "InviteMemberEvent: Rejected invitation. Reason: Invalid"
+                f" federation policy. ({event.sender}) error={exc}"
+            )
+            return
+
         sender_domain = self._parse_sender_domain(event.sender)
         if sender_domain is None:
             await self.room_leave(room.room_id)
@@ -1771,7 +1865,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
             )
             return
 
-        if sender_domain not in allowed_domains or sender_domain in denied_domains:
+        if not federation_policy.allows_domain(sender_domain):
             await self.room_leave(room.room_id)
             self._track_matrix_decision(
                 domain="invites",

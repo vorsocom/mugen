@@ -21,8 +21,6 @@ platforms, even though the transport entrypoint is `/sync`.
 When `matrix` is enabled in `mugen.platforms`, bootstrap is fail-closed unless:
 
 1. root config has valid process-level Matrix settings:
-   - `matrix.domains.allowed`
-   - `matrix.domains.denied`
    - `matrix.invites.direct_only`
    - `matrix.media.allowed_mimetypes`
    - `matrix.media.max_download_bytes`
@@ -36,6 +34,9 @@ When `matrix` is enabled in `mugen.platforms`, bootstrap is fail-closed unless:
 Homeserver URLs, Matrix users, device ids, and credentials are owned by ACP
 `MessagingClientProfiles` plus `KeyRef` secrets. Zero active client profiles is
 valid at startup.
+
+Matrix federation policy is owned per `MessagingClientProfiles.settings` using
+`federation.allowed` plus optional `federation.denied`.
 
 Optional sender gating is also owned per `MessagingClientProfiles.settings`
 using `user_access.mode` plus `user_access.users`.
