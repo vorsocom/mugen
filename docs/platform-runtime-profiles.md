@@ -38,6 +38,19 @@ Each `MessagingClientProfiles` row owns:
 - lookup identifiers such as `path_token`, `recipient_user_id`,
   `account_number`, `phone_number_id`, and `provider`
 
+Client-profile-specific sender gates also live in `settings` when supported by
+the platform:
+
+- Matrix: `user_access.mode` plus `user_access.users`
+- WhatsApp: `user_access.mode`, `user_access.users`, and optional
+  `user_access.denied_message`
+
+Supported access modes are:
+
+- `allow-all`
+- `allow-all-except`
+- `allow-only`
+
 Tenant-editable non-secret platform defaults now live in ACP
 `RuntimeConfigProfiles` rows rather than operator-owned TOML.
 

@@ -151,9 +151,6 @@ def _valid_core_config() -> dict:
                 "id": "app-id",
                 "secret": "whatsapp-app-secret",
             },
-            "beta": {
-                "users": ["15550000001"],
-            },
             "business": {
                 "phone_number_id": "phone-number-id",
             },
@@ -747,12 +744,6 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cfg["whatsapp"]["servers"]["allowed"] = ""
         cases.append((cfg, "whatsapp.servers.allowed"))
 
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["whatsapp"]
-        cfg["mugen"]["beta"] = {"active": True}
-        cfg["whatsapp"]["beta"]["users"] = ["", "15550000001"]
-        cases.append((cfg, "whatsapp.beta.users[0]"))
-
         for candidate, message in cases:
             with self.subTest(message=message):
                 with self.assertRaisesRegex(RuntimeError, re.escape(message)):
@@ -760,11 +751,6 @@ class TestDISchemaValidationBranches(unittest.TestCase):
 
         cfg = _valid_core_config()
         cfg["mugen"]["platforms"] = ["whatsapp"]
-        di._validate_core_module_schema(cfg)
-
-        cfg = _valid_core_config()
-        cfg["mugen"]["platforms"] = ["whatsapp"]
-        cfg["mugen"]["beta"] = {"active": True}
         di._validate_core_module_schema(cfg)
 
     def test_build_provider_logs_relational_runtime_bootstrap_failure(self) -> None:

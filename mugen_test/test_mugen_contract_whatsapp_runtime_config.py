@@ -13,18 +13,11 @@ from mugen.core.contract.whatsapp_runtime_config import (
 
 def _valid_config() -> dict:
     return {
-        "mugen": {
-            "beta": {
-                "active": False,
-            }
-        },
+        "mugen": {},
         "whatsapp": {
             "app": {
                 "id": "app-id",
                 "secret": "whatsapp-app-secret",
-            },
-            "beta": {
-                "users": ["15550000001"],
             },
             "business": {
                 "phone_number_id": "phone-number-id",
@@ -57,10 +50,6 @@ class TestWhatsAppRuntimeConfigContract(unittest.TestCase):
 
     def test_accepts_valid_contracts(self) -> None:
         cfg = _valid_config()
-        validate_whatsapp_enabled_runtime_config(cfg)
-
-        cfg = _valid_config()
-        cfg["mugen"]["beta"]["active"] = True
         validate_whatsapp_enabled_runtime_config(cfg)
 
         cfg = _valid_config()
@@ -141,16 +130,6 @@ class TestWhatsAppRuntimeConfigContract(unittest.TestCase):
         cfg = _valid_config()
         cfg["whatsapp"]["webhook"]["dedupe_ttl_seconds"] = 0
         cases.append((cfg, "whatsapp.webhook.dedupe_ttl_seconds"))
-
-        cfg = _valid_config()
-        cfg["mugen"]["beta"]["active"] = True
-        cfg["whatsapp"]["beta"]["users"] = "15550000001"
-        cases.append((cfg, "whatsapp.beta.users"))
-
-        cfg = _valid_config()
-        cfg["mugen"]["beta"]["active"] = True
-        cfg["whatsapp"]["beta"]["users"] = [""]
-        cases.append((cfg, "whatsapp.beta.users[0]"))
 
         for candidate, pattern in cases:
             with self.subTest(pattern=pattern):

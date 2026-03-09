@@ -149,6 +149,30 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(kwargs["correlation_id"], str)
         self.assertNotEqual(kwargs["correlation_id"], "")
 
+    async def test_user_access_policy_normalizes_whatsapp_settings(self) -> None:
+        config = _make_config()
+        config.whatsapp.user_access = SimpleNamespace(
+            mode="allow-all-except",
+            users=["15550001", "15550001", "15550002"],
+            denied_message="Not enabled",
+        )
+        client = DefaultWhatsAppClient(
+            config=config,
+            ipc_service=Mock(),
+            keyval_storage_gateway=Mock(),
+            logging_gateway=Mock(),
+            messaging_service=Mock(),
+            user_service=Mock(),
+        )
+
+        policy = client.user_access_policy()
+
+        self.assertEqual(policy.mode, "allow-all-except")
+        self.assertEqual(policy.users, ("15550001", "15550002"))
+        self.assertEqual(policy.denied_message, "Not enabled")
+        self.assertFalse(policy.allows("15550001"))
+        self.assertTrue(policy.allows("15550003"))
+
     async def test_verify_startup_logs_and_returns_false_on_probe_failure(self) -> None:
         client = self._new_client()
         client._call_api = AsyncMock(  # pylint: disable=protected-access

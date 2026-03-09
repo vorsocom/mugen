@@ -4,6 +4,7 @@ __all__ = ["WhatsAppWACAPIIPCExtension"]
 
 import asyncio
 import hashlib
+import inspect
 import json
 import time
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,9 @@ from mugen.core.service.context_scope_resolution import (
 from mugen.core.utility.client_profile_runtime import (
     client_profile_id_from_ingress_route,
     client_profile_scope,
+)
+from mugen.core.utility.messaging_client_user_access import (
+    MessagingClientUserAccessPolicy,
 )
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
@@ -298,6 +302,22 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 return configured
         return self._resolve_default_phone_number_id()
 
+    async def _resolve_user_access_policy(self) -> MessagingClientUserAccessPolicy:
+        policy_provider = getattr(self._client, "user_access_policy", None)
+        if not callable(policy_provider):
+            return MessagingClientUserAccessPolicy()
+
+        resolved = policy_provider()
+        if inspect.isawaitable(resolved):
+            resolved = await resolved
+        if isinstance(resolved, MessagingClientUserAccessPolicy):
+            return resolved
+        if resolved is None:
+            return MessagingClientUserAccessPolicy()
+        raise RuntimeError(
+            "WhatsApp client user_access_policy returned an invalid result."
+        )
+
     async def _resolve_ingress_route(
         self,
         *,
@@ -517,14 +537,23 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             self._logging_gateway.debug("Skip duplicate WhatsApp message event.")
             return
 
-        if self._config.mugen.beta.active:
-            beta_users: list = self._config.whatsapp.beta.users
-            if sender not in beta_users:
+        try:
+            user_access_policy = await self._resolve_user_access_policy()
+        except RuntimeError as exc:
+            self._logging_gateway.warning(
+                "WhatsApp sender rejected. Reason: Invalid user access policy."
+                f" sender={sender} error={exc}"
+            )
+            return
+
+        if not user_access_policy.allows(sender):
+            denied_message = user_access_policy.denied_message
+            if denied_message is not None:
                 await self._client.send_text_message(
-                    message=self._config.mugen.beta.message,
+                    message=denied_message,
                     recipient=sender,
                 )
-                return
+            return
 
         known_users = await self._user_service.get_known_users_list()
         known_users = known_users if isinstance(known_users, dict) else {}

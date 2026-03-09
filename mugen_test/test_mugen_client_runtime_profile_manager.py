@@ -16,6 +16,10 @@ from mugen.core.plugin.acp.service.messaging_client_profile import (
     RuntimeMessagingClientProfileSpec,
 )
 from mugen.core.utility.client_profile_runtime import client_profile_scope
+from mugen.core.utility.messaging_client_user_access import (
+    MESSAGING_CLIENT_USER_ACCESS_MODE_ALLOW_ONLY,
+    MessagingClientUserAccessPolicy,
+)
 from mugen.core.utility.platform_runtime_profile import build_config_namespace
 
 _TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000111")
@@ -163,6 +167,15 @@ class _DelegationClient:
             }
 
         return _result
+
+
+class _DelegationWhatsAppClientWithUserAccess(_DelegationClient):
+    def user_access_policy(self) -> MessagingClientUserAccessPolicy:
+        return MessagingClientUserAccessPolicy(
+            mode=MESSAGING_CLIENT_USER_ACCESS_MODE_ALLOW_ONLY,
+            users=("15550077",),
+            denied_message="Not enabled",
+        )
 
 
 class TestSimpleProfileClientManager(unittest.IsolatedAsyncioTestCase):
@@ -610,6 +623,53 @@ class TestMultiProfilePlatformDelegates(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(result["method"], "send_text_message")
                 self.assertEqual(result["client_profile_id"], str(_SECONDARY_ID))
+
+    async def test_multi_profile_whatsapp_client_user_access_policy_paths(self) -> None:
+        service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "whatsapp",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+            )
+        )
+        with (
+            patch.object(rpm_mod, "MessagingClientProfileService", return_value=service),
+            patch.object(
+                whatsapp_mod,
+                "DefaultWhatsAppClient",
+                _DelegationWhatsAppClientWithUserAccess,
+            ),
+        ):
+            client = whatsapp_mod.MultiProfileWhatsAppClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            policy = await client.user_access_policy()
+            self.assertEqual(policy.mode, MESSAGING_CLIENT_USER_ACCESS_MODE_ALLOW_ONLY)
+            self.assertEqual(policy.users, ("15550077",))
+            self.assertEqual(policy.denied_message, "Not enabled")
+
+        service = _MessagingClientProfileServiceStub(
+            (
+                _runtime_spec(
+                    "whatsapp",
+                    client_profile_id=_DEFAULT_ID,
+                    profile_key="default",
+                ),
+            )
+        )
+        with (
+            patch.object(rpm_mod, "MessagingClientProfileService", return_value=service),
+            patch.object(whatsapp_mod, "DefaultWhatsAppClient", _DelegationClient),
+        ):
+            client = whatsapp_mod.MultiProfileWhatsAppClient(
+                config=_root_config(),
+                relational_storage_gateway=object(),
+            )
+            policy = await client.user_access_policy()
+            self.assertEqual(policy, MessagingClientUserAccessPolicy())
 
     async def test_platform_delegate_wrappers_cover_remaining_methods(self) -> None:
         with (

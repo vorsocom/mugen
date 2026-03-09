@@ -4,9 +4,11 @@ from __future__ import annotations
 
 __all__ = [
     "ALLOWED_MESSAGING_SECRET_REF_PATHS",
+    "ALLOWED_MESSAGING_CLIENT_PROFILE_SETTINGS_PATHS",
     "ALLOWED_MESSAGING_SETTINGS_PATHS",
     "ALLOWED_OPS_CONNECTOR_DEFAULT_PATHS",
     "normalize_json_object",
+    "normalize_messaging_client_profile_settings",
     "normalize_messaging_platform_key",
     "normalize_runtime_config_category",
     "normalize_runtime_config_profile_key",
@@ -72,6 +74,30 @@ ALLOWED_MESSAGING_SETTINGS_PATHS: dict[str, frozenset[tuple[str, ...]]] = {
         }
     ),
     "whatsapp": frozenset({("app", "id")}),
+}
+
+ALLOWED_MESSAGING_CLIENT_PROFILE_SETTINGS_PATHS: dict[
+    str, frozenset[tuple[str, ...]]
+] = {
+    "line": ALLOWED_MESSAGING_SETTINGS_PATHS["line"],
+    "matrix": ALLOWED_MESSAGING_SETTINGS_PATHS["matrix"]
+    | frozenset(
+        {
+            ("user_access", "mode"),
+            ("user_access", "users"),
+        }
+    ),
+    "signal": ALLOWED_MESSAGING_SETTINGS_PATHS["signal"],
+    "telegram": ALLOWED_MESSAGING_SETTINGS_PATHS["telegram"],
+    "wechat": ALLOWED_MESSAGING_SETTINGS_PATHS["wechat"],
+    "whatsapp": ALLOWED_MESSAGING_SETTINGS_PATHS["whatsapp"]
+    | frozenset(
+        {
+            ("user_access", "mode"),
+            ("user_access", "users"),
+            ("user_access", "denied_message"),
+        }
+    ),
 }
 
 ALLOWED_OPS_CONNECTOR_DEFAULT_PATHS = frozenset(
@@ -195,6 +221,23 @@ def normalize_tenant_messaging_settings(
     return _validate_allowed_leaf_paths(
         payload,
         allowed_paths=ALLOWED_MESSAGING_SETTINGS_PATHS[normalized_platform_key],
+        field_name="Settings",
+    )
+
+
+def normalize_messaging_client_profile_settings(
+    *,
+    platform_key: object,
+    value: object,
+) -> dict[str, Any]:
+    """Normalize ACP-owned messaging client profile settings for a platform."""
+    normalized_platform_key = normalize_messaging_platform_key(platform_key)
+    payload = normalize_json_object(value, field_name="Settings")
+    return _validate_allowed_leaf_paths(
+        payload,
+        allowed_paths=ALLOWED_MESSAGING_CLIENT_PROFILE_SETTINGS_PATHS[
+            normalized_platform_key
+        ],
         field_name="Settings",
     )
 

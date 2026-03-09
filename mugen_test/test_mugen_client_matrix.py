@@ -515,7 +515,10 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                         "text/*",
                     ],
                 ),
-                beta=SimpleNamespace(users=["@beta:example.com"]),
+                user_access=SimpleNamespace(
+                    mode="allow-all",
+                    users=[],
+                ),
                 invites=SimpleNamespace(direct_only=True),
                 security=SimpleNamespace(
                     device_trust=SimpleNamespace(
@@ -526,7 +529,6 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             mugen=SimpleNamespace(
-                beta=SimpleNamespace(active=False),
                 runtime=_runtime_settings(),
             ),
         )
@@ -2208,7 +2210,8 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.room_leave.assert_awaited()
 
         client.room_leave.reset_mock()
-        client._config.mugen.beta.active = True
+        client._config.matrix.user_access.mode = "allow-only"
+        client._config.matrix.user_access.users = ["@beta:example.com"]
         event = SimpleNamespace(
             content={"membership": "invite", "is_direct": True},
             sender="@u:example.com",
@@ -2217,7 +2220,8 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
         client.room_leave.assert_awaited()
 
         client.room_leave.reset_mock()
-        client._config.mugen.beta.active = False
+        client._config.matrix.user_access.mode = "allow-all"
+        client._config.matrix.user_access.users = []
         event = SimpleNamespace(
             content={"membership": "invite"}, sender="@u:example.com"
         )
@@ -2252,7 +2256,7 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             1,  # pylint: disable=protected-access
         )
         self.assertEqual(
-            client._matrix_metrics["matrix.invites.rejected.non_beta_user"],
+            client._matrix_metrics["matrix.invites.rejected.user_access_denied"],
             1,  # pylint: disable=protected-access
         )
         self.assertEqual(
@@ -2327,12 +2331,13 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             client._parse_sender_domain(123),  # pylint: disable=protected-access
         )
 
-    async def test_cb_invite_member_event_beta_user_without_profile_object(
+    async def test_cb_invite_member_event_allowed_sender_without_profile_object(
         self,
     ) -> None:
         client = self._client()
         room = SimpleNamespace(room_id="!room:test")
-        client._config.mugen.beta.active = True
+        client._config.matrix.user_access.mode = "allow-only"
+        client._config.matrix.user_access.users = ["@beta:example.com"]
         client.verify_user_devices = AsyncMock()
         client._mark_room_as_direct = AsyncMock()
         client.get_profile = AsyncMock(return_value=object())
@@ -2348,6 +2353,27 @@ class TestMugenClientMatrix(unittest.IsolatedAsyncioTestCase):
             "@beta:example.com", "!room:test"
         )
         client._user_service.add_known_user.assert_not_awaited()
+
+    async def test_cb_invite_member_event_rejects_invalid_user_access_policy(self) -> None:
+        client = self._client()
+        room = SimpleNamespace(room_id="!room:test")
+        client._config.matrix.user_access.mode = ""
+        event = SimpleNamespace(
+            content={"membership": "invite", "is_direct": True},
+            sender="@u:example.com",
+        )
+
+        await client._cb_invite_member_event(room, event)
+
+        client.room_leave.assert_awaited_once_with("!room:test")
+        self.assertEqual(
+            client._matrix_metrics["matrix.invites.rejected.invalid_user_access_policy"],
+            1,  # pylint: disable=protected-access
+        )
+        self.assertIn(
+            "Invalid user access policy",
+            client._logging_gateway.warning.call_args.args[0],
+        )
 
     async def test_callback_skip_logging_for_stubbed_paths(self) -> None:
         client = self._client()

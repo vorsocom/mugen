@@ -20,21 +20,6 @@ def _require_non_empty_string(*, value: object, path: str) -> str:
     return value.strip()
 
 
-def _require_string_list(*, value: object, path: str) -> list[str]:
-    if not isinstance(value, list):
-        raise RuntimeError(
-            f"Invalid configuration: {path} must be an array of strings."
-        )
-    normalized: list[str] = []
-    for index, item in enumerate(value):
-        if not isinstance(item, str) or item.strip() == "":
-            raise RuntimeError(
-                f"Invalid configuration: {path}[{index}] must be a non-empty string."
-            )
-        normalized.append(item.strip())
-    return normalized
-
-
 def _require_bool(*, value: object, path: str) -> bool:
     if isinstance(value, bool) is not True:
         raise RuntimeError(f"Invalid configuration: {path} must be a boolean.")
@@ -89,16 +74,6 @@ def _require_nonnegative_number(*, value: object, path: str) -> float:
             f"Invalid configuration: {path} must be a non-negative number."
         )
     return number
-
-
-def _beta_is_active(config: Mapping[str, Any]) -> bool:
-    mugen_cfg = config.get("mugen")
-    if not isinstance(mugen_cfg, Mapping):
-        return False
-    beta_cfg = mugen_cfg.get("beta")
-    if not isinstance(beta_cfg, Mapping):
-        return False
-    return beta_cfg.get("active") is True
 
 
 def validate_whatsapp_enabled_runtime_config(config: Mapping[str, Any]) -> None:
@@ -168,13 +143,3 @@ def validate_whatsapp_enabled_runtime_config(config: Mapping[str, Any]) -> None:
         value=webhook_cfg.get("dedupe_ttl_seconds"),
         path="whatsapp.webhook.dedupe_ttl_seconds",
     )
-
-    if _beta_is_active(config):
-        beta_cfg = _require_table(
-            whatsapp_cfg.get("beta"),
-            path="whatsapp.beta",
-        )
-        _require_string_list(
-            value=beta_cfg.get("users"),
-            path="whatsapp.beta.users",
-        )
