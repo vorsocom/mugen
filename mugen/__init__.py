@@ -72,8 +72,7 @@ from mugen.bootstrap_state import (
 from mugen.config import AppConfig
 from mugen.core.bootstrap.extensions import (
     DefaultExtensionRegistry,
-    configured_core_extensions,
-    configured_downstream_extensions,
+    configured_extensions,
     parse_bool as _parse_ext_bool,
     resolve_extension_spec,
 )
@@ -303,39 +302,6 @@ def _extract_signal_stage_entries(
             ),
         )
     ]
-
-
-def _build_core_extension_instance(
-    *,
-    extension_class: type,
-    config: SimpleNamespace,
-    keyval_storage_gateway_provider=_keyval_storage_gateway_provider,
-):
-    """Instantiate core-owned extensions with explicit constructor dependencies."""
-    parameters = list(inspect.signature(extension_class.__init__).parameters.values())[1:]
-    kwargs: dict[str, object] = {}
-
-    for parameter in parameters:
-        if parameter.kind in (
-            inspect.Parameter.VAR_POSITIONAL,
-            inspect.Parameter.VAR_KEYWORD,
-        ):
-            continue
-
-        if parameter.name == "config":
-            kwargs["config"] = config
-            continue
-        if parameter.name == "keyval_storage_gateway":
-            kwargs["keyval_storage_gateway"] = keyval_storage_gateway_provider()
-            continue
-
-        if parameter.default is inspect.Parameter.empty:
-            raise ExtensionLoadError(
-                "Core extension constructor dependency is unsupported "
-                f"({extension_class.__module__}.{extension_class.__name__}.{parameter.name})."
-            )
-
-    return extension_class(**kwargs)
 
 
 def _normalize_platform_list(values: object) -> list[str]:
@@ -1354,14 +1320,9 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
     platform_service: IPlatformService = platform_provider()
     sweep_started_at = perf_counter()
     try:
-        core_extensions = configured_core_extensions(config)
-        downstream_extensions = configured_downstream_extensions(config)
+        extensions = configured_extensions(config)
     except RuntimeError as exc:
         raise BootstrapConfigError(str(exc)) from exc
-    extensions: list[tuple[str, SimpleNamespace]] = (
-        [("core", ext_cfg) for ext_cfg in core_extensions]
-        + [("plugin", ext_cfg) for ext_cfg in downstream_extensions]
-    )
 
     if extension_registry_provider is None:
         extension_registry: IExtensionRegistry = DefaultExtensionRegistry(
@@ -1375,7 +1336,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
 
     registered_tokens_by_type: dict[str, set[str]] = {}
 
-    for extension_scope, ext_cfg in extensions:
+    for ext_cfg in extensions:
         ext_started_at = perf_counter()
         raw_token = getattr(ext_cfg, "token", None)
         if not isinstance(raw_token, str) or raw_token.strip() == "":
@@ -1394,7 +1355,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
             continue
 
         try:
-            spec = resolve_extension_spec(token, scope=extension_scope)
+            spec = resolve_extension_spec(token)
             resolved_type = spec.extension_type
             if configured_type not in {"", resolved_type}:
                 raise ExtensionLoadError(
@@ -1402,14 +1363,7 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
                     f"(token={token} configured_type={configured_type} "
                     f"resolved_type={resolved_type})."
                 )
-            if extension_scope == "core":
-                extension = _build_core_extension_instance(
-                    extension_class=spec.extension_class,
-                    config=config,
-                    keyval_storage_gateway_provider=keyval_storage_gateway_provider,
-                )
-            else:
-                extension = spec.extension_class()
+            extension = spec.extension_class()
             registered = await extension_registry.register(
                 app=app,
                 extension_type=resolved_type,

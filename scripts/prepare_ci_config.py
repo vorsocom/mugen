@@ -21,6 +21,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.acp",
         "namespace": "com.vorsocomputing.mugen.acp",
         "models": "mugen.core.plugin.acp.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.acp.contrib",
     },
     {
@@ -28,6 +29,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.audit",
         "namespace": "com.vorsocomputing.mugen.audit",
         "models": "mugen.core.plugin.audit.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.audit.contrib",
     },
     {
@@ -35,6 +37,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.ops_vpn",
         "namespace": "com.vorsocomputing.mugen.ops_vpn",
         "models": "mugen.core.plugin.ops_vpn.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.ops_vpn.contrib",
     },
     {
@@ -42,6 +45,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.ops_case",
         "namespace": "com.vorsocomputing.mugen.ops_case",
         "models": "mugen.core.plugin.ops_case.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.ops_case.contrib",
     },
     {
@@ -49,6 +53,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.ops_sla",
         "namespace": "com.vorsocomputing.mugen.ops_sla",
         "models": "mugen.core.plugin.ops_sla.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.ops_sla.contrib",
     },
     {
@@ -56,6 +61,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.ops_metering",
         "namespace": "com.vorsocomputing.mugen.ops_metering",
         "models": "mugen.core.plugin.ops_metering.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.ops_metering.contrib",
     },
     {
@@ -63,6 +69,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.ops_workflow",
         "namespace": "com.vorsocomputing.mugen.ops_workflow",
         "models": "mugen.core.plugin.ops_workflow.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.ops_workflow.contrib",
     },
     {
@@ -70,6 +77,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.ops_governance",
         "namespace": "com.vorsocomputing.mugen.ops_governance",
         "models": "mugen.core.plugin.ops_governance.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.ops_governance.contrib",
     },
     {
@@ -77,6 +85,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.ops_reporting",
         "namespace": "com.vorsocomputing.mugen.ops_reporting",
         "models": "mugen.core.plugin.ops_reporting.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.ops_reporting.contrib",
     },
     {
@@ -84,6 +93,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.ops_connector",
         "namespace": "com.vorsocomputing.mugen.ops_connector",
         "models": "mugen.core.plugin.ops_connector.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.ops_connector.contrib",
     },
     {
@@ -91,6 +101,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.billing",
         "namespace": "com.vorsocomputing.mugen.billing",
         "models": "mugen.core.plugin.billing.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.billing.contrib",
     },
     {
@@ -98,6 +109,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.knowledge_pack",
         "namespace": "com.vorsocomputing.mugen.knowledge_pack",
         "models": "mugen.core.plugin.knowledge_pack.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.knowledge_pack.contrib",
     },
     {
@@ -105,6 +117,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.channel_orchestration",
         "namespace": "com.vorsocomputing.mugen.channel_orchestration",
         "models": "mugen.core.plugin.channel_orchestration.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.channel_orchestration.contrib",
     },
     {
@@ -119,6 +132,7 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "name": "com.vorsocomputing.mugen.web",
         "namespace": "com.vorsocomputing.mugen.web",
         "models": "mugen.core.plugin.web.model",
+        "migration_track": "core",
         "contrib": "mugen.core.plugin.web.contrib",
     },
 )
@@ -232,41 +246,25 @@ def _ensure_framework_extension(
     name: str,
     namespace: str,
     models: str,
+    migration_track: str,
     contrib: str,
 ) -> None:
     normalized_token = token.strip().lower()
     modules = doc["mugen"]["modules"]
-    core_modules = modules["core"]
-    if "extensions" not in core_modules or not isinstance(
-        core_modules.get("extensions"), list
-    ):
-        core_modules["extensions"] = tomlkit.aot()
     if "extensions" not in modules or not isinstance(modules.get("extensions"), list):
         modules["extensions"] = tomlkit.aot()
 
-    matches: list[tuple[object, int, object]] = []
-    core_matches: list[tuple[object, int, object]] = []
-    plugin_matches: list[tuple[object, int, object]] = []
-    sections = [core_modules["extensions"], modules["extensions"]]
-    for section in sections:
-        for index, extension in enumerate(section):
-            if (
-                str(extension.get("type", "")).strip().lower() == "fw"
-                and str(extension.get("token", "")).strip().lower() == normalized_token
-            ):
-                match = (section, index, extension)
-                matches.append(match)
-                if section is modules["extensions"]:
-                    plugin_matches.append(match)
-                else:
-                    core_matches.append(match)
+    extensions = modules["extensions"]
+    matches: list[tuple[int, object]] = []
+    for index, extension in enumerate(extensions):
+        if (
+            str(extension.get("type", "")).strip().lower() == "fw"
+            and str(extension.get("token", "")).strip().lower() == normalized_token
+        ):
+            matches.append((index, extension))
 
     if matches:
-        if plugin_matches:
-            _, _, extension = plugin_matches[0]
-        else:
-            extension = tomlkit.table()
-            modules["extensions"].append(extension)
+        _, extension = matches[0]
         extension["type"] = "fw"
         extension["token"] = token
         extension["enabled"] = True
@@ -276,11 +274,15 @@ def _ensure_framework_extension(
             extension["models"] = models
         elif "models" in extension:
             del extension["models"]
+        if migration_track:
+            extension["migration_track"] = migration_track
+        elif "migration_track" in extension:
+            del extension["migration_track"]
         extension["contrib"] = contrib
 
-        duplicate_matches = [match for match in matches if match[2] is not extension]
-        for section, index, _ in reversed(duplicate_matches):
-            del section[index]
+        duplicate_matches = [match for match in matches if match[1] is not extension]
+        for index, _ in reversed(duplicate_matches):
+            del extensions[index]
         return
 
     # CI requires deterministic extension metadata for migration seeding.
@@ -292,6 +294,8 @@ def _ensure_framework_extension(
     extension["namespace"] = namespace
     if models:
         extension["models"] = models
+    if migration_track:
+        extension["migration_track"] = migration_track
     extension["contrib"] = contrib
     modules["extensions"].append(extension)
 
@@ -304,6 +308,7 @@ def _enable_ci_framework_plugins(doc: tomlkit.TOMLDocument) -> None:
             name=extension["name"],
             namespace=extension["namespace"],
             models=extension["models"],
+            migration_track=extension.get("migration_track", ""),
             contrib=extension["contrib"],
         )
 

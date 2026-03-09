@@ -15,6 +15,10 @@ from mugen.core.utility.context_runtime import (
 )
 
 
+def _config_provider():
+    return di.container.config
+
+
 def _context_component_registry_provider():
     return di.container.get_required_ext_service(di.EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY)
 
@@ -24,10 +28,10 @@ class ClearChatHistoryICPExtension(ICPExtension):
 
     def __init__(
         self,
-        config: SimpleNamespace,
+        config: SimpleNamespace | None = None,
         context_component_registry_provider=_context_component_registry_provider,
     ) -> None:
-        self._config = config
+        self._config = config if config is not None else _config_provider()
         self._context_component_registry_provider = context_component_registry_provider
 
     @property

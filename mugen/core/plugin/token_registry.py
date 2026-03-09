@@ -1,14 +1,21 @@
-"""Plugin-owned extension token registry."""
+"""Unified extension token registry."""
 
 from __future__ import annotations
 
+from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.fw import IFWExtension
 from mugen.core.contract.extension.ipc import IIPCExtension
 
 
 def get_plugin_extension_token_registry() -> dict[str, tuple[str, type, str, str]]:
-    """Return extension token bindings owned by plugin packages."""
+    """Return extension token bindings for unified config entries."""
     return {
+        "core.cp.clear_history": (
+            "cp",
+            ICPExtension,
+            "mugen.core.extension.cp.clear_history",
+            "ClearChatHistoryICPExtension",
+        ),
         "core.fw.acp": (
             "fw",
             IFWExtension,

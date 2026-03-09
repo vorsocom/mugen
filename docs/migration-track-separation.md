@@ -78,9 +78,11 @@ runtime schema contracts aligned and fail-fast when configuration is incomplete.
 ## Configuration Contract
 
 Track configuration lives under `rdbms.migration_tracks` in `mugen.toml`.
-Core extension model entries for migration autogenerate live under
-`mugen.modules.core.extensions`. The legacy key
-`mugen.modules.core.plugins` is unsupported and fails fast.
+Runtime extension entries live under `mugen.modules.extensions`.
+Model-bearing entries default to the `downstream` autogenerate track unless
+they declare `migration_track = "core"` (or another explicit track name).
+The legacy keys `mugen.modules.core.extensions` and
+`mugen.modules.core.plugins` are unsupported and fail fast.
 
 ```toml
 [rdbms.migration_tracks.core]

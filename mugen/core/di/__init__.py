@@ -263,6 +263,7 @@ def _validate_extension_entry_schema(
             "token",
             "enabled",
             "critical",
+            "migration_track",
             "name",
             "namespace",
             "models",
@@ -289,6 +290,14 @@ def _validate_extension_entry_schema(
             f"Invalid configuration: {path}.type={ext_type!r} is unsupported. "
             "Legacy CTX/RAG extensions were replaced by the context engine service."
         )
+
+    migration_track = entry.get("migration_track")
+    if migration_track is not None:
+        if not isinstance(migration_track, str) or migration_track.strip() == "":
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"{path}.migration_track must be a non-empty string when provided."
+            )
 
 
 def _validate_core_module_schema(config: dict) -> None:
@@ -420,10 +429,20 @@ def _validate_core_module_schema(config: dict) -> None:
     core_cfg = modules_cfg.get("core")
     if not isinstance(core_cfg, dict):
         raise RuntimeError("Invalid configuration: mugen.modules.core must be a table.")
+    if "plugins" in core_cfg:
+        raise RuntimeError(
+            "Invalid configuration: mugen.modules.core.plugins is no longer "
+            "supported; use mugen.modules.extensions."
+        )
+    if "extensions" in core_cfg:
+        raise RuntimeError(
+            "Invalid configuration: mugen.modules.core.extensions is no longer "
+            "supported; use mugen.modules.extensions."
+        )
     _ensure_only_known_keys(
         core_cfg,
         path="mugen.modules.core",
-        allowed={"client", "extensions", "gateway", "service"},
+        allowed={"client", "gateway", "service"},
     )
 
     for section_name, allowed_keys in (
@@ -531,19 +550,6 @@ def _validate_core_module_schema(config: dict) -> None:
                 f"mugen.modules.core.gateway.{optional_key} must be a token "
                 "(module:Class unsupported)."
             )
-
-    core_extensions_cfg = core_cfg.get("extensions")
-    if core_extensions_cfg is None:
-        core_extensions_cfg = []
-    if not isinstance(core_extensions_cfg, list):
-        raise RuntimeError(
-            "Invalid configuration: mugen.modules.core.extensions must be an array."
-        )
-    for index, entry in enumerate(core_extensions_cfg):
-        _validate_extension_entry_schema(
-            entry,
-            path=f"mugen.modules.core.extensions[{index}]",
-        )
 
     ext_cfg = modules_cfg.get("extensions")
     if ext_cfg is None:

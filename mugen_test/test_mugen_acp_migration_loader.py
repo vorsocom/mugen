@@ -27,11 +27,11 @@ def _fw_entry(
     }
 
 
-def _cfg(*, core: list[dict] | None = None, ext: list[dict] | None = None) -> dict:
+def _cfg(*, ext: list[dict] | None = None) -> dict:
     return {
         "mugen": {
             "modules": {
-                "core": {"extensions": list(core or [])},
+                "core": {},
                 "extensions": list(ext or []),
             }
         },
@@ -44,7 +44,9 @@ class TestAcpMigrationLoader(unittest.TestCase):
 
     def test_plugin_identity_uses_name_fallback_and_requires_identity(self) -> None:
         self.assertEqual(
-            loader._plugin_identity({"name": "com.vorsocomputing.mugen.acp"}),  # pylint: disable=protected-access
+            loader._plugin_identity(  # pylint: disable=protected-access
+                {"name": "com.vorsocomputing.mugen.acp"}
+            ),
             "com.vorsocomputing.mugen.acp",
         )
         with self.assertRaises(KeyError):
@@ -53,7 +55,9 @@ class TestAcpMigrationLoader(unittest.TestCase):
     def test_import_callable_returns_contribute_and_rejects_non_callable(self) -> None:
         module = SimpleNamespace(contribute=lambda *_args, **_kwargs: None)
         with patch.object(loader, "import_module", return_value=module):
-            fn = loader._import_callable("demo.contrib")  # pylint: disable=protected-access
+            fn = loader._import_callable(  # pylint: disable=protected-access
+                "demo.contrib"
+            )
 
         self.assertTrue(callable(fn))
 
@@ -64,9 +68,11 @@ class TestAcpMigrationLoader(unittest.TestCase):
         ):
             loader._import_callable("demo.bad")  # pylint: disable=protected-access
 
-    def test_load_enabled_framework_plugins_skips_disabled_and_non_fw_entries(self) -> None:
+    def test_load_enabled_framework_plugins_skips_disabled_and_non_fw_entries(
+        self,
+    ) -> None:
         cfg = _cfg(
-            core=[
+            ext=[
                 _fw_entry(
                     token="core.fw.acp",
                     name="com.vorsocomputing.mugen.acp",
@@ -85,52 +91,58 @@ class TestAcpMigrationLoader(unittest.TestCase):
             ],
         )
 
-        plugins = loader._load_enabled_framework_plugins(cfg)  # pylint: disable=protected-access
+        load_plugins = (
+            loader._load_enabled_framework_plugins  # pylint: disable=protected-access
+        )
+        plugins = load_plugins(cfg)
 
         self.assertEqual(plugins, [])
 
-    def test_load_enabled_framework_plugins_collapses_identical_duplicates(self) -> None:
+    def test_load_enabled_framework_plugins_collapses_identical_duplicates(
+        self,
+    ) -> None:
         cfg = _cfg(
-            core=[
-                _fw_entry(
-                    token="core.fw.acp",
-                    name="com.vorsocomputing.mugen.acp",
-                    namespace="com.vorsocomputing.mugen.acp",
-                    contrib="mugen.core.plugin.acp.contrib",
-                )
-            ],
             ext=[
                 _fw_entry(
                     token="core.fw.acp",
                     name="com.vorsocomputing.mugen.acp",
                     namespace="com.vorsocomputing.mugen.acp",
                     contrib="mugen.core.plugin.acp.contrib",
-                )
+                ),
+                _fw_entry(
+                    token="core.fw.acp",
+                    name="com.vorsocomputing.mugen.acp",
+                    namespace="com.vorsocomputing.mugen.acp",
+                    contrib="mugen.core.plugin.acp.contrib",
+                ),
             ],
         )
 
-        plugins = loader._load_enabled_framework_plugins(cfg)  # pylint: disable=protected-access
+        load_plugins = (
+            loader._load_enabled_framework_plugins  # pylint: disable=protected-access
+        )
+        plugins = load_plugins(cfg)
 
         self.assertEqual(len(plugins), 1)
         self.assertEqual(plugins[0].token, "core.fw.acp")
 
-    def test_load_enabled_framework_plugins_rejects_conflicting_duplicates(self) -> None:
+    def test_load_enabled_framework_plugins_rejects_conflicting_duplicates(
+        self,
+    ) -> None:
         cfg = _cfg(
-            core=[
+            ext=[
                 _fw_entry(
                     token="core.fw.acp",
                     name="com.vorsocomputing.mugen.acp",
                     namespace="com.vorsocomputing.mugen.acp",
                     contrib="mugen.core.plugin.acp.contrib",
-                )
-            ],
-            ext=[
+                ),
                 _fw_entry(
                     token="core.fw.acp",
                     name="com.vorsocomputing.mugen.acp",
                     namespace="com.vorsocomputing.mugen.acp",
                     contrib="mugen.core.plugin.acp.contrib.alt",
-                )
+                ),
             ],
         )
 
@@ -138,19 +150,19 @@ class TestAcpMigrationLoader(unittest.TestCase):
             RuntimeError,
             "Conflicting framework plugin configuration",
         ):
-            loader._load_enabled_framework_plugins(cfg)  # pylint: disable=protected-access
+            loader._load_enabled_framework_plugins(  # pylint: disable=protected-access
+                cfg
+            )
 
     def test_contribute_all_uses_collapsed_admin_plugin_once(self) -> None:
         cfg = _cfg(
-            core=[
+            ext=[
                 _fw_entry(
                     token="core.fw.acp",
                     name="com.vorsocomputing.mugen.acp",
                     namespace="com.vorsocomputing.mugen.acp",
                     contrib="mugen.core.plugin.acp.contrib",
-                )
-            ],
-            ext=[
+                ),
                 _fw_entry(
                     token="core.fw.acp",
                     name="com.vorsocomputing.mugen.acp",

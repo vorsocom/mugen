@@ -58,46 +58,26 @@ def load_mugen_config(path: Path) -> dict:
     return data
 
 
-def configured_core_extension_entries(config: dict) -> list[dict]:
-    """Return core extension entries and reject removed legacy contract keys."""
+def _legacy_core_extension_error(key: str) -> RuntimeError:
+    return RuntimeError(
+        "Invalid configuration: "
+        f"mugen.modules.core.{key} is no longer supported; "
+        "use mugen.modules.extensions."
+    )
+
+
+def configured_extension_entries(config: dict) -> list[dict]:
+    """Return unified extension entries and reject removed legacy contract keys."""
     modules_cfg = config.get("mugen", {}).get("modules", {})
     if isinstance(modules_cfg, dict) is not True:
         return []
 
     core_cfg = modules_cfg.get("core", {})
-    if isinstance(core_cfg, dict) is not True:
-        return []
-
-    if "plugins" in core_cfg:
-        raise RuntimeError(
-            "Invalid configuration: mugen.modules.core.plugins is no longer "
-            "supported; use mugen.modules.core.extensions."
-        )
-
-    extension_entries = core_cfg.get("extensions", [])
-    if extension_entries is None:
-        return []
-    if isinstance(extension_entries, list) is not True:
-        raise RuntimeError(
-            "Invalid configuration: mugen.modules.core.extensions must be an array."
-        )
-
-    normalized: list[dict] = []
-    for index, entry in enumerate(extension_entries):
-        if isinstance(entry, dict) is not True:
-            raise RuntimeError(
-                "Invalid configuration: "
-                f"mugen.modules.core.extensions[{index}] must be a table."
-            )
-        normalized.append(entry)
-    return normalized
-
-
-def configured_downstream_extension_entries(config: dict) -> list[dict]:
-    """Return downstream extension entries with schema validation."""
-    modules_cfg = config.get("mugen", {}).get("modules", {})
-    if isinstance(modules_cfg, dict) is not True:
-        return []
+    if isinstance(core_cfg, dict):
+        if "plugins" in core_cfg:
+            raise _legacy_core_extension_error("plugins")
+        if "extensions" in core_cfg:
+            raise _legacy_core_extension_error("extensions")
 
     extension_entries = modules_cfg.get("extensions", [])
     if extension_entries is None:

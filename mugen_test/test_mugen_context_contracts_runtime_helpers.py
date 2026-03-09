@@ -46,14 +46,6 @@ def _scope(*, tenant_id: str = "tenant-1") -> ContextScope:
         sender_id="user-1",
         conversation_id="room-1",
     )
-
-
-class _CoreExt:
-    def __init__(self, config, keyval_storage_gateway) -> None:
-        self.config = config
-        self.keyval_storage_gateway = keyval_storage_gateway
-
-
 class TestMugenContextContractsAndRuntimeHelpers(unittest.TestCase):
     """Exercise remaining branch-heavy helpers introduced by the context runtime."""
 
@@ -317,24 +309,16 @@ class TestMugenContextContractsAndRuntimeHelpers(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Legacy CTX/RAG"):
             di._validate_extension_entry_schema(  # pylint: disable=protected-access
                 {"type": "ctx", "token": "core.ctx.system_persona"},
-                path="mugen.modules.core.extensions[0]",
+                path="mugen.modules.extensions[0]",
             )
 
-    def test_core_extension_providers_and_constructor_branch(self) -> None:
+    def test_keyval_storage_gateway_provider_reads_container_member(self) -> None:
         with patch.object(
             mugen.di,
             "container",
             new=SimpleNamespace(keyval_storage_gateway="keyval"),
         ):
             self.assertEqual(mugen._keyval_storage_gateway_provider(), "keyval")
-
-        ext = mugen._build_core_extension_instance(
-            extension_class=_CoreExt,
-            config="cfg",
-            keyval_storage_gateway_provider=lambda: "keyval",
-        )
-        self.assertEqual(ext.config, "cfg")
-        self.assertEqual(ext.keyval_storage_gateway, "keyval")
 
 
 class TestDefaultExtensionRegistryAsync(unittest.IsolatedAsyncioTestCase):
