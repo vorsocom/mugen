@@ -91,9 +91,6 @@ class PersonaPolicyContributor(IContextContributor):
 
     name = "persona_policy"
 
-    def __init__(self, *, config) -> None:
-        self._config = config
-
     async def collect(
         self,
         request: ContextTurnRequest,
@@ -102,8 +99,7 @@ class PersonaPolicyContributor(IContextContributor):
         state: ContextState | None,
     ) -> list[ContextCandidate]:
         _ = state
-        assistant_cfg = getattr(getattr(self._config, "mugen", None), "assistant", None)
-        persona = getattr(assistant_cfg, "persona", None)
+        persona = policy.metadata.get("persona")
         content = {
             "persona": persona,
             "policy_key": policy.policy_key,

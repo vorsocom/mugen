@@ -168,7 +168,7 @@ class ContextEngineFWExtension(IFWExtension):  # pylint: disable=too-few-public-
 
         registry.register_guard(DefaultContextGuard())
         registry.register_ranker(DefaultContextRanker())
-        registry.register_contributor(PersonaPolicyContributor(config=self._config))
+        registry.register_contributor(PersonaPolicyContributor())
         registry.register_contributor(StateContributor())
         registry.register_contributor(
             ChannelOrchestrationContributor(

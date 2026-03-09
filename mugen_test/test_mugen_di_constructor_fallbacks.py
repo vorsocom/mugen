@@ -16,15 +16,14 @@ from mugen.core.plugin.whatsapp.wacapi.ipc_ext import WhatsAppWACAPIIPCExtension
 class TestPersonaPolicyContributorFallbacks(unittest.TestCase):
     """Tests constructor behavior for persona-policy contributor."""
 
-    def test_explicit_config_is_used(self) -> None:
-        config = SimpleNamespace()
-        contributor = PersonaPolicyContributor(config=config)
+    def test_zero_arg_constructor_is_supported(self) -> None:
+        contributor = PersonaPolicyContributor()
 
-        self.assertIs(contributor._config, config)  # pylint: disable=protected-access
+        self.assertEqual(contributor.name, "persona_policy")
 
-    def test_missing_config_is_rejected(self) -> None:
+    def test_config_kwarg_is_rejected(self) -> None:
         with self.assertRaises(TypeError):
-            PersonaPolicyContributor()
+            PersonaPolicyContributor(config=SimpleNamespace())
 
 
 class TestClearHistoryFallbacks(unittest.TestCase):

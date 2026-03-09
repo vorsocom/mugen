@@ -116,7 +116,8 @@ That means:
 
 - one tenant may own multiple client profiles on one platform;
 - replies go out through the same transport account that received the event;
-- `client_profile_key` is optional debug metadata only.
+- `client_profile_key` also flows into downstream context resolution, so ACP
+  `ContextProfiles` may vary persona by messaging client profile when needed.
 
 ## Runtime Managers And Reload
 

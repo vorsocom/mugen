@@ -32,7 +32,9 @@ class ContextProfileDE(BaseDE, TenantScopedDEMixin):
     description: str | None = None
     platform: str | None = None
     channel_key: str | None = None
+    client_profile_key: str | None = None
     policy_id: uuid.UUID | None = None
+    persona: str | None = None
     is_active: bool | None = None
     is_default: bool | None = None
     attributes: dict[str, Any] | None = None

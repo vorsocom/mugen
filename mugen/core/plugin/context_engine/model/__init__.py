@@ -50,12 +50,18 @@ class ContextProfile(ModelBase, TenantScopedMixin):  # pylint: disable=too-few-p
     description: Mapped[str | None] = mapped_column(String(512), nullable=True)
     platform: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
     channel_key: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
+    client_profile_key: Mapped[str | None] = mapped_column(
+        CITEXT(64),
+        nullable=True,
+        index=True,
+    )
     policy_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(f"{_SCHEMA}.context_engine_context_policy.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
+    persona: Mapped[str | None] = mapped_column(String, nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

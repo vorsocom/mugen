@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 import unittest
 
 from mugen.core.contract.context import ContextPolicy, ContextScope, ContextTurnRequest
 from mugen.core.plugin.context_engine.service.contributor import PersonaPolicyContributor
 
 
-def _request(*, persona: str | None = None) -> tuple[PersonaPolicyContributor, ContextTurnRequest]:
-    assistant_cfg = (
-        SimpleNamespace(persona=persona) if persona is not None else SimpleNamespace()
-    )
-    contributor = PersonaPolicyContributor(
-        config=SimpleNamespace(mugen=SimpleNamespace(assistant=assistant_cfg))
-    )
+def _request() -> tuple[PersonaPolicyContributor, ContextTurnRequest]:
+    contributor = PersonaPolicyContributor()
     request = ContextTurnRequest(
         scope=ContextScope(
             tenant_id="tenant-1",
@@ -54,12 +48,15 @@ class TestPersonaPolicyContributor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(artifact.lane, "system_persona_policy")
         self.assertIsNone(artifact.content["persona"])
 
-    async def test_collect_includes_configured_persona_and_tenant_resolution(self) -> None:
-        contributor, request = _request(persona="Be concise.")
+    async def test_collect_includes_resolved_persona_and_tenant_resolution(self) -> None:
+        contributor, request = _request()
 
         candidates = await contributor.collect(
             request,
-            policy=ContextPolicy(policy_key="default-policy"),
+            policy=ContextPolicy(
+                policy_key="default-policy",
+                metadata={"persona": "Be concise."},
+            ),
             state=None,
         )
 

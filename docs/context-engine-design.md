@@ -121,6 +121,11 @@ Built-in contributors include:
 - audit trace overlays
 - structured memory recall
 
+`ContextProfiles` are the selection layer for ACP-managed assistant persona.
+They may target `platform`, `channel_key`, and optional
+`client_profile_key`, and each selected profile may point to a
+`ContextPolicy`.
+
 ## Tenant Isolation and Global Fallback
 
 `ContextScope.tenant_id` is always populated.

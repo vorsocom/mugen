@@ -38,7 +38,9 @@ context_profile_type = EdmType(
         "Description": EdmProperty("Description", TypeRef("Edm.String")),
         "Platform": EdmProperty("Platform", TypeRef("Edm.String")),
         "ChannelKey": EdmProperty("ChannelKey", TypeRef("Edm.String")),
+        "ClientProfileKey": EdmProperty("ClientProfileKey", TypeRef("Edm.String")),
         "PolicyId": EdmProperty("PolicyId", TypeRef("Edm.Guid")),
+        "Persona": EdmProperty("Persona", TypeRef("Edm.String")),
         "IsActive": EdmProperty("IsActive", TypeRef("Edm.Boolean"), nullable=False),
         "IsDefault": EdmProperty("IsDefault", TypeRef("Edm.Boolean"), nullable=False),
         "Attributes": EdmProperty(
