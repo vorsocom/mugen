@@ -21,6 +21,9 @@ from mugen.core.contract.gateway.completion import (
     ICompletionGateway,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.message_serialization import (
+    serialize_completion_message_content,
+)
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
     require_fields_in_production,
@@ -502,13 +505,7 @@ class VertexCompletionGateway(ICompletionGateway):
 
     @staticmethod
     def _serialize_text_content(content: Any) -> str:
-        if isinstance(content, str):
-            return content
-        if content is None:
-            return ""
-        if isinstance(content, (dict, list)):
-            return json.dumps(content, ensure_ascii=True)
-        return str(content)
+        return serialize_completion_message_content(content)
 
     def _perform_request(
         self,

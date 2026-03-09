@@ -261,6 +261,64 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             stream=False,
         )
 
+    async def test_get_completion_serializes_structured_message_content(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        response_payload = SimpleNamespace(
+            id="chatcmpl-2",
+            model="llama-3.1-8b-instant",
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(
+                        role="assistant",
+                        content="ok",
+                        tool_calls=[],
+                    ),
+                )
+            ],
+            usage=None,
+        )
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=response_payload),
+                )
+            )
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.groqq.AsyncGroq",
+            return_value=api,
+        ):
+            gateway = GroqCompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[
+                CompletionMessage(role="system", content={"policy": "strict"}),
+                CompletionMessage(
+                    role="user",
+                    content={"message": "hello", "ingress_metadata": {"tenant": "global"}},
+                ),
+            ],
+        )
+        await gateway.get_completion(request)
+
+        _, kwargs = api.chat.completions.create.await_args
+        self.assertEqual(
+            kwargs["messages"],
+            [
+                {"role": "system", "content": '{"policy": "strict"}'},
+                {
+                    "role": "user",
+                    "content": (
+                        '{"message": "hello", "ingress_metadata": {"tenant": "global"}}'
+                    ),
+                },
+            ],
+        )
+
     async def test_get_completion_uses_explicit_inference_and_vendor_params(self) -> None:
         config = _make_config()
         logging_gateway = Mock()

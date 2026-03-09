@@ -710,6 +710,33 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[tool]", conversation[0]["content"][0]["text"])
         self.assertEqual(system_prompts, [{"text": "sys"}])
 
+    def test_split_messages_serializes_structured_message_content(self) -> None:
+        request = CompletionRequest(
+            operation="completion",
+            model="anthropic.claude",
+            messages=[
+                CompletionMessage(role="system", content={"policy": "strict"}),
+                CompletionMessage(
+                    role="user",
+                    content={"message": "hello", "ingress_metadata": {"tenant": "global"}},
+                ),
+                CompletionMessage(role="tool", content={"trace_id": "abc123"}),
+            ],
+            inference=CompletionInferenceConfig(),
+        )
+
+        conversation, system_prompts = BedrockCompletionGateway._split_messages(request)
+
+        self.assertEqual(system_prompts, [{"text": '{"policy": "strict"}'}])
+        self.assertEqual(
+            conversation[0]["content"][0]["text"],
+            '{"message": "hello", "ingress_metadata": {"tenant": "global"}}',
+        )
+        self.assertEqual(
+            conversation[1]["content"][0]["text"],
+            '[tool] {"trace_id": "abc123"}',
+        )
+
     def test_build_inference_config_supports_empty_and_default_paths(self) -> None:
         gateway = self._build_gateway()
         request = CompletionRequest(

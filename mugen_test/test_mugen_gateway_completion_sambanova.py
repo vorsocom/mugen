@@ -346,6 +346,44 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         body = kwargs["body"]
         self.assertEqual(body["max_completion_tokens"], 64)
 
+    async def test_get_completion_serializes_structured_message_content(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+        request = CompletionRequest(
+            operation="completion",
+            messages=[
+                CompletionMessage(role="system", content={"policy": "strict"}),
+                CompletionMessage(
+                    role="user",
+                    content={"message": "hello", "message_context": [{"role": "user"}]},
+                ),
+            ],
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion(request)
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertEqual(
+            body["messages"],
+            [
+                {"role": "system", "content": '{"policy": "strict"}'},
+                {
+                    "role": "user",
+                    "content": (
+                        '{"message": "hello", "message_context": [{"role": "user"}]}'
+                    ),
+                },
+            ],
+        )
+
     async def test_get_completion_rejects_removed_legacy_token_limit_vendor_params(
         self,
     ) -> None:

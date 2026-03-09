@@ -18,6 +18,9 @@ from mugen.core.contract.gateway.completion import (
     ICompletionGateway,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.message_serialization import (
+    serialize_completion_message_dict,
+)
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
     require_fields_in_production,
@@ -190,7 +193,7 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         ]
         data: dict[str, Any] = {
             "messages": [
-                message.to_dict()
+                serialize_completion_message_dict(message)
                 for message in completion_request.messages
             ],
             "model": model,
