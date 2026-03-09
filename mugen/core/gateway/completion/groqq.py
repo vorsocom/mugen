@@ -17,6 +17,9 @@ from mugen.core.contract.gateway.completion import (
     ICompletionGateway,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.message_serialization import (
+    serialize_completion_message_dict,
+)
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
     require_fields_in_production,
@@ -212,7 +215,10 @@ class GroqCompletionGateway(ICompletionGateway):
         )
 
         kwargs: dict[str, Any] = {
-            "messages": [message.to_dict() for message in request.messages],
+            "messages": [
+                serialize_completion_message_dict(message)
+                for message in request.messages
+            ],
             "model": model,
             "temperature": temperature,
             "top_p": top_p,

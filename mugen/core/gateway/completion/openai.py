@@ -16,6 +16,10 @@ from mugen.core.contract.gateway.completion import (
     ICompletionGateway,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.message_serialization import (
+    serialize_completion_message_content,
+    serialize_completion_message_dict,
+)
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
     require_fields_in_production,
@@ -285,7 +289,10 @@ class OpenAICompletionGateway(ICompletionGateway):
         stream = self._resolve_stream(request)
 
         kwargs: dict[str, Any] = {
-            "messages": [message.to_dict() for message in request.messages],
+            "messages": [
+                serialize_completion_message_dict(message)
+                for message in request.messages
+            ],
             "model": model,
             "stream": stream,
         }
@@ -851,18 +858,14 @@ class OpenAICompletionGateway(ICompletionGateway):
                     instructions_parts.append(system_content)
                 continue
 
-            input_items.append(message.to_dict())
+            input_items.append(serialize_completion_message_dict(message))
 
         instructions = "\n\n".join(instructions_parts) if instructions_parts else None
         return instructions, input_items
 
     @staticmethod
     def _serialize_instruction_content(value: Any) -> str:
-        if isinstance(value, str):
-            return value
-        if isinstance(value, (dict, list)):
-            return json.dumps(value, ensure_ascii=True)
-        return ""
+        return serialize_completion_message_content(value)
 
     @classmethod
     def _extract_responses_content(

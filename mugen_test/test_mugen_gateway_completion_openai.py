@@ -1121,6 +1121,62 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         api.chat.completions.create.assert_awaited_once()
         api.responses.create.assert_not_called()
 
+    async def test_get_completion_chat_serializes_structured_message_content(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        chat_payload = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(content="chat path"),
+                )
+            ],
+            usage=None,
+        )
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock(return_value=chat_payload)),
+            ),
+            responses=SimpleNamespace(create=AsyncMock()),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=api,
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[
+                CompletionMessage(role="system", content={"policy": "strict"}),
+                CompletionMessage(
+                    role="user",
+                    content={
+                        "message": "hello",
+                        "ingress_metadata": {"client_profile_key": "default"},
+                    },
+                ),
+            ],
+        )
+        await gateway.get_completion(request)
+
+        _, kwargs = api.chat.completions.create.await_args
+        self.assertEqual(
+            kwargs["messages"],
+            [
+                {"role": "system", "content": '{"policy": "strict"}'},
+                {
+                    "role": "user",
+                    "content": (
+                        '{"message": "hello", "ingress_metadata": '
+                        '{"client_profile_key": "default"}}'
+                    ),
+                },
+            ],
+        )
+
     async def test_get_completion_raises_on_invalid_surface(self) -> None:
         config = _make_config()
         config.openai.api.dict["completion"]["surface"] = "invalid_surface"
@@ -1850,6 +1906,34 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(kwargs["instructions"], "policy")
         self.assertNotIn("input", kwargs)
+
+        structured_user_request = CompletionRequest(
+            operation="completion",
+            messages=[
+                CompletionMessage(role="system", content={"policy": "strict"}),
+                CompletionMessage(
+                    role="user",
+                    content={"message": "hello", "message_context": [{"role": "user"}]},
+                ),
+            ],
+            vendor_params={"openai_api": "responses"},
+        )
+        _, kwargs = gateway._serialize_responses_kwargs(
+            structured_user_request,
+            operation_config,
+        )
+        self.assertEqual(kwargs["instructions"], '{"policy": "strict"}')
+        self.assertEqual(
+            kwargs["input"],
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        '{"message": "hello", "message_context": [{"role": "user"}]}'
+                    ),
+                }
+            ],
+        )
 
         _, kwargs = gateway._serialize_responses_kwargs(
             request,

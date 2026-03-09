@@ -20,6 +20,9 @@ from mugen.core.contract.gateway.completion import (
     ICompletionGateway,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.message_serialization import (
+    serialize_completion_message_content,
+)
 from mugen.core.gateway.completion.timeout_config import (
     require_fields_in_production,
     resolve_optional_positive_float,
@@ -345,16 +348,17 @@ class BedrockCompletionGateway(ICompletionGateway):
         conversation: list[dict] = []
         system_prompts: list[dict] = []
         for message in request.messages:
+            serialized_content = serialize_completion_message_content(message.content)
             if message.role == "system":
-                system_prompts.append({"text": message.content})
+                system_prompts.append({"text": serialized_content})
                 continue
 
             if message.role in {"user", "assistant"}:
                 role = message.role
-                content = message.content
+                content = serialized_content
             else:
                 role = "user"
-                content = f"[{message.role}] {message.content}"
+                content = f"[{message.role}] {serialized_content}"
 
             conversation.append({"role": role, "content": [{"text": content}]})
 

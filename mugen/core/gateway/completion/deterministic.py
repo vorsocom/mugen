@@ -11,6 +11,9 @@ from mugen.core.contract.gateway.completion import (
     ICompletionGateway,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.message_serialization import (
+    serialize_completion_message_content,
+)
 
 
 class DeterministicCompletionGateway(ICompletionGateway):
@@ -68,5 +71,9 @@ class DeterministicCompletionGateway(ICompletionGateway):
                 continue
             if isinstance(message.content, str) and message.content.strip() != "":
                 return message.content
+            if isinstance(message.content, dict) and message.content:
+                return serialize_completion_message_content(message.content)
+            if isinstance(message.content, list) and message.content:
+                return serialize_completion_message_content(message.content)
 
         return "ok"

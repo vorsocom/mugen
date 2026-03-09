@@ -92,3 +92,43 @@ class TestMugenGatewayCompletionDeterministic(unittest.IsolatedAsyncioTestCase):
         response = await gateway.get_completion(request)
 
         self.assertEqual(response.content, "ok")
+
+    async def test_get_completion_uses_last_structured_user_content(self) -> None:
+        gateway = _gateway()
+        request = CompletionRequest(
+            operation="completion",
+            messages=[
+                CompletionMessage(role="assistant", content="assistant only"),
+                CompletionMessage(
+                    role="user",
+                    content={"message": "hello", "ingress_metadata": {"tenant": "global"}},
+                ),
+            ],
+        )
+
+        response = await gateway.get_completion(request)
+
+        self.assertEqual(
+            response.content,
+            '{"message": "hello", "ingress_metadata": {"tenant": "global"}}',
+        )
+
+    async def test_get_completion_uses_last_structured_user_list_content(self) -> None:
+        gateway = _gateway()
+        request = CompletionRequest(
+            operation="completion",
+            messages=[
+                CompletionMessage(role="assistant", content="assistant only"),
+                CompletionMessage(
+                    role="user",
+                    content=[{"type": "input_text", "text": "hello"}],
+                ),
+            ],
+        )
+
+        response = await gateway.get_completion(request)
+
+        self.assertEqual(
+            response.content,
+            '[{"type": "input_text", "text": "hello"}]',
+        )
