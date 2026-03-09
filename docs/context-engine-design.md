@@ -14,6 +14,9 @@ Use this document for hard runtime semantics. Use
 `docs/context-engine-authoring.md` for collaborator authoring and registration.
 Use `docs/context-engine-user-stories.md` for story-driven runtime walkthroughs
 that show how these guarantees behave on real turns.
+Use `docs/context-engine-debugging-playbook.md` when you need a deterministic
+operator workflow for diagnosing bad context decisions, trace results, or
+commit failures in production.
 Use `docs/context-engine-strengthening-decisions.md` for the decision log that
 explains why the current design took this shape.
 
@@ -123,6 +126,11 @@ Default engine behavior: `DefaultContextEngine` executes prepare in this order:
 For end-to-end examples that connect resolver, state, contributors, source
 policy, guards, rankers, compilation, cache, memory, and trace behavior, see
 `docs/context-engine-user-stories.md`.
+
+## Debugging
+
+For production triage, trace interpretation, and prepare-vs-commit failure
+diagnosis, see `docs/context-engine-debugging-playbook.md`.
 
 Contract guarantee: blocked artifacts do not reach completion compilation.
 
