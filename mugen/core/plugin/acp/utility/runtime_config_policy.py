@@ -83,6 +83,8 @@ ALLOWED_MESSAGING_CLIENT_PROFILE_SETTINGS_PATHS: dict[
     "matrix": ALLOWED_MESSAGING_SETTINGS_PATHS["matrix"]
     | frozenset(
         {
+            ("federation", "allowed"),
+            ("federation", "denied"),
             ("user_access", "mode"),
             ("user_access", "users"),
         }

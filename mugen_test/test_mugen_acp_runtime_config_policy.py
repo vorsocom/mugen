@@ -38,7 +38,11 @@ class TestRuntimeConfigPolicy(unittest.TestCase):
             },
         )
         self.assertEqual(
-            list(policy._iter_leaf_paths({"webhook": {}})),  # pylint: disable=protected-access
+            list(
+                policy._iter_leaf_paths(  # pylint: disable=protected-access
+                    {"webhook": {}}
+                )
+            ),
             [(("webhook",), {})],
         )
 
@@ -70,6 +74,10 @@ class TestRuntimeConfigPolicy(unittest.TestCase):
                 platform_key="matrix",
                 value={
                     "Client": {"Device": "device-1"},
+                    "Federation": {
+                        "Allowed": ["example.com"],
+                        "Denied": ["blocked.example.com"],
+                    },
                     "User_Access": {
                         "Mode": "allow-only",
                         "Users": ["@user:example.com"],
@@ -78,6 +86,10 @@ class TestRuntimeConfigPolicy(unittest.TestCase):
             ),
             {
                 "client": {"device": "device-1"},
+                "federation": {
+                    "allowed": ["example.com"],
+                    "denied": ["blocked.example.com"],
+                },
                 "user_access": {
                     "mode": "allow-only",
                     "users": ["@user:example.com"],
@@ -115,6 +127,15 @@ class TestRuntimeConfigPolicy(unittest.TestCase):
                 category="messaging.platform_defaults",
                 profile_key="matrix",
                 value={"User_Access": {"Mode": "allow-only"}},
+            )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "SettingsJson path 'federation.allowed' is not allowed",
+        ):
+            policy.normalize_runtime_config_settings(
+                category="messaging.platform_defaults",
+                profile_key="matrix",
+                value={"Federation": {"Allowed": ["example.com"]}},
             )
 
         with self.assertRaisesRegex(RuntimeError, "SecretRefs must be a JSON object"):

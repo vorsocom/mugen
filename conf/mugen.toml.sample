@@ -415,8 +415,8 @@ api.read_timeout_seconds = 30.0
 # === Matrix ===
 [matrix]
 domain = ""
-domains.allowed = []
-domains.denied = []
+# Federation policy is owned per ACP
+# MessagingClientProfiles.Settings.federation.allowed/denied.
 invites.direct_only = true
 media.allowed_mimetypes = [
   "audio/*",

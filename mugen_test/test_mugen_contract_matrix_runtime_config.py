@@ -19,10 +19,6 @@ def _valid_config() -> dict:
                 "user": "@assistant:example.com",
                 "password": "pw",
             },
-            "domains": {
-                "allowed": ["example.com"],
-                "denied": [],
-            },
             "invites": {
                 "direct_only": True,
             },
@@ -51,10 +47,6 @@ class TestMatrixRuntimeConfigContract(unittest.TestCase):
         validate_matrix_enabled_runtime_config(cfg)
 
         cfg = _valid_config()
-        cfg["matrix"]["domains"]["denied"] = ["blocked.example.com"]
-        validate_matrix_enabled_runtime_config(cfg)
-
-        cfg = _valid_config()
         cfg["matrix"]["security"]["device_trust"]["mode"] = "permissive"
         validate_matrix_enabled_runtime_config(cfg)
 
@@ -73,32 +65,24 @@ class TestMatrixRuntimeConfigContract(unittest.TestCase):
         cfg["matrix"]["profiles"] = []
         validate_matrix_enabled_runtime_config(cfg)
 
+    def test_tolerates_legacy_root_domains_block(self) -> None:
+        cfg = _valid_config()
+        cfg["matrix"]["domains"] = "invalid"
+        validate_matrix_enabled_runtime_config(cfg)
+
+        cfg = _valid_config()
+        cfg["matrix"]["domains"] = {
+            "allowed": [],
+            "denied": "blocked.example.com",
+        }
+        validate_matrix_enabled_runtime_config(cfg)
+
     def test_rejects_invalid_shapes_and_values(self) -> None:
         cases: list[tuple[dict, str]] = []
 
         cfg = _valid_config()
         cfg["matrix"] = "invalid"
         cases.append((cfg, "matrix must be a table"))
-
-        cfg = _valid_config()
-        cfg["matrix"]["domains"] = "invalid"
-        cases.append((cfg, "matrix.domains must be a table"))
-
-        cfg = _valid_config()
-        cfg["matrix"]["domains"]["allowed"] = []
-        cases.append((cfg, "matrix.domains.allowed must be a non-empty array of strings"))
-
-        cfg = _valid_config()
-        cfg["matrix"]["domains"]["allowed"] = ["", "ok"]
-        cases.append((cfg, "matrix.domains.allowed[0] must be a non-empty string"))
-
-        cfg = _valid_config()
-        cfg["matrix"]["domains"]["denied"] = "example.com"
-        cases.append((cfg, "matrix.domains.denied must be an array of strings"))
-
-        cfg = _valid_config()
-        cfg["matrix"]["domains"]["denied"] = ["", "example.com"]
-        cases.append((cfg, "matrix.domains.denied[0] must be a non-empty string"))
 
         cfg = _valid_config()
         cfg["matrix"]["invites"] = "invalid"
