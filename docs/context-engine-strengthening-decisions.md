@@ -124,3 +124,17 @@ Why:
 
 - reduces accidental coupling to the current core plugin
 - makes future refactors safer for downstream authors
+
+## 9. Resolver Inputs Stay First-Class
+
+Decision:
+
+- policy selection inputs remain explicit resolver inputs
+- `service_route_key` is treated as a first-class business-surface selector
+- `client_profile_key` remains transport identity and is not repurposed
+
+Why:
+
+- keeps workflow-surface selection out of contributor-local metadata
+- preserves a clean split between transport identity and business routing
+- makes profile and binding matching explainable in production debugging

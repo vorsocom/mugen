@@ -39,6 +39,7 @@ class IngressBindingCreateValidation(IValidationBase):
     channel_key: str
     identifier_type: str
     identifier_value: str
+    service_route_key: str | None = None
 
     @model_validator(mode="after")
     def _validate_required_strings(self) -> "IngressBindingCreateValidation":
@@ -53,6 +54,9 @@ class IngressBindingCreateValidation(IValidationBase):
         self.identifier_value = self.identifier_value.strip()
         if self.identifier_value == "":
             raise ValueError("IdentifierValue must be non-empty.")
+
+        if self.service_route_key is not None:
+            self.service_route_key = self.service_route_key.strip() or None
 
         return self
 

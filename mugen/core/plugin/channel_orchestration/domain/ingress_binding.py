@@ -18,5 +18,6 @@ class IngressBindingDE(BaseDE, TenantScopedDEMixin):
     channel_key: str | None = None
     identifier_type: str | None = None
     identifier_value: str | None = None
+    service_route_key: str | None = None
     is_active: bool | None = None
     attributes: dict[str, Any] | None = None

@@ -23,6 +23,7 @@ class ConversationStateDE(BaseDE, TenantScopedDEMixin):
     external_conversation_ref: str | None = None
 
     status: str | None = None
+    service_route_key: str | None = None
     route_key: str | None = None
 
     assigned_queue_name: str | None = None

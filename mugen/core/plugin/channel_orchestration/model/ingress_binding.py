@@ -54,6 +54,12 @@ class IngressBinding(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    service_route_key: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -78,6 +84,13 @@ class IngressBinding(ModelBase, TenantScopedMixin):
         CheckConstraint(
             "length(btrim(identifier_value)) > 0",
             name="ck_chorch_ingress_binding__identifier_value_nonempty",
+        ),
+        CheckConstraint(
+            (
+                "service_route_key IS NULL OR "
+                "length(btrim(service_route_key)) > 0"
+            ),
+            name="ck_chorch_ingress_binding__service_route_nonempty_if_set",
         ),
         UniqueConstraint(
             "tenant_id",

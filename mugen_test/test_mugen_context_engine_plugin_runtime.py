@@ -242,7 +242,10 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(all(table.schema == "mugen" for table in tables))
+        self.assertIn("service_route_key", ContextProfile.__table__.c)
         self.assertIn("client_profile_key", ContextProfile.__table__.c)
+        self.assertIn("service_route_key", ContextContributorBinding.__table__.c)
+        self.assertIn("service_route_key", ContextSourceBinding.__table__.c)
         self.assertIn("persona", ContextProfile.__table__.c)
 
     async def test_policy_resolver_covers_default_and_configured_policy_paths(
@@ -258,6 +261,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                             name="matrix-default",
                             platform="matrix",
                             channel_key=None,
+                            service_route_key=None,
                             client_profile_key=None,
                             persona="Default persona.",
                             is_default=True,
@@ -272,6 +276,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                             name="matrix-fallback",
                             platform="matrix",
                             channel_key="matrix",
+                            service_route_key=None,
                             client_profile_key=None,
                             persona="Fallback persona.",
                             is_default=True,
@@ -284,6 +289,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                             name="matrix-policy",
                             platform="matrix",
                             channel_key="matrix",
+                            service_route_key="customer_inbox",
                             client_profile_key="matrix-primary",
                             persona="Escalation persona.",
                             is_default=False,
@@ -342,12 +348,14 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                         contributor_key="persona_policy",
                         platform="matrix",
                         channel_key=None,
+                        service_route_key=None,
                         is_enabled=True,
                     ),
                     SimpleNamespace(
                         contributor_key="ignored",
                         platform="telegram",
                         channel_key=None,
+                        service_route_key=None,
                         is_enabled=True,
                     ),
                 ]
@@ -361,6 +369,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                         source_kind="knowledge",
                         platform="matrix",
                         channel_key="matrix",
+                        service_route_key="customer_inbox",
                         is_enabled=True,
                     ),
                     SimpleNamespace(
@@ -368,6 +377,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                         source_kind="audit",
                         platform="line",
                         channel_key=None,
+                        service_route_key=None,
                         is_enabled=True,
                     ),
                 ]
@@ -410,16 +420,18 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(default_policy.policy_key, "default")
         self.assertEqual(default_policy.profile_key, "matrix-default")
         self.assertEqual(default_policy.contributor_allow, ("persona_policy",))
-        self.assertEqual(default_policy.source_allow, ("knowledge",))
-        self.assertEqual(default_policy.source_rules[0].source_key, "source-a")
+        self.assertEqual(default_policy.source_allow, ())
+        self.assertEqual(default_policy.source_rules, ())
         self.assertTrue(default_policy.trace_enabled)
         self.assertEqual(default_policy.metadata["persona"], "Default persona.")
+        self.assertIsNone(default_policy.metadata["service_route_key"])
         self.assertEqual(default_policy.metadata["trace_policy_name"], "trace-default")
 
         configured_policy = await resolver.resolve_policy(
             _request(
                 ingress_metadata={
                     "ingress_route": {
+                        "service_route_key": "customer_inbox",
                         "client_profile_key": "matrix-primary",
                     }
                 }
@@ -440,6 +452,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(configured_policy.contributor_deny, ("audit",))
         self.assertEqual(configured_policy.source_allow, ("knowledge",))
         self.assertEqual(configured_policy.source_deny, ("memory",))
+        self.assertEqual(configured_policy.source_rules[0].source_key, "source-a")
         self.assertEqual(
             configured_policy.source_rules[-1].effect,
             ContextSourcePolicyEffect.DENY,
@@ -447,6 +460,10 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(configured_policy.trace_enabled)
         self.assertFalse(configured_policy.cache_enabled)
         self.assertEqual(configured_policy.metadata["persona"], "Escalation persona.")
+        self.assertEqual(
+            configured_policy.metadata["service_route_key"],
+            "customer_inbox",
+        )
         self.assertEqual(
             configured_policy.metadata["trace_policy_name"], "trace-strict"
         )
@@ -530,7 +547,12 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(global_default.retention.require_partition_for_global_memory)
         request_client_profile_key = runtime_module._request_client_profile_key
+        request_service_route_key = runtime_module._request_service_route_key
         select_profile = DefaultContextPolicyResolver._select_profile
+        binding_matches_scope = DefaultContextPolicyResolver._binding_matches_scope
+        source_binding_matches_scope = (
+            DefaultContextPolicyResolver._source_binding_matches_scope
+        )
         self.assertEqual(
             request_client_profile_key(  # pylint: disable=protected-access
                 _request(
@@ -548,9 +570,29 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             ),
             "matrix-top-level",
         )
+        self.assertEqual(
+            request_service_route_key(  # pylint: disable=protected-access
+                _request(
+                    ingress_metadata={
+                        "ingress_route": {
+                            "service_route_key": " customer.inbox ",
+                        },
+                        "service_route_key": "top-level",
+                    }
+                )
+            ),
+            "customer.inbox",
+        )
+        self.assertEqual(
+            request_service_route_key(  # pylint: disable=protected-access
+                _request(ingress_metadata={"service_route_key": " top-level "})
+            ),
+            "top-level",
+        )
         self.assertIsNone(
             select_profile(  # pylint: disable=protected-access
                 _scope(),
+                None,
                 None,
                 [],
             )
@@ -559,31 +601,91 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             name="wildcard",
             platform="matrix",
             channel_key="matrix",
+            service_route_key=None,
             client_profile_key=None,
             is_default=True,
         )
-        exact_profile = SimpleNamespace(
-            name="exact",
+        exact_service_route_profile = SimpleNamespace(
+            name="service-route",
             platform="matrix",
             channel_key="matrix",
+            service_route_key="customer.inbox",
+            client_profile_key=None,
+            is_default=False,
+        )
+        exact_client_profile = SimpleNamespace(
+            name="client-profile",
+            platform="matrix",
+            channel_key="matrix",
+            service_route_key=None,
             client_profile_key="matrix-primary",
             is_default=False,
         )
         self.assertIs(
             select_profile(  # pylint: disable=protected-access
                 _scope(),
+                "customer.inbox",
                 "matrix-primary",
-                [wildcard_profile, exact_profile],
+                [
+                    wildcard_profile,
+                    exact_client_profile,
+                    exact_service_route_profile,
+                ],
             ),
-            exact_profile,
+            exact_service_route_profile,
         )
         self.assertIs(
             select_profile(  # pylint: disable=protected-access
                 _scope(),
                 None,
-                [wildcard_profile, exact_profile],
+                None,
+                [wildcard_profile, exact_client_profile],
             ),
             wildcard_profile,
+        )
+        self.assertTrue(
+            binding_matches_scope(  # pylint: disable=protected-access
+                SimpleNamespace(
+                    platform="matrix",
+                    channel_key="matrix",
+                    service_route_key="customer.inbox",
+                ),
+                _scope(),
+                "customer.inbox",
+            )
+        )
+        self.assertFalse(
+            binding_matches_scope(  # pylint: disable=protected-access
+                SimpleNamespace(
+                    platform="matrix",
+                    channel_key="matrix",
+                    service_route_key="valet.core",
+                ),
+                _scope(),
+                "customer.inbox",
+            )
+        )
+        self.assertTrue(
+            source_binding_matches_scope(  # pylint: disable=protected-access
+                SimpleNamespace(
+                    platform="matrix",
+                    channel_key="matrix",
+                    service_route_key=None,
+                ),
+                _scope(),
+                "customer.inbox",
+            )
+        )
+        self.assertFalse(
+            source_binding_matches_scope(  # pylint: disable=protected-access
+                SimpleNamespace(
+                    platform="matrix",
+                    channel_key="matrix",
+                    service_route_key="valet.core",
+                ),
+                _scope(),
+                "customer.inbox",
+            )
         )
         profile = SimpleNamespace(policy_id=uuid.uuid4())
         self.assertIsNone(
@@ -647,24 +749,37 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.metadata, {"k": "v"})
 
         created_state = await store.save(
-            request=_request(trace_id="trace-create"),
+            request=_request(
+                trace_id="trace-create",
+                ingress_metadata={"service_route_key": "top-level-route"},
+            ),
             prepared=_prepared(),
             completion=None,
             final_user_responses=[],
             outcome=TurnOutcome.COMPLETION_FAILED,
         )
         self.assertEqual(created_state.summary, None)
+        self.assertEqual(created_state.routing["service_route_key"], "top-level-route")
         snapshot_service.create.assert_awaited_once()
         self.assertEqual(event_log_service.create.await_count, 1)
 
         updated_state = await store.save(
-            request=_request(trace_id="trace-update", user_message={"prompt": "hi"}),
+            request=_request(
+                trace_id="trace-update",
+                user_message={"prompt": "hi"},
+                ingress_metadata={
+                    "ingress_route": {
+                        "service_route_key": "route-envelope",
+                    }
+                },
+            ),
             prepared=_prepared(),
             completion=CompletionResponse(content="assistant answer"),
             final_user_responses=[],
             outcome=TurnOutcome.COMPLETED,
         )
         self.assertEqual(updated_state.summary, "summary")
+        self.assertEqual(updated_state.routing["service_route_key"], "route-envelope")
         self.assertEqual(updated_state.routing["tenant_resolution"], None)
         snapshot_service.update.assert_awaited_once()
         self.assertEqual(event_log_service.create.await_count, 3)
@@ -1117,6 +1232,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                 return_value=[
                     SimpleNamespace(
                         status="open",
+                        service_route_key="valet.customer_inbox",
                         route_key="route-1",
                         assigned_queue_name="support",
                         assigned_service_key="svc",
@@ -1145,6 +1261,12 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             work_item_service=work_item_service,
         ).collect(request, policy=policy, state=None)
         self.assertEqual(channel_candidates[0].artifact.lane, "operational_overlay")
+        self.assertEqual(
+            channel_candidates[0].artifact.content["conversation"][
+                "service_route_key"
+            ],
+            "valet.customer_inbox",
+        )
         self.assertEqual(
             await ChannelOrchestrationContributor(
                 conversation_state_service=SimpleNamespace(

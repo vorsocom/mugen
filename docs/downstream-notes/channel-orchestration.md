@@ -69,8 +69,21 @@ Resolver success returns:
 - optional `channel_profile_id`
 - optional `client_profile_id`
 - optional `client_profile_key`
+- optional `service_route_key`
 - optional `route_key`
 - optional `binding_id`
+
+Service-route resolution order:
+
+- `IngressBinding.service_route_key`
+- `ChannelProfile.service_route_default_key`
+- `None`
+
+Semantics:
+
+- `client_profile_key` remains transport-account identity.
+- `service_route_key` is the tenant business surface or workflow family.
+- `route_key` remains the operational queue-routing key.
 
 Resolver failure reason codes:
 
@@ -96,7 +109,8 @@ used only when bindings or explicit orchestration rules point there.
 
 1. Adapter receives inbound payload.
 2. Adapter resolves tenant-aware ingress route.
-3. Downstream maps payload to normalized sender/context plus channel profile.
+3. Downstream uses `service_route_key` to pick the business workflow surface,
+   then maps payload to normalized sender/context plus channel profile.
 4. Call orchestration actions as needed:
    `evaluate_intake` -> `route` -> `apply_throttle`.
 5. Call `escalate` or `set_fallback` on downstream business triggers.

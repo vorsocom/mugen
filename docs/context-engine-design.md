@@ -258,7 +258,7 @@ stores with different purposes.
 - unresolved slots
 - commitments
 - safety flags
-- routing
+- routing, including tenant-resolution and optional `service_route_key`
 - explicit summary/metadata
 
 `recent_turn` history is event material used for replay and reconstruction.
@@ -356,6 +356,9 @@ Contract guarantee: `ContextScope.tenant_id` is always populated.
 Resolution policy:
 
 - resolved ingress routing uses the resolved tenant;
+- policy resolution may also consume `ingress_metadata["ingress_route"][
+  "service_route_key"]` to distinguish business surfaces without changing
+  `ContextScope`;
 - `missing_identifier` and `missing_binding` may fall back to
   `GLOBAL_TENANT_ID`;
 - platforms with no routing subsystem may opt into deterministic global

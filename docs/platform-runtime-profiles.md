@@ -79,8 +79,12 @@ platform fallback to the global tenant.
 
 ## Ingress Routing
 
-Ingress route resolution now carries `client_profile_id` and optional
-`client_profile_key` in the downstream route envelope.
+Ingress route resolution now carries:
+
+- `client_profile_id` for transport-account identity
+- optional `client_profile_key` for transport-profile-aware context selection
+- optional `service_route_key` for tenant business-surface or workflow-family
+  selection
 
 Platform identifier mapping:
 
@@ -117,8 +121,10 @@ That means:
 
 - one tenant may own multiple client profiles on one platform;
 - replies go out through the same transport account that received the event;
-- `client_profile_key` also flows into downstream context resolution, so ACP
-  `ContextProfiles` may vary persona by messaging client profile when needed.
+- `client_profile_key` may still vary downstream context by transport account
+  when needed;
+- `service_route_key` is the preferred downstream selector for business-surface
+  routing such as `valet.core` vs `valet.customer_inbox`.
 
 ## Runtime Managers And Reload
 

@@ -34,6 +34,7 @@ ingress_binding_type = EdmType(
             TypeRef("Edm.String"),
             nullable=False,
         ),
+        "ServiceRouteKey": EdmProperty("ServiceRouteKey", TypeRef("Edm.String")),
         "IsActive": EdmProperty("IsActive", TypeRef("Edm.Boolean"), nullable=False),
         "Attributes": EdmProperty(
             "Attributes",

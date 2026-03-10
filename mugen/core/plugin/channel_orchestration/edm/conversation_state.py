@@ -30,6 +30,7 @@ conversation_state_type = EdmType(
             TypeRef("Edm.String"),
         ),
         "Status": EdmProperty("Status", TypeRef("Edm.String"), nullable=False),
+        "ServiceRouteKey": EdmProperty("ServiceRouteKey", TypeRef("Edm.String")),
         "RouteKey": EdmProperty("RouteKey", TypeRef("Edm.String")),
         "AssignedQueueName": EdmProperty("AssignedQueueName", TypeRef("Edm.String")),
         "AssignedOwnerUserId": EdmProperty("AssignedOwnerUserId", TypeRef("Edm.Guid")),

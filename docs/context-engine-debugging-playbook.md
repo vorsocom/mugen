@@ -322,6 +322,7 @@ different trace behavior than expected.
 ### What to inspect
 
 - `ContextScope`
+- `ingress_metadata["ingress_route"]["service_route_key"]` when present
 - `ingress_metadata["ingress_route"]["client_profile_key"]` when present
 - `PreparedContextTurn.bundle.policy`
 - `CompletionRequest.vendor_params["context_policy"]`
@@ -358,6 +359,7 @@ Example resolved policy shape:
   "metadata": {
     "profile_name": "vip-sms",
     "persona": "White-glove travel desk",
+    "service_route_key": "valet.customer_inbox",
     "trace_policy_name": "vip-debug"
   }
 }
@@ -374,6 +376,7 @@ Example resolved policy shape:
 
 ### Common root causes
 
+- wrong `service_route_key` or missing one in ingress metadata;
 - wrong `client_profile_key` or missing one in ingress metadata;
 - scope matched a more general `ContextProfile` than expected;
 - profile pointed at a different `ContextPolicy` row than intended;
@@ -390,13 +393,15 @@ Example resolved policy shape:
 2. Confirm whether the turn is `resolved` or `fallback_global`.
 3. Read the prepared bundle policy before looking at the completion output.
 4. Compare the prepared policy against the expected profile and policy rows.
-5. Confirm the incoming `client_profile_key` if the tenant expects
-   client-profile-specific behavior.
-6. Compare the matched scope fields against profile fields:
-   `platform`, `channel_key`, `client_profile_key`.
-7. Inspect contributor and source binding rows for the same tenant.
-8. If trace capture differs from expectation, inspect `ContextTracePolicies`.
-9. Only after policy is confirmed should you inspect selected/dropped artifacts.
+5. Confirm the incoming `service_route_key` if the tenant expects
+   workflow-surface-specific behavior.
+6. Confirm the incoming `client_profile_key` if the tenant expects
+   transport-profile-specific behavior.
+7. Compare the matched scope fields against profile fields:
+   `platform`, `channel_key`, `service_route_key`, `client_profile_key`.
+8. Inspect contributor and source binding rows for the same tenant.
+9. If trace capture differs from expectation, inspect `ContextTracePolicies`.
+10. Only after policy is confirmed should you inspect selected/dropped artifacts.
 
 ### Example trace interpretation
 
@@ -429,7 +434,7 @@ the wrong policy.
 
 - operator/config fixes:
   correct `ContextProfile` matching rows, policy links, source bindings, or
-  ingress metadata that carries `client_profile_key`
+  ingress metadata that carries `service_route_key` or `client_profile_key`
 - plugin-author fixes:
   if a downstream resolver replacement exists, confirm it preserves the core
   contract and returns one effective `ContextPolicy`
@@ -442,7 +447,7 @@ the wrong policy.
   load and candidate collection
 - default engine behavior: prepare starts with policy resolution
 - current implementation detail: profile matching considers `platform`,
-  `channel_key`, `client_profile_key`, then `is_default`
+  `channel_key`, `service_route_key`, `client_profile_key`, then `is_default`
 - current implementation detail: policy selection uses the profile-linked policy
   first, then a default policy row, then the first available policy row
 

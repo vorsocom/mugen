@@ -53,6 +53,12 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
         nullable=True,
     )
 
+    service_route_default_key: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+
     route_default_key: Mapped[str | None] = mapped_column(
         CITEXT(128),
         nullable=True,
@@ -93,6 +99,13 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
         CheckConstraint(
             "display_name IS NULL OR length(btrim(display_name)) > 0",
             name="ck_chorch_profile__display_name_nonempty_if_set",
+        ),
+        CheckConstraint(
+            (
+                "service_route_default_key IS NULL OR "
+                "length(btrim(service_route_default_key)) > 0"
+            ),
+            name="ck_chorch_profile__service_route_default_nonempty_if_set",
         ),
         CheckConstraint(
             "route_default_key IS NULL OR length(btrim(route_default_key)) > 0",

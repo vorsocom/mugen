@@ -55,6 +55,11 @@ class ContextProfile(
     channel_key: Mapped[str | None] = mapped_column(
         CITEXT(64), nullable=True, index=True
     )
+    service_route_key: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
     client_profile_key: Mapped[str | None] = mapped_column(
         CITEXT(64),
         nullable=True,
@@ -83,6 +88,13 @@ class ContextProfile(
     __table_args__ = (
         UniqueConstraint("tenant_id", "name", name="ux_ctxeng_profile__tenant_name"),
         CheckConstraint("length(btrim(name)) > 0", name="ck_ctxeng_profile__name"),
+        CheckConstraint(
+            (
+                "service_route_key IS NULL OR "
+                "length(btrim(service_route_key)) > 0"
+            ),
+            name="ck_ctxeng_profile__service_route_nonempty_if_set",
+        ),
         {"schema": _SCHEMA},
     )
 
@@ -154,6 +166,11 @@ class ContextContributorBinding(
     channel_key: Mapped[str | None] = mapped_column(
         CITEXT(64), nullable=True, index=True
     )
+    service_route_key: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
     priority: Mapped[int] = mapped_column(
         BigInteger,
         nullable=False,
@@ -181,6 +198,13 @@ class ContextContributorBinding(
             "length(btrim(contributor_key)) > 0",
             name="ck_ctxeng_contributor_binding__contributor_key",
         ),
+        CheckConstraint(
+            (
+                "service_route_key IS NULL OR "
+                "length(btrim(service_route_key)) > 0"
+            ),
+            name="ck_ctxeng_contributor_binding__service_route_nonempty_if_set",
+        ),
         {"schema": _SCHEMA},
     )
 
@@ -197,6 +221,11 @@ class ContextSourceBinding(
     platform: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
     channel_key: Mapped[str | None] = mapped_column(
         CITEXT(64), nullable=True, index=True
+    )
+    service_route_key: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
     )
     locale: Mapped[str | None] = mapped_column(CITEXT(32), nullable=True, index=True)
     category: Mapped[str | None] = mapped_column(CITEXT(64), nullable=True, index=True)
@@ -222,6 +251,13 @@ class ContextSourceBinding(
         CheckConstraint(
             "length(btrim(source_key)) > 0",
             name="ck_ctxeng_source_binding__source_key",
+        ),
+        CheckConstraint(
+            (
+                "service_route_key IS NULL OR "
+                "length(btrim(service_route_key)) > 0"
+            ),
+            name="ck_ctxeng_source_binding__service_route_nonempty_if_set",
         ),
         {"schema": _SCHEMA},
     )

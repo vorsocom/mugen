@@ -29,6 +29,10 @@ channel_profile_type = EdmType(
             TypeRef("Edm.Guid"),
         ),
         "DisplayName": EdmProperty("DisplayName", TypeRef("Edm.String")),
+        "ServiceRouteDefaultKey": EdmProperty(
+            "ServiceRouteDefaultKey",
+            TypeRef("Edm.String"),
+        ),
         "RouteDefaultKey": EdmProperty("RouteDefaultKey", TypeRef("Edm.String")),
         "PolicyId": EdmProperty("PolicyId", TypeRef("Edm.Guid")),
         "IsActive": EdmProperty("IsActive", TypeRef("Edm.Boolean"), nullable=False),

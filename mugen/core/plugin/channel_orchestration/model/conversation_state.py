@@ -69,6 +69,12 @@ class ConversationState(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    service_route_key: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+
     route_key: Mapped[str | None] = mapped_column(
         CITEXT(128),
         nullable=True,
@@ -193,6 +199,13 @@ class ConversationState(ModelBase, TenantScopedMixin):
         CheckConstraint(
             "length(btrim(status)) > 0",
             name="ck_chorch_state__status_nonempty",
+        ),
+        CheckConstraint(
+            (
+                "service_route_key IS NULL OR "
+                "length(btrim(service_route_key)) > 0"
+            ),
+            name="ck_chorch_state__service_route_nonempty_if_set",
         ),
         CheckConstraint(
             "route_key IS NULL OR length(btrim(route_key)) > 0",

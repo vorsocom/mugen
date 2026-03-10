@@ -19,6 +19,7 @@ class ChannelProfileDE(BaseDE, TenantScopedDEMixin):
     client_profile_id: uuid.UUID | None = None
     display_name: str | None = None
 
+    service_route_default_key: str | None = None
     route_default_key: str | None = None
     policy_id: uuid.UUID | None = None
 
