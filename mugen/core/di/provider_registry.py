@@ -129,6 +129,36 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
             class_name="DefaultContextEngine",
         ),
     },
+    "planning_engine_service": {
+        "default": _ProviderTokenSpec(
+            module_path="mugen.core.service.agent_runtime",
+            class_name="DefaultPlanningEngine",
+        ),
+    },
+    "evaluation_engine_service": {
+        "default": _ProviderTokenSpec(
+            module_path="mugen.core.service.agent_runtime",
+            class_name="DefaultEvaluationEngine",
+        ),
+    },
+    "agent_executor_service": {
+        "default": _ProviderTokenSpec(
+            module_path="mugen.core.service.agent_runtime",
+            class_name="DefaultAgentExecutor",
+        ),
+    },
+    "plan_run_store_service": {
+        "default": _ProviderTokenSpec(
+            module_path="mugen.core.service.agent_runtime",
+            class_name="DefaultPlanRunStore",
+        ),
+    },
+    "agent_runtime_service": {
+        "default": _ProviderTokenSpec(
+            module_path="mugen.core.service.agent_runtime",
+            class_name="DefaultAgentRuntime",
+        ),
+    },
     "messaging_service": {
         "default": _ProviderTokenSpec(
             module_path="mugen.core.service.messaging",

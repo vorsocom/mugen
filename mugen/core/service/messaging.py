@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from mugen.core.constants import GLOBAL_TENANT_ID
+from mugen.core.contract.agent import IAgentRuntime
 from mugen.core.contract.context import ContextScope, IContextEngine
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
@@ -37,10 +38,12 @@ class DefaultMessagingService(IMessagingService):
         context_engine_service: IContextEngine,
         logging_gateway: ILoggingGateway,
         user_service: IUserService,
+        agent_runtime_service: IAgentRuntime | None = None,
     ) -> None:
         self._config = config
         self._completion_gateway = completion_gateway
         self._context_engine_service = context_engine_service
+        self._agent_runtime_service = agent_runtime_service
         self._logging_gateway = logging_gateway
         self._user_service = user_service
         self._cp_extensions: list[ICPExtension] = []
@@ -114,6 +117,7 @@ class DefaultMessagingService(IMessagingService):
                 completion_gateway=self._completion_gateway,
                 config=self._config,
                 context_engine_service=self._context_engine_service,
+                agent_runtime_service=self._agent_runtime_service,
                 logging_gateway=self._logging_gateway,
                 messaging_service=self,
             )

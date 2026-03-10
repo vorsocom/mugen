@@ -12,6 +12,13 @@ from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
+from mugen.core.contract.agent import (
+    IAgentExecutor,
+    IAgentRuntime,
+    IEvaluationEngine,
+    IPlanRunStore,
+    IPlanningEngine,
+)
 from mugen.core.contract.context import IContextEngine
 from mugen.core.contract.di.injector import IDependencyInjector
 from mugen.core.contract.gateway.completion import ICompletionGateway
@@ -57,6 +64,11 @@ class DependencyInjector(IDependencyInjector):
         platform_service: IPlatformService = None,
         user_service: IUserService = None,
         context_engine_service: IContextEngine = None,
+        planning_engine_service: IPlanningEngine = None,
+        evaluation_engine_service: IEvaluationEngine = None,
+        agent_executor_service: IAgentExecutor = None,
+        plan_run_store_service: IPlanRunStore = None,
+        agent_runtime_service: IAgentRuntime = None,
         messaging_service: IMessagingService = None,
         knowledge_gateway: IKnowledgeGateway = None,
         matrix_client: IMatrixClient = None,
@@ -83,6 +95,11 @@ class DependencyInjector(IDependencyInjector):
         self.__platform_service = platform_service
         self.__user_service = user_service
         self.__context_engine_service = context_engine_service
+        self.__planning_engine_service = planning_engine_service
+        self.__evaluation_engine_service = evaluation_engine_service
+        self.__agent_executor_service = agent_executor_service
+        self.__plan_run_store_service = plan_run_store_service
+        self.__agent_runtime_service = agent_runtime_service
         self.__messaging_service = messaging_service
         self.__knowledge_gateway = knowledge_gateway
         self.__matrix_client = matrix_client
@@ -222,6 +239,46 @@ class DependencyInjector(IDependencyInjector):
     @context_engine_service.setter
     def context_engine_service(self, value: IContextEngine) -> None:
         self.__context_engine_service = value
+
+    @property
+    def planning_engine_service(self) -> IPlanningEngine | None:
+        return self.__planning_engine_service
+
+    @planning_engine_service.setter
+    def planning_engine_service(self, value: IPlanningEngine | None) -> None:
+        self.__planning_engine_service = value
+
+    @property
+    def evaluation_engine_service(self) -> IEvaluationEngine | None:
+        return self.__evaluation_engine_service
+
+    @evaluation_engine_service.setter
+    def evaluation_engine_service(self, value: IEvaluationEngine | None) -> None:
+        self.__evaluation_engine_service = value
+
+    @property
+    def agent_executor_service(self) -> IAgentExecutor | None:
+        return self.__agent_executor_service
+
+    @agent_executor_service.setter
+    def agent_executor_service(self, value: IAgentExecutor | None) -> None:
+        self.__agent_executor_service = value
+
+    @property
+    def plan_run_store_service(self) -> IPlanRunStore | None:
+        return self.__plan_run_store_service
+
+    @plan_run_store_service.setter
+    def plan_run_store_service(self, value: IPlanRunStore | None) -> None:
+        self.__plan_run_store_service = value
+
+    @property
+    def agent_runtime_service(self) -> IAgentRuntime | None:
+        return self.__agent_runtime_service
+
+    @agent_runtime_service.setter
+    def agent_runtime_service(self, value: IAgentRuntime | None) -> None:
+        self.__agent_runtime_service = value
 
     @property
     def messaging_service(self) -> IMessagingService:

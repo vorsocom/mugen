@@ -82,6 +82,17 @@ The core messaging path now depends on a dedicated context engine service:
 The default context engine is provider-neutral and composes pluggable contributors, guards, rankers, caches, and trace sinks behind typed contracts.
 Plugin authors extending that seam should start with `docs/context-engine-authoring.md`.
 
+When agent runtime is enabled for a route, the same messaging path can also hand
+the prepared turn to a dedicated agent runtime that coordinates planning,
+evaluation, capability execution, and durable background continuation without
+changing the context engine's prepare/commit boundary.
+
+The default agent runtime is provider-neutral and composes pluggable planners,
+evaluators, capability providers, execution guards, schedulers, response
+synthesizers, and trace sinks behind typed contracts.
+Plugin authors extending that seam should start with
+`docs/agent-runtime-authoring.md`.
+
 ## Quick Start
 
 To quickly set up and evaluate a muGen environment, follow these steps:

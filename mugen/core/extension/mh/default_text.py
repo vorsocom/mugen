@@ -9,6 +9,13 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+from mugen.core.contract.agent import (
+    IAgentRuntime,
+    PlanOutcome,
+    PlanOutcomeStatus,
+    PlanRunMode,
+    PlanRunRequest,
+)
 from mugen.core.contract.context import ContextScope, ContextTurnRequest, IContextEngine
 from mugen.core.contract.context.result import TurnOutcome
 from mugen.core.contract.extension.mh import IMHExtension
@@ -38,10 +45,12 @@ class DefaultTextMHExtension(IMHExtension):
         context_engine_service: IContextEngine,
         logging_gateway: ILoggingGateway,
         messaging_service: IMessagingService,
+        agent_runtime_service: IAgentRuntime | None = None,
     ) -> None:
         self._completion_gateway = completion_gateway
         self._config = config
         self._context_engine_service = context_engine_service
+        self._agent_runtime_service = agent_runtime_service
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._extension_timeout_seconds = self._resolve_extension_timeout_seconds()
@@ -95,7 +104,12 @@ class DefaultTextMHExtension(IMHExtension):
         lock = self._get_room_lock(scope)
         async with lock:
             prepared = await self._context_engine_service.prepare_turn(turn_request)
-            completion, assistant_response = await self._complete(prepared)
+            completion, assistant_response, final_user_responses, outcome_override = (
+                await self._run_agent_or_completion(
+                    request=turn_request,
+                    prepared=prepared,
+                )
+            )
             assistant_response = await self._preprocess_assistant_response(
                 platform=platform,
                 room_id=room_id,
@@ -113,7 +127,10 @@ class DefaultTextMHExtension(IMHExtension):
                     f"{self._format_completion_response_for_log(completion)}"
                 )
 
-            final_user_responses = [{"type": "text", "content": assistant_response}]
+            final_user_responses = self._merge_preprocessed_response(
+                final_user_responses=final_user_responses,
+                assistant_response=assistant_response,
+            )
             await self._dispatch_conversational_triggers(
                 platform=platform,
                 room_id=room_id,
@@ -124,6 +141,7 @@ class DefaultTextMHExtension(IMHExtension):
             outcome = self._determine_outcome(
                 completion=completion,
                 assistant_response=assistant_response,
+                outcome_override=outcome_override,
             )
             await self._commit_turn(
                 request=turn_request,
@@ -133,6 +151,56 @@ class DefaultTextMHExtension(IMHExtension):
                 outcome=outcome,
             )
             return final_user_responses
+
+    async def _run_agent_or_completion(
+        self,
+        *,
+        request: ContextTurnRequest,
+        prepared,
+    ) -> tuple[
+        CompletionResponse | None,
+        str,
+        list[dict[str, Any]],
+        TurnOutcome | None,
+    ]:
+        if self._agent_runtime_service is not None:
+            agent_request = PlanRunRequest(
+                mode=PlanRunMode.CURRENT_TURN,
+                scope=request.scope,
+                user_message=request.user_message,
+                message_id=request.message_id,
+                trace_id=request.trace_id,
+                ingress_metadata=dict(request.ingress_metadata),
+                prepared_context=prepared,
+            )
+            try:
+                if await self._agent_runtime_service.is_enabled_for_request(agent_request):
+                    outcome = await self._agent_runtime_service.run_current_turn(
+                        agent_request
+                    )
+                    completion, assistant_response, final_user_responses = (
+                        self._agent_outcome_parts(outcome)
+                    )
+                    return (
+                        completion,
+                        assistant_response,
+                        final_user_responses,
+                        self._agent_turn_outcome(outcome),
+                    )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self._logging_gateway.warning(
+                    "DefaultTextMHExtension.handle_message: "
+                    "Agent runtime failed; falling back to single-pass completion "
+                    f"(error={type(exc).__name__}: {exc})."
+                )
+
+        completion, assistant_response = await self._complete(prepared)
+        return (
+            completion,
+            assistant_response,
+            [{"type": "text", "content": assistant_response}],
+            None,
+        )
 
     async def _run_command_extensions(
         self,
@@ -181,6 +249,7 @@ class DefaultTextMHExtension(IMHExtension):
             completion = await self._completion_gateway.get_completion(
                 prepared.completion_request
             )
+            return completion, self._coerce_to_text(getattr(completion, "content", None))
         except CompletionGatewayError as exc:
             self._logging_gateway.warning(
                 "DefaultTextMHExtension.handle_message: "
@@ -192,8 +261,41 @@ class DefaultTextMHExtension(IMHExtension):
                 "DefaultTextMHExtension.handle_message: "
                 f"Unexpected completion gateway failure: {exc}"
             )
-            return None, self._completion_error_message
-        return completion, self._coerce_to_text(getattr(completion, "content", None))
+        return None, self._completion_error_message
+
+    @staticmethod
+    def _agent_outcome_parts(
+        outcome: PlanOutcome,
+    ) -> tuple[CompletionResponse | None, str, list[dict[str, Any]]]:
+        responses = [dict(item) for item in outcome.final_user_responses]
+        assistant_response = outcome.assistant_response or ""
+        if assistant_response.strip() == "":
+            for response in responses:
+                if response.get("type") != "text":
+                    continue
+                content = response.get("content")
+                if isinstance(content, str):
+                    assistant_response = content
+                    break
+        if not responses and assistant_response != "":
+            responses = [{"type": "text", "content": assistant_response}]
+        return outcome.completion, assistant_response, responses
+
+    @staticmethod
+    def _merge_preprocessed_response(
+        *,
+        final_user_responses: list[dict[str, Any]],
+        assistant_response: str,
+    ) -> list[dict[str, Any]]:
+        merged = [dict(item) for item in final_user_responses]
+        for response in merged:
+            if response.get("type") != "text":
+                continue
+            response["content"] = assistant_response
+            return merged
+        if assistant_response != "":
+            merged.append({"type": "text", "content": assistant_response})
+        return merged
 
     async def _preprocess_assistant_response(
         self,
@@ -290,12 +392,29 @@ class DefaultTextMHExtension(IMHExtension):
         *,
         completion: CompletionResponse | None,
         assistant_response: str,
+        outcome_override: TurnOutcome | None = None,
     ) -> TurnOutcome:
+        if outcome_override is not None:
+            return outcome_override
         if completion is None:
             return TurnOutcome.COMPLETION_FAILED
         if assistant_response.strip() == "":
             return TurnOutcome.NO_RESPONSE
         return TurnOutcome.COMPLETED
+
+    @staticmethod
+    def _agent_turn_outcome(outcome: PlanOutcome) -> TurnOutcome:
+        if outcome.status in {
+            PlanOutcomeStatus.COMPLETED,
+            PlanOutcomeStatus.SPAWNED_BACKGROUND,
+            PlanOutcomeStatus.WAITING,
+        }:
+            return TurnOutcome.COMPLETED
+        if outcome.status == PlanOutcomeStatus.HANDOFF:
+            return TurnOutcome.BLOCKED
+        if outcome.status == PlanOutcomeStatus.STOPPED:
+            return TurnOutcome.CANCELLED
+        return TurnOutcome.BLOCKED
 
     def _get_room_lock(self, scope: ContextScope) -> asyncio.Lock:
         lock_key = scope_key(scope)

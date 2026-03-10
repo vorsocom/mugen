@@ -2,6 +2,7 @@
 
 __all__ = [
     "ContainerShutdownError",
+    "EXT_SERVICE_AGENT_COMPONENT_REGISTRY",
     "EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY",
     "EXT_SERVICE_ADMIN_REGISTRY",
     "EXT_SERVICE_ADMIN_SANDBOX_ENFORCER",
@@ -33,6 +34,13 @@ from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
+from mugen.core.contract.agent import (
+    IAgentExecutor,
+    IAgentRuntime,
+    IEvaluationEngine,
+    IPlanRunStore,
+    IPlanningEngine,
+)
 from mugen.core.contract.line_runtime_config import (
     validate_line_enabled_runtime_config,
 )
@@ -84,6 +92,7 @@ EXT_SERVICE_ADMIN_REGISTRY = "admin_registry"
 EXT_SERVICE_ADMIN_SANDBOX_ENFORCER = "admin_sandbox_enforcer"
 EXT_SERVICE_ADMIN_SVC_JWT = "admin_svc_jwt"
 EXT_SERVICE_ADMIN_SVC_AUTH = "admin_svc_auth"
+EXT_SERVICE_AGENT_COMPONENT_REGISTRY = "agent_component_registry"
 EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY = "context_component_registry"
 
 class ContainerBootstrapError(RuntimeError):
@@ -234,6 +243,39 @@ def _validate_required_runtime_profile(
     normalized = value.strip().lower()
     if normalized != "platform_full":
         raise RuntimeError(f"Invalid configuration: {path} must be platform_full.")
+
+
+def _supported_constructor_kwargs(
+    provider_class: type,
+    provider_kwargs: dict[str, object],
+) -> dict[str, object]:
+    """Filter DI kwargs to those explicitly supported by the provider constructor."""
+    try:
+        signature = inspect.signature(provider_class)
+    except (TypeError, ValueError):
+        return provider_kwargs
+
+    parameters = tuple(signature.parameters.values())
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    ):
+        return provider_kwargs
+
+    supported_names = {
+        parameter.name
+        for parameter in parameters
+        if parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    }
+    return {
+        key: value
+        for key, value in provider_kwargs.items()
+        if key in supported_names
+    }
 
 
 def _validate_optional_nonnegative_timeout_like_value(
@@ -914,6 +956,75 @@ _PROVIDER_SPECS = {
             ("logging_gateway", "logging_gateway"),
         ),
     ),
+    "planning_engine_service": _ProviderSpec(
+        provider_name="planning_engine_service",
+        injector_attr="planning_engine_service",
+        interface=IPlanningEngine,
+        module_path=("mugen", "modules", "core", "service", "planning_engine"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required=False,
+        readiness_required=False,
+    ),
+    "evaluation_engine_service": _ProviderSpec(
+        provider_name="evaluation_engine_service",
+        injector_attr="evaluation_engine_service",
+        interface=IEvaluationEngine,
+        module_path=("mugen", "modules", "core", "service", "evaluation_engine"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required=False,
+        readiness_required=False,
+    ),
+    "agent_executor_service": _ProviderSpec(
+        provider_name="agent_executor_service",
+        injector_attr="agent_executor_service",
+        interface=IAgentExecutor,
+        module_path=("mugen", "modules", "core", "service", "agent_executor"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required=False,
+        readiness_required=False,
+    ),
+    "plan_run_store_service": _ProviderSpec(
+        provider_name="plan_run_store_service",
+        injector_attr="plan_run_store_service",
+        interface=IPlanRunStore,
+        module_path=("mugen", "modules", "core", "service", "plan_run_store"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required=False,
+        readiness_required=False,
+    ),
+    "agent_runtime_service": _ProviderSpec(
+        provider_name="agent_runtime_service",
+        injector_attr="agent_runtime_service",
+        interface=IAgentRuntime,
+        module_path=("mugen", "modules", "core", "service", "agent_runtime"),
+        constructor_bindings=(
+            ("config", "config"),
+            ("logging_gateway", "logging_gateway"),
+            ("planning_engine_service", "planning_engine_service"),
+            ("evaluation_engine_service", "evaluation_engine_service"),
+            ("agent_executor_service", "agent_executor_service"),
+            ("plan_run_store_service", "plan_run_store_service"),
+        ),
+        invalid_config_exceptions=(KeyError, ValueError),
+        required=False,
+        readiness_required=False,
+    ),
     "messaging_service": _ProviderSpec(
         provider_name="messaging_service",
         injector_attr="messaging_service",
@@ -923,6 +1034,7 @@ _PROVIDER_SPECS = {
             ("config", "config"),
             ("completion_gateway", "completion_gateway"),
             ("context_engine_service", "context_engine_service"),
+            ("agent_runtime_service", "agent_runtime_service"),
             ("logging_gateway", "logging_gateway"),
             ("user_service", "user_service"),
         ),
@@ -1083,6 +1195,11 @@ _PROVIDER_BUILD_ORDER = (
     "platform_service",
     "user_service",
     "context_engine_service",
+    "planning_engine_service",
+    "evaluation_engine_service",
+    "agent_executor_service",
+    "plan_run_store_service",
+    "agent_runtime_service",
     "messaging_service",
     "knowledge_gateway",
     "matrix_client",
@@ -1383,6 +1500,7 @@ def _build_provider_from_spec(
             arg_name: getattr(injector, injector_attr)
             for arg_name, injector_attr in spec.constructor_bindings
         }
+        provider_kwargs = _supported_constructor_kwargs(provider_class, provider_kwargs)
         setattr(injector, spec.injector_attr, provider_class(**provider_kwargs))
     except AttributeError as exc:
         message = f"Invalid injector ({spec.provider_name})."

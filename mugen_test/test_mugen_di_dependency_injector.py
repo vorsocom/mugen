@@ -47,6 +47,11 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.platform_service)
         self.assertIsNone(injector.user_service)
         self.assertIsNone(injector.context_engine_service)
+        self.assertIsNone(injector.planning_engine_service)
+        self.assertIsNone(injector.evaluation_engine_service)
+        self.assertIsNone(injector.agent_executor_service)
+        self.assertIsNone(injector.plan_run_store_service)
+        self.assertIsNone(injector.agent_runtime_service)
         self.assertIsNone(injector.messaging_service)
         self.assertIsNone(injector.knowledge_gateway)
         self.assertIsNone(injector.matrix_client)
@@ -56,6 +61,64 @@ class TestDependencyInjector(unittest.TestCase):
         self.assertIsNone(injector.wechat_client)
         self.assertIsNone(injector.whatsapp_client)
         self.assertIsNone(injector.web_client)
+
+    def test_agent_runtime_properties_round_trip(self):
+        """Agent-runtime DI slots should support explicit getter/setter access."""
+
+        injector = di.injector.DependencyInjector()
+        email_gateway = object()
+        sms_gateway = object()
+        ipc_service = object()
+        keyval_storage_gateway = object()
+        ingress_service = object()
+        nlp_service = object()
+        platform_service = object()
+        planning_engine = object()
+        evaluation_engine = object()
+        agent_executor = object()
+        plan_run_store = object()
+        agent_runtime = object()
+        matrix_client = object()
+        telegram_client = object()
+        wechat_client = object()
+        whatsapp_client = object()
+        web_client = object()
+
+        injector.email_gateway = email_gateway
+        injector.sms_gateway = sms_gateway
+        injector.ipc_service = ipc_service
+        injector.keyval_storage_gateway = keyval_storage_gateway
+        injector.ingress_service = ingress_service
+        injector.nlp_service = nlp_service
+        injector.platform_service = platform_service
+        injector.planning_engine_service = planning_engine
+        injector.evaluation_engine_service = evaluation_engine
+        injector.agent_executor_service = agent_executor
+        injector.plan_run_store_service = plan_run_store
+        injector.agent_runtime_service = agent_runtime
+        injector.matrix_client = matrix_client
+        injector.telegram_client = telegram_client
+        injector.wechat_client = wechat_client
+        injector.whatsapp_client = whatsapp_client
+        injector.web_client = web_client
+
+        self.assertIs(injector.email_gateway, email_gateway)
+        self.assertIs(injector.sms_gateway, sms_gateway)
+        self.assertIs(injector.ipc_service, ipc_service)
+        self.assertIs(injector.keyval_storage_gateway, keyval_storage_gateway)
+        self.assertIs(injector.ingress_service, ingress_service)
+        self.assertIs(injector.nlp_service, nlp_service)
+        self.assertIs(injector.platform_service, platform_service)
+        self.assertIs(injector.planning_engine_service, planning_engine)
+        self.assertIs(injector.evaluation_engine_service, evaluation_engine)
+        self.assertIs(injector.agent_executor_service, agent_executor)
+        self.assertIs(injector.plan_run_store_service, plan_run_store)
+        self.assertIs(injector.agent_runtime_service, agent_runtime)
+        self.assertIs(injector.matrix_client, matrix_client)
+        self.assertIs(injector.telegram_client, telegram_client)
+        self.assertIs(injector.wechat_client, wechat_client)
+        self.assertIs(injector.whatsapp_client, whatsapp_client)
+        self.assertIs(injector.web_client, web_client)
 
     def test_with_init_parameters(self):
         """Test instantiation with all parameters."""
