@@ -13,6 +13,13 @@ from mugen.core.contract.client.telegram import ITelegramClient
 from mugen.core.contract.client.wechat import IWeChatClient
 from mugen.core.contract.client.web import IWebClient
 from mugen.core.contract.client.whatsapp import IWhatsAppClient
+from mugen.core.contract.agent import (
+    IAgentExecutor,
+    IAgentRuntime,
+    IEvaluationEngine,
+    IPlanRunStore,
+    IPlanningEngine,
+)
 from mugen.core.contract.context import IContextEngine
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.email import IEmailGateway
@@ -113,6 +120,31 @@ class IDependencyInjector(ABC):
     @abstractmethod
     def context_engine_service(self) -> IContextEngine:
         """Get the global context engine service."""
+
+    @property
+    @abstractmethod
+    def planning_engine_service(self) -> IPlanningEngine | None:
+        """Get the optional planning engine service."""
+
+    @property
+    @abstractmethod
+    def evaluation_engine_service(self) -> IEvaluationEngine | None:
+        """Get the optional evaluation engine service."""
+
+    @property
+    @abstractmethod
+    def agent_executor_service(self) -> IAgentExecutor | None:
+        """Get the optional agent executor service."""
+
+    @property
+    @abstractmethod
+    def plan_run_store_service(self) -> IPlanRunStore | None:
+        """Get the optional plan run store service."""
+
+    @property
+    @abstractmethod
+    def agent_runtime_service(self) -> IAgentRuntime | None:
+        """Get the optional agent runtime coordinator service."""
 
     @property
     @abstractmethod

@@ -8,6 +8,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from mugen.core.contract.agent import (
+    IAgentRuntime,
+    PlanOutcome,
+    PlanOutcomeStatus,
+)
 from mugen.core.contract.context import (
     ContextArtifact,
     ContextBundle,
@@ -157,6 +162,7 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         messaging_service=None,
         extension_timeout_seconds: float = 10.0,
         ct_trigger_prefilter_enabled: bool = True,
+        agent_runtime_service: IAgentRuntime | None = None,
     ) -> tuple[DefaultTextMHExtension, Mock, Mock]:
         completion_gateway = Mock()
         if completion_side_effect is None:
@@ -180,6 +186,7 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
                 ct_trigger_prefilter_enabled=ct_trigger_prefilter_enabled,
             ),
             context_engine_service=context_engine_service,
+            agent_runtime_service=agent_runtime_service,
             logging_gateway=Mock(),
             messaging_service=messaging_service or _make_messaging_service(),
         )
@@ -351,6 +358,176 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response, [{"type": "text", "content": ""}])
         ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
+
+    async def test_agent_runtime_disabled_keeps_single_pass_completion_path(self) -> None:
+        agent_runtime_service = Mock()
+        agent_runtime_service.is_enabled_for_request = AsyncMock(return_value=False)
+        agent_runtime_service.run_current_turn = AsyncMock()
+        ext, completion_gateway, context_engine_service = self._new_ext(
+            completion_result=CompletionResponse(content="assistant answer"),
+            agent_runtime_service=agent_runtime_service,
+        )
+
+        response = await ext.handle_message(
+            platform="matrix",
+            room_id="room-1",
+            sender="user-1",
+            message="hello",
+            scope=_scope(),
+        )
+
+        self.assertEqual(response, [{"type": "text", "content": "assistant answer"}])
+        agent_runtime_service.is_enabled_for_request.assert_awaited_once()
+        agent_runtime_service.run_current_turn.assert_not_awaited()
+        completion_gateway.get_completion.assert_awaited_once()
+        context_engine_service.commit_turn.assert_awaited_once()
+
+    async def test_agent_runtime_enabled_uses_agent_outcome_and_commits_once(self) -> None:
+        agent_runtime_service = Mock()
+        agent_runtime_service.is_enabled_for_request = AsyncMock(return_value=True)
+        agent_runtime_service.run_current_turn = AsyncMock(
+            return_value=PlanOutcome(
+                status=PlanOutcomeStatus.COMPLETED,
+                final_user_responses=(
+                    {"type": "text", "content": "agent reply"},
+                ),
+                assistant_response="agent reply",
+            )
+        )
+        ext, completion_gateway, context_engine_service = self._new_ext(
+            agent_runtime_service=agent_runtime_service,
+        )
+
+        response = await ext.handle_message(
+            platform="matrix",
+            room_id="room-1",
+            sender="user-1",
+            message="hello",
+            scope=_scope(),
+        )
+
+        self.assertEqual(response, [{"type": "text", "content": "agent reply"}])
+        agent_runtime_service.is_enabled_for_request.assert_awaited_once()
+        agent_runtime_service.run_current_turn.assert_awaited_once()
+        completion_gateway.get_completion.assert_not_awaited()
+        context_engine_service.commit_turn.assert_awaited_once()
+        self.assertEqual(
+            context_engine_service.commit_turn.await_args.kwargs["outcome"],
+            TurnOutcome.COMPLETED,
+        )
+
+    async def test_agent_runtime_failure_falls_back_to_completion(self) -> None:
+        agent_runtime_service = Mock()
+        agent_runtime_service.is_enabled_for_request = AsyncMock(return_value=True)
+        agent_runtime_service.run_current_turn = AsyncMock(
+            side_effect=RuntimeError("agent boom")
+        )
+        ext, completion_gateway, context_engine_service = self._new_ext(
+            completion_result=CompletionResponse(content="fallback answer"),
+            agent_runtime_service=agent_runtime_service,
+        )
+
+        response = await ext.handle_message(
+            platform="matrix",
+            room_id="room-1",
+            sender="user-1",
+            message="hello",
+            scope=_scope(),
+        )
+
+        self.assertEqual(response, [{"type": "text", "content": "fallback answer"}])
+        agent_runtime_service.run_current_turn.assert_awaited_once()
+        completion_gateway.get_completion.assert_awaited_once()
+        context_engine_service.commit_turn.assert_awaited_once()
+        ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
+
+    async def test_agent_outcome_parts_and_merge_helpers_cover_fallback_branches(self) -> None:
+        completion = CompletionResponse(content="agent")
+        completion_result = DefaultTextMHExtension._agent_outcome_parts(  # pylint: disable=protected-access
+            PlanOutcome(
+                status=PlanOutcomeStatus.COMPLETED,
+                final_user_responses=(
+                    {"type": "image", "content": {"id": "1"}},
+                    {"type": "text", "content": "from response"},
+                ),
+                completion=completion,
+            )
+        )
+        synthesized_result = DefaultTextMHExtension._agent_outcome_parts(  # pylint: disable=protected-access
+            PlanOutcome(
+                status=PlanOutcomeStatus.COMPLETED,
+                assistant_response="assistant only",
+            )
+        )
+        scanned_result = DefaultTextMHExtension._agent_outcome_parts(  # pylint: disable=protected-access
+            PlanOutcome(
+                status=PlanOutcomeStatus.COMPLETED,
+                final_user_responses=(
+                    {"type": "image", "content": {"id": "1"}},
+                    {"type": "text", "content": {"not": "string"}},
+                ),
+            )
+        )
+        merged_non_text = DefaultTextMHExtension._merge_preprocessed_response(  # pylint: disable=protected-access
+            final_user_responses=[{"type": "image", "content": {"id": "1"}}],
+            assistant_response="merged text",
+        )
+        merged_blank = DefaultTextMHExtension._merge_preprocessed_response(  # pylint: disable=protected-access
+            final_user_responses=[],
+            assistant_response="",
+        )
+
+        self.assertEqual(completion_result, (completion, "from response", [
+            {"type": "image", "content": {"id": "1"}},
+            {"type": "text", "content": "from response"},
+        ]))
+        self.assertEqual(
+            synthesized_result,
+            (
+                None,
+                "assistant only",
+                [{"type": "text", "content": "assistant only"}],
+            ),
+        )
+        self.assertEqual(
+            scanned_result,
+            (
+                None,
+                "",
+                [
+                    {"type": "image", "content": {"id": "1"}},
+                    {"type": "text", "content": {"not": "string"}},
+                ],
+            ),
+        )
+        self.assertEqual(
+            merged_non_text,
+            [
+                {"type": "image", "content": {"id": "1"}},
+                {"type": "text", "content": "merged text"},
+            ],
+        )
+        self.assertEqual(merged_blank, [])
+
+    async def test_agent_turn_outcome_maps_non_completed_statuses(self) -> None:
+        self.assertEqual(
+            DefaultTextMHExtension._agent_turn_outcome(  # pylint: disable=protected-access
+                PlanOutcome(status=PlanOutcomeStatus.HANDOFF)
+            ),
+            TurnOutcome.BLOCKED,
+        )
+        self.assertEqual(
+            DefaultTextMHExtension._agent_turn_outcome(  # pylint: disable=protected-access
+                PlanOutcome(status=PlanOutcomeStatus.STOPPED)
+            ),
+            TurnOutcome.CANCELLED,
+        )
+        self.assertEqual(
+            DefaultTextMHExtension._agent_turn_outcome(  # pylint: disable=protected-access
+                PlanOutcome(status=PlanOutcomeStatus.FAILED)
+            ),
+            TurnOutcome.BLOCKED,
+        )
 
     async def test_ct_trigger_prefilter_enabled(self) -> None:
         ct_matching = _CtExt(supported=True, triggers=["urgent"])

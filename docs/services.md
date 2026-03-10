@@ -136,6 +136,55 @@ For production debugging of selected/dropped artifacts, fallback-global
 behavior, commit-token failures, and trace interpretation, see
 `docs/context-engine-debugging-playbook.md`.
 
+## Agent Runtime Service Boundary
+
+Core messaging may optionally hand a prepared turn to a dedicated
+`IAgentRuntime` after context preparation succeeds.
+
+The runtime service boundary is:
+
+- `is_enabled_for_request(PlanRunRequest) -> bool`
+- `run_current_turn(PlanRunRequest) -> PlanOutcome`
+- `run_background_batch(owner, limit, now) -> list[PlanOutcome]`
+
+The default runtime coordinates four first-class seams behind that contract:
+
+- `IPlanningEngine` chooses the next action;
+- `IEvaluationEngine` judges steps, responses, and outcomes;
+- `IAgentExecutor` lists and executes normalized capabilities;
+- `IPlanRunStore` persists run state, immutable step history, leases, and final
+  outcomes.
+
+The context engine remains the prepare and commit boundary. The agent runtime
+does not replace `prepare_turn(...)` or `commit_turn(...)`; it owns only the
+plan-act-evaluate loop between them.
+
+Hard contract guarantee lives in `docs/agent-runtime-design.md`.
+Collaborator authoring and extension guidance live in
+`docs/agent-runtime-authoring.md`.
+Operational debugging of route bypass, capability failures, evaluator
+decisions, and stuck background runs lives in
+`docs/agent-runtime-debugging-playbook.md`.
+
+## Agent Runtime Plugin
+
+The core `agent_runtime` plugin is the reference runtime-composition and
+durability layer for agent execution.
+
+Runtime responsibilities:
+
+- register planner, evaluator, capability-provider, guard, response
+  synthesizer, scheduler, and trace-sink collaborators;
+- enforce single-owner composition for policy resolver, run store, and
+  scheduler;
+- persist durable run and step history in plugin-owned relational tables;
+- expose ACP-backed capabilities through normalized descriptors and execution
+  results;
+- resolve route-scoped policy from runtime config.
+
+Current limitation: planning and evaluation policy is code-configured today.
+The plugin does not expose ACP-managed agent-runtime policy resources yet.
+
 ## Context Engine Plugin
 
 The core `context_engine` plugin is both a runtime-composition layer and an ACP
@@ -180,7 +229,15 @@ operators can distinguish `resolved` from `fallback_global` behavior.
 
 ## Planning Guidance
 
-For downstream business-case planning:
+For generic agent orchestration in core:
+
+- start with `docs/agent-runtime-design.md`;
+- use `docs/agent-runtime-authoring.md` when adding planners, evaluators,
+  capability providers, guards, schedulers, or trace sinks;
+- use `docs/agent-runtime-debugging-playbook.md` for production debugging of
+  route enablement, capability execution, and background lease behavior.
+
+For downstream business-case planning and domain workflow rollout:
 
 1. Start with the orchestration matrix:
    `docs/downstream-notes/acp-derivatives-orchestration-matrix.md`.

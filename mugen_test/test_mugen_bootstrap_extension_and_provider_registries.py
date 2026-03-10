@@ -385,6 +385,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
     def test_plugin_token_registry_contains_context_engine_extension(self) -> None:
         token_registry = get_plugin_extension_token_registry()
         self.assertIn("core.fw.context_engine", token_registry)
+        self.assertIn("core.fw.agent_runtime", token_registry)
 
     def test_parse_bool_default_paths(self) -> None:
         self.assertTrue(ext_mod.parse_bool(object(), default=True))
@@ -858,6 +859,60 @@ class TestProviderRegistryResolution(unittest.TestCase):
                 interface=object,
             )
         self.assertIs(resolved, _DummyContextEngine)
+
+    def test_agent_runtime_provider_tokens_resolve(self) -> None:
+        resolved_classes = SimpleNamespace(
+            DefaultPlanningEngine=type("DefaultPlanningEngine", (), {}),
+            DefaultEvaluationEngine=type("DefaultEvaluationEngine", (), {}),
+            DefaultAgentExecutor=type("DefaultAgentExecutor", (), {}),
+            DefaultPlanRunStore=type("DefaultPlanRunStore", (), {}),
+            DefaultAgentRuntime=type("DefaultAgentRuntime", (), {}),
+        )
+
+        with patch(
+            "mugen.core.di.provider_registry.importlib.import_module",
+            return_value=resolved_classes,
+        ):
+            self.assertIs(
+                provider_registry.resolve_provider_class(
+                    provider_name="planning_engine_service",
+                    token="default",
+                    interface=object,
+                ),
+                resolved_classes.DefaultPlanningEngine,
+            )
+            self.assertIs(
+                provider_registry.resolve_provider_class(
+                    provider_name="evaluation_engine_service",
+                    token="default",
+                    interface=object,
+                ),
+                resolved_classes.DefaultEvaluationEngine,
+            )
+            self.assertIs(
+                provider_registry.resolve_provider_class(
+                    provider_name="agent_executor_service",
+                    token="default",
+                    interface=object,
+                ),
+                resolved_classes.DefaultAgentExecutor,
+            )
+            self.assertIs(
+                provider_registry.resolve_provider_class(
+                    provider_name="plan_run_store_service",
+                    token="default",
+                    interface=object,
+                ),
+                resolved_classes.DefaultPlanRunStore,
+            )
+            self.assertIs(
+                provider_registry.resolve_provider_class(
+                    provider_name="agent_runtime_service",
+                    token="default",
+                    interface=object,
+                ),
+                resolved_classes.DefaultAgentRuntime,
+            )
 
     def test_vertex_completion_provider_token_resolves(self) -> None:
         with patch(

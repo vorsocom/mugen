@@ -34,6 +34,12 @@ def get_plugin_extension_token_registry() -> dict[str, tuple[str, type, str, str
             "mugen.core.plugin.context_engine.fw_ext",
             "ContextEngineFWExtension",
         ),
+        "core.fw.agent_runtime": (
+            "fw",
+            IFWExtension,
+            "mugen.core.plugin.agent_runtime.fw_ext",
+            "AgentRuntimeFWExtension",
+        ),
         "core.fw.ops_vpn": (
             "fw",
             IFWExtension,
