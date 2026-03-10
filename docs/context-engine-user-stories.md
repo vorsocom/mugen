@@ -146,8 +146,10 @@ policy was selected before any contributor ran.
 Tenant `Asteria Travel` serves:
 
 - browser chat for standard concierge requests;
-- a downstream VIP messaging bridge that stamps `client_profile_key="vip-sms"`
-  into ingress metadata.
+- a tenant workflow split between `valet.customer_inbox` and `valet.core`;
+- a downstream VIP messaging bridge that stamps
+  `service_route_key="valet.customer_inbox"` and
+  `client_profile_key="vip-sms"` into ingress metadata.
 
 A guest on the VIP bridge expects a tighter persona, narrower evidence set, and
 stronger trace capture than a casual browser user.
@@ -187,6 +189,7 @@ ingress_metadata = {
     "source": "crm_binding"
   },
   "ingress_route": {
+    "service_route_key": "valet.customer_inbox",
     "client_profile_key": "vip-sms"
   },
   "locale": "en-US",
@@ -208,7 +211,8 @@ linked business objects = none
    `ContextContributorBindings`, active `ContextSourceBindings`, and active
    `ContextTracePolicies` for the tenant.
 3. The resolver selects the most specific `ContextProfile` match by `platform`,
-   `channel_key`, and optional `client_profile_key`.
+   `channel_key`, optional `service_route_key`, and optional
+   `client_profile_key`.
 4. It selects the linked `ContextPolicy` if the profile references one;
    otherwise it falls back to the tenant default or the built-in default
    policy.
@@ -319,12 +323,13 @@ An operator should inspect:
 - dropped source-policy items whose `ContextSourceRef` did not match the VIP
   allow rules;
 - `tenant_resolution` carried into persona content and state routing metadata.
+- `service_route_key` carried into policy metadata and bounded-state routing.
 
 ### Plugin-author takeaway
 
 If a tenant needs different persona, source policy, retention, or trace
-behavior by channel or client profile, put that in the policy resolver inputs.
-Do not hide it inside contributors or message handlers.
+behavior by channel, service route, or client profile, put that in the policy
+resolver inputs. Do not hide it inside contributors or message handlers.
 
 ### Contract vs current implementation notes
 
@@ -1873,6 +1878,7 @@ ingress_metadata = {
     "source": "crm_binding"
   },
   "ingress_route": {
+    "service_route_key": "valet.customer_inbox",
     "client_profile_key": "vip-cruise"
   },
   "locale": "en-US",
@@ -1886,7 +1892,7 @@ Relevant ACP changes before the turn:
 
 ```text
 ContextProfiles:
-- { "name": "vip-cruise", "platform": "web", "channel_key": "cruise-desk", "client_profile_key": "vip-cruise", "policy_id": "..." }
+- { "name": "vip-cruise", "platform": "web", "channel_key": "cruise-desk", "service_route_key": "valet.customer_inbox", "client_profile_key": "vip-cruise", "policy_id": "..." }
 
 ContextPolicies:
 - { "policy_key": "vip-cruise-tight", "contributor_allow": ["persona_policy", "recent_turns", "knowledge_pack", "ops_case"], "source_deny": ["memory_record"] }
@@ -1906,7 +1912,8 @@ ContextTracePolicies:
 1. The next turn enters through the same engine boundary with no code change.
 2. `DefaultContextPolicyResolver` reads the updated ACP rows.
 3. The new `ContextProfile` wins because it is more specific than the tenant
-   default on `platform`, `channel_key`, and `client_profile_key`.
+   default on `platform`, `channel_key`, `service_route_key`, and
+   `client_profile_key`.
 4. The linked `ContextPolicy` changes:
    - persona metadata
    - contributor allowlist
@@ -1957,6 +1964,7 @@ records the richer trace detail operators requested.
 If the ACP update "did nothing," inspect:
 
 - which `ContextProfile` actually matched the scope;
+- whether the incoming turn really carried the expected `service_route_key`;
 - whether the incoming turn really carried the expected `client_profile_key`;
 - the resolved `policy_key` in persona content or trace metadata;
 - contributor allow/deny results;

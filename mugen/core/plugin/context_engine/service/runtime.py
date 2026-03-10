@@ -118,6 +118,17 @@ def _request_client_profile_key(request: ContextTurnRequest) -> str | None:
     return _normalize_optional_text(ingress_metadata.get("client_profile_key"))
 
 
+def _request_service_route_key(request: ContextTurnRequest) -> str | None:
+    ingress_metadata = dict(request.ingress_metadata or {})
+    ingress_route = ingress_metadata.get("ingress_route")
+    route_value = None
+    if isinstance(ingress_route, dict):
+        route_value = _normalize_optional_text(ingress_route.get("service_route_key"))
+    if route_value is not None:
+        return route_value
+    return _normalize_optional_text(ingress_metadata.get("service_route_key"))
+
+
 def _assistant_text(
     *,
     completion: CompletionResponse | None,
@@ -224,6 +235,7 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
 
     async def resolve_policy(self, request: ContextTurnRequest) -> ContextPolicy:
         tenant_id = _parse_tenant_uuid(request.scope.tenant_id)
+        service_route_key = _request_service_route_key(request)
         client_profile_key = _request_client_profile_key(request)
 
         profiles = await self._profile_service.list(
@@ -232,7 +244,12 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             ],
             limit=200,
         )
-        profile = self._select_profile(request.scope, client_profile_key, profiles)
+        profile = self._select_profile(
+            request.scope,
+            service_route_key,
+            client_profile_key,
+            profiles,
+        )
 
         policies = await self._policy_service.list(
             filter_groups=[
@@ -264,19 +281,27 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
         contributor_allow = tuple(
             binding.contributor_key
             for binding in contributor_bindings
-            if self._binding_matches_scope(binding, request.scope)
+            if self._binding_matches_scope(binding, request.scope, service_route_key)
             and binding.contributor_key is not None
         )
         source_allow = tuple(
             binding.source_kind
             for binding in source_bindings
-            if self._source_binding_matches_scope(binding, request.scope)
+            if self._source_binding_matches_scope(
+                binding,
+                request.scope,
+                service_route_key,
+            )
             and binding.source_kind is not None
         )
         source_rules = tuple(
             self._source_rule_from_binding(binding)
             for binding in source_bindings
-            if self._source_binding_matches_scope(binding, request.scope)
+            if self._source_binding_matches_scope(
+                binding,
+                request.scope,
+                service_route_key,
+            )
             and binding.source_kind is not None
         )
 
@@ -323,6 +348,7 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
                     "persona": (
                         None if profile is None else getattr(profile, "persona", None)
                     ),
+                    "service_route_key": service_route_key,
                     "trace_policy_name": (
                         None if trace_policy is None else trace_policy.name
                     ),
@@ -370,6 +396,7 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
                 "persona": (
                     None if profile is None else getattr(profile, "persona", None)
                 ),
+                "service_route_key": service_route_key,
                 "trace_policy_name": (
                     None if trace_policy is None else trace_policy.name
                 ),
@@ -390,6 +417,7 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
     @staticmethod
     def _select_profile(
         scope,
+        service_route_key: str | None,
         client_profile_key: str | None,
         profiles: list[ContextProfileDE],
     ) -> ContextProfileDE | None:
@@ -398,6 +426,8 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             for profile in profiles
             if getattr(profile, "platform", None) in (None, scope.platform)
             and getattr(profile, "channel_key", None) in (None, scope.channel_id)
+            and getattr(profile, "service_route_key", None)
+            in (None, service_route_key)
             and getattr(profile, "client_profile_key", None)
             in (None, client_profile_key)
         ]
@@ -407,6 +437,12 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
             key=lambda profile: (
                 0 if getattr(profile, "platform", None) == scope.platform else 1,
                 0 if getattr(profile, "channel_key", None) == scope.channel_id else 1,
+                (
+                    0
+                    if getattr(profile, "service_route_key", None)
+                    == service_route_key
+                    else 1
+                ),
                 (
                     0
                     if getattr(profile, "client_profile_key", None)
@@ -433,17 +469,35 @@ class DefaultContextPolicyResolver(IContextPolicyResolver):
         return policies[0] if policies else None
 
     @staticmethod
-    def _binding_matches_scope(binding: ContextContributorBindingDE, scope) -> bool:
-        return binding.platform in (None, scope.platform) and binding.channel_key in (
-            None,
-            scope.channel_id,
+    def _binding_matches_scope(
+        binding: ContextContributorBindingDE,
+        scope,
+        service_route_key: str | None,
+    ) -> bool:
+        return (
+            binding.platform in (None, scope.platform)
+            and binding.channel_key in (
+                None,
+                scope.channel_id,
+            )
+            and getattr(binding, "service_route_key", None)
+            in (None, service_route_key)
         )
 
     @staticmethod
-    def _source_binding_matches_scope(binding: ContextSourceBindingDE, scope) -> bool:
-        return binding.platform in (None, scope.platform) and binding.channel_key in (
-            None,
-            scope.channel_id,
+    def _source_binding_matches_scope(
+        binding: ContextSourceBindingDE,
+        scope,
+        service_route_key: str | None,
+    ) -> bool:
+        return (
+            binding.platform in (None, scope.platform)
+            and binding.channel_key in (
+                None,
+                scope.channel_id,
+            )
+            and getattr(binding, "service_route_key", None)
+            in (None, service_route_key)
         )
 
     @staticmethod
@@ -1151,6 +1205,7 @@ class RelationalContextStateStore(IContextStateStore):
                 "conversation_id": request.scope.conversation_id,
                 "case_id": request.scope.case_id,
                 "workflow_id": request.scope.workflow_id,
+                "service_route_key": _request_service_route_key(request),
                 "tenant_resolution": request.ingress_metadata.get("tenant_resolution"),
             },
             summary=None if existing is None else existing.summary,

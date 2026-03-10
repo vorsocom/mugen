@@ -207,6 +207,7 @@ class TestMugenSignalReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                             "identifier_value": "+15550000",
                         },
                         "channel_profile_id": None,
+                        "service_route_key": None,
                         "route_key": None,
                         "binding_id": None,
                         "client_profile_id": str(_CLIENT_PROFILE_ID),

@@ -86,6 +86,7 @@ def build_ingress_route_context(result: IngressRouteResult) -> dict[str, Any]:
             if result.client_profile_id is not None
             else None
         ),
+        "service_route_key": result.service_route_key,
         "route_key": result.route_key,
         "binding_id": str(result.binding_id) if result.binding_id is not None else None,
         "client_profile_key": result.client_profile_key,
@@ -189,7 +190,7 @@ class DefaultIngressRoutingService(IIngressRoutingService):
         *,
         tenant_id: uuid.UUID,
         binding_row: Mapping[str, Any],
-    ) -> tuple[str | None, uuid.UUID | None, str | None]:
+    ) -> tuple[str | None, str | None, uuid.UUID | None, str | None]:
         attributes = binding_row.get("attributes")
         configured_route_key = None
         if isinstance(attributes, Mapping):
@@ -201,9 +202,10 @@ class DefaultIngressRoutingService(IIngressRoutingService):
         else:
             route_key = None
 
+        service_route_key = _normalize_optional_text(binding_row.get("service_route_key"))
         channel_profile_id = _normalize_optional_uuid(binding_row.get("channel_profile_id"))
         if channel_profile_id is None:
-            return route_key, None, None
+            return route_key, service_route_key, None, None
 
         profile = await self._rsg.get_one(
             _TABLE_CHANNEL_PROFILE,
@@ -212,13 +214,21 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                 "id": channel_profile_id,
                 "is_active": True,
             },
-            columns=("route_default_key", "client_profile_id"),
+            columns=(
+                "route_default_key",
+                "service_route_default_key",
+                "client_profile_id",
+            ),
         )
         if profile is None:
-            return route_key, None, None
+            return route_key, service_route_key, None, None
 
         if route_key is None:
             route_key = _normalize_optional_text(profile.get("route_default_key"))
+        if service_route_key is None:
+            service_route_key = _normalize_optional_text(
+                profile.get("service_route_default_key")
+            )
         client_profile_id = _normalize_optional_uuid(profile.get("client_profile_id"))
         client_profile_key = None
         if client_profile_id is not None:
@@ -235,7 +245,7 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                 client_profile_key = _normalize_optional_text(
                     client_profile.get("profile_key")
                 )
-        return route_key, client_profile_id, client_profile_key
+        return route_key, service_route_key, client_profile_id, client_profile_key
 
     async def _resolve_route_key(
         self,
@@ -244,7 +254,7 @@ class DefaultIngressRoutingService(IIngressRoutingService):
         binding_row: Mapping[str, Any],
     ) -> str | None:
         """Backwards-compatible route-key helper used by older tests/callers."""
-        route_key, _client_profile_id, _client_profile_key = (
+        route_key, _service_route_key, _client_profile_id, _client_profile_key = (
             await self._resolve_channel_profile_route_context(
                 tenant_id=tenant_id,
                 binding_row=binding_row,
@@ -365,6 +375,7 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                 claims.setdefault("identifier_value", identifier_value)
 
             route_key = None
+            service_route_key = None
             channel_profile_id = None
             binding_id = None
             client_profile_id = None
@@ -376,6 +387,7 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                 binding_id = _normalize_optional_uuid(binding_row.get("id"))
                 (
                     route_key,
+                    service_route_key,
                     client_profile_id,
                     client_profile_key,
                 ) = await self._resolve_channel_profile_route_context(
@@ -393,6 +405,7 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                     identifier_claims=claims,
                     channel_profile_id=channel_profile_id,
                     client_profile_id=client_profile_id,
+                    service_route_key=service_route_key,
                     route_key=route_key,
                     binding_id=binding_id,
                     client_profile_key=client_profile_key,

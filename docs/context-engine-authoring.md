@@ -408,16 +408,17 @@ that ownership boundary.
 ### Current Core Plugin Mapping
 
 - `ContextProfiles`
-  - select assistant persona by `platform`, `channel_key`, and optional
-    `client_profile_key`
+  - select assistant persona by `platform`, `channel_key`, optional
+    `service_route_key`, and optional `client_profile_key`
 - `ContextPolicies`
   - provide budget, redaction, retention, contributor allow/deny, source
-    allow/deny, trace, and cache settings
+  allow/deny, trace, and cache settings
 - `ContextContributorBindings`
-  - contribute scope-aware contributor allow rules
+  - contribute scope-aware contributor allow rules, including optional
+    `service_route_key` narrowing
 - `ContextSourceBindings`
   - contribute scope-aware source allow rules with optional `source_key`,
-    `locale`, and `category`
+    `locale`, `category`, and optional `service_route_key`
 - `ContextTracePolicies`
   - influence prepare/commit capture and selected/dropped trace detail
 

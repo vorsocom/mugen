@@ -38,6 +38,7 @@ context_profile_type = EdmType(
         "Description": EdmProperty("Description", TypeRef("Edm.String")),
         "Platform": EdmProperty("Platform", TypeRef("Edm.String")),
         "ChannelKey": EdmProperty("ChannelKey", TypeRef("Edm.String")),
+        "ServiceRouteKey": EdmProperty("ServiceRouteKey", TypeRef("Edm.String")),
         "ClientProfileKey": EdmProperty("ClientProfileKey", TypeRef("Edm.String")),
         "PolicyId": EdmProperty("PolicyId", TypeRef("Edm.Guid")),
         "Persona": EdmProperty("Persona", TypeRef("Edm.String")),
@@ -104,6 +105,7 @@ context_contributor_binding_type = EdmType(
         ),
         "Platform": EdmProperty("Platform", TypeRef("Edm.String")),
         "ChannelKey": EdmProperty("ChannelKey", TypeRef("Edm.String")),
+        "ServiceRouteKey": EdmProperty("ServiceRouteKey", TypeRef("Edm.String")),
         "Priority": EdmProperty("Priority", TypeRef("Edm.Int64"), nullable=False),
         "IsEnabled": EdmProperty("IsEnabled", TypeRef("Edm.Boolean"), nullable=False),
         "Attributes": EdmProperty(
@@ -126,6 +128,7 @@ context_source_binding_type = EdmType(
         "SourceKey": EdmProperty("SourceKey", TypeRef("Edm.String"), nullable=False),
         "Platform": EdmProperty("Platform", TypeRef("Edm.String")),
         "ChannelKey": EdmProperty("ChannelKey", TypeRef("Edm.String")),
+        "ServiceRouteKey": EdmProperty("ServiceRouteKey", TypeRef("Edm.String")),
         "Locale": EdmProperty("Locale", TypeRef("Edm.String")),
         "Category": EdmProperty("Category", TypeRef("Edm.String")),
         "IsEnabled": EdmProperty("IsEnabled", TypeRef("Edm.Boolean"), nullable=False),

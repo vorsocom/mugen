@@ -138,6 +138,18 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
             ingress_bindings.crud.create_schema,
             IngressBindingCreateValidation,
         )
+        self.assertIn(
+            "ServiceRouteDefaultKey",
+            channel_profiles.crud.create_schema,
+        )
+        self.assertIn(
+            "ServiceRouteKey",
+            ingress_bindings.crud.update_schema,
+        )
+        self.assertIn(
+            "ServiceRouteKey",
+            states.crud.update_schema,
+        )
 
         self.assertIn("evaluate_intake", states.capabilities.actions)
         self.assertIn("route", states.capabilities.actions)
@@ -153,3 +165,17 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
 
         event_type = registry.schema.get_type("CHANNELORCH.OrchestrationEvent")
         self.assertEqual(event_type.entity_set_name, "OrchestrationEvents")
+
+    def test_ingress_binding_validation_normalizes_service_route_key(self) -> None:
+        validation = IngressBindingCreateValidation(
+            tenant_id="11111111-1111-1111-1111-111111111111",
+            channel_key=" line ",
+            identifier_type=" path_token ",
+            identifier_value=" token ",
+            service_route_key=" valet.core ",
+        )
+
+        self.assertEqual(validation.channel_key, "line")
+        self.assertEqual(validation.identifier_type, "path_token")
+        self.assertEqual(validation.identifier_value, "token")
+        self.assertEqual(validation.service_route_key, "valet.core")

@@ -479,6 +479,7 @@ class ChannelOrchestrationContributor(IContextContributor):
                 if conversation is None
                 else {
                     "status": conversation.status,
+                    "service_route_key": conversation.service_route_key,
                     "route_key": conversation.route_key,
                     "assigned_queue_name": conversation.assigned_queue_name,
                     "assigned_service_key": conversation.assigned_service_key,

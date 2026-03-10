@@ -47,13 +47,17 @@ def contribute(
         {
             "set": "ContextProfiles",
             "entity": "ContextProfile",
-            "description": "Tenant-scoped context profiles for scope-based policy selection.",
+            "description": (
+                "Tenant-scoped context profiles for scope-based policy"
+                " selection."
+            ),
             "create_schema": (
                 "TenantId",
                 "Name",
                 "Description",
                 "Platform",
                 "ChannelKey",
+                "ServiceRouteKey",
                 "ClientProfileKey",
                 "PolicyId",
                 "Persona",
@@ -65,6 +69,7 @@ def contribute(
                 "Description",
                 "Platform",
                 "ChannelKey",
+                "ServiceRouteKey",
                 "ClientProfileKey",
                 "PolicyId",
                 "Persona",
@@ -102,10 +107,21 @@ def contribute(
             "set": "ContextContributorBindings",
             "entity": "ContextContributorBinding",
             "description": "Contributor activation and priority bindings.",
-            "create_schema": ("TenantId", "BindingKey", "ContributorKey"),
+            "create_schema": (
+                "TenantId",
+                "BindingKey",
+                "ContributorKey",
+                "Platform",
+                "ChannelKey",
+                "ServiceRouteKey",
+                "Priority",
+                "IsEnabled",
+                "Attributes",
+            ),
             "update_schema": (
                 "Platform",
                 "ChannelKey",
+                "ServiceRouteKey",
                 "Priority",
                 "IsEnabled",
                 "Attributes",
@@ -117,10 +133,22 @@ def contribute(
             "set": "ContextSourceBindings",
             "entity": "ContextSourceBinding",
             "description": "Source selection overlays for contributor filtering.",
-            "create_schema": ("TenantId", "SourceKind", "SourceKey"),
+            "create_schema": (
+                "TenantId",
+                "SourceKind",
+                "SourceKey",
+                "Platform",
+                "ChannelKey",
+                "ServiceRouteKey",
+                "Locale",
+                "Category",
+                "IsEnabled",
+                "Attributes",
+            ),
             "update_schema": (
                 "Platform",
                 "ChannelKey",
+                "ServiceRouteKey",
                 "Locale",
                 "Category",
                 "IsEnabled",
@@ -132,7 +160,10 @@ def contribute(
         {
             "set": "ContextTracePolicies",
             "entity": "ContextTracePolicy",
-            "description": "Trace capture policies for prepare/commit provenance records.",
+            "description": (
+                "Trace capture policies for prepare/commit provenance"
+                " records."
+            ),
             "create_schema": ("TenantId", "Name"),
             "update_schema": (
                 "CapturePrepare",
@@ -158,7 +189,12 @@ def contribute(
         permission_object = PermissionObjectDef(plugin_ns.ns, obj_name)
         registry.register_permission_object(permission_object)
         registry.register_default_global_grants(
-            DefaultGlobalGrant(admin_ns.key("administrator"), permission_object.key, ptyp, True)
+            DefaultGlobalGrant(
+                admin_ns.key("administrator"),
+                permission_object.key,
+                ptyp,
+                True,
+            )
             for ptyp in admin_verb_keys
         )
 

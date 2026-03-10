@@ -53,6 +53,7 @@ class IngressRouteResult:
     identifier_claims: dict[str, str]
     channel_profile_id: uuid.UUID | None = None
     client_profile_id: uuid.UUID | None = None
+    service_route_key: str | None = None
     route_key: str | None = None
     binding_id: uuid.UUID | None = None
     client_profile_key: str | None = None

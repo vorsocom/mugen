@@ -33,6 +33,7 @@ class ContextProfileDE(BaseDE, TenantScopedDEMixin):
     description: str | None = None
     platform: str | None = None
     channel_key: str | None = None
+    service_route_key: str | None = None
     client_profile_key: str | None = None
     policy_id: uuid.UUID | None = None
     persona: str | None = None
@@ -69,6 +70,7 @@ class ContextContributorBindingDE(BaseDE, TenantScopedDEMixin):
     contributor_key: str | None = None
     platform: str | None = None
     channel_key: str | None = None
+    service_route_key: str | None = None
     priority: int | None = None
     is_enabled: bool | None = None
     attributes: dict[str, Any] | None = None
@@ -82,6 +84,7 @@ class ContextSourceBindingDE(BaseDE, TenantScopedDEMixin):
     source_key: str | None = None
     platform: str | None = None
     channel_key: str | None = None
+    service_route_key: str | None = None
     locale: str | None = None
     category: str | None = None
     is_enabled: bool | None = None
