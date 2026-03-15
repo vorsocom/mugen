@@ -67,6 +67,15 @@ see `docs/acp-rbac-policy.md`.
 Downstream plugins should compose business orchestration on top of ACP-exposed
 resources/actions rather than bypassing them with direct table writes.
 
+ACP does not currently own a general managed-file or managed-blob primitive.
+Raw bytes, object persistence, upload/download transport, and cache/materialize
+flows should stay behind storage/runtime ports rather than ACP core resources.
+When a plugin needs file-backed lifecycle, prefer metadata-first ACP resources
+that reference external/object storage and keep binary persistence in plugin or
+gateway code. If multiple domains later need the same tenant-scoped file
+catalog/lifecycle semantics, implement that as a separate ACP-aligned plugin
+rather than extending ACP core.
+
 ## Live Platform Runtime Reload
 
 ACP now also exposes an admin action for reconciling active multi-profile
@@ -93,7 +102,9 @@ and provide reusable platform primitives:
 
 - `audit`: tamper-evident audit records with hash-chain verification and
   lifecycle controls (legal hold, redact, tombstone, purge), plus correlation
-  graph links and business-trace observability timeline events.
+  graph links and business-trace observability timeline events. Evidence is
+  metadata-first and references external storage rather than making ACP a blob
+  store.
 - `billing`: account/product/price/subscription/usage/invoice/payment primitives.
 - `channel_orchestration`: intake, routing, throttle, blocklist, and fallback.
 - `knowledge_pack`: versioned knowledge content lifecycle and retrieval metadata.
