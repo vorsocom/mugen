@@ -68,13 +68,51 @@ from mugen.core.runtime.phase_b_shutdown import (
 
 _PLATFORM_CLIENTS_TASK_KEY = "platform_clients_task"
 
+
+def _nonempty_error_text(value: object) -> str | None:
+    if isinstance(value, Exception):
+        value = str(value)
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if normalized == "":
+        return None
+    return normalized
+
+
+def _format_container_shutdown_failure_message(
+    *,
+    primary_error: object,
+    cleanup_error: Exception,
+    default_message: str,
+) -> str:
+    message = _nonempty_error_text(primary_error) or default_message
+    message = message.rstrip(" .;:")
+    return (
+        f"{message}; container shutdown failed: "
+        f"{type(cleanup_error).__name__}: {cleanup_error}"
+    )
+
+
 try:
     # Create Quart mugen.
     app = create_quart_app()
-except BootstrapError:
+except BootstrapError as exc:
     logging.getLogger(__name__).exception(
         "Application bootstrap failed during app creation."
     )
+    try:
+        di.shutdown_container()
+    except Exception as cleanup_exc:  # pylint: disable=broad-exception-caught
+        logging.getLogger(__name__).exception(
+            "Application bootstrap cleanup failed during app creation."
+        )
+        message = _format_container_shutdown_failure_message(
+            primary_error=exc,
+            cleanup_error=cleanup_exc,
+            default_message="application bootstrap failed during app creation",
+        )
+        raise type(exc)(message) from cleanup_exc
     raise
 
 
@@ -100,6 +138,23 @@ def _resolve_shutdown_timeout_seconds() -> float:
 
 async def _shutdown_container() -> None:
     await di.shutdown_container_async()
+
+
+async def _cleanup_failed_startup(*, phase_name: str) -> Exception | None:
+    state = _bootstrap_state()
+    state[SHUTDOWN_REQUESTED_KEY] = True
+    try:
+        await _shutdown_container()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        app.logger.error(
+            "Bootstrap %s cleanup failed error_type=%s error=%s",
+            phase_name,
+            type(exc).__name__,
+            exc,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        return exc
+    return None
 
 
 def _on_platform_clients_done(task: asyncio.Task, started_at: float) -> None:
@@ -164,7 +219,7 @@ async def startup():
     app.logger.info("Bootstrap phase_a starting.")
     try:
         await bootstrap_app(app)
-    except BootstrapError:
+    except BootstrapError as exc:
         state[PHASE_A_STATUS_KEY] = PHASE_STATUS_DEGRADED
         current_error = state.get(PHASE_A_ERROR_KEY)
         if not isinstance(current_error, str) or current_error.strip() == "":
@@ -174,6 +229,15 @@ async def startup():
             perf_counter() - phase_a_started_at,
             exc_info=True,
         )
+        cleanup_exc = await _cleanup_failed_startup(phase_name="phase_a")
+        if cleanup_exc is not None:
+            message = _format_container_shutdown_failure_message(
+                primary_error=state.get(PHASE_A_ERROR_KEY),
+                cleanup_error=cleanup_exc,
+                default_message="phase_a bootstrap failed",
+            )
+            state[PHASE_A_ERROR_KEY] = message
+            raise type(exc)(message) from cleanup_exc
         raise
     state[PHASE_A_STATUS_KEY] = PHASE_STATUS_HEALTHY
     app.logger.info(
@@ -189,8 +253,30 @@ async def startup():
     try:
         runtime_config = getattr(di.container, "config", None)
     except Exception as exc:  # pylint: disable=broad-exception-caught
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        state[PHASE_B_ERROR_KEY] = "Configuration unavailable."
+        cleanup_exc = await _cleanup_failed_startup(phase_name="phase_b")
+        if cleanup_exc is not None:
+            message = _format_container_shutdown_failure_message(
+                primary_error=state.get(PHASE_B_ERROR_KEY),
+                cleanup_error=cleanup_exc,
+                default_message="Configuration unavailable.",
+            )
+            state[PHASE_B_ERROR_KEY] = message
+            raise BootstrapConfigError(message) from cleanup_exc
         raise BootstrapConfigError("Configuration unavailable.") from exc
     if runtime_config is None:
+        state[PHASE_B_STATUS_KEY] = PHASE_STATUS_DEGRADED
+        state[PHASE_B_ERROR_KEY] = "Configuration unavailable."
+        cleanup_exc = await _cleanup_failed_startup(phase_name="phase_b")
+        if cleanup_exc is not None:
+            message = _format_container_shutdown_failure_message(
+                primary_error=state.get(PHASE_B_ERROR_KEY),
+                cleanup_error=cleanup_exc,
+                default_message="Configuration unavailable.",
+            )
+            state[PHASE_B_ERROR_KEY] = message
+            raise BootstrapConfigError(message) from cleanup_exc
         raise BootstrapConfigError("Configuration unavailable.")
 
     phase_b_started_at = perf_counter()
@@ -220,6 +306,15 @@ async def startup():
         )
         state.pop(_PLATFORM_CLIENTS_TASK_KEY, None)
         state.pop(_PHASE_B_STARTUP_PLAN_KEY, None)
+        cleanup_exc = await _cleanup_failed_startup(phase_name="phase_b")
+        if cleanup_exc is not None:
+            message = _format_container_shutdown_failure_message(
+                primary_error=state.get(PHASE_B_ERROR_KEY),
+                cleanup_error=cleanup_exc,
+                default_message="phase_b startup failed",
+            )
+            state[PHASE_B_ERROR_KEY] = message
+            raise BootstrapConfigError(message) from cleanup_exc
         raise BootstrapConfigError(str(exc)) from exc
 
 

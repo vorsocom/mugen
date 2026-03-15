@@ -53,9 +53,38 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 "mugen.create_quart_app",
                 side_effect=BootstrapConfigError("bad config"),
             ),
+            unittest.mock.patch("mugen.core.di.shutdown_container") as shutdown_container,
             self.assertRaises(BootstrapConfigError),
         ):
             import_module("quartman")
+        shutdown_container.assert_called_once_with()
+
+    async def test_import_creation_failure_reports_container_cleanup_failure(self) -> None:
+        sys.modules.pop("quartman", None)
+        with (
+            unittest.mock.patch(
+                "mugen.create_quart_app",
+                side_effect=BootstrapConfigError("bad config"),
+            ),
+            unittest.mock.patch(
+                "mugen.core.di.shutdown_container",
+                side_effect=RuntimeError("container failed"),
+            ),
+            self.assertRaisesRegex(
+                BootstrapConfigError,
+                "bad config; container shutdown failed: RuntimeError: container failed",
+            ),
+        ):
+            import_module("quartman")
+
+    async def test_nonempty_error_text_rejects_non_string_and_blank_values(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        self.assertIsNone(quartman._nonempty_error_text(None))
+        self.assertIsNone(quartman._nonempty_error_text("   "))
 
     async def test_phase_b_starts_after_phase_a_completes(self) -> None:
         app = Quart("quartman_test")
@@ -113,6 +142,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
         quartman = _import_quartman_with_app(app)
 
         phase_b_runner = unittest.mock.AsyncMock()
+        shutdown_container = unittest.mock.AsyncMock()
 
         with (
             unittest.mock.patch.object(
@@ -127,12 +157,47 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 "run_platform_clients",
                 new=phase_b_runner,
             ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=shutdown_container,
+            ),
             self.assertRaises(ExtensionLoadError),
         ):
             await quartman.app.startup()
 
         self.assertEqual(phase_b_runner.await_count, 0)
-        await quartman.app.shutdown()
+        shutdown_container.assert_awaited_once_with()
+
+    async def test_phase_a_failure_reports_container_cleanup_failure(self) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        with (
+            unittest.mock.patch.object(
+                quartman,
+                "bootstrap_app",
+                new=unittest.mock.AsyncMock(
+                    side_effect=ExtensionLoadError("extension bootstrap failed")
+                ),
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=unittest.mock.AsyncMock(
+                    side_effect=RuntimeError("container failed")
+                ),
+            ),
+            self.assertRaisesRegex(
+                ExtensionLoadError,
+                "phase_a bootstrap failed; container shutdown failed: RuntimeError: container failed",
+            ),
+        ):
+            await quartman.app.startup()
+
+        state = quartman._bootstrap_state()
+        self.assertEqual(state[quartman.PHASE_A_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+        self.assertIn("container shutdown failed", state[quartman.PHASE_A_ERROR_KEY])
 
     async def test_phase_a_failure_preserves_existing_non_empty_error(self) -> None:
         app = Quart("quartman_test")
@@ -584,6 +649,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
     async def test_startup_fails_when_container_config_is_missing(self) -> None:
         app = Quart("quartman_test")
         quartman = _import_quartman_with_app(app)
+        shutdown_container = unittest.mock.AsyncMock()
 
         with (
             unittest.mock.patch.object(
@@ -601,11 +667,51 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 "run_platform_clients",
                 new=unittest.mock.AsyncMock(),
             ) as phase_b_runner,
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=shutdown_container,
+            ),
             self.assertRaises(BootstrapConfigError),
         ):
             await quartman.app.startup()
 
+        state = quartman._bootstrap_state()
         self.assertEqual(phase_b_runner.await_count, 0)
+        self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+        self.assertEqual(state[quartman.PHASE_B_ERROR_KEY], "Configuration unavailable.")
+        shutdown_container.assert_awaited_once_with()
+
+    async def test_startup_missing_runtime_config_reports_container_cleanup_failure(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        with (
+            unittest.mock.patch.object(quartman.di, "container", object()),
+            unittest.mock.patch.object(
+                quartman,
+                "bootstrap_app",
+                new=unittest.mock.AsyncMock(return_value=None),
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=unittest.mock.AsyncMock(
+                    side_effect=RuntimeError("container failed")
+                ),
+            ),
+            self.assertRaisesRegex(
+                BootstrapConfigError,
+                "Configuration unavailable; container shutdown failed: RuntimeError: container failed",
+            ),
+        ):
+            await quartman.app.startup()
+
+        state = quartman._bootstrap_state()
+        self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+        self.assertIn("container shutdown failed", state[quartman.PHASE_B_ERROR_KEY])
 
     async def test_startup_rejects_missing_runtime_config(
         self,
@@ -685,6 +791,7 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
             def config(self):
                 raise RuntimeError("container unavailable")
 
+        shutdown_container = unittest.mock.AsyncMock()
         with (
             unittest.mock.patch.object(quartman.di, "container", _RaisingContainer()),
             unittest.mock.patch.object(
@@ -697,9 +804,60 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 "run_platform_clients",
                 new=unittest.mock.AsyncMock(),
             ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=shutdown_container,
+            ),
             self.assertRaisesRegex(BootstrapConfigError, "Configuration unavailable"),
         ):
             await quartman.app.startup()
+
+        state = quartman._bootstrap_state()
+        self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+        self.assertEqual(state[quartman.PHASE_B_ERROR_KEY], "Configuration unavailable.")
+        shutdown_container.assert_awaited_once_with()
+
+    async def test_startup_attribute_error_during_phase_b_resolution_reports_cleanup_failure(
+        self,
+    ) -> None:
+        app = Quart("quartman_test")
+        quartman = _import_quartman_with_app(app)
+
+        class _RaisingContainer:  # pylint: disable=too-few-public-methods
+            @property
+            def config(self):
+                raise RuntimeError("container unavailable")
+
+        with (
+            unittest.mock.patch.object(quartman.di, "container", _RaisingContainer()),
+            unittest.mock.patch.object(
+                quartman,
+                "bootstrap_app",
+                new=unittest.mock.AsyncMock(return_value=None),
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "run_platform_clients",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=unittest.mock.AsyncMock(
+                    side_effect=RuntimeError("container failed")
+                ),
+            ),
+            self.assertRaisesRegex(
+                BootstrapConfigError,
+                "Configuration unavailable; container shutdown failed: RuntimeError: container failed",
+            ),
+        ):
+            await quartman.app.startup()
+
+        state = quartman._bootstrap_state()
+        self.assertEqual(state[quartman.PHASE_B_STATUS_KEY], quartman.PHASE_STATUS_DEGRADED)
+        self.assertIn("container shutdown failed", state[quartman.PHASE_B_ERROR_KEY])
 
     async def test_startup_rejects_phase_b_plan_missing_timeout_value(self) -> None:
         app = Quart("quartman_test")
@@ -733,11 +891,17 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 "run_platform_clients",
                 new=unittest.mock.AsyncMock(),
             ) as phase_b_runner,
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=unittest.mock.AsyncMock(),
+            ) as shutdown_container,
             self.assertRaises(BootstrapConfigError),
         ):
             await quartman.app.startup()
 
         self.assertEqual(phase_b_runner.await_count, 0)
+        shutdown_container.assert_awaited_once_with()
 
     async def test_startup_timeout_failure_cancels_phase_b_task(self) -> None:
         app = Quart("quartman_test")
@@ -775,6 +939,11 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 quartman,
                 "run_platform_clients",
                 new=_blocking_runner,
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=unittest.mock.AsyncMock(),
             ),
             self.assertRaises(BootstrapConfigError),
         ):
@@ -830,6 +999,11 @@ class TestQuartmanBootstrapLifecycle(unittest.IsolatedAsyncioTestCase):
                 quartman,
                 "run_platform_clients",
                 new=_done_runner,
+            ),
+            unittest.mock.patch.object(
+                quartman,
+                "_shutdown_container",
+                new=unittest.mock.AsyncMock(),
             ),
             self.assertRaises(BootstrapConfigError),
         ):
