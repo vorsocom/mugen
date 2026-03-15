@@ -26,6 +26,9 @@ No new plugin is introduced in this phase.
 - Lifecycle orchestration scope is `AuditEvent` and `EvidenceBlob` only.
 - `EvidenceBlob` is metadata-first (`storage_uri` + hash material), not
   in-database binary storage.
+- A general tenant-scoped managed-file/blob primitive is intentionally deferred.
+  If a shared cross-domain need emerges later, it should land as a separate
+  ACP-aligned plugin rather than ACP core.
 - Existing `DataHandlingRecord.EvidenceRef` remains supported;
   `EvidenceBlobId` is additive.
 
