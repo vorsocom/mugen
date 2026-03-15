@@ -1723,6 +1723,8 @@ def _provider_specs_for_shutdown() -> list[_ProviderSpec]:
 
 def _shutdown_injector(injector: DependencyInjector | None) -> None:
     """Synchronous cleanup wrapper for non-running-loop contexts."""
+    if injector is None:
+        return
     try:
         asyncio.get_running_loop()
     except RuntimeError:
