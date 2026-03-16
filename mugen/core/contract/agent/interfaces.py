@@ -28,10 +28,12 @@ from mugen.core.contract.agent.types import (
     CapabilityResult,
     EvaluationRequest,
     EvaluationResult,
+    JoinState,
     PlanDecision,
     PlanLease,
     PlanOutcome,
     PlanRunCursor,
+    PlanRunLineage,
     PlanRunRequest,
     PlanRunStep,
     PreparedPlanRun,
@@ -247,6 +249,8 @@ class IPlanRunStore(ABC):
         *,
         state: object,
         policy: AgentRuntimePolicy,
+        lineage: PlanRunLineage | None = None,
+        join_state: JoinState | None = None,
     ) -> PreparedPlanRun:
         """Create a new durable run."""
 
@@ -302,6 +306,19 @@ class IPlanRunStore(ABC):
     @abstractmethod
     async def list_steps(self, *, run_id: str, limit: int | None = None) -> list[PlanRunStep]:
         """List append-only steps for one run."""
+
+    @abstractmethod
+    async def list_child_runs(
+        self,
+        parent_run_id: str,
+        *,
+        terminal_only: bool = False,
+    ) -> list[PreparedPlanRun]:
+        """List child runs delegated from one parent."""
+
+    @abstractmethod
+    async def load_run_graph(self, root_run_id: str) -> list[PreparedPlanRun]:
+        """Load all runs participating in one rooted run graph."""
 
 
 class IResponseSynthesizer(ABC):

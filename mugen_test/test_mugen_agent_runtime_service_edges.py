@@ -13,15 +13,20 @@ from mugen.core.contract.agent import (
     CapabilityDescriptor,
     CapabilityInvocation,
     CapabilityResult,
+    DelegationArtifactRef,
+    DelegationInstruction,
     EvaluationRequest,
     EvaluationResult,
     EvaluationStatus,
+    JoinPolicy,
+    JoinState,
     PlanDecision,
     PlanDecisionKind,
     PlanObservation,
     PlanOutcome,
     PlanOutcomeStatus,
     PlanRunCursor,
+    PlanRunLineage,
     PlanRunMode,
     PlanRunRequest,
     PlanRunState,
@@ -85,14 +90,19 @@ def _request(
     mode: PlanRunMode = PlanRunMode.CURRENT_TURN,
     prepared_context: PreparedContextTurn | None = None,
     run_id: str | None = None,
+    service_route_key: str | None = "support.primary",
+    agent_key: str | None = None,
+    metadata: dict | None = None,
 ) -> PlanRunRequest:
     return PlanRunRequest(
         mode=mode,
         scope=_scope(),
         user_message="Handle the request",
-        service_route_key="support.primary",
+        service_route_key=service_route_key,
+        agent_key=agent_key,
         prepared_context=prepared_context,
         run_id=run_id,
+        metadata=dict(metadata or {}),
     )
 
 
@@ -125,6 +135,7 @@ def _run(
             "message_id": resolved_request.message_id,
             "trace_id": resolved_request.trace_id,
             "service_route_key": resolved_request.service_route_key,
+            "agent_key": resolved_request.agent_key,
             "ingress_metadata": dict(resolved_request.ingress_metadata),
             "metadata": dict(resolved_request.metadata),
         },
@@ -269,10 +280,39 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
                 "message_id": "msg-1",
                 "trace_id": "trace-1",
                 "service_route_key": "support.primary",
+                "agent_key": "coordinator.root",
                 "ingress_metadata": {"trace": "1"},
                 "metadata": {"origin": "resume"},
             },
             run_id="run-1",
+        )
+        lineage = PlanRunLineage(
+            parent_run_id="run-parent",
+            root_run_id="run-root",
+            spawned_by_step_no=3,
+            agent_key="specialist.lookup",
+        )
+        artifact = DelegationArtifactRef(
+            artifact_key="artifact.summary",
+            source_run_id="run-parent",
+            source_step_sequence_no=2,
+            summary="facts",
+            payload={"value": 42},
+            metadata={"trace": "1"},
+        )
+        join_policy = JoinPolicy(
+            on_required_child_failed=PlanOutcomeStatus.FAILED,
+            on_required_child_handoff=PlanOutcomeStatus.HANDOFF,
+            on_required_child_stopped=PlanOutcomeStatus.STOPPED,
+        )
+        join_state = JoinState(
+            child_run_ids=("child-1",),
+            required_child_run_ids=("child-1",),
+            completed_child_run_ids=("child-1",),
+            last_joined_sequence_no=3,
+            timeout_at=datetime.now(timezone.utc),
+            policy=join_policy,
+            metadata={"trace": "1"},
         )
 
         self.assertEqual(serialized_completion["usage"]["total_tokens"], 3)
@@ -307,8 +347,78 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
                 PlanOutcome(status=status)
             )
             self.assertIsInstance(mapped, PlanRunStatus)
+        self.assertEqual(derived_request.agent_key, "coordinator.root")
         self.assertEqual(derived_request.mode, PlanRunMode.BACKGROUND)
         self.assertEqual(derived_request.metadata["origin"], "resume")
+        self.assertIsNone(svc_module._serialize_lineage(None))  # pylint: disable=protected-access
+        self.assertIsNone(svc_module._deserialize_lineage(None))  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            svc_module._deserialize_lineage(
+                svc_module._serialize_lineage(lineage)  # pylint: disable=protected-access
+            ).agent_key,
+            "specialist.lookup",
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            svc_module._serialize_artifact_ref(artifact)["metadata"]["trace"],
+            "1",
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            svc_module._deserialize_artifact_ref(
+                {
+                    "artifact_key": "artifact.summary",
+                    "source_run_id": "run-parent",
+                    "payload": {"value": 42},
+                }
+            ).artifact_key,
+            "artifact.summary",
+        )
+        self.assertIsNone(svc_module._serialize_join_policy(None))  # pylint: disable=protected-access
+        self.assertIsNone(svc_module._deserialize_join_policy(None))  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            svc_module._deserialize_join_policy(
+                svc_module._serialize_join_policy(join_policy)  # pylint: disable=protected-access
+            ).on_required_child_failed,
+            PlanOutcomeStatus.FAILED,
+        )
+        self.assertIsNone(svc_module._serialize_join_state(None))  # pylint: disable=protected-access
+        self.assertIsNone(svc_module._deserialize_join_state(None))  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            svc_module._deserialize_join_state(
+                svc_module._serialize_join_state(join_state)  # pylint: disable=protected-access
+            ).last_joined_sequence_no,
+            3,
+        )
+        self.assertIsNone(  # pylint: disable=protected-access
+            svc_module._deserialize_join_state({"timeout_at": ""}).timeout_at
+        )
+        self.assertIs(  # pylint: disable=protected-access
+            svc_module._lineage_from_request_metadata({"agent_lineage": lineage}),
+            lineage,
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            svc_module._lineage_from_request_metadata(
+                {"agent_lineage": svc_module._serialize_lineage(lineage)}  # pylint: disable=protected-access
+            ).root_run_id,
+            "run-root",
+        )
+        self.assertIs(  # pylint: disable=protected-access
+            svc_module._join_state_from_request_metadata({"agent_join_state": join_state}),
+            join_state,
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            svc_module._join_state_from_request_metadata(
+                {"agent_join_state": svc_module._serialize_join_state(join_state)}  # pylint: disable=protected-access
+            ).required_child_run_ids,
+            ("child-1",),
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            svc_module._outcome_status_from_run_status(PlanRunStatus.PREPARED),
+            PlanOutcomeStatus.FAILED,
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            svc_module._outcome_status_from_run_status(PlanRunStatus.ACTIVE),
+            PlanOutcomeStatus.FAILED,
+        )
 
     async def test_agent_service_base_resolves_policy_and_run_store_edges(self) -> None:
         request = _request()
@@ -423,6 +533,84 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
                 AgentRuntimePolicy(planner_key="")
             )
             self.assertIs(selected_default, fallback_planner)
+
+    async def test_default_planning_engine_applies_agent_defaults_and_missing_agent_guards(
+        self,
+    ) -> None:
+        engine = DefaultPlanningEngine(
+            config=SimpleNamespace(),
+            logging_gateway=Mock(),
+        )
+        run_store = Mock()
+        run_store.save_run = AsyncMock(side_effect=lambda prepared_run: prepared_run)
+
+        with _patch_registry(
+            _registry(
+                policy_resolver=Mock(
+                    resolve_policy=AsyncMock(
+                        return_value=AgentRuntimePolicy(
+                            enabled=True,
+                            current_turn_enabled=True,
+                            agent_key="coordinator.root",
+                            metadata={"service_route_key": "support.fallback"},
+                        )
+                    )
+                ),
+                run_store=run_store,
+            )
+        ):
+            created_run = _run(
+                run_id="run-created",
+                request=_request(prepared_context=_prepared_context()),
+                status=PlanRunStatus.PREPARED,
+            )
+            run_store.create_run = AsyncMock(return_value=created_run)
+            request = _request(prepared_context=_prepared_context())
+            request.service_route_key = None
+            request.agent_key = None
+            prepared = await engine.prepare_run(request)
+            self.assertEqual(prepared.service_route_key, "support.fallback")
+            self.assertEqual(prepared.request_snapshot["agent_key"], "coordinator.root")
+
+        existing = _run(run_id="run-existing", request=_request(run_id="run-existing"))
+        existing.lineage = PlanRunLineage(root_run_id="run-existing", agent_key="old.agent")
+        existing.request_snapshot["agent_key"] = "old.agent"
+        with _patch_registry(
+            _registry(
+                policy_resolver=Mock(
+                    resolve_policy=AsyncMock(
+                        return_value=AgentRuntimePolicy(
+                            enabled=True,
+                            current_turn_enabled=True,
+                            agent_key="specialist.lookup",
+                        )
+                    )
+                ),
+                run_store=Mock(
+                    load_run=AsyncMock(return_value=existing),
+                    save_run=AsyncMock(side_effect=lambda prepared_run: prepared_run),
+                ),
+            )
+        ):
+            resumed = await engine.prepare_run(_request(run_id="run-existing"))
+            self.assertEqual(resumed.lineage.agent_key, "specialist.lookup")
+
+        with _patch_registry(
+            _registry(
+                policy_resolver=Mock(
+                    resolve_policy=AsyncMock(
+                        return_value=AgentRuntimePolicy(
+                            enabled=True,
+                            current_turn_enabled=True,
+                            metadata={"agent_definition_missing": "missing.agent"},
+                        )
+                    )
+                ),
+                run_store=run_store,
+            )
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Unknown agent definition: missing.agent"):
+                await engine.prepare_run(_request(prepared_context=_prepared_context()))
 
     async def test_default_evaluation_engine_fallbacks_and_selection(self) -> None:
         engine = DefaultEvaluationEngine(
@@ -594,6 +782,7 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
 
     async def test_default_plan_run_store_delegates_all_methods(self) -> None:
         run = _run()
+        child = _run(run_id="run-child")
         step = PlanRunStep(
             run_id=run.run_id,
             sequence_no=1,
@@ -612,6 +801,8 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
             return_value=PlanOutcome(status=PlanOutcomeStatus.COMPLETED)
         )
         store.list_steps = AsyncMock(return_value=[step])
+        store.list_child_runs = AsyncMock(return_value=[child])
+        store.load_run_graph = AsyncMock(return_value=[run, child])
         wrapper = DefaultPlanRunStore(
             config=SimpleNamespace(),
             logging_gateway=Mock(),
@@ -651,6 +842,11 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
                 PlanOutcomeStatus.COMPLETED,
             )
             self.assertEqual(await wrapper.list_steps(run_id=run.run_id), [step])
+            self.assertEqual(
+                await wrapper.list_child_runs(run.run_id, terminal_only=True),
+                [child],
+            )
+            self.assertEqual(await wrapper.load_run_graph(run.run_id), [run, child])
 
     async def test_agent_runtime_enablement_and_dependency_guards(self) -> None:
         resolver = Mock()
@@ -753,6 +949,258 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
         outcomes = await runtime.run_background_batch(owner="worker")
 
         self.assertEqual(outcomes, [])
+
+    async def test_agent_runtime_multi_agent_helper_edges(self) -> None:
+        runtime = DefaultAgentRuntime(
+            config=SimpleNamespace(),
+            logging_gateway=Mock(),
+            planning_engine_service=Mock(
+                prepare_run=AsyncMock(
+                    side_effect=[
+                        _run(
+                            run_id="child-optional",
+                            mode=PlanRunMode.BACKGROUND,
+                            request=_request(mode=PlanRunMode.BACKGROUND),
+                            status=PlanRunStatus.PREPARED,
+                        )
+                    ]
+                )
+            ),
+            evaluation_engine_service=Mock(),
+            agent_executor_service=Mock(
+                list_capabilities=AsyncMock(return_value=[]),
+                execute_capability=AsyncMock(),
+            ),
+            plan_run_store_service=Mock(
+                save_run=AsyncMock(side_effect=lambda prepared_run: prepared_run),
+                append_step=AsyncMock(side_effect=_append_cursor_side_effect()),
+                finalize_run=AsyncMock(side_effect=lambda *, run_id, outcome: outcome),
+                list_child_runs=AsyncMock(
+                    return_value=[
+                        _run(
+                            run_id="child-pending",
+                            mode=PlanRunMode.BACKGROUND,
+                            request=_request(mode=PlanRunMode.BACKGROUND),
+                            status=PlanRunStatus.PREPARED,
+                        )
+                    ]
+                ),
+            ),
+        )
+
+        runtime._bootstrap_observations = AsyncMock(  # pylint: disable=protected-access
+            return_value=((), PlanOutcome(status=PlanOutcomeStatus.WAITING), False)
+        )
+        early = await runtime._run_loop(  # pylint: disable=protected-access
+            request=_request(prepared_context=_prepared_context()),
+            run=_run(),
+            max_iterations=1,
+            allow_wait=False,
+        )
+        self.assertEqual(early.status, PlanOutcomeStatus.WAITING)
+
+        delegate_runtime = DefaultAgentRuntime(
+            config=SimpleNamespace(),
+            logging_gateway=Mock(),
+            planning_engine_service=Mock(
+                next_decision=AsyncMock(return_value=PlanDecision(kind=PlanDecisionKind.DELEGATE)),
+                finalize_run=AsyncMock(side_effect=lambda *_args: _run()),
+            ),
+            evaluation_engine_service=Mock(),
+            agent_executor_service=Mock(),
+            plan_run_store_service=Mock(
+                save_run=AsyncMock(side_effect=lambda prepared_run: prepared_run),
+                append_step=AsyncMock(side_effect=_append_cursor_side_effect()),
+                finalize_run=AsyncMock(side_effect=lambda *, run_id, outcome: outcome),
+            ),
+        )
+        delegated_handoff = await delegate_runtime._run_loop(  # pylint: disable=protected-access
+            request=_request(mode=PlanRunMode.BACKGROUND),
+            run=_run(mode=PlanRunMode.BACKGROUND, request=_request(mode=PlanRunMode.BACKGROUND)),
+            max_iterations=1,
+            allow_wait=True,
+        )
+        self.assertEqual(delegated_handoff.error_message, "delegate_requires_child_instructions")
+
+        iterated_run = _run(
+            mode=PlanRunMode.BACKGROUND,
+            request=_request(mode=PlanRunMode.BACKGROUND),
+        )
+        iterated_run.state.iteration_count = 1
+        self.assertEqual(
+            await runtime._initial_request_observations(  # pylint: disable=protected-access
+                request=_request(
+                    mode=PlanRunMode.BACKGROUND,
+                    metadata={"delegation": {"task_brief": "ignored"}},
+                ),
+                run=iterated_run,
+            ),
+            [],
+        )
+
+        delegated_request = _request(
+            mode=PlanRunMode.BACKGROUND,
+            metadata={
+                "delegation": {
+                    "task_brief": "",
+                    "parent_run_id": "run-parent",
+                    "parent_agent_key": "coordinator.root",
+                    "delegated_agent_key": "specialist.lookup",
+                    "required": False,
+                    "artifacts": [
+                        {
+                            "artifact_key": "artifact.summary",
+                            "source_run_id": "run-parent",
+                            "summary": "facts",
+                            "payload": {"value": 42},
+                            "metadata": {"source": "parent"},
+                        },
+                        "ignored",
+                    ],
+                    "metadata": {"priority": "low"},
+                }
+            },
+        )
+        seeded = await runtime._initial_request_observations(  # pylint: disable=protected-access
+            request=delegated_request,
+            run=_run(
+                mode=PlanRunMode.BACKGROUND,
+                request=delegated_request,
+                status=PlanRunStatus.PREPARED,
+            ),
+        )
+        self.assertEqual(seeded[0].summary, "delegated_task")
+        self.assertEqual(seeded[1].kind, "delegation_artifact")
+
+        no_join = await runtime._resume_join_state(  # pylint: disable=protected-access
+            request=_request(mode=PlanRunMode.BACKGROUND),
+            run=_run(
+                mode=PlanRunMode.BACKGROUND,
+                request=_request(mode=PlanRunMode.BACKGROUND),
+            ),
+        )
+        self.assertEqual(no_join, ((), None, False))
+
+        waiting_run = _run(
+            run_id="run-waiting",
+            mode=PlanRunMode.BACKGROUND,
+            request=_request(mode=PlanRunMode.BACKGROUND),
+            status=PlanRunStatus.WAITING,
+        )
+        waiting_run.join_state = JoinState(
+            child_run_ids=("child-pending",),
+            required_child_run_ids=("child-pending",),
+        )
+        observations, outcome, finalize_pending = await runtime._resume_join_state(  # pylint: disable=protected-access
+            request=_request(mode=PlanRunMode.BACKGROUND),
+            run=waiting_run,
+        )
+        self.assertEqual(observations, ())
+        self.assertEqual(outcome.status, PlanOutcomeStatus.WAITING)
+        self.assertFalse(finalize_pending)
+
+        self.assertIsNone(
+            runtime._terminal_outcome_from_join_state(  # pylint: disable=protected-access
+                join_state=JoinState(required_child_run_ids=("missing",)),
+                child_runs={},
+            )
+        )
+        self.assertEqual(
+            runtime._terminal_outcome_from_join_state(  # pylint: disable=protected-access
+                join_state=JoinState(required_child_run_ids=("child",)),
+                child_runs={
+                    "child": _run(
+                        run_id="child",
+                        mode=PlanRunMode.BACKGROUND,
+                        request=_request(mode=PlanRunMode.BACKGROUND),
+                        status=PlanRunStatus.HANDOFF,
+                    )
+                },
+            ).error_message,
+            "required_child_handoff",
+        )
+        self.assertEqual(
+            runtime._terminal_outcome_from_join_state(  # pylint: disable=protected-access
+                join_state=JoinState(required_child_run_ids=("child",)),
+                child_runs={
+                    "child": _run(
+                        run_id="child",
+                        mode=PlanRunMode.BACKGROUND,
+                        request=_request(mode=PlanRunMode.BACKGROUND),
+                        status=PlanRunStatus.STOPPED,
+                    )
+                },
+            ).error_message,
+            "required_child_stopped",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "delegate_requires_child_instructions"):
+            await runtime._delegate_to_children(  # pylint: disable=protected-access
+                request=_request(mode=PlanRunMode.BACKGROUND),
+                run=_run(
+                    mode=PlanRunMode.BACKGROUND,
+                    request=_request(mode=PlanRunMode.BACKGROUND),
+                    policy=AgentRuntimePolicy(
+                        enabled=True,
+                        background_enabled=True,
+                        agent_key="coordinator.root",
+                        delegate_agent_allow=("specialist.lookup",),
+                    ),
+                ),
+                decision=PlanDecision(kind=PlanDecisionKind.DELEGATE),
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "delegate_agent_not_allowed:blocked.agent"):
+            await runtime._delegate_to_children(  # pylint: disable=protected-access
+                request=_request(mode=PlanRunMode.BACKGROUND),
+                run=_run(
+                    mode=PlanRunMode.BACKGROUND,
+                    request=_request(mode=PlanRunMode.BACKGROUND),
+                    policy=AgentRuntimePolicy(
+                        enabled=True,
+                        background_enabled=True,
+                        agent_key="coordinator.root",
+                        delegate_agent_allow=("specialist.lookup",),
+                    ),
+                ),
+                decision=PlanDecision(
+                    kind=PlanDecisionKind.DELEGATE,
+                    delegations=(
+                        DelegationInstruction(
+                            agent_key="blocked.agent",
+                            task_brief="blocked",
+                        ),
+                    ),
+                ),
+            )
+
+        optional_run = _run(
+            run_id="run-optional",
+            mode=PlanRunMode.BACKGROUND,
+            request=_request(mode=PlanRunMode.BACKGROUND),
+            policy=AgentRuntimePolicy(
+                enabled=True,
+                background_enabled=True,
+                agent_key="coordinator.root",
+                delegate_agent_allow=("specialist.lookup",),
+            ),
+        )
+        optional_outcome = await runtime._delegate_to_children(  # pylint: disable=protected-access
+            request=_request(mode=PlanRunMode.BACKGROUND),
+            run=optional_run,
+            decision=PlanDecision(
+                kind=PlanDecisionKind.DELEGATE,
+                delegations=(
+                    DelegationInstruction(
+                        agent_key="specialist.lookup",
+                        task_brief="optional task",
+                        required=False,
+                    ),
+                ),
+            ),
+        )
+        self.assertEqual(optional_outcome.status, PlanOutcomeStatus.WAITING)
+        self.assertEqual(optional_run.join_state.required_child_run_ids, ())
 
     async def test_agent_runtime_run_loop_terminal_and_wait_paths(self) -> None:
         def _make_runtime(decision, *, allow_wait=False, eval_response=None):

@@ -15,6 +15,8 @@ from mugen.core.contract.agent import (
     CapabilityResult,
     EvaluationRequest,
     EvaluationStatus,
+    JoinPolicy,
+    JoinState,
     PlanDecision,
     PlanDecisionKind,
     PlanLease,
@@ -22,6 +24,7 @@ from mugen.core.contract.agent import (
     PlanOutcome,
     PlanOutcomeStatus,
     PlanRunCursor,
+    PlanRunLineage,
     PlanRunMode,
     PlanRunRequest,
     PlanRunState,
@@ -99,6 +102,7 @@ def _request(
     available_capabilities: tuple[CapabilityDescriptor, ...] = (),
     metadata: dict | None = None,
     service_route_key: str | None = "support.primary",
+    agent_key: str | None = None,
     sender_id: str | None = "22222222-2222-2222-2222-222222222222",
 ) -> PlanRunRequest:
     return PlanRunRequest(
@@ -106,6 +110,7 @@ def _request(
         scope=_scope(sender_id=sender_id),
         user_message="Handle the request",
         service_route_key=service_route_key,
+        agent_key=agent_key,
         prepared_context=prepared_context,
         available_capabilities=available_capabilities,
         metadata=dict(metadata or {}),
@@ -403,6 +408,26 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             description="Lookup data",
             input_schema={"type": "object"},
         )
+        lineage = PlanRunLineage(
+            parent_run_id="run-parent",
+            root_run_id="run-root",
+            spawned_by_step_no=2,
+            agent_key="specialist.lookup",
+        )
+        join_policy = JoinPolicy(
+            on_required_child_failed=PlanOutcomeStatus.FAILED,
+            on_required_child_handoff=PlanOutcomeStatus.HANDOFF,
+            on_required_child_stopped=PlanOutcomeStatus.STOPPED,
+        )
+        join_state = JoinState(
+            child_run_ids=("child-1",),
+            required_child_run_ids=("child-1",),
+            completed_child_run_ids=("child-1",),
+            last_joined_sequence_no=2,
+            timeout_at=datetime.now(timezone.utc),
+            policy=join_policy,
+            metadata={"trace": "1"},
+        )
         tool_invocations = runtime_module._tool_call_invocations(  # pylint: disable=protected-access
             [
                 {
@@ -429,6 +454,30 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._request_snapshot(request)["service_route_key"],
             "support.primary",
+        )
+        self.assertIsNone(runtime_module._serialize_lineage(None))  # pylint: disable=protected-access
+        self.assertIsNone(runtime_module._deserialize_lineage(None))  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            runtime_module._deserialize_lineage(
+                runtime_module._serialize_lineage(lineage)  # pylint: disable=protected-access
+            ).agent_key,
+            "specialist.lookup",
+        )
+        self.assertIsNone(runtime_module._serialize_join_policy(None))  # pylint: disable=protected-access
+        self.assertIsNone(runtime_module._deserialize_join_policy(None))  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            runtime_module._deserialize_join_policy(
+                runtime_module._serialize_join_policy(join_policy)  # pylint: disable=protected-access
+            ).on_required_child_failed,
+            PlanOutcomeStatus.FAILED,
+        )
+        self.assertIsNone(runtime_module._serialize_join_state(None))  # pylint: disable=protected-access
+        self.assertIsNone(runtime_module._deserialize_join_state(None))  # pylint: disable=protected-access
+        self.assertEqual(  # pylint: disable=protected-access
+            runtime_module._deserialize_join_state(
+                runtime_module._serialize_join_state(join_state)  # pylint: disable=protected-access
+            ).last_joined_sequence_no,
+            2,
         )
         self.assertTrue(runtime_module._serialize_policy(policy)["enabled"])  # pylint: disable=protected-access
         self.assertEqual(  # pylint: disable=protected-access
@@ -566,6 +615,80 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(route_policy.enabled)
         self.assertTrue(route_policy.background_enabled)
         self.assertEqual(route_policy.max_iterations, 7)
+
+        missing_agent_resolver = CodeConfiguredAgentPolicyResolver(
+            config=SimpleNamespace(
+                mugen=SimpleNamespace(
+                    agent_runtime=SimpleNamespace(
+                        enabled=True,
+                        routes=[SimpleNamespace(service_route_key=None, background_enabled=True)],
+                    )
+                )
+            )
+        )
+        missing_agent_policy = await missing_agent_resolver.resolve_policy(
+            _request(service_route_key=None)
+        )
+        self.assertTrue(missing_agent_policy.background_enabled)
+
+        unresolved_agent_policy = await dict_resolver.resolve_policy(
+            _request(service_route_key="support.primary", metadata={"x": 1})
+        )
+        self.assertNotIn("agent_definition_missing", unresolved_agent_policy.metadata)
+
+        unknown_agent_policy = await CodeConfiguredAgentPolicyResolver(
+            config=SimpleNamespace(
+                mugen=SimpleNamespace(
+                    agent_runtime=SimpleNamespace(
+                        enabled=True,
+                        agent_key="coordinator.root",
+                    )
+                )
+            )
+        ).resolve_policy(_request(agent_key="missing.agent"))
+        self.assertEqual(unknown_agent_policy.agent_key, "missing.agent")
+        self.assertEqual(
+            unknown_agent_policy.metadata["agent_definition_missing"],
+            "missing.agent",
+        )
+
+    async def test_relational_plan_run_store_row_to_run_handles_rows_without_lineage(self) -> None:
+        store = RelationalPlanRunStore(
+            run_service=_FakeRunService(),
+            step_service=_FakeStepService(),
+        )
+        now = datetime.now(timezone.utc)
+        row = SimpleNamespace(
+            id=uuid.uuid4(),
+            mode=PlanRunMode.BACKGROUND.value,
+            status=PlanRunStatus.PREPARED.value,
+            policy_json=runtime_module._serialize_policy(  # pylint: disable=protected-access
+                AgentRuntimePolicy(enabled=True, background_enabled=True)
+            ),
+            run_state_json=runtime_module._serialize_state(  # pylint: disable=protected-access
+                PlanRunState(goal="hello")
+            ),
+            request_json={"mode": "background", "scope": runtime_module._scope_to_dict(_scope())},  # pylint: disable=protected-access
+            service_route_key="support.primary",
+            parent_run_id=None,
+            root_run_id=None,
+            agent_key=None,
+            spawned_by_step_no=None,
+            join_state_json=None,
+            current_sequence_no=0,
+            next_wakeup_at=None,
+            lease_owner=None,
+            lease_expires_at=None,
+            final_outcome_json=None,
+            created_at=now,
+            updated_at=now,
+            row_version=1,
+            metadata_json={},
+        )
+
+        prepared = store._row_to_run(row)  # pylint: disable=protected-access
+
+        self.assertIsNone(prepared.lineage)
 
     async def test_llm_planner_uses_prepared_context_with_tool_calls(self) -> None:
         capability = CapabilityDescriptor(

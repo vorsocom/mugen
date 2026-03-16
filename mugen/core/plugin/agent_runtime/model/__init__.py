@@ -46,9 +46,29 @@ class AgentPlanRun(
         nullable=True,
         index=True,
     )
+    parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{_SCHEMA}.agent_runtime_plan_run.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    root_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{_SCHEMA}.agent_runtime_plan_run.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    agent_key: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+    spawned_by_step_no: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
     request_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
     policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
     run_state_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    join_state_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     current_sequence_no: Mapped[int] = mapped_column(
         BigInteger,
@@ -82,6 +102,10 @@ class AgentPlanRun(
                 "length(btrim(service_route_key)) > 0"
             ),
             name="ck_agent_run__service_route_nonempty_if_set",
+        ),
+        CheckConstraint(
+            "agent_key IS NULL OR length(btrim(agent_key)) > 0",
+            name="ck_agent_run__agent_key_nonempty_if_set",
         ),
         {
             "schema": _SCHEMA,
@@ -133,6 +157,21 @@ Index(
     AgentPlanRun.tenant_id,
     AgentPlanRun.mode,
     AgentPlanRun.status,
+)
+Index(
+    "ix_agent_run__tenant_parent",
+    AgentPlanRun.tenant_id,
+    AgentPlanRun.parent_run_id,
+)
+Index(
+    "ix_agent_run__tenant_root",
+    AgentPlanRun.tenant_id,
+    AgentPlanRun.root_run_id,
+)
+Index(
+    "ix_agent_run__tenant_agent",
+    AgentPlanRun.tenant_id,
+    AgentPlanRun.agent_key,
 )
 Index(
     "ix_agent_step__tenant_run_occurred",

@@ -13,14 +13,18 @@ from mugen.core.contract.agent import (
     CapabilityDescriptor,
     CapabilityInvocation,
     CapabilityResult,
+    DelegationInstruction,
     EvaluationResult,
     EvaluationStatus,
+    JoinPolicy,
+    JoinState,
     PlanDecision,
     PlanDecisionKind,
     PlanLease,
     PlanOutcome,
     PlanOutcomeStatus,
     PlanRunCursor,
+    PlanRunLineage,
     PlanRunMode,
     PlanRunRequest,
     PlanRunState,
@@ -78,14 +82,19 @@ def _request(
     mode: PlanRunMode = PlanRunMode.CURRENT_TURN,
     prepared_context: PreparedContextTurn | None = None,
     run_id: str | None = None,
+    service_route_key: str | None = "support.primary",
+    agent_key: str | None = None,
+    metadata: dict | None = None,
 ) -> PlanRunRequest:
     return PlanRunRequest(
         mode=mode,
         scope=_scope(),
         user_message="Handle the request",
-        service_route_key="support.primary",
+        service_route_key=service_route_key,
+        agent_key=agent_key,
         prepared_context=prepared_context,
         run_id=run_id,
+        metadata=dict(metadata or {}),
     )
 
 
@@ -118,6 +127,7 @@ def _run(
             "message_id": resolved_request.message_id,
             "trace_id": resolved_request.trace_id,
             "service_route_key": resolved_request.service_route_key,
+            "agent_key": resolved_request.agent_key,
             "ingress_metadata": dict(resolved_request.ingress_metadata),
             "metadata": dict(resolved_request.metadata),
         },
@@ -501,6 +511,265 @@ class TestMugenAgentRuntimeService(unittest.IsolatedAsyncioTestCase):
             run_id="run-background",
             owner="worker-1",
         )
+
+    async def test_run_current_turn_rejects_delegate_decision(self) -> None:
+        request = _request(prepared_context=_prepared_context())
+        run = _run(request=request)
+        planning_engine = Mock()
+        planning_engine.prepare_run = AsyncMock(return_value=run)
+        planning_engine.next_decision = AsyncMock(
+            return_value=PlanDecision(
+                kind=PlanDecisionKind.DELEGATE,
+                delegations=(
+                    DelegationInstruction(
+                        agent_key="specialist.lookup",
+                        task_brief="Investigate this",
+                    ),
+                ),
+            )
+        )
+        planning_engine.finalize_run = AsyncMock(side_effect=lambda *_args: run)
+
+        runtime = _runtime(
+            planning_engine=planning_engine,
+            evaluation_engine=Mock(),
+            executor=Mock(
+                list_capabilities=AsyncMock(return_value=[]),
+                execute_capability=AsyncMock(),
+            ),
+            plan_run_store=Mock(
+                save_run=AsyncMock(side_effect=lambda prepared_run: prepared_run),
+                append_step=AsyncMock(side_effect=_append_cursor_side_effect()),
+                finalize_run=AsyncMock(side_effect=lambda *, run_id, outcome: outcome),
+            ),
+        )
+
+        outcome = await runtime.run_current_turn(request)
+
+        self.assertEqual(outcome.status, PlanOutcomeStatus.HANDOFF)
+        self.assertEqual(outcome.error_message, "delegate_not_allowed_in_current_turn")
+
+    async def test_run_background_batch_delegates_waits_and_resumes_on_child_completion(self) -> None:
+        parent_request = _request(
+            mode=PlanRunMode.BACKGROUND,
+            agent_key="coordinator.root",
+        )
+        parent_run = _run(
+            run_id="run-parent",
+            mode=PlanRunMode.BACKGROUND,
+            request=parent_request,
+            policy=AgentRuntimePolicy(
+                enabled=True,
+                background_enabled=True,
+                agent_key="coordinator.root",
+                delegate_agent_allow=("specialist.lookup",),
+                max_background_iterations=4,
+            ),
+        )
+        child_run = _run(
+            run_id="run-child",
+            mode=PlanRunMode.BACKGROUND,
+            request=_request(
+                mode=PlanRunMode.BACKGROUND,
+                service_route_key="support.lookup",
+                agent_key="specialist.lookup",
+            ),
+            policy=AgentRuntimePolicy(
+                enabled=True,
+                background_enabled=True,
+                agent_key="specialist.lookup",
+            ),
+            status=PlanRunStatus.PREPARED,
+        )
+        child_run.lineage = PlanRunLineage(
+            parent_run_id="run-parent",
+            root_run_id="run-parent",
+            spawned_by_step_no=1,
+            agent_key="specialist.lookup",
+        )
+        child_completed = _run(
+            run_id="run-child",
+            mode=PlanRunMode.BACKGROUND,
+            request=_request(
+                mode=PlanRunMode.BACKGROUND,
+                service_route_key="support.lookup",
+                agent_key="specialist.lookup",
+            ),
+            policy=child_run.policy,
+            status=PlanRunStatus.COMPLETED,
+        )
+        child_completed.lineage = child_run.lineage
+        child_completed.final_outcome = PlanOutcome(
+            status=PlanOutcomeStatus.COMPLETED,
+            assistant_response="lookup complete",
+        )
+
+        parent_waiting = _run(
+            run_id="run-parent",
+            mode=PlanRunMode.BACKGROUND,
+            request=parent_request,
+            policy=parent_run.policy,
+            status=PlanRunStatus.WAITING,
+        )
+        parent_waiting.lineage = PlanRunLineage(
+            root_run_id="run-parent",
+            agent_key="coordinator.root",
+        )
+        parent_waiting.join_state = JoinState(
+            child_run_ids=("run-child",),
+            required_child_run_ids=("run-child",),
+            policy=JoinPolicy(),
+        )
+
+        planning_engine = Mock()
+        planning_engine.prepare_run = AsyncMock(side_effect=[child_run])
+        planning_engine.next_decision = AsyncMock(
+            side_effect=[
+                PlanDecision(
+                    kind=PlanDecisionKind.DELEGATE,
+                    delegations=(
+                        DelegationInstruction(
+                            agent_key="specialist.lookup",
+                            task_brief="Look this up",
+                            service_route_key="support.lookup",
+                        ),
+                    ),
+                    join_policy=JoinPolicy(),
+                ),
+                PlanDecision(
+                    kind=PlanDecisionKind.RESPOND,
+                    response_text="Final after child",
+                ),
+            ]
+        )
+        planning_engine.finalize_run = AsyncMock(
+            side_effect=lambda *_args: parent_waiting
+        )
+
+        evaluation_engine = Mock()
+        evaluation_engine.evaluate_step = AsyncMock()
+        evaluation_engine.evaluate_response = AsyncMock(
+            return_value=EvaluationResult(status=EvaluationStatus.PASS)
+        )
+
+        executor = Mock()
+        executor.list_capabilities = AsyncMock(return_value=[])
+        executor.execute_capability = AsyncMock()
+
+        plan_run_store = Mock()
+        plan_run_store.list_runnable_runs = AsyncMock(
+            side_effect=[[parent_run], [parent_waiting]]
+        )
+        plan_run_store.acquire_lease = AsyncMock(
+            return_value=PlanLease(
+                owner="worker-1",
+                expires_at=datetime.now(timezone.utc),
+            )
+        )
+        plan_run_store.release_lease = AsyncMock()
+        plan_run_store.save_run = AsyncMock(side_effect=lambda prepared_run: prepared_run)
+        plan_run_store.append_step = AsyncMock(side_effect=_append_cursor_side_effect())
+        plan_run_store.finalize_run = AsyncMock(
+            side_effect=lambda *, run_id, outcome: outcome
+        )
+        plan_run_store.load_run = AsyncMock(side_effect=[parent_run, parent_waiting])
+        plan_run_store.list_child_runs = AsyncMock(return_value=[child_completed])
+        plan_run_store.load_run_graph = AsyncMock(return_value=[parent_waiting, child_completed])
+
+        runtime = _runtime(
+            planning_engine=planning_engine,
+            evaluation_engine=evaluation_engine,
+            executor=executor,
+            plan_run_store=plan_run_store,
+        )
+
+        first_outcomes = await runtime.run_background_batch(owner="worker-1", limit=10)
+        second_outcomes = await runtime.run_background_batch(owner="worker-1", limit=10)
+
+        self.assertEqual(first_outcomes[0].status, PlanOutcomeStatus.WAITING)
+        self.assertEqual(second_outcomes[0].status, PlanOutcomeStatus.COMPLETED)
+        self.assertEqual(second_outcomes[0].assistant_response, "Final after child")
+        self.assertEqual(planning_engine.prepare_run.await_count, 1)
+        self.assertEqual(planning_engine.next_decision.await_count, 2)
+        self.assertGreaterEqual(plan_run_store.list_child_runs.await_count, 1)
+
+    async def test_run_background_batch_handoffs_when_required_child_fails(self) -> None:
+        parent_request = _request(
+            mode=PlanRunMode.BACKGROUND,
+            agent_key="coordinator.root",
+        )
+        parent_run = _run(
+            run_id="run-parent",
+            mode=PlanRunMode.BACKGROUND,
+            request=parent_request,
+            policy=AgentRuntimePolicy(
+                enabled=True,
+                background_enabled=True,
+                agent_key="coordinator.root",
+            ),
+            status=PlanRunStatus.WAITING,
+        )
+        parent_run.lineage = PlanRunLineage(
+            root_run_id="run-parent",
+            agent_key="coordinator.root",
+        )
+        parent_run.join_state = JoinState(
+            child_run_ids=("run-child",),
+            required_child_run_ids=("run-child",),
+            policy=JoinPolicy(),
+        )
+        failed_child = _run(
+            run_id="run-child",
+            mode=PlanRunMode.BACKGROUND,
+            request=_request(
+                mode=PlanRunMode.BACKGROUND,
+                agent_key="specialist.lookup",
+            ),
+            status=PlanRunStatus.FAILED,
+        )
+        failed_child.lineage = PlanRunLineage(
+            parent_run_id="run-parent",
+            root_run_id="run-parent",
+            agent_key="specialist.lookup",
+        )
+        failed_child.final_outcome = PlanOutcome(
+            status=PlanOutcomeStatus.FAILED,
+            error_message="child failed",
+        )
+
+        runtime = _runtime(
+            planning_engine=Mock(
+                prepare_run=AsyncMock(),
+                next_decision=AsyncMock(),
+                finalize_run=AsyncMock(side_effect=lambda *_args: parent_run),
+            ),
+            evaluation_engine=Mock(),
+            executor=Mock(
+                list_capabilities=AsyncMock(return_value=[]),
+                execute_capability=AsyncMock(),
+            ),
+            plan_run_store=Mock(
+                list_runnable_runs=AsyncMock(return_value=[parent_run]),
+                acquire_lease=AsyncMock(
+                    return_value=PlanLease(
+                        owner="worker-1",
+                        expires_at=datetime.now(timezone.utc),
+                    )
+                ),
+                release_lease=AsyncMock(),
+                save_run=AsyncMock(side_effect=lambda prepared_run: prepared_run),
+                append_step=AsyncMock(side_effect=_append_cursor_side_effect()),
+                finalize_run=AsyncMock(side_effect=lambda *, run_id, outcome: outcome),
+                load_run=AsyncMock(return_value=parent_run),
+                list_child_runs=AsyncMock(return_value=[failed_child]),
+                load_run_graph=AsyncMock(return_value=[parent_run, failed_child]),
+            ),
+        )
+
+        outcomes = await runtime.run_background_batch(owner="worker-1", limit=10)
+
+        self.assertEqual(outcomes[0].status, PlanOutcomeStatus.HANDOFF)
+        self.assertEqual(outcomes[0].error_message, "required_child_failed")
 
 
 if __name__ == "__main__":

@@ -165,7 +165,8 @@ effective `AgentRuntimePolicy`.
 - Input: `PlanRunRequest`
 - Output: `AgentRuntimePolicy`
 - Good fit: route enablement, planner/evaluator selection, capability
-  allowlists, iteration budgets
+  allowlists, delegate-agent allowlists, agent identity selection, iteration
+  budgets
 - Do not use to execute capabilities or persist step history
 
 Current reference implementation: `CodeConfiguredAgentPolicyResolver` reads
@@ -207,24 +208,39 @@ Current reference implementation recognizes this runtime-config shape:
 enabled = true
 current_turn_enabled = true
 background_enabled = false
+agent_key = "coordinator.root"
 planner_key = "llm_default"
 evaluator_key = "llm_default"
 response_synthesizer_key = "text_default"
 capability_allow = ["acp__OpsCases__assign"]
+delegate_agent_allow = ["specialist.lookup"]
 max_iterations = 4
 max_background_iterations = 8
 lease_seconds = 60
 wait_seconds_default = 30
 
+[[mugen.agent_runtime.agents]]
+agent_key = "coordinator.root"
+planner_key = "llm_default"
+delegate_agent_allow = ["specialist.lookup", "specialist.audit"]
+
+[[mugen.agent_runtime.agents]]
+agent_key = "specialist.lookup"
+service_route_key = "support.lookup"
+planner_key = "lookup_planner"
+
 [[mugen.agent_runtime.routes]]
 service_route_key = "support.primary"
 background_enabled = true
+agent_key = "coordinator.root"
 capability_allow = ["acp__OpsCases__assign", "acp__OpsCases__escalate"]
 ```
 
 Current behavior notes:
 
 - route matching is exact on `service_route_key`;
+- explicit request `agent_key` wins over route-selected `agent_key`;
+- selected agent definitions overlay root defaults before route overrides;
 - route values overlay root defaults;
 - an empty route allowlist inherits the default allowlist;
 - planner, evaluator, and synthesizer selection is by exact `name`.

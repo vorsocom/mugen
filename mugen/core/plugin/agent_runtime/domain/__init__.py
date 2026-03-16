@@ -23,9 +23,14 @@ class AgentPlanRunDE(BaseDE, TenantScopedDEMixin):
     mode: str | None = None
     status: str | None = None
     service_route_key: str | None = None
+    parent_run_id: str | None = None
+    root_run_id: str | None = None
+    agent_key: str | None = None
+    spawned_by_step_no: int | None = None
     request_json: dict[str, Any] | None = None
     policy_json: dict[str, Any] | None = None
     run_state_json: dict[str, Any] | None = None
+    join_state_json: dict[str, Any] | None = None
     metadata_json: dict[str, Any] | None = None
     current_sequence_no: int | None = None
     next_wakeup_at: datetime | None = None
