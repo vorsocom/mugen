@@ -28,6 +28,8 @@ from mugen.core.contract.agent import (
     CapabilityDescriptor,
     CapabilityInvocation,
     CapabilityResult,
+    JoinPolicy,
+    JoinState,
     EvaluationRequest,
     EvaluationResult,
     EvaluationStatus,
@@ -46,6 +48,7 @@ from mugen.core.contract.agent import (
     PlanOutcome,
     PlanOutcomeStatus,
     PlanRunCursor,
+    PlanRunLineage,
     PlanRunMode,
     PlanRunRequest,
     PlanRunState,
@@ -81,6 +84,13 @@ def _normalize_optional_text(value: object) -> str | None:
     return normalized or None
 
 
+def _uuid_or_none(value: object) -> uuid.UUID | None:
+    normalized = _normalize_optional_text(value)
+    if normalized is None:
+        return None
+    return uuid.UUID(normalized)
+
+
 def _scope_key(scope: ContextScope) -> str:
     parts = [
         scope.tenant_id,
@@ -107,9 +117,95 @@ def _request_snapshot(request: PlanRunRequest) -> dict[str, Any]:
         "message_id": request.message_id,
         "trace_id": request.trace_id,
         "service_route_key": request.service_route_key,
+        "agent_key": request.agent_key,
         "ingress_metadata": dict(request.ingress_metadata),
         "metadata": dict(request.metadata),
     }
+
+
+def _serialize_lineage(lineage: PlanRunLineage | None) -> dict[str, Any] | None:
+    if lineage is None:
+        return None
+    return {
+        "parent_run_id": lineage.parent_run_id,
+        "root_run_id": lineage.root_run_id,
+        "spawned_by_step_no": lineage.spawned_by_step_no,
+        "agent_key": lineage.agent_key,
+    }
+
+
+def _deserialize_lineage(payload: dict[str, Any] | None) -> PlanRunLineage | None:
+    if not isinstance(payload, dict):
+        return None
+    return PlanRunLineage(
+        parent_run_id=_normalize_optional_text(payload.get("parent_run_id")),
+        root_run_id=_normalize_optional_text(payload.get("root_run_id")),
+        spawned_by_step_no=payload.get("spawned_by_step_no"),
+        agent_key=_normalize_optional_text(payload.get("agent_key")),
+    )
+
+
+def _serialize_join_policy(policy: JoinPolicy | None) -> dict[str, Any] | None:
+    if policy is None:
+        return None
+    return {
+        "mode": policy.mode.value,
+        "on_required_child_failed": policy.on_required_child_failed.value,
+        "on_required_child_handoff": policy.on_required_child_handoff.value,
+        "on_required_child_stopped": policy.on_required_child_stopped.value,
+        "metadata": dict(policy.metadata),
+    }
+
+
+def _deserialize_join_policy(payload: dict[str, Any] | None) -> JoinPolicy | None:
+    if not isinstance(payload, dict):
+        return None
+    return JoinPolicy(
+        mode=str(payload.get("mode") or "all_required"),
+        on_required_child_failed=str(
+            payload.get("on_required_child_failed") or PlanOutcomeStatus.HANDOFF.value
+        ),
+        on_required_child_handoff=str(
+            payload.get("on_required_child_handoff") or PlanOutcomeStatus.HANDOFF.value
+        ),
+        on_required_child_stopped=str(
+            payload.get("on_required_child_stopped") or PlanOutcomeStatus.HANDOFF.value
+        ),
+        metadata=dict(payload.get("metadata") or {}),
+    )
+
+
+def _serialize_join_state(join_state: JoinState | None) -> dict[str, Any] | None:
+    if join_state is None:
+        return None
+    return {
+        "child_run_ids": list(join_state.child_run_ids),
+        "required_child_run_ids": list(join_state.required_child_run_ids),
+        "completed_child_run_ids": list(join_state.completed_child_run_ids),
+        "last_joined_sequence_no": join_state.last_joined_sequence_no,
+        "timeout_at": None if join_state.timeout_at is None else join_state.timeout_at.isoformat(),
+        "policy": _serialize_join_policy(join_state.policy),
+        "metadata": dict(join_state.metadata),
+    }
+
+
+def _deserialize_join_state(payload: dict[str, Any] | None) -> JoinState | None:
+    if not isinstance(payload, dict):
+        return None
+    timeout_at = payload.get("timeout_at")
+    if isinstance(timeout_at, str) and timeout_at != "":
+        timeout_value = datetime.fromisoformat(timeout_at)
+    else:
+        timeout_value = None
+    return JoinState(
+        child_run_ids=tuple(payload.get("child_run_ids") or ()),
+        required_child_run_ids=tuple(payload.get("required_child_run_ids") or ()),
+        completed_child_run_ids=tuple(payload.get("completed_child_run_ids") or ()),
+        last_joined_sequence_no=int(payload.get("last_joined_sequence_no") or 0),
+        timeout_at=timeout_value,
+        policy=_deserialize_join_policy(payload.get("policy")) or JoinPolicy(),
+        metadata=dict(payload.get("metadata") or {}),
+    )
 
 
 def _serialize_policy(policy: AgentRuntimePolicy) -> dict[str, Any]:
@@ -117,10 +213,12 @@ def _serialize_policy(policy: AgentRuntimePolicy) -> dict[str, Any]:
         "enabled": policy.enabled,
         "current_turn_enabled": policy.current_turn_enabled,
         "background_enabled": policy.background_enabled,
+        "agent_key": policy.agent_key,
         "planner_key": policy.planner_key,
         "evaluator_key": policy.evaluator_key,
         "response_synthesizer_key": policy.response_synthesizer_key,
         "capability_allow": list(policy.capability_allow),
+        "delegate_agent_allow": list(policy.delegate_agent_allow),
         "max_iterations": policy.max_iterations,
         "max_background_iterations": policy.max_background_iterations,
         "lease_seconds": policy.lease_seconds,
@@ -135,12 +233,14 @@ def _deserialize_policy(payload: dict[str, Any] | None) -> AgentRuntimePolicy:
         enabled=bool(payload.get("enabled", False)),
         current_turn_enabled=bool(payload.get("current_turn_enabled", False)),
         background_enabled=bool(payload.get("background_enabled", False)),
+        agent_key=_normalize_optional_text(payload.get("agent_key")),
         planner_key=str(payload.get("planner_key") or "llm_default"),
         evaluator_key=str(payload.get("evaluator_key") or "llm_default"),
         response_synthesizer_key=str(
             payload.get("response_synthesizer_key") or "text_default"
         ),
         capability_allow=tuple(payload.get("capability_allow") or ()),
+        delegate_agent_allow=tuple(payload.get("delegate_agent_allow") or ()),
         max_iterations=int(payload.get("max_iterations") or 4),
         max_background_iterations=int(payload.get("max_background_iterations") or 8),
         lease_seconds=int(payload.get("lease_seconds") or 60),
@@ -355,16 +455,59 @@ class CodeConfiguredAgentPolicyResolver(IAgentPolicyResolver):
             return AgentRuntimePolicy()
 
         defaults = self._policy_from_config(cfg)
-        service_route_key = request.service_route_key
-        for route_cfg in _cfg_list(cfg, "routes"):
-            if _normalize_optional_text(_cfg_value(route_cfg, "service_route_key")) != service_route_key:
-                continue
-            route_policy = self._policy_from_config(route_cfg, base=defaults)
-            route_policy.metadata["service_route_key"] = service_route_key
-            return route_policy
+        route_cfg = self._route_config(cfg, request.service_route_key)
+        requested_agent_key = _normalize_optional_text(request.agent_key)
+        route_agent_key = None
+        if route_cfg is not None:
+            route_agent_key = _normalize_optional_text(_cfg_value(route_cfg, "agent_key"))
+        selected_agent_key = requested_agent_key or route_agent_key or defaults.agent_key
 
-        defaults.metadata["service_route_key"] = service_route_key
-        return defaults
+        policy = defaults
+        agent_cfg = self._agent_config(cfg, selected_agent_key)
+        if agent_cfg is not None:
+            policy = self._policy_from_config(agent_cfg, base=policy)
+        elif selected_agent_key is not None:
+            policy.agent_key = selected_agent_key
+
+        if route_cfg is not None:
+            policy = self._policy_from_config(route_cfg, base=policy)
+
+        resolved_route_key = request.service_route_key
+        if resolved_route_key is None and route_cfg is not None:
+            resolved_route_key = _normalize_optional_text(
+                _cfg_value(route_cfg, "service_route_key")
+            )
+        if resolved_route_key is None and agent_cfg is not None:
+            resolved_route_key = _normalize_optional_text(
+                _cfg_value(agent_cfg, "service_route_key")
+            )
+
+        policy.agent_key = selected_agent_key or policy.agent_key
+        policy.metadata = dict(policy.metadata)
+        policy.metadata["service_route_key"] = resolved_route_key
+        if selected_agent_key is not None and agent_cfg is None:
+            policy.metadata["agent_definition_missing"] = selected_agent_key
+        return policy
+
+    @staticmethod
+    def _route_config(cfg: Any, service_route_key: str | None) -> Any | None:
+        normalized_route = _normalize_optional_text(service_route_key)
+        for route_cfg in _cfg_list(cfg, "routes"):
+            if _normalize_optional_text(_cfg_value(route_cfg, "service_route_key")) != normalized_route:
+                continue
+            return route_cfg
+        return None
+
+    @staticmethod
+    def _agent_config(cfg: Any, agent_key: str | None) -> Any | None:
+        normalized_agent_key = _normalize_optional_text(agent_key)
+        if normalized_agent_key is None:
+            return None
+        for agent_cfg in _cfg_list(cfg, "agents"):
+            if _normalize_optional_text(_cfg_value(agent_cfg, "agent_key")) != normalized_agent_key:
+                continue
+            return agent_cfg
+        return None
 
     def _policy_from_config(
         self,
@@ -406,10 +549,19 @@ class CodeConfiguredAgentPolicyResolver(IAgentPolicyResolver):
             )
             if item is not None
         )
+        delegate_agent_allow = tuple(
+            item
+            for item in (
+                _normalize_optional_text(value)
+                for value in _cfg_list(cfg, "delegate_agent_allow")
+            )
+            if item is not None
+        )
         return AgentRuntimePolicy(
             enabled=enabled,
             current_turn_enabled=current_turn_enabled,
             background_enabled=background_enabled,
+            agent_key=_normalize_optional_text(_cfg_value(cfg, "agent_key")) or seed.agent_key,
             planner_key=str(_cfg_value(cfg, "planner_key") or seed.planner_key),
             evaluator_key=str(_cfg_value(cfg, "evaluator_key") or seed.evaluator_key),
             response_synthesizer_key=str(
@@ -417,6 +569,7 @@ class CodeConfiguredAgentPolicyResolver(IAgentPolicyResolver):
                 or seed.response_synthesizer_key
             ),
             capability_allow=capability_allow or seed.capability_allow,
+            delegate_agent_allow=delegate_agent_allow or seed.delegate_agent_allow,
             max_iterations=max_iterations or seed.max_iterations,
             max_background_iterations=(
                 max_background_iterations or seed.max_background_iterations
@@ -987,6 +1140,8 @@ class RelationalPlanRunStore(IPlanRunStore):
         *,
         state: PlanRunState,
         policy: AgentRuntimePolicy,
+        lineage: PlanRunLineage | None = None,
+        join_state: JoinState | None = None,
     ) -> PreparedPlanRun:
         tenant_id = uuid.UUID(request.scope.tenant_id)
         run_row = await self._run_service.create(
@@ -1000,6 +1155,17 @@ class RelationalPlanRunStore(IPlanRunStore):
                 "policy_json": _serialize_policy(policy),
                 "run_state_json": _serialize_state(state),
                 "metadata_json": dict(request.metadata),
+                "parent_run_id": _uuid_or_none(None if lineage is None else lineage.parent_run_id),
+                "root_run_id": _uuid_or_none(None if lineage is None else lineage.root_run_id),
+                "agent_key": _normalize_optional_text(
+                    None
+                    if lineage is None
+                    else lineage.agent_key
+                )
+                or request.agent_key
+                or policy.agent_key,
+                "spawned_by_step_no": None if lineage is None else lineage.spawned_by_step_no,
+                "join_state_json": _serialize_join_state(join_state),
                 "current_sequence_no": 0,
                 "next_wakeup_at": None,
                 "lease_owner": None,
@@ -1008,6 +1174,12 @@ class RelationalPlanRunStore(IPlanRunStore):
                 "last_error": None,
             }
         )
+        if getattr(run_row, "root_run_id", None) is None:
+            run_row = await self._run_service.update_with_row_version(
+                {"id": run_row.id},
+                expected_row_version=run_row.row_version,
+                changes={"root_run_id": run_row.id},
+            )
         return self._row_to_run(run_row)
 
     async def load_run(self, run_id: str) -> PreparedPlanRun | None:
@@ -1028,6 +1200,20 @@ class RelationalPlanRunStore(IPlanRunStore):
                 "policy_json": _serialize_policy(run.policy),
                 "run_state_json": _serialize_state(run.state),
                 "metadata_json": dict(run.metadata),
+                "parent_run_id": _uuid_or_none(
+                    None if run.lineage is None else run.lineage.parent_run_id
+                ),
+                "root_run_id": _uuid_or_none(
+                    None if run.lineage is None else run.lineage.root_run_id
+                ),
+                "agent_key": _normalize_optional_text(
+                    None if run.lineage is None else run.lineage.agent_key
+                )
+                or run.policy.agent_key,
+                "spawned_by_step_no": None
+                if run.lineage is None
+                else run.lineage.spawned_by_step_no,
+                "join_state_json": _serialize_join_state(run.join_state),
                 "current_sequence_no": run.cursor.next_sequence_no - 1,
                 "next_wakeup_at": run.next_wakeup_at,
                 "lease_owner": None if run.lease is None else run.lease.owner,
@@ -1123,6 +1309,14 @@ class RelationalPlanRunStore(IPlanRunStore):
                 continue
             if row.lease_expires_at is not None and row.lease_expires_at > current:
                 continue
+            join_ready = await self._join_barrier_satisfied(row)
+            if getattr(row, "join_state_json", None) is not None and join_ready is False:
+                continue
+            if join_ready:
+                due.append(self._row_to_run(row))
+                if len(due) >= limit:
+                    break
+                continue
             if row.next_wakeup_at is not None and row.next_wakeup_at > current:
                 continue
             due.append(self._row_to_run(row))
@@ -1172,6 +1366,54 @@ class RelationalPlanRunStore(IPlanRunStore):
             for step in steps
         ]
 
+    async def list_child_runs(
+        self,
+        parent_run_id: str,
+        *,
+        terminal_only: bool = False,
+    ) -> list[PreparedPlanRun]:
+        parent_row = await self._require_run_row(parent_run_id)
+        rows = await self._run_service.list(
+            filter_groups=[
+                FilterGroup(
+                    where={
+                        "tenant_id": parent_row.tenant_id,
+                        "parent_run_id": parent_row.id,
+                    }
+                )
+            ],
+            order_by=[OrderBy(field="created_at")],
+        )
+        runs = [self._row_to_run(row) for row in rows]
+        if terminal_only:
+            return [
+                run
+                for run in runs
+                if run.status
+                in {
+                    PlanRunStatus.COMPLETED,
+                    PlanRunStatus.FAILED,
+                    PlanRunStatus.HANDOFF,
+                    PlanRunStatus.STOPPED,
+                }
+            ]
+        return runs
+
+    async def load_run_graph(self, root_run_id: str) -> list[PreparedPlanRun]:
+        root_row = await self._require_run_row(root_run_id)
+        rows = await self._run_service.list(
+            filter_groups=[
+                FilterGroup(
+                    where={
+                        "tenant_id": root_row.tenant_id,
+                        "root_run_id": root_row.root_run_id or root_row.id,
+                    }
+                )
+            ],
+            order_by=[OrderBy(field="created_at")],
+        )
+        return [self._row_to_run(row) for row in rows]
+
     async def _get_run_row(self, run_id: str) -> AgentPlanRunDE | None:
         normalized = _normalize_optional_text(run_id)
         if normalized is None:
@@ -1184,6 +1426,30 @@ class RelationalPlanRunStore(IPlanRunStore):
             raise RuntimeError(f"Unknown plan run: {run_id}.")
         return row
 
+    async def _join_barrier_satisfied(self, row: AgentPlanRunDE) -> bool:
+        join_state = _deserialize_join_state(getattr(row, "join_state_json", None))
+        if join_state is None:
+            return False
+        if not join_state.required_child_run_ids:
+            return True
+        child_rows = await self._run_service.list(
+            filter_groups=[
+                FilterGroup(
+                    where={
+                        "tenant_id": row.tenant_id,
+                        "parent_run_id": row.id,
+                    }
+                )
+            ],
+            order_by=[OrderBy(field="created_at")],
+        )
+        terminal_ids = {
+            str(child_row.id)
+            for child_row in child_rows
+            if child_row.status in self._terminal_statuses
+        }
+        return set(join_state.required_child_run_ids).issubset(terminal_ids)
+
     def _row_to_run(self, row: AgentPlanRunDE) -> PreparedPlanRun:
         run_id = str(row.id)
         status = PlanRunStatus(str(row.status or PlanRunStatus.PREPARED.value))
@@ -1193,6 +1459,23 @@ class RelationalPlanRunStore(IPlanRunStore):
         lease = None
         if row.lease_owner is not None and row.lease_expires_at is not None:
             lease = PlanLease(owner=row.lease_owner, expires_at=row.lease_expires_at)
+        lineage = None
+        if (
+            getattr(row, "parent_run_id", None) is not None
+            or getattr(row, "root_run_id", None) is not None
+            or _normalize_optional_text(getattr(row, "agent_key", None)) is not None
+            or getattr(row, "spawned_by_step_no", None) is not None
+        ):
+            lineage = PlanRunLineage(
+                parent_run_id=None
+                if getattr(row, "parent_run_id", None) is None
+                else str(row.parent_run_id),
+                root_run_id=None
+                if getattr(row, "root_run_id", None) is None
+                else str(row.root_run_id),
+                spawned_by_step_no=getattr(row, "spawned_by_step_no", None),
+                agent_key=_normalize_optional_text(getattr(row, "agent_key", None)),
+            )
         return PreparedPlanRun(
             run_id=run_id,
             mode=PlanRunMode(str(row.mode or PlanRunMode.CURRENT_TURN.value)),
@@ -1206,6 +1489,8 @@ class RelationalPlanRunStore(IPlanRunStore):
                 status=status,
             ),
             service_route_key=_normalize_optional_text(row.service_route_key),
+            lineage=lineage,
+            join_state=_deserialize_join_state(getattr(row, "join_state_json", None)),
             next_wakeup_at=row.next_wakeup_at,
             lease=lease,
             final_outcome=_deserialize_outcome(row.final_outcome_json),

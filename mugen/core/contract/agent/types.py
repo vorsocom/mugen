@@ -7,9 +7,14 @@ __all__ = [
     "CapabilityDescriptor",
     "CapabilityInvocation",
     "CapabilityResult",
+    "DelegationArtifactRef",
+    "DelegationInstruction",
     "EvaluationRequest",
     "EvaluationResult",
     "EvaluationStatus",
+    "JoinMode",
+    "JoinPolicy",
+    "JoinState",
     "PlanDecision",
     "PlanDecisionKind",
     "PlanLease",
@@ -17,6 +22,7 @@ __all__ = [
     "PlanOutcome",
     "PlanOutcomeStatus",
     "PlanRunCursor",
+    "PlanRunLineage",
     "PlanRunMode",
     "PlanRunRequest",
     "PlanRunState",
@@ -42,6 +48,14 @@ def _normalize_optional_text(value: object) -> str | None:
         raise TypeError("Agent-runtime text fields must be strings or None.")
     normalized = value.strip()
     return normalized or None
+
+
+def _normalize_text_tuple(values: tuple[str, ...] | list[str] | None) -> tuple[str, ...]:
+    return tuple(
+        item
+        for item in (_normalize_optional_text(value) for value in (values or ()))
+        if item is not None
+    )
 
 
 def _route_key_from_metadata(metadata: dict[str, Any]) -> str | None:
@@ -81,6 +95,7 @@ class PlanDecisionKind(str, Enum):
     WAIT = "wait"
     HANDOFF = "handoff"
     SPAWN_BACKGROUND = "spawn_background"
+    DELEGATE = "delegate"
     STOP = "stop"
 
 
@@ -114,6 +129,12 @@ class PlanRunStepKind(str, Enum):
     EFFECT = "effect"
 
 
+class JoinMode(str, Enum):
+    """Parent-child join strategies for delegated work."""
+
+    ALL_REQUIRED = "all_required"
+
+
 @dataclass(slots=True)
 class AgentRuntimePolicy:
     """Code-configured runtime policy snapshot for one request/run."""
@@ -121,15 +142,156 @@ class AgentRuntimePolicy:
     enabled: bool = False
     current_turn_enabled: bool = False
     background_enabled: bool = False
+    agent_key: str | None = None
     planner_key: str = "llm_default"
     evaluator_key: str = "llm_default"
     response_synthesizer_key: str = "text_default"
     capability_allow: tuple[str, ...] = ()
+    delegate_agent_allow: tuple[str, ...] = ()
     max_iterations: int = 4
     max_background_iterations: int = 8
     lease_seconds: int = 60
     wait_seconds_default: int = 30
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.agent_key = _normalize_optional_text(self.agent_key)
+        planner_key = _normalize_optional_text(self.planner_key)
+        evaluator_key = _normalize_optional_text(self.evaluator_key)
+        synthesizer_key = _normalize_optional_text(self.response_synthesizer_key)
+        self.planner_key = planner_key or ""
+        self.evaluator_key = evaluator_key or ""
+        self.response_synthesizer_key = synthesizer_key or ""
+        self.capability_allow = _normalize_text_tuple(self.capability_allow)
+        self.delegate_agent_allow = _normalize_text_tuple(self.delegate_agent_allow)
+        if not isinstance(self.metadata, dict):
+            raise TypeError("AgentRuntimePolicy.metadata must be a dict.")
+
+
+@dataclass(slots=True)
+class PlanRunLineage:
+    """Hierarchical lineage metadata for one plan run."""
+
+    parent_run_id: str | None = None
+    root_run_id: str | None = None
+    spawned_by_step_no: int | None = None
+    agent_key: str | None = None
+
+    def __post_init__(self) -> None:
+        self.parent_run_id = _normalize_optional_text(self.parent_run_id)
+        self.root_run_id = _normalize_optional_text(self.root_run_id)
+        self.agent_key = _normalize_optional_text(self.agent_key)
+
+
+@dataclass(slots=True)
+class DelegationArtifactRef:
+    """Stable reference to parent-produced artifacts shared with a child run."""
+
+    artifact_key: str
+    source_run_id: str
+    source_step_sequence_no: int | None = None
+    summary: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        artifact_key = _normalize_optional_text(self.artifact_key)
+        source_run_id = _normalize_optional_text(self.source_run_id)
+        if artifact_key is None:
+            raise ValueError("DelegationArtifactRef.artifact_key is required.")
+        if source_run_id is None:
+            raise ValueError("DelegationArtifactRef.source_run_id is required.")
+        if not isinstance(self.payload, dict):
+            raise TypeError("DelegationArtifactRef.payload must be a dict.")
+        if not isinstance(self.metadata, dict):
+            raise TypeError("DelegationArtifactRef.metadata must be a dict.")
+        self.artifact_key = artifact_key
+        self.source_run_id = source_run_id
+        self.summary = _normalize_optional_text(self.summary)
+
+
+@dataclass(slots=True)
+class DelegationInstruction:
+    """One child-agent delegation request emitted by a planner."""
+
+    agent_key: str
+    task_brief: str
+    service_route_key: str | None = None
+    artifacts: tuple[DelegationArtifactRef, ...] = ()
+    required: bool = True
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        agent_key = _normalize_optional_text(self.agent_key)
+        task_brief = _normalize_optional_text(self.task_brief)
+        if agent_key is None:
+            raise ValueError("DelegationInstruction.agent_key is required.")
+        if task_brief is None:
+            raise ValueError("DelegationInstruction.task_brief is required.")
+        self.agent_key = agent_key
+        self.task_brief = task_brief
+        self.service_route_key = _normalize_optional_text(self.service_route_key)
+        self.artifacts = tuple(self.artifacts or ())
+        for artifact in self.artifacts:
+            if not isinstance(artifact, DelegationArtifactRef):
+                raise TypeError(
+                    "DelegationInstruction.artifacts must contain DelegationArtifactRef values."
+                )
+        if not isinstance(self.metadata, dict):
+            raise TypeError("DelegationInstruction.metadata must be a dict.")
+
+
+@dataclass(slots=True)
+class JoinPolicy:
+    """Policy for resuming a parent run after child completion."""
+
+    mode: JoinMode = JoinMode.ALL_REQUIRED
+    on_required_child_failed: PlanOutcomeStatus = PlanOutcomeStatus.HANDOFF
+    on_required_child_handoff: PlanOutcomeStatus = PlanOutcomeStatus.HANDOFF
+    on_required_child_stopped: PlanOutcomeStatus = PlanOutcomeStatus.HANDOFF
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, JoinMode):
+            self.mode = JoinMode(str(self.mode))
+        if not isinstance(self.on_required_child_failed, PlanOutcomeStatus):
+            self.on_required_child_failed = PlanOutcomeStatus(
+                str(self.on_required_child_failed)
+            )
+        if not isinstance(self.on_required_child_handoff, PlanOutcomeStatus):
+            self.on_required_child_handoff = PlanOutcomeStatus(
+                str(self.on_required_child_handoff)
+            )
+        if not isinstance(self.on_required_child_stopped, PlanOutcomeStatus):
+            self.on_required_child_stopped = PlanOutcomeStatus(
+                str(self.on_required_child_stopped)
+            )
+        if not isinstance(self.metadata, dict):
+            raise TypeError("JoinPolicy.metadata must be a dict.")
+
+
+@dataclass(slots=True)
+class JoinState:
+    """Persisted waiting state for a parent run that delegated child work."""
+
+    child_run_ids: tuple[str, ...] = ()
+    required_child_run_ids: tuple[str, ...] = ()
+    completed_child_run_ids: tuple[str, ...] = ()
+    last_joined_sequence_no: int = 0
+    timeout_at: datetime | None = None
+    policy: JoinPolicy = field(default_factory=JoinPolicy)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.child_run_ids = _normalize_text_tuple(self.child_run_ids)
+        self.required_child_run_ids = _normalize_text_tuple(self.required_child_run_ids)
+        self.completed_child_run_ids = _normalize_text_tuple(self.completed_child_run_ids)
+        if not isinstance(self.policy, JoinPolicy):
+            raise TypeError("JoinState.policy must be a JoinPolicy.")
+        if self.timeout_at is not None and not isinstance(self.timeout_at, datetime):
+            raise TypeError("JoinState.timeout_at must be a datetime or None.")
+        if not isinstance(self.metadata, dict):
+            raise TypeError("JoinState.metadata must be a dict.")
 
 
 @dataclass(slots=True)
@@ -156,6 +318,10 @@ class CapabilityDescriptor:
         self.title = normalized_title
         self.description = _normalize_optional_text(self.description)
         self.idempotency_key_field = _normalize_optional_text(self.idempotency_key_field)
+        if self.input_schema is not None and not isinstance(self.input_schema, dict):
+            raise TypeError("CapabilityDescriptor.input_schema must be a dict or None.")
+        if not isinstance(self.metadata, dict):
+            raise TypeError("CapabilityDescriptor.metadata must be a dict.")
 
 
 @dataclass(slots=True)
@@ -175,6 +341,8 @@ class CapabilityInvocation:
         self.idempotency_key = _normalize_optional_text(self.idempotency_key)
         if not isinstance(self.arguments, dict):
             raise TypeError("CapabilityInvocation.arguments must be a dict.")
+        if not isinstance(self.metadata, dict):
+            raise TypeError("CapabilityInvocation.metadata must be a dict.")
 
 
 @dataclass(slots=True)
@@ -194,6 +362,8 @@ class CapabilityResult:
             raise ValueError("CapabilityResult.capability_key is required.")
         self.capability_key = capability_key
         self.error_message = _normalize_optional_text(self.error_message)
+        if not isinstance(self.metadata, dict):
+            raise TypeError("CapabilityResult.metadata must be a dict.")
 
 
 @dataclass(slots=True)
@@ -206,6 +376,7 @@ class PlanRunRequest:
     message_id: str | None = None
     trace_id: str | None = None
     service_route_key: str | None = None
+    agent_key: str | None = None
     ingress_metadata: dict[str, Any] = field(default_factory=dict)
     prepared_context: PreparedContextTurn | None = None
     available_capabilities: tuple[CapabilityDescriptor, ...] = ()
@@ -223,8 +394,11 @@ class PlanRunRequest:
         self.user_message = user_message
         self.message_id = _normalize_optional_text(self.message_id)
         self.trace_id = _normalize_optional_text(self.trace_id)
+        self.agent_key = _normalize_optional_text(self.agent_key)
         if not isinstance(self.ingress_metadata, dict):
             raise TypeError("PlanRunRequest.ingress_metadata must be a dict.")
+        if not isinstance(self.metadata, dict):
+            raise TypeError("PlanRunRequest.metadata must be a dict.")
         self.service_route_key = _normalize_optional_text(self.service_route_key)
         if self.service_route_key is None:
             self.service_route_key = _route_key_from_metadata(self.ingress_metadata)
@@ -255,6 +429,8 @@ class PlanRunState:
         self.last_response_text = _normalize_optional_text(self.last_response_text)
         self.last_error = _normalize_optional_text(self.last_error)
         self.summary = _normalize_optional_text(self.summary)
+        if not isinstance(self.metadata, dict):
+            raise TypeError("PlanRunState.metadata must be a dict.")
 
 
 @dataclass(slots=True)
@@ -310,6 +486,8 @@ class PlanObservation:
         self.summary = _normalize_optional_text(self.summary)
         if not isinstance(self.payload, dict):
             raise TypeError("PlanObservation.payload must be a dict.")
+        if not isinstance(self.metadata, dict):
+            raise TypeError("PlanObservation.metadata must be a dict.")
 
 
 @dataclass(slots=True)
@@ -320,6 +498,8 @@ class PlanDecision:
     response_text: str | None = None
     response_payloads: tuple[dict[str, Any], ...] = ()
     capability_invocations: tuple[CapabilityInvocation, ...] = ()
+    delegations: tuple[DelegationInstruction, ...] = ()
+    join_policy: JoinPolicy | None = None
     wait_until: datetime | None = None
     handoff_reason: str | None = None
     background_payload: dict[str, Any] | None = None
@@ -335,6 +515,23 @@ class PlanDecision:
         self.rationale_summary = _normalize_optional_text(self.rationale_summary)
         self.response_payloads = tuple(self.response_payloads or ())
         self.capability_invocations = tuple(self.capability_invocations or ())
+        self.delegations = tuple(self.delegations or ())
+        for invocation in self.capability_invocations:
+            if not isinstance(invocation, CapabilityInvocation):
+                raise TypeError(
+                    "PlanDecision.capability_invocations must contain CapabilityInvocation values."
+                )
+        for delegation in self.delegations:
+            if not isinstance(delegation, DelegationInstruction):
+                raise TypeError(
+                    "PlanDecision.delegations must contain DelegationInstruction values."
+                )
+        if self.join_policy is not None and not isinstance(self.join_policy, JoinPolicy):
+            raise TypeError("PlanDecision.join_policy must be a JoinPolicy or None.")
+        if self.background_payload is not None and not isinstance(self.background_payload, dict):
+            raise TypeError("PlanDecision.background_payload must be a dict or None.")
+        if not isinstance(self.metadata, dict):
+            raise TypeError("PlanDecision.metadata must be a dict.")
 
 
 @dataclass(slots=True)
@@ -357,6 +554,8 @@ class EvaluationRequest:
         self.draft_response_text = _normalize_optional_text(self.draft_response_text)
         self.observations = tuple(self.observations or ())
         self.final_user_responses = tuple(self.final_user_responses or ())
+        if not isinstance(self.metadata, dict):
+            raise TypeError("EvaluationRequest.metadata must be a dict.")
 
 
 @dataclass(slots=True)
@@ -381,6 +580,10 @@ class EvaluationResult:
             PlanDecisionKind,
         ):
             self.recommended_decision = PlanDecisionKind(str(self.recommended_decision))
+        if not isinstance(self.scores, dict):
+            raise TypeError("EvaluationResult.scores must be a dict.")
+        if not isinstance(self.metadata, dict):
+            raise TypeError("EvaluationResult.metadata must be a dict.")
 
 
 @dataclass(slots=True)
@@ -402,6 +605,8 @@ class PlanOutcome:
         self.assistant_response = _normalize_optional_text(self.assistant_response)
         self.background_run_id = _normalize_optional_text(self.background_run_id)
         self.error_message = _normalize_optional_text(self.error_message)
+        if not isinstance(self.metadata, dict):
+            raise TypeError("PlanOutcome.metadata must be a dict.")
 
 
 @dataclass(slots=True)
@@ -437,6 +642,8 @@ class PreparedPlanRun:
     request_snapshot: dict[str, Any]
     cursor: PlanRunCursor
     service_route_key: str | None = None
+    lineage: PlanRunLineage | None = None
+    join_state: JoinState | None = None
     next_wakeup_at: datetime | None = None
     lease: PlanLease | None = None
     final_outcome: PlanOutcome | None = None
@@ -462,4 +669,10 @@ class PreparedPlanRun:
             raise TypeError("PreparedPlanRun.cursor must be a PlanRunCursor.")
         if not isinstance(self.request_snapshot, dict):
             raise TypeError("PreparedPlanRun.request_snapshot must be a dict.")
+        if self.lineage is not None and not isinstance(self.lineage, PlanRunLineage):
+            raise TypeError("PreparedPlanRun.lineage must be a PlanRunLineage or None.")
+        if self.join_state is not None and not isinstance(self.join_state, JoinState):
+            raise TypeError("PreparedPlanRun.join_state must be a JoinState or None.")
         self.service_route_key = _normalize_optional_text(self.service_route_key)
+        if not isinstance(self.metadata, dict):
+            raise TypeError("PreparedPlanRun.metadata must be a dict.")

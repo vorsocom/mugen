@@ -183,6 +183,7 @@ set:
 - `WAIT`
 - `HANDOFF`
 - `SPAWN_BACKGROUND`
+- `DELEGATE`
 - `STOP`
 
 Decision semantics:
@@ -194,10 +195,16 @@ Decision semantics:
   this becomes handoff because live requests cannot remain waiting.
 - `HANDOFF`: stop agency and surface a human or external handoff outcome.
 - `SPAWN_BACKGROUND`: create a new background run and complete the current run.
+- `DELEGATE`: background-only hierarchical delegation. Create child runs,
+  persist a join barrier, and resume the parent after required children finish.
 - `STOP`: terminate without further action.
 
 Contract guarantee: decisions describe what should happen next. They do not
 perform execution side effects directly.
+
+Current reference behavior: `DELEGATE` is rejected for live current-turn runs.
+If a live route needs multi-agent work, it must first `SPAWN_BACKGROUND` a
+coordinator continuation run.
 
 ## Evaluation Contract
 
@@ -265,10 +272,14 @@ Contract guarantee: `IPlanRunStore` owns four durable concerns:
 Current reference plugin behavior:
 
 - `agent_runtime_plan_run` stores one row per run with request snapshot, policy
-  snapshot, mutable run state, current sequence number, wake-up timestamp,
-  lease state, and final outcome.
+  snapshot, mutable run state, lineage fields (`parent_run_id`, `root_run_id`,
+  `agent_key`, `spawned_by_step_no`), join state, current sequence number,
+  wake-up timestamp, lease state, and final outcome.
 - `agent_runtime_plan_step` stores one immutable row per step with
   `sequence_no`, `step_kind`, payload, and timestamp.
+
+Current reference behavior: waiting parent runs with join state are not treated
+as runnable again until all required child runs are terminal.
 
 Contract guarantee: finalization is idempotent. Once `final_outcome_json` is
 present, later finalize attempts return the existing outcome instead of
@@ -287,14 +298,21 @@ Recognized policy fields:
 - `enabled`
 - `current_turn_enabled`
 - `background_enabled`
+- `agent_key`
 - `planner_key`
 - `evaluator_key`
 - `response_synthesizer_key`
 - `capability_allow`
+- `delegate_agent_allow`
 - `max_iterations`
 - `max_background_iterations`
 - `lease_seconds`
 - `wait_seconds_default`
+
+Current reference behavior: agent definitions may also be code-configured under
+`mugen.agent_runtime.agents[]`. Route policy or explicit request `agent_key`
+selects the effective agent identity, then route values override that agent’s
+defaults.
 
 Current route-selection behavior:
 

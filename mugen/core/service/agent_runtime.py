@@ -20,6 +20,8 @@ from mugen.core.contract.agent import (
     CapabilityDescriptor,
     CapabilityInvocation,
     CapabilityResult,
+    DelegationArtifactRef,
+    DelegationInstruction,
     EvaluationRequest,
     EvaluationResult,
     EvaluationStatus,
@@ -28,6 +30,8 @@ from mugen.core.contract.agent import (
     IEvaluationEngine,
     IPlanRunStore,
     IPlanningEngine,
+    JoinPolicy,
+    JoinState,
     PlanDecision,
     PlanDecisionKind,
     PlanLease,
@@ -35,6 +39,7 @@ from mugen.core.contract.agent import (
     PlanOutcome,
     PlanOutcomeStatus,
     PlanRunCursor,
+    PlanRunLineage,
     PlanRunMode,
     PlanRunRequest,
     PlanRunState,
@@ -113,6 +118,142 @@ def _serialize_capability_result(result: CapabilityResult | None) -> dict[str, A
     }
 
 
+def _serialize_lineage(lineage: PlanRunLineage | None) -> dict[str, Any] | None:
+    if lineage is None:
+        return None
+    return {
+        "parent_run_id": lineage.parent_run_id,
+        "root_run_id": lineage.root_run_id,
+        "spawned_by_step_no": lineage.spawned_by_step_no,
+        "agent_key": lineage.agent_key,
+    }
+
+
+def _deserialize_lineage(payload: dict[str, Any] | None) -> PlanRunLineage | None:
+    if not isinstance(payload, dict):
+        return None
+    return PlanRunLineage(
+        parent_run_id=_normalize_optional_text(payload.get("parent_run_id")),
+        root_run_id=_normalize_optional_text(payload.get("root_run_id")),
+        spawned_by_step_no=payload.get("spawned_by_step_no"),
+        agent_key=_normalize_optional_text(payload.get("agent_key")),
+    )
+
+
+def _serialize_artifact_ref(artifact: DelegationArtifactRef) -> dict[str, Any]:
+    return {
+        "artifact_key": artifact.artifact_key,
+        "source_run_id": artifact.source_run_id,
+        "source_step_sequence_no": artifact.source_step_sequence_no,
+        "summary": artifact.summary,
+        "payload": dict(artifact.payload),
+        "metadata": dict(artifact.metadata),
+    }
+
+
+def _deserialize_artifact_ref(payload: dict[str, Any]) -> DelegationArtifactRef:
+    return DelegationArtifactRef(
+        artifact_key=str(payload.get("artifact_key") or ""),
+        source_run_id=str(payload.get("source_run_id") or ""),
+        source_step_sequence_no=payload.get("source_step_sequence_no"),
+        summary=_normalize_optional_text(payload.get("summary")),
+        payload=dict(payload.get("payload") or {}),
+        metadata=dict(payload.get("metadata") or {}),
+    )
+
+
+def _serialize_delegation_instruction(delegation: DelegationInstruction) -> dict[str, Any]:
+    return {
+        "agent_key": delegation.agent_key,
+        "task_brief": delegation.task_brief,
+        "service_route_key": delegation.service_route_key,
+        "artifacts": [_serialize_artifact_ref(item) for item in delegation.artifacts],
+        "required": delegation.required,
+        "metadata": dict(delegation.metadata),
+    }
+
+
+def _serialize_join_policy(policy: JoinPolicy | None) -> dict[str, Any] | None:
+    if policy is None:
+        return None
+    return {
+        "mode": policy.mode.value,
+        "on_required_child_failed": policy.on_required_child_failed.value,
+        "on_required_child_handoff": policy.on_required_child_handoff.value,
+        "on_required_child_stopped": policy.on_required_child_stopped.value,
+        "metadata": dict(policy.metadata),
+    }
+
+
+def _deserialize_join_policy(payload: dict[str, Any] | None) -> JoinPolicy | None:
+    if not isinstance(payload, dict):
+        return None
+    return JoinPolicy(
+        mode=str(payload.get("mode") or "all_required"),
+        on_required_child_failed=str(
+            payload.get("on_required_child_failed") or PlanOutcomeStatus.HANDOFF.value
+        ),
+        on_required_child_handoff=str(
+            payload.get("on_required_child_handoff") or PlanOutcomeStatus.HANDOFF.value
+        ),
+        on_required_child_stopped=str(
+            payload.get("on_required_child_stopped") or PlanOutcomeStatus.HANDOFF.value
+        ),
+        metadata=dict(payload.get("metadata") or {}),
+    )
+
+
+def _serialize_join_state(join_state: JoinState | None) -> dict[str, Any] | None:
+    if join_state is None:
+        return None
+    return {
+        "child_run_ids": list(join_state.child_run_ids),
+        "required_child_run_ids": list(join_state.required_child_run_ids),
+        "completed_child_run_ids": list(join_state.completed_child_run_ids),
+        "last_joined_sequence_no": join_state.last_joined_sequence_no,
+        "timeout_at": None if join_state.timeout_at is None else join_state.timeout_at.isoformat(),
+        "policy": _serialize_join_policy(join_state.policy),
+        "metadata": dict(join_state.metadata),
+    }
+
+
+def _deserialize_join_state(payload: dict[str, Any] | None) -> JoinState | None:
+    if not isinstance(payload, dict):
+        return None
+    timeout_at = payload.get("timeout_at")
+    if isinstance(timeout_at, str) and timeout_at != "":
+        timeout_value = datetime.fromisoformat(timeout_at)
+    else:
+        timeout_value = None
+    return JoinState(
+        child_run_ids=tuple(payload.get("child_run_ids") or ()),
+        required_child_run_ids=tuple(payload.get("required_child_run_ids") or ()),
+        completed_child_run_ids=tuple(payload.get("completed_child_run_ids") or ()),
+        last_joined_sequence_no=int(payload.get("last_joined_sequence_no") or 0),
+        timeout_at=timeout_value,
+        policy=_deserialize_join_policy(payload.get("policy")) or JoinPolicy(),
+        metadata=dict(payload.get("metadata") or {}),
+    )
+
+
+def _lineage_from_request_metadata(metadata: dict[str, Any]) -> PlanRunLineage | None:
+    payload = metadata.get("agent_lineage")
+    if isinstance(payload, PlanRunLineage):
+        return payload
+    if isinstance(payload, dict):
+        return _deserialize_lineage(payload)
+    return None
+
+
+def _join_state_from_request_metadata(metadata: dict[str, Any]) -> JoinState | None:
+    payload = metadata.get("agent_join_state")
+    if isinstance(payload, JoinState):
+        return payload
+    if isinstance(payload, dict):
+        return _deserialize_join_state(payload)
+    return None
+
+
 def _serialize_observation(observation: PlanObservation) -> dict[str, Any]:
     return {
         "kind": observation.kind,
@@ -139,6 +280,10 @@ def _serialize_decision(decision: PlanDecision) -> dict[str, Any]:
             }
             for item in decision.capability_invocations
         ],
+        "delegations": [
+            _serialize_delegation_instruction(item) for item in decision.delegations
+        ],
+        "join_policy": _serialize_join_policy(decision.join_policy),
         "wait_until": None
         if decision.wait_until is None
         else decision.wait_until.isoformat(),
@@ -200,6 +345,19 @@ def _status_from_outcome(outcome: PlanOutcome) -> PlanRunStatus:
     return mapping[outcome.status]
 
 
+def _outcome_status_from_run_status(status: PlanRunStatus) -> PlanOutcomeStatus:
+    mapping = {
+        PlanRunStatus.COMPLETED: PlanOutcomeStatus.COMPLETED,
+        PlanRunStatus.FAILED: PlanOutcomeStatus.FAILED,
+        PlanRunStatus.HANDOFF: PlanOutcomeStatus.HANDOFF,
+        PlanRunStatus.WAITING: PlanOutcomeStatus.WAITING,
+        PlanRunStatus.STOPPED: PlanOutcomeStatus.STOPPED,
+        PlanRunStatus.PREPARED: PlanOutcomeStatus.FAILED,
+        PlanRunStatus.ACTIVE: PlanOutcomeStatus.FAILED,
+    }
+    return mapping[status]
+
+
 def _request_from_snapshot(snapshot: dict[str, Any], *, run_id: str) -> PlanRunRequest:
     scope_payload = dict(snapshot.get("scope") or {})
     scope = ContextScope(**scope_payload)
@@ -210,6 +368,7 @@ def _request_from_snapshot(snapshot: dict[str, Any], *, run_id: str) -> PlanRunR
         message_id=_normalize_optional_text(snapshot.get("message_id")),
         trace_id=_normalize_optional_text(snapshot.get("trace_id")),
         service_route_key=_normalize_optional_text(snapshot.get("service_route_key")),
+        agent_key=_normalize_optional_text(snapshot.get("agent_key")),
         ingress_metadata=dict(snapshot.get("ingress_metadata") or {}),
         run_id=run_id,
         metadata=dict(snapshot.get("metadata") or {}),
@@ -249,6 +408,14 @@ class DefaultPlanningEngine(_AgentServiceBase, IPlanningEngine):
             raise TypeError("DefaultPlanningEngine requires PlanRunRequest.")
 
         policy = await self._resolve_policy(request)
+        resolved_route_key = _normalize_optional_text(policy.metadata.get("service_route_key"))
+        if request.service_route_key is None and resolved_route_key is not None:
+            request.service_route_key = resolved_route_key
+        if request.agent_key is None and policy.agent_key is not None:
+            request.agent_key = policy.agent_key
+        missing_agent_key = _normalize_optional_text(policy.metadata.get("agent_definition_missing"))
+        if missing_agent_key is not None:
+            raise RuntimeError(f"Unknown agent definition: {missing_agent_key}.")
         run_store = self._require_run_store()
 
         if request.run_id is not None:
@@ -257,6 +424,10 @@ class DefaultPlanningEngine(_AgentServiceBase, IPlanningEngine):
                 raise RuntimeError(f"Unknown plan run: {request.run_id}.")
             existing.policy = policy
             existing.service_route_key = request.service_route_key
+            existing.request_snapshot["service_route_key"] = request.service_route_key
+            existing.request_snapshot["agent_key"] = request.agent_key
+            if request.agent_key is not None and existing.lineage is not None:
+                existing.lineage.agent_key = request.agent_key
             return await run_store.save_run(existing)
 
         initial_status = (
@@ -265,10 +436,18 @@ class DefaultPlanningEngine(_AgentServiceBase, IPlanningEngine):
             else PlanRunStatus.PREPARED
         )
         state = PlanRunState(goal=request.user_message, status=initial_status)
-        created = await run_store.create_run(request, state=state, policy=policy)
+        created = await run_store.create_run(
+            request,
+            state=state,
+            policy=policy,
+            lineage=_lineage_from_request_metadata(request.metadata),
+            join_state=_join_state_from_request_metadata(request.metadata),
+        )
         created.status = initial_status
         created.state.status = initial_status
         created.service_route_key = request.service_route_key
+        created.request_snapshot["service_route_key"] = request.service_route_key
+        created.request_snapshot["agent_key"] = request.agent_key
         return await run_store.save_run(created)
 
     async def next_decision(
@@ -458,11 +637,15 @@ class DefaultPlanRunStore(_AgentServiceBase, IPlanRunStore):
         *,
         state: PlanRunState,
         policy: AgentRuntimePolicy,
+        lineage: PlanRunLineage | None = None,
+        join_state: JoinState | None = None,
     ) -> PreparedPlanRun:
         return await self._require_run_store().create_run(
             request,
             state=state,
             policy=policy,
+            lineage=lineage,
+            join_state=join_state,
         )
 
     async def load_run(self, run_id: str) -> PreparedPlanRun | None:
@@ -513,6 +696,20 @@ class DefaultPlanRunStore(_AgentServiceBase, IPlanRunStore):
 
     async def list_steps(self, *, run_id: str, limit: int | None = None) -> list[PlanRunStep]:
         return await self._require_run_store().list_steps(run_id=run_id, limit=limit)
+
+    async def list_child_runs(
+        self,
+        parent_run_id: str,
+        *,
+        terminal_only: bool = False,
+    ) -> list[PreparedPlanRun]:
+        return await self._require_run_store().list_child_runs(
+            parent_run_id,
+            terminal_only=terminal_only,
+        )
+
+    async def load_run_graph(self, root_run_id: str) -> list[PreparedPlanRun]:
+        return await self._require_run_store().load_run_graph(root_run_id)
 
 
 class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
@@ -625,10 +822,29 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         max_iterations: int,
         allow_wait: bool,
     ) -> PlanOutcome:
-        observations: tuple[PlanObservation, ...] = ()
+        observations, pending_outcome, finalize_pending = await self._bootstrap_observations(
+            request=request,
+            run=run,
+        )
+        if pending_outcome is not None and finalize_pending is False:
+            return pending_outcome
+
         run.status = PlanRunStatus.ACTIVE
         run.state.status = PlanRunStatus.ACTIVE
         run = await self._plan_run_store_service.save_run(run)
+        for observation in observations:
+            run.cursor = await self._append_step(
+                request=request,
+                run=run,
+                step_kind=PlanRunStepKind.OBSERVATION,
+                payload=_serialize_observation(observation),
+            )
+        if pending_outcome is not None:
+            return await self._finalize_terminal(
+                request=request,
+                run=run,
+                outcome=pending_outcome,
+            )
 
         for iteration in range(max_iterations):
             run.state.iteration_count = iteration + 1
@@ -785,6 +1001,32 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                     ),
                 )
 
+            if decision.kind == PlanDecisionKind.DELEGATE:
+                if allow_wait is not True or request.mode != PlanRunMode.BACKGROUND:
+                    return await self._finalize_terminal(
+                        request=request,
+                        run=run,
+                        outcome=PlanOutcome(
+                            status=PlanOutcomeStatus.HANDOFF,
+                            error_message="delegate_not_allowed_in_current_turn",
+                        ),
+                    )
+                try:
+                    return await self._delegate_to_children(
+                        request=request,
+                        run=run,
+                        decision=decision,
+                    )
+                except RuntimeError as exc:
+                    return await self._finalize_terminal(
+                        request=request,
+                        run=run,
+                        outcome=PlanOutcome(
+                            status=PlanOutcomeStatus.HANDOFF,
+                            error_message=str(exc),
+                        ),
+                    )
+
             if decision.kind == PlanDecisionKind.WAIT:
                 if allow_wait is not True:
                     return await self._finalize_terminal(
@@ -839,6 +1081,301 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 error_message="max_iterations_exceeded",
             ),
         )
+
+    async def _bootstrap_observations(
+        self,
+        *,
+        request: PlanRunRequest,
+        run: PreparedPlanRun,
+    ) -> tuple[tuple[PlanObservation, ...], PlanOutcome | None, bool]:
+        observations = tuple(await self._initial_request_observations(request=request, run=run))
+        if request.mode != PlanRunMode.BACKGROUND or run.join_state is None:
+            return observations, None, False
+
+        join_observations, join_outcome, finalize_pending = await self._resume_join_state(
+            request=request,
+            run=run,
+        )
+        return observations + join_observations, join_outcome, finalize_pending
+
+    async def _initial_request_observations(
+        self,
+        *,
+        request: PlanRunRequest,
+        run: PreparedPlanRun,
+    ) -> list[PlanObservation]:
+        if int(run.state.iteration_count or 0) > 0:
+            return []
+        delegation_payload = request.metadata.get("delegation")
+        if not isinstance(delegation_payload, dict):
+            return []
+        observations = [
+            PlanObservation(
+                kind="delegation_brief",
+                summary=_normalize_optional_text(delegation_payload.get("task_brief"))
+                or "delegated_task",
+                payload={
+                    "parent_run_id": _normalize_optional_text(
+                        delegation_payload.get("parent_run_id")
+                    ),
+                    "parent_agent_key": _normalize_optional_text(
+                        delegation_payload.get("parent_agent_key")
+                    ),
+                    "delegated_agent_key": _normalize_optional_text(
+                        delegation_payload.get("delegated_agent_key")
+                    ),
+                    "task_brief": _normalize_optional_text(
+                        delegation_payload.get("task_brief")
+                    ),
+                    "required": bool(delegation_payload.get("required", True)),
+                },
+                metadata=dict(delegation_payload.get("metadata") or {}),
+            )
+        ]
+        for artifact_payload in delegation_payload.get("artifacts") or ():
+            if not isinstance(artifact_payload, dict):
+                continue
+            artifact = _deserialize_artifact_ref(artifact_payload)
+            observations.append(
+                PlanObservation(
+                    kind="delegation_artifact",
+                    summary=artifact.summary or artifact.artifact_key,
+                    payload=_serialize_artifact_ref(artifact),
+                    metadata=dict(artifact.metadata),
+                )
+            )
+        return observations
+
+    async def _resume_join_state(
+        self,
+        *,
+        request: PlanRunRequest,
+        run: PreparedPlanRun,
+    ) -> tuple[tuple[PlanObservation, ...], PlanOutcome | None, bool]:
+        join_state = run.join_state
+        if join_state is None:
+            return (), None, False
+
+        child_runs = await self._plan_run_store_service.list_child_runs(run.run_id)
+        child_by_id = {child.run_id: child for child in child_runs}
+        required_ids = set(join_state.required_child_run_ids)
+        terminal_children: dict[str, PreparedPlanRun] = {}
+        for child_run_id, child_run in child_by_id.items():
+            if child_run.status in {
+                PlanRunStatus.COMPLETED,
+                PlanRunStatus.FAILED,
+                PlanRunStatus.HANDOFF,
+                PlanRunStatus.STOPPED,
+            }:
+                terminal_children[child_run_id] = child_run
+
+        completed_ids = set(join_state.completed_child_run_ids) | set(terminal_children)
+        if required_ids - completed_ids:
+            run.join_state.completed_child_run_ids = tuple(sorted(completed_ids))
+            run.status = PlanRunStatus.WAITING
+            run.state.status = PlanRunStatus.WAITING
+            run.next_wakeup_at = None
+            run = await self._plan_run_store_service.save_run(run)
+            outcome = PlanOutcome(
+                status=PlanOutcomeStatus.WAITING,
+                metadata={
+                    "run_id": run.run_id,
+                    "waiting_on_child_run_ids": sorted(required_ids - completed_ids),
+                },
+            )
+            await self._record_outcome(request=request, run=run, outcome=outcome)
+            return (), outcome, False
+
+        observations = tuple(
+            self._child_run_observation(child_run)
+            for child_run_id, child_run in child_by_id.items()
+            if child_run_id in completed_ids
+        )
+        terminal_outcome = self._terminal_outcome_from_join_state(
+            join_state=join_state,
+            child_runs=child_by_id,
+        )
+        run.join_state = None
+        run.next_wakeup_at = None
+        return observations, terminal_outcome, terminal_outcome is not None
+
+    def _child_run_observation(self, child_run: PreparedPlanRun) -> PlanObservation:
+        outcome = child_run.final_outcome
+        return PlanObservation(
+            kind="child_run_result",
+            summary=outcome.assistant_response if outcome is not None else child_run.status.value,
+            payload={
+                "child_run_id": child_run.run_id,
+                "agent_key": None if child_run.lineage is None else child_run.lineage.agent_key,
+                "status": child_run.status.value,
+                "assistant_response": None if outcome is None else outcome.assistant_response,
+                "error_message": None if outcome is None else outcome.error_message,
+                "metadata": {} if outcome is None else dict(outcome.metadata),
+            },
+            success=child_run.status == PlanRunStatus.COMPLETED,
+            metadata={
+                "lineage": _serialize_lineage(child_run.lineage),
+                "final_outcome": None if outcome is None else _serialize_outcome(outcome),
+            },
+        )
+
+    def _terminal_outcome_from_join_state(
+        self,
+        *,
+        join_state: JoinState,
+        child_runs: dict[str, PreparedPlanRun],
+    ) -> PlanOutcome | None:
+        required_ids = set(join_state.required_child_run_ids)
+        for child_run_id in required_ids:
+            child_run = child_runs.get(child_run_id)
+            if child_run is None:
+                continue
+            if child_run.status == PlanRunStatus.FAILED:
+                return PlanOutcome(
+                    status=join_state.policy.on_required_child_failed,
+                    error_message="required_child_failed",
+                    metadata={"child_run_id": child_run_id},
+                )
+            if child_run.status == PlanRunStatus.HANDOFF:
+                return PlanOutcome(
+                    status=join_state.policy.on_required_child_handoff,
+                    error_message="required_child_handoff",
+                    metadata={"child_run_id": child_run_id},
+                )
+            if child_run.status == PlanRunStatus.STOPPED:
+                return PlanOutcome(
+                    status=join_state.policy.on_required_child_stopped,
+                    error_message="required_child_stopped",
+                    metadata={"child_run_id": child_run_id},
+                )
+        return None
+
+    async def _delegate_to_children(
+        self,
+        *,
+        request: PlanRunRequest,
+        run: PreparedPlanRun,
+        decision: PlanDecision,
+    ) -> PlanOutcome:
+        if not decision.delegations:
+            raise RuntimeError("delegate_requires_child_instructions")
+        allowed_agents = set(run.policy.delegate_agent_allow)
+        decision_sequence_no = run.cursor.next_sequence_no - 1
+        root_run_id = (
+            run.run_id
+            if run.lineage is None or run.lineage.root_run_id is None
+            else run.lineage.root_run_id
+        )
+        child_run_ids: list[str] = []
+        required_child_run_ids: list[str] = []
+        child_run_summaries: list[dict[str, Any]] = []
+        for delegation in decision.delegations:
+            if allowed_agents and delegation.agent_key not in allowed_agents:
+                raise RuntimeError(f"delegate_agent_not_allowed:{delegation.agent_key}")
+            child_request = PlanRunRequest(
+                mode=PlanRunMode.BACKGROUND,
+                scope=request.scope,
+                user_message=delegation.task_brief,
+                message_id=request.message_id,
+                trace_id=request.trace_id,
+                service_route_key=delegation.service_route_key,
+                agent_key=delegation.agent_key,
+                ingress_metadata=dict(request.ingress_metadata),
+                metadata=self._child_request_metadata(
+                    request=request,
+                    run=run,
+                    delegation=delegation,
+                    root_run_id=root_run_id,
+                    decision_sequence_no=decision_sequence_no,
+                ),
+            )
+            child_run = await self._planning_engine_service.prepare_run(child_request)
+            child_run_ids.append(child_run.run_id)
+            if delegation.required:
+                required_child_run_ids.append(child_run.run_id)
+            child_run_summaries.append(
+                {
+                    "child_run_id": child_run.run_id,
+                    "agent_key": delegation.agent_key,
+                    "service_route_key": child_run.service_route_key,
+                    "required": delegation.required,
+                }
+            )
+
+        run.join_state = JoinState(
+            child_run_ids=tuple(child_run_ids),
+            required_child_run_ids=tuple(required_child_run_ids),
+            completed_child_run_ids=(),
+            last_joined_sequence_no=decision_sequence_no,
+            policy=decision.join_policy or JoinPolicy(),
+            metadata={
+                "delegations": [
+                    _serialize_delegation_instruction(item) for item in decision.delegations
+                ],
+            },
+        )
+        run.status = PlanRunStatus.WAITING
+        run.state.status = PlanRunStatus.WAITING
+        run.next_wakeup_at = None
+        run = await self._plan_run_store_service.save_run(run)
+        run.cursor = await self._append_step(
+            request=request,
+            run=run,
+            step_kind=PlanRunStepKind.EFFECT,
+            payload={
+                "kind": "delegate",
+                "child_runs": child_run_summaries,
+                "join_state": _serialize_join_state(run.join_state),
+            },
+        )
+        outcome = PlanOutcome(
+            status=PlanOutcomeStatus.WAITING,
+            metadata={
+                "run_id": run.run_id,
+                "child_run_ids": child_run_ids,
+            },
+        )
+        await self._record_outcome(request=request, run=run, outcome=outcome)
+        return outcome
+
+    def _child_request_metadata(
+        self,
+        *,
+        request: PlanRunRequest,
+        run: PreparedPlanRun,
+        delegation: DelegationInstruction,
+        root_run_id: str,
+        decision_sequence_no: int,
+    ) -> dict[str, Any]:
+        reserved_keys = {
+            "agent_lineage",
+            "agent_join_state",
+            "delegation",
+            "background_payload",
+            "spawned_from_run_id",
+        }
+        base_metadata = {
+            key: value for key, value in dict(request.metadata).items() if key not in reserved_keys
+        }
+        lineage = PlanRunLineage(
+            parent_run_id=run.run_id,
+            root_run_id=root_run_id,
+            spawned_by_step_no=decision_sequence_no,
+            agent_key=delegation.agent_key,
+        )
+        base_metadata["agent_lineage"] = _serialize_lineage(lineage)
+        base_metadata["delegation"] = {
+            "parent_run_id": run.run_id,
+            "parent_agent_key": run.policy.agent_key,
+            "delegated_agent_key": delegation.agent_key,
+            "task_brief": delegation.task_brief,
+            "required": delegation.required,
+            "artifacts": [
+                _serialize_artifact_ref(item) for item in delegation.artifacts
+            ],
+            "metadata": dict(delegation.metadata),
+        }
+        return base_metadata
 
     async def _execute_decision(
         self,
@@ -924,6 +1461,10 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         decision: PlanDecision,
     ) -> str:
         background_payload = dict(decision.background_payload or {})
+        forwarded_metadata = dict(request.metadata)
+        forwarded_metadata.pop("agent_lineage", None)
+        forwarded_metadata.pop("agent_join_state", None)
+        forwarded_metadata.pop("delegation", None)
         background_request = PlanRunRequest(
             mode=PlanRunMode.BACKGROUND,
             scope=request.scope,
@@ -931,9 +1472,10 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
             message_id=request.message_id,
             trace_id=request.trace_id,
             service_route_key=request.service_route_key,
+            agent_key=request.agent_key or run.policy.agent_key,
             ingress_metadata=dict(request.ingress_metadata),
             metadata={
-                **dict(request.metadata),
+                **forwarded_metadata,
                 "spawned_from_run_id": run.run_id,
                 "background_payload": background_payload,
             },
@@ -1051,4 +1593,3 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
             if loaded is not None:
                 runs.append(loaded)
         return runs
-
