@@ -151,7 +151,8 @@ poetry run python scripts/release.py prepare --bump patch --python "$(poetry run
 # Finish release: open the release PR to main.
 poetry run python scripts/release.py finish --version 0.43.3
 
-# After the release PR is merged on main, tag it, sync develop, and clean up.
+# After the release PR is merged on main, tag it and open the develop sync PR.
+# After that PR is merged, rerun publish to clean up the release branch.
 poetry run python scripts/release.py publish --version 0.43.3
 ```
 

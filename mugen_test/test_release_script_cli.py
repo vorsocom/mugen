@@ -18,6 +18,7 @@ _VERSION = "0.43.3"
 _RELEASE_BRANCH = f"release/{_VERSION}"
 _OPEN_PR_URL = "https://github.com/vorsocom/mugen/pull/123"
 _MERGED_PR_URL = "https://github.com/vorsocom/mugen/pull/456"
+_DEVELOP_SYNC_PR_URL = "https://github.com/vorsocom/mugen/pull/789"
 _MERGE_COMMIT = "c2a4d98df475e7b8927f8df55d886cc5014831c1"
 _OTHER_COMMIT = "f1f2f3f4f5f6f7f8f9fafbfcfdfeff0011223344"
 
@@ -184,6 +185,23 @@ if args == [
     "--limit",
     "1",
     "--state",
+    "open",
+    "--base",
+    "develop",
+    "--head",
+    release_branch,
+    "--json",
+    "url",
+]:
+    print(os.environ.get("FAKE_GH_OPEN_DEVELOP_PRS_JSON", "[]"))
+    raise SystemExit(0)
+
+if args == [
+    "pr",
+    "list",
+    "--limit",
+    "1",
+    "--state",
     "merged",
     "--base",
     "main",
@@ -195,7 +213,29 @@ if args == [
     print(os.environ.get("FAKE_GH_MERGED_PRS_JSON", "[]"))
     raise SystemExit(0)
 
+if args == [
+    "pr",
+    "list",
+    "--limit",
+    "1",
+    "--state",
+    "merged",
+    "--base",
+    "develop",
+    "--head",
+    release_branch,
+    "--json",
+    "url",
+]:
+    print(os.environ.get("FAKE_GH_MERGED_DEVELOP_PRS_JSON", "[]"))
+    raise SystemExit(0)
+
 if args[:2] == ["pr", "create"]:
+    if "--base" in args:
+        base_branch = args[args.index("--base") + 1]
+        if base_branch == "develop":
+            print(os.environ["FAKE_GH_CREATE_DEVELOP_URL"])
+            raise SystemExit(0)
     print(os.environ["FAKE_GH_CREATE_URL"])
     raise SystemExit(0)
 
@@ -227,6 +267,9 @@ raise SystemExit(2)
         open_prs_json: str = "[]",
         merged_prs_json: str = "[]",
         create_url: str = _OPEN_PR_URL,
+        open_develop_prs_json: str = "[]",
+        merged_develop_prs_json: str = "[]",
+        create_develop_url: str = _DEVELOP_SYNC_PR_URL,
     ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -247,6 +290,9 @@ raise SystemExit(2)
             env["FAKE_GH_OPEN_PRS_JSON"] = open_prs_json
             env["FAKE_GH_MERGED_PRS_JSON"] = merged_prs_json
             env["FAKE_GH_CREATE_URL"] = create_url
+            env["FAKE_GH_OPEN_DEVELOP_PRS_JSON"] = open_develop_prs_json
+            env["FAKE_GH_MERGED_DEVELOP_PRS_JSON"] = merged_develop_prs_json
+            env["FAKE_GH_CREATE_DEVELOP_URL"] = create_develop_url
             env["FAKE_RELEASE_BRANCH"] = _RELEASE_BRANCH
             env["FAKE_RELEASE_LOG"] = str(log_path)
 
@@ -381,7 +427,7 @@ raise SystemExit(2)
         self.assertIn(f"ERROR: Tag already exists: {_VERSION}", result.stderr)
         self.assertFalse(any(entry["command"] == "gh" for entry in commands))
 
-    def test_publish_tags_merge_commit_syncs_develop_and_cleans_release_branch(self) -> None:
+    def test_publish_tags_merge_commit_and_opens_develop_sync_pr(self) -> None:
         result, commands = self._run_release(
             "publish",
             local_branches=[_RELEASE_BRANCH],
@@ -396,58 +442,109 @@ raise SystemExit(2)
         self.assertIn(f"Release published for {_VERSION}.", result.stdout)
         self.assertIn(f"Release PR: {_MERGED_PR_URL}", result.stdout)
         self.assertIn(f"Tag {_VERSION}: created at {_MERGE_COMMIT}", result.stdout)
-        self.assertIn("Develop sync: merged release/0.43.3", result.stdout)
-        self.assertIn("Release branch cleanup: local=deleted remote=deleted", result.stdout)
+        self.assertIn(
+            f"Develop sync: PR ready: {_DEVELOP_SYNC_PR_URL}",
+            result.stdout,
+        )
+        self.assertIn(
+            "Release branch cleanup: deferred until develop sync is merged.",
+            result.stdout,
+        )
+        self.assertIn(
+            f"Next: merge the develop sync PR, then rerun `scripts/release.py publish --version {_VERSION}` to clean up.",
+            result.stdout,
+        )
 
         git_args = [entry["args"] for entry in commands if entry["command"] == "git"]
+        gh_args = [entry["args"] for entry in commands if entry["command"] == "gh"]
         self.assertIn(["fetch", "--tags", "origin", "main", "develop"], git_args)
         self.assertIn(
             ["tag", "-a", _VERSION, _MERGE_COMMIT, "-m", f"Release {_VERSION}"],
             git_args,
         )
         self.assertIn(["push", "origin", _VERSION], git_args)
-        self.assertIn(["checkout", "develop"], git_args)
-        self.assertIn(["pull", "--ff-only", "origin", "develop"], git_args)
         self.assertIn(
             [
-                "merge",
-                "--no-ff",
+                "pr",
+                "create",
+                "--base",
+                "develop",
+                "--head",
                 _RELEASE_BRANCH,
-                "-m",
-                f"Merge {_RELEASE_BRANCH} into develop",
+                "--title",
+                f"chore(release): sync {_VERSION} back to develop",
+                "--body",
+                "\n".join(
+                    [
+                        f"Sync released version {_VERSION} back into `develop`.",
+                        "",
+                        "Generated by `scripts/release.py publish`.",
+                        "Cleanup the release branch after this PR lands.",
+                    ]
+                ),
             ],
-            git_args,
+            gh_args,
         )
-        self.assertIn(["push", "origin", "develop"], git_args)
-        self.assertIn(["branch", "-d", _RELEASE_BRANCH], git_args)
-        self.assertIn(["push", "origin", "--delete", _RELEASE_BRANCH], git_args)
+        self.assertNotIn(["checkout", "develop"], git_args)
+        self.assertNotIn(["pull", "--ff-only", "origin", "develop"], git_args)
+        self.assertNotIn(["branch", "-d", _RELEASE_BRANCH], git_args)
+        self.assertNotIn(["push", "origin", "--delete", _RELEASE_BRANCH], git_args)
+        self.assertNotIn(["push", "origin", "develop"], git_args)
 
-    def test_publish_falls_back_to_main_when_release_branch_is_absent(self) -> None:
+    def test_publish_reports_existing_open_develop_sync_pr(self) -> None:
         result, commands = self._run_release(
             "publish",
+            local_branches=[_RELEASE_BRANCH],
+            remote_branches=[_RELEASE_BRANCH],
             known_commits=[_MERGE_COMMIT],
+            open_develop_prs_json=json.dumps([{"url": _DEVELOP_SYNC_PR_URL}]),
             merged_prs_json=json.dumps(
                 [{"url": _MERGED_PR_URL, "mergeCommit": {"oid": _MERGE_COMMIT}}]
             ),
         )
 
         self.assertEqual(result.returncode, 0)
-        self.assertIn("Develop sync: merged origin/main", result.stdout)
-        self.assertIn("Release branch cleanup: local=kept remote=already absent", result.stdout)
+        self.assertIn(
+            f"Develop sync: PR already open: {_DEVELOP_SYNC_PR_URL}",
+            result.stdout,
+        )
+        self.assertIn(
+            "Release branch cleanup: deferred until develop sync is merged.",
+            result.stdout,
+        )
 
         git_args = [entry["args"] for entry in commands if entry["command"] == "git"]
-        self.assertIn(
-            [
-                "merge",
-                "--no-ff",
-                "origin/main",
-                "-m",
-                f"Merge main into develop after release {_VERSION}",
-            ],
-            git_args,
-        )
+        gh_args = [entry["args"] for entry in commands if entry["command"] == "gh"]
+        self.assertNotIn(["checkout", "develop"], git_args)
         self.assertNotIn(["branch", "-d", _RELEASE_BRANCH], git_args)
         self.assertNotIn(["push", "origin", "--delete", _RELEASE_BRANCH], git_args)
+        self.assertFalse(any(args[:2] == ["pr", "create"] for args in gh_args))
+
+    def test_publish_cleans_release_branch_after_develop_sync_pr_is_merged(self) -> None:
+        result, commands = self._run_release(
+            "publish",
+            local_branches=[_RELEASE_BRANCH],
+            remote_branches=[_RELEASE_BRANCH],
+            known_commits=[_MERGE_COMMIT],
+            merged_prs_json=json.dumps(
+                [{"url": _MERGED_PR_URL, "mergeCommit": {"oid": _MERGE_COMMIT}}]
+            ),
+            merged_develop_prs_json=json.dumps([{"url": _DEVELOP_SYNC_PR_URL}]),
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(
+            f"Develop sync: PR merged: {_DEVELOP_SYNC_PR_URL}",
+            result.stdout,
+        )
+        self.assertIn("Release branch cleanup: local=deleted remote=deleted", result.stdout)
+
+        git_args = [entry["args"] for entry in commands if entry["command"] == "git"]
+        self.assertIn(["checkout", "develop"], git_args)
+        self.assertIn(["pull", "--ff-only", "origin", "develop"], git_args)
+        self.assertIn(["branch", "-d", _RELEASE_BRANCH], git_args)
+        self.assertIn(["push", "origin", "--delete", _RELEASE_BRANCH], git_args)
+        self.assertNotIn(["push", "origin", "develop"], git_args)
 
     def test_publish_fails_when_release_pr_is_still_open(self) -> None:
         result, commands = self._run_release(
@@ -493,7 +590,7 @@ raise SystemExit(2)
             local_tags=[_VERSION],
             known_commits=[_MERGE_COMMIT],
             resolved_commits={_VERSION: _MERGE_COMMIT},
-            ancestors=[f"{_MERGE_COMMIT}>develop"],
+            ancestors=[f"{_MERGE_COMMIT}>origin/develop"],
             merged_prs_json=json.dumps(
                 [{"url": _MERGED_PR_URL, "mergeCommit": {"oid": _MERGE_COMMIT}}]
             ),
@@ -502,6 +599,10 @@ raise SystemExit(2)
         self.assertEqual(result.returncode, 0)
         self.assertIn(f"Tag {_VERSION}: already existed at {_MERGE_COMMIT}", result.stdout)
         self.assertIn("Develop sync: already up to date", result.stdout)
+        self.assertIn(
+            "Release branch cleanup: local=already absent remote=already absent",
+            result.stdout,
+        )
 
         git_args = [entry["args"] for entry in commands if entry["command"] == "git"]
         self.assertNotIn(
