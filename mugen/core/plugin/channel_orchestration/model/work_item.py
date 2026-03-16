@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -93,7 +94,7 @@ class WorkItem(ModelBase, TenantScopedMixin):
 
     last_actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -132,7 +133,7 @@ class WorkItem(ModelBase, TenantScopedMixin):
             "source",
             "created_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

@@ -172,6 +172,50 @@ class TestRunMigrationTracksSchemaContract(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn(f"CHILD_MUGEN_CONFIG_FILE={config_path.resolve()}", result.stdout)
 
+    def test_sets_core_schema_env_for_alembic_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "mugen.toml").write_text(
+                textwrap.dedent("""
+                    [rdbms.migration_tracks.core]
+                    schema = "core_runtime"
+
+                    [[rdbms.migration_tracks.plugins]]
+                    name = "ctx_plugin"
+                    schema = "ctx_runtime"
+                    alembic_config = "plugins/ctx_plugin/alembic.ini"
+                    """),
+                encoding="utf-8",
+            )
+            plugin_dir = repo_root / "plugins" / "ctx_plugin"
+            plugin_dir.mkdir(parents=True)
+            (plugin_dir / "alembic.ini").write_text("[alembic]\n", encoding="utf-8")
+            (repo_root / "alembic.py").write_text(
+                textwrap.dedent("""
+                    import os
+
+                    print("CHILD_TRACK=" + str(os.getenv("MUGEN_ALEMBIC_TRACK", "")))
+                    print("CHILD_SCHEMA=" + str(os.getenv("MUGEN_ALEMBIC_SCHEMA", "")))
+                    print(
+                        "CHILD_CORE_SCHEMA="
+                        + str(os.getenv("MUGEN_ALEMBIC_CORE_SCHEMA", ""))
+                    )
+                    raise SystemExit(0)
+                    """),
+                encoding="utf-8",
+            )
+            result = self._run_script(
+                config_text=None,
+                repo_root=repo_root,
+                dry_run=False,
+                extra_args=["--track", "ctx_plugin"],
+            )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("CHILD_TRACK=ctx_plugin", result.stdout)
+        self.assertIn("CHILD_SCHEMA=ctx_runtime", result.stdout)
+        self.assertIn("CHILD_CORE_SCHEMA=core_runtime", result.stdout)
+
     def test_fails_fast_when_config_file_does_not_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)

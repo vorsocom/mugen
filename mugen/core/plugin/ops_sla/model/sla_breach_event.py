@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class SlaBreachEventType(str, enum.Enum):
@@ -94,19 +95,19 @@ class SlaBreachEvent(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ["tenant_id"],
-            ["mugen.admin_tenant.id"],
+            [f"{CORE_SCHEMA_TOKEN}.admin_tenant.id"],
             ondelete="RESTRICT",
             name="fk_ops_sla_breach_event__tenant_id__admin_tenant",
         ),
         ForeignKeyConstraint(
             ["actor_user_id"],
-            ["mugen.admin_user.id"],
+            [f"{CORE_SCHEMA_TOKEN}.admin_user.id"],
             ondelete="SET NULL",
             name="fk_ops_sla_breach_event__actor_uid__admin_user",
         ),
         ForeignKeyConstraint(
             ["tenant_id", "clock_id"],
-            ["mugen.ops_sla_clock.tenant_id", "mugen.ops_sla_clock.id"],
+            [f"{CORE_SCHEMA_TOKEN}.ops_sla_clock.tenant_id", f"{CORE_SCHEMA_TOKEN}.ops_sla_clock.id"],
             ondelete="CASCADE",
             name="fkx_ops_sla_breach_event__tenant_clock",
         ),
@@ -133,7 +134,7 @@ class SlaBreachEvent(ModelBase, TenantScopedMixin):
             "clock_id",
             "occurred_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

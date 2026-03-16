@@ -12,6 +12,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.schema_contract import resolve_core_schema, resolve_runtime_schema
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
@@ -19,6 +20,9 @@ revision: str = "9d1a6d3a3c30"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+
+_CORE_SCHEMA = resolve_core_schema(default=resolve_runtime_schema())
 
 
 def _base_columns() -> list[sa.Column]:
@@ -54,7 +58,7 @@ def _tenant_column() -> sa.Column:
     return sa.Column(
         "tenant_id",
         sa.Uuid(),
-        sa.ForeignKey("mugen.admin_tenant.id", ondelete="RESTRICT"),
+        sa.ForeignKey(f"{_CORE_SCHEMA}.admin_tenant.id", ondelete="RESTRICT"),
         nullable=False,
     )
 

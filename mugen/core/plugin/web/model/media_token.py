@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class WebMediaToken(ModelBase):
@@ -81,7 +82,7 @@ class WebMediaToken(ModelBase):
             "owner_user_id",
             "expires_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 if TYPE_CHECKING:
     from mugen.core.plugin.knowledge_pack.model.knowledge_pack_version import (
@@ -61,7 +62,7 @@ class KnowledgePack(ModelBase, TenantScopedMixin):
     current_version_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(
-            "mugen.knowledge_pack_knowledge_pack_version.id",
+            f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_pack_version.id",
             ondelete="SET NULL",
         ),
         nullable=True,
@@ -111,7 +112,7 @@ class KnowledgePack(ModelBase, TenantScopedMixin):
             "tenant_id",
             "is_active",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

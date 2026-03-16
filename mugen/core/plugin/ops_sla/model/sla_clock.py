@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class SlaClockStatus(str, enum.Enum):
@@ -44,28 +45,28 @@ class SlaClock(ModelBase, TenantScopedMixin):
 
     policy_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.ops_sla_policy.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.ops_sla_policy.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
 
     calendar_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.ops_sla_calendar.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.ops_sla_calendar.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
 
     target_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.ops_sla_target.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.ops_sla_target.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
 
     clock_definition_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.ops_sla_clock_definition.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.ops_sla_clock_definition.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -185,7 +186,7 @@ class SlaClock(ModelBase, TenantScopedMixin):
 
     last_actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -251,7 +252,7 @@ class SlaClock(ModelBase, TenantScopedMixin):
             "tracked_id",
             "tracked_ref",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

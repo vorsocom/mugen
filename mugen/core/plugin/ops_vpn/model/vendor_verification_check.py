@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -77,7 +78,7 @@ class VendorVerificationCheck(ModelBase, TenantScopedMixin):
 
     checked_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -110,8 +111,8 @@ class VendorVerificationCheck(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "vendor_verification_id"),
             (
-                "mugen.ops_vpn_vendor_verification.tenant_id",
-                "mugen.ops_vpn_vendor_verification.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_vpn_vendor_verification.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_vpn_vendor_verification.id",
             ),
             name="fkx_ops_vpn_vendor_verification_check__tenant_verification",
             ondelete="CASCADE",
@@ -119,8 +120,8 @@ class VendorVerificationCheck(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "criterion_id"),
             (
-                "mugen.ops_vpn_verification_criterion.tenant_id",
-                "mugen.ops_vpn_verification_criterion.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_vpn_verification_criterion.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_vpn_verification_criterion.id",
             ),
             name="fkx_ops_vpn_vendor_verification_check__tenant_criterion",
             ondelete="SET NULL",
@@ -154,7 +155,7 @@ class VendorVerificationCheck(ModelBase, TenantScopedMixin):
             "vendor_verification_id",
             "status",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

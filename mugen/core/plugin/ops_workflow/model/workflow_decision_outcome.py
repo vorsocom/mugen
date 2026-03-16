@@ -13,6 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 if TYPE_CHECKING:
     from mugen.core.plugin.ops_workflow.model.workflow_decision_request import (
@@ -54,8 +55,8 @@ class WorkflowDecisionOutcome(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "decision_request_id"),
             (
-                "mugen.ops_workflow_decision_request.tenant_id",
-                "mugen.ops_workflow_decision_request.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_decision_request.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_decision_request.id",
             ),
             name="fkx_ops_wf_decision_outcome_tenant_request",
             ondelete="CASCADE",
@@ -70,7 +71,7 @@ class WorkflowDecisionOutcome(ModelBase, TenantScopedMixin):
             "decision_request_id",
             name="ux_ops_wf_decision_outcome_tenant_request",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

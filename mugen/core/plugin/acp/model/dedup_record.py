@@ -15,6 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import ForeignKey, Uuid
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class DedupRecordStatus(str, enum.Enum):
@@ -35,7 +36,7 @@ class DedupRecord(ModelBase):
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_tenant.id", ondelete="RESTRICT"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_tenant.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -107,7 +108,7 @@ class DedupRecord(ModelBase):
             "status",
             "lease_expires_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

@@ -20,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -74,13 +75,13 @@ class PaymentAllocation(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "payment_id"),
-            ("mugen.billing_payment.tenant_id", "mugen.billing_payment.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_payment.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_payment.id"),
             name="fkx_billing_payment_allocation__tenant_payment",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "invoice_id"),
-            ("mugen.billing_invoice.tenant_id", "mugen.billing_invoice.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_invoice.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_invoice.id"),
             name="fkx_billing_payment_allocation__tenant_invoice",
             ondelete="RESTRICT",
         ),
@@ -114,7 +115,7 @@ class PaymentAllocation(ModelBase, TenantScopedMixin):
             unique=True,
             postgresql_where=sa_text("external_ref IS NOT NULL"),
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

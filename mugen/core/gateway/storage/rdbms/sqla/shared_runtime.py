@@ -9,6 +9,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from mugen.core.utility.config_value import parse_bool_flag
+from mugen.core.utility.rdbms_schema import resolve_rdbms_schema_contract
 
 
 @dataclass(slots=True)
@@ -154,6 +155,11 @@ class SharedSQLAlchemyRuntime:
             "pool_timeout": pool_timeout,
             "pool_size": pool_size,
             "max_overflow": max_overflow,
+            "execution_options": {
+                "schema_translate_map": dict(
+                    resolve_rdbms_schema_contract(config).schema_translate_map
+                )
+            },
         }
         if connect_args:
             engine_kwargs["connect_args"] = connect_args

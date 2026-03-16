@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -91,13 +92,13 @@ class InvoiceLine(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "invoice_id"),
-            ("mugen.billing_invoice.tenant_id", "mugen.billing_invoice.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_invoice.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_invoice.id"),
             name="fkx_billing_invoice_line__tenant_invoice",
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "price_id"),
-            ("mugen.billing_price.tenant_id", "mugen.billing_price.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_price.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_price.id"),
             name="fkx_billing_invoice_line__tenant_price",
             ondelete="SET NULL",
         ),
@@ -119,7 +120,7 @@ class InvoiceLine(ModelBase, TenantScopedMixin):
             "tenant_id",
             "invoice_id",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

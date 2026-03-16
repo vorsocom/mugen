@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class UsageRecordStatus(str, enum.Enum):
@@ -157,8 +158,8 @@ class UsageRecord(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ["tenant_id", "meter_definition_id"],
             [
-                "mugen.ops_metering_meter_definition.tenant_id",
-                "mugen.ops_metering_meter_definition.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_metering_meter_definition.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_metering_meter_definition.id",
             ],
             name="fkx_ops_metering_usage_record__tenant_meter_definition",
             ondelete="RESTRICT",
@@ -166,8 +167,8 @@ class UsageRecord(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ["tenant_id", "meter_policy_id"],
             [
-                "mugen.ops_metering_meter_policy.tenant_id",
-                "mugen.ops_metering_meter_policy.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_metering_meter_policy.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_metering_meter_policy.id",
             ],
             name="fkx_ops_metering_usage_record__tenant_meter_policy",
             ondelete="SET NULL",
@@ -175,8 +176,8 @@ class UsageRecord(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ["tenant_id", "usage_session_id"],
             [
-                "mugen.ops_metering_usage_session.tenant_id",
-                "mugen.ops_metering_usage_session.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_metering_usage_session.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_metering_usage_session.id",
             ],
             name="fkx_ops_metering_usage_record__tenant_usage_session",
             ondelete="SET NULL",
@@ -241,7 +242,7 @@ class UsageRecord(ModelBase, TenantScopedMixin):
             unique=True,
             postgresql_where=sa_text("usage_session_id IS NOT NULL"),
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

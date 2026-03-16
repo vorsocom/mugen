@@ -26,6 +26,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 if TYPE_CHECKING:
     from mugen.core.plugin.knowledge_pack.model.knowledge_entry import KnowledgeEntry
@@ -78,7 +79,7 @@ class KnowledgePackVersion(ModelBase, TenantScopedMixin):
 
     submitted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -90,7 +91,7 @@ class KnowledgePackVersion(ModelBase, TenantScopedMixin):
 
     approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -102,7 +103,7 @@ class KnowledgePackVersion(ModelBase, TenantScopedMixin):
 
     published_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -114,7 +115,7 @@ class KnowledgePackVersion(ModelBase, TenantScopedMixin):
 
     archived_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -122,7 +123,7 @@ class KnowledgePackVersion(ModelBase, TenantScopedMixin):
     rollback_of_version_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(
-            "mugen.knowledge_pack_knowledge_pack_version.id",
+            f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_pack_version.id",
             ondelete="SET NULL",
         ),
         nullable=True,
@@ -153,8 +154,8 @@ class KnowledgePackVersion(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "knowledge_pack_id"),
             (
-                "mugen.knowledge_pack_knowledge_pack.tenant_id",
-                "mugen.knowledge_pack_knowledge_pack.id",
+                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_pack.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_pack.id",
             ),
             name="fkx_knowledge_pack_version__tenant_pack",
             ondelete="CASCADE",
@@ -184,7 +185,7 @@ class KnowledgePackVersion(ModelBase, TenantScopedMixin):
             "knowledge_pack_id",
             "status",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

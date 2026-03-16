@@ -25,6 +25,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 if TYPE_CHECKING:
     from mugen.core.plugin.ops_workflow.model.workflow_definition import (
@@ -143,7 +144,7 @@ class WorkflowInstance(ModelBase, TenantScopedMixin):
 
     last_actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -190,8 +191,8 @@ class WorkflowInstance(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "workflow_definition_id"),
             (
-                "mugen.ops_workflow_workflow_definition.tenant_id",
-                "mugen.ops_workflow_workflow_definition.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_definition.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_definition.id",
             ),
             name="fkx_ops_wf_instance_tenant_definition",
             ondelete="RESTRICT",
@@ -199,8 +200,8 @@ class WorkflowInstance(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "workflow_version_id"),
             (
-                "mugen.ops_workflow_workflow_version.tenant_id",
-                "mugen.ops_workflow_workflow_version.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_version.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_version.id",
             ),
             name="fkx_ops_wf_instance_tenant_version",
             ondelete="RESTRICT",
@@ -208,8 +209,8 @@ class WorkflowInstance(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "current_state_id"),
             (
-                "mugen.ops_workflow_workflow_state.tenant_id",
-                "mugen.ops_workflow_workflow_state.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_state.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_state.id",
             ),
             name="fkx_ops_wf_instance_tenant_current_state",
             ondelete="SET NULL",
@@ -217,8 +218,8 @@ class WorkflowInstance(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "pending_transition_id"),
             (
-                "mugen.ops_workflow_workflow_transition.tenant_id",
-                "mugen.ops_workflow_workflow_transition.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_transition.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_transition.id",
             ),
             name="fkx_ops_wf_instance_tenant_pending_transition",
             ondelete="SET NULL",
@@ -255,7 +256,7 @@ class WorkflowInstance(ModelBase, TenantScopedMixin):
             "workflow_version_id",
             "current_state_id",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

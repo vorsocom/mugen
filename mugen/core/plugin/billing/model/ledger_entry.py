@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class LedgerDirection(str, enum.Enum):
@@ -119,19 +120,19 @@ class LedgerEntry(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "account_id"),
-            ("mugen.billing_account.tenant_id", "mugen.billing_account.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_account.id"),
             name="fkx_billing_ledger_entry__tenant_account",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "invoice_id"),
-            ("mugen.billing_invoice.tenant_id", "mugen.billing_invoice.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_invoice.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_invoice.id"),
             name="fkx_billing_ledger_entry__tenant_invoice",
             ondelete="SET NULL",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "payment_id"),
-            ("mugen.billing_payment.tenant_id", "mugen.billing_payment.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_payment.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_payment.id"),
             name="fkx_billing_ledger_entry__tenant_payment",
             ondelete="SET NULL",
         ),
@@ -158,7 +159,7 @@ class LedgerEntry(ModelBase, TenantScopedMixin):
             "account_id",
             "occurred_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:
