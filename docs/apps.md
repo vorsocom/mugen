@@ -1,7 +1,7 @@
 # Building Downstream muGen Applications
 
 Status: Active  
-Last Updated: 2026-03-15  
+Last Updated: 2026-03-16  
 Audience: Downstream application teams, plugin maintainers
 
 muGen is meant to be extended, but the extension path matters. The goal for a
@@ -27,6 +27,25 @@ repository as downstream.
 ~$ git checkout -b develop
 ```
 
+Track downstream provenance in a separate metadata file at the project root,
+for example `downstream.toml`, rather than in runtime config or
+`pyproject.toml`.
+
+```shell
+~$ cp conf/downstream.toml.sample downstream.toml
+```
+
+Use this file for provenance only:
+
+- `upstream.sync_ref` is required and should record the exact upstream commit
+  currently merged into the downstream repository.
+- `upstream.sync_tag` is optional and should be set only when that synced
+  commit corresponds to an upstream tag.
+- `upstream.branch` should match the upstream branch you actually integrate
+  from. Use `main` only when release-based syncs are your baseline.
+- Keep runtime settings, secrets, local paths, and machine-specific values out
+  of this file.
+
 This keeps upstream syncs explicit and makes it easier to distinguish framework
 changes from product-specific behavior.
 
@@ -39,6 +58,7 @@ Recommended layout:
 
 ```text
 hrms-agent/
+├── downstream.toml
 ├── mugen/
 ├── acme_extension/
 │   ├── __init__.py
@@ -67,6 +87,7 @@ Practical rules:
 Create local config from the samples:
 
 ```shell
+~$ cp conf/downstream.toml.sample downstream.toml
 ~$ cp conf/mugen.toml.sample mugen.toml
 ~$ cp conf/hypercorn.toml.sample hypercorn.toml
 ```

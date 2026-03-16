@@ -74,6 +74,7 @@ from mugen.core.plugin.context_engine.service.runtime import (
     RelationalContextTraceSink,
     StructuredLaneRenderer,
 )
+from mugen.core.utility.rdbms_schema import CONTEXT_ENGINE_SCHEMA_TOKEN
 
 
 def _tenant_uuid() -> uuid.UUID:
@@ -226,7 +227,7 @@ def _prepared(
 class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
     """Exercises plugin runtime services without DI/bootstrap."""
 
-    async def test_models_use_core_runtime_schema(self) -> None:
+    async def test_models_use_plugin_runtime_schema_token(self) -> None:
         tables = (
             ContextProfile.__table__,
             ContextPolicyModel.__table__,
@@ -241,7 +242,9 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             ContextTrace.__table__,
         )
 
-        self.assertTrue(all(table.schema == "mugen" for table in tables))
+        self.assertTrue(
+            all(table.schema == CONTEXT_ENGINE_SCHEMA_TOKEN for table in tables)
+        )
         self.assertIn("service_route_key", ContextProfile.__table__.c)
         self.assertIn("client_profile_key", ContextProfile.__table__.c)
         self.assertIn("service_route_key", ContextContributorBinding.__table__.c)

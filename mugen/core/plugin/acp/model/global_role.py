@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -64,7 +65,7 @@ class GlobalRole(ModelBase):
             "name",
             name="ux_global_role__namespace_name",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

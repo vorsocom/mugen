@@ -19,6 +19,7 @@ from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -29,7 +30,7 @@ class PluginCapabilityGrant(ModelBase):
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_tenant.id", ondelete="RESTRICT"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_tenant.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -121,7 +122,7 @@ class PluginCapabilityGrant(ModelBase):
             "tenant_id",
             "plugin_key",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

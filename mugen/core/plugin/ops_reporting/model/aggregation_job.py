@@ -25,6 +25,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class AggregationJobStatus(str, enum.Enum):
@@ -115,7 +116,7 @@ class AggregationJob(ModelBase, TenantScopedMixin):
 
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -129,8 +130,8 @@ class AggregationJob(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ["tenant_id", "metric_definition_id"],
             [
-                "mugen.ops_reporting_metric_definition.tenant_id",
-                "mugen.ops_reporting_metric_definition.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_reporting_metric_definition.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_reporting_metric_definition.id",
             ],
             ondelete="CASCADE",
             name="fkx_ops_reporting_aggregation_job__tenant_metric_definition",
@@ -172,7 +173,7 @@ class AggregationJob(ModelBase, TenantScopedMixin):
             "window_start",
             "window_end",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

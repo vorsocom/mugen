@@ -44,7 +44,11 @@ Typical migration pattern:
         contribute_all(reg, mugen_cfg=mugen_cfg)
 
         manifest = reg.build_seed_manifest()
-        apply_manifest(bind, manifest, schema="mugen")
+        apply_manifest(
+            bind,
+            manifest,
+            schema=mugen_cfg["rdbms"]["migration_tracks"]["core"]["schema"],
+        )
 
 Idempotency / conflict semantics
 --------------------------------

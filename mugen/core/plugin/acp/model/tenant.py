@@ -12,6 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.plugin.acp.model.mixin.soft_delete import SoftDeleteMixin
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class TenantStatus(str, enum.Enum):
@@ -95,7 +96,7 @@ class Tenant(ModelBase, SoftDeleteMixin):
             "NOT (deleted_at IS NOT NULL AND deleted_by_user_id IS NULL)",
             name="ck_tenant__not_deleted_and_not_deleted_by",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

@@ -27,8 +27,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import AGENT_RUNTIME_SCHEMA_TOKEN
 
-_SCHEMA = "mugen"
+_SCHEMA = AGENT_RUNTIME_SCHEMA_TOKEN
 
 
 class AgentPlanRun(

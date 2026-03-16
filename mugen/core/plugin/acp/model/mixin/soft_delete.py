@@ -8,6 +8,8 @@ from datetime import datetime
 from sqlalchemy import DateTime, ForeignKey, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
+
 
 class SoftDeleteMixin:  # pylint: disable=too-few-public-methods
     """An SQLAlchemy declarative mixin for implementing soft deleting."""
@@ -20,6 +22,6 @@ class SoftDeleteMixin:  # pylint: disable=too-few-public-methods
 
     deleted_by_user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id"),
         nullable=True,
     )

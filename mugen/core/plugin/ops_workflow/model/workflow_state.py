@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 if TYPE_CHECKING:
     from mugen.core.plugin.ops_workflow.model.workflow_instance import WorkflowInstance
@@ -94,8 +95,8 @@ class WorkflowState(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "workflow_version_id"),
             (
-                "mugen.ops_workflow_workflow_version.tenant_id",
-                "mugen.ops_workflow_workflow_version.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_version.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_version.id",
             ),
             name="fkx_ops_wf_state_tenant_version",
             ondelete="CASCADE",
@@ -125,7 +126,7 @@ class WorkflowState(ModelBase, TenantScopedMixin):
             "workflow_version_id",
             "is_initial",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

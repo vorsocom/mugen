@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -65,15 +66,15 @@ class UsageAllocation(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "usage_event_id"),
-            ("mugen.billing_usage_event.tenant_id", "mugen.billing_usage_event.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_usage_event.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_usage_event.id"),
             name="fkx_billing_usage_allocation__tenant_usage_event",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "entitlement_bucket_id"),
             (
-                "mugen.billing_entitlement_bucket.tenant_id",
-                "mugen.billing_entitlement_bucket.id",
+                f"{CORE_SCHEMA_TOKEN}.billing_entitlement_bucket.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_entitlement_bucket.id",
             ),
             name="fkx_billing_usage_allocation__tenant_entitlement_bucket",
             ondelete="RESTRICT",
@@ -114,7 +115,7 @@ class UsageAllocation(ModelBase, TenantScopedMixin):
             unique=True,
             postgresql_where=sa_text("external_ref IS NOT NULL"),
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

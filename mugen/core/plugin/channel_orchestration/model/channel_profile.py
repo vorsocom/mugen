@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -41,7 +42,7 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
     client_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(
-            "mugen.admin_messaging_client_profile.id",
+            f"{CORE_SCHEMA_TOKEN}.admin_messaging_client_profile.id",
             ondelete="SET NULL",
         ),
         nullable=True,
@@ -68,7 +69,7 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
     policy_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(
-            "mugen.channel_orchestration_orchestration_policy.id",
+            f"{CORE_SCHEMA_TOKEN}.channel_orchestration_orchestration_policy.id",
             ondelete="SET NULL",
         ),
         nullable=True,
@@ -134,7 +135,7 @@ class ChannelProfile(ModelBase, TenantScopedMixin):
             "channel_key",
             "client_profile_id",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

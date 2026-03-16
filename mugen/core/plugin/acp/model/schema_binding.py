@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -21,14 +22,14 @@ class SchemaBinding(ModelBase):
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_tenant.id", ondelete="RESTRICT"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_tenant.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
 
     schema_definition_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_schema_definition.id", ondelete="CASCADE"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_schema_definition.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -88,7 +89,7 @@ class SchemaBinding(ModelBase):
             unique=True,
             postgresql_where=sa_text("is_active AND target_action IS NOT NULL"),
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

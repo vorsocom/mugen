@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -63,8 +64,8 @@ class TaxonomySubcategory(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "taxonomy_category_id"),
             (
-                "mugen.ops_vpn_taxonomy_category.tenant_id",
-                "mugen.ops_vpn_taxonomy_category.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_vpn_taxonomy_category.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_vpn_taxonomy_category.id",
             ),
             name="fkx_ops_vpn_taxonomy_subcategory__tenant_category",
             ondelete="CASCADE",
@@ -97,7 +98,7 @@ class TaxonomySubcategory(ModelBase, TenantScopedMixin):
             "taxonomy_category_id",
             "code",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

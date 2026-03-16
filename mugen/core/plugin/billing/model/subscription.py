@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.soft_delete import SoftDeleteMixin
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 if TYPE_CHECKING:
     from mugen.core.plugin.billing.model.entitlement_bucket import EntitlementBucket
@@ -143,13 +144,13 @@ class Subscription(ModelBase, TenantScopedMixin, SoftDeleteMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "account_id"),
-            ("mugen.billing_account.tenant_id", "mugen.billing_account.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_account.id"),
             name="fkx_billing_subscription__tenant_account",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "price_id"),
-            ("mugen.billing_price.tenant_id", "mugen.billing_price.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_price.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_price.id"),
             name="fkx_billing_subscription__tenant_price",
             ondelete="RESTRICT",
         ),
@@ -176,7 +177,7 @@ class Subscription(ModelBase, TenantScopedMixin, SoftDeleteMixin):
             "tenant_id",
             "price_id",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

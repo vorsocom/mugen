@@ -9,6 +9,7 @@ from mugen.core.plugin.acp.model.mixin.role_scoped import RoleScopedMixin
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
 from mugen.core.plugin.acp.model.mixin.user_scoped import UserScopedMixin
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -41,8 +42,8 @@ class RoleMembership(
                 "role_id",
             ),
             (
-                "mugen.admin_role.tenant_id",
-                "mugen.admin_role.id",
+                f"{CORE_SCHEMA_TOKEN}.admin_role.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.admin_role.id",
             ),
             name="fkx_role_membership__tenant_role",
             ondelete="CASCADE",
@@ -53,8 +54,8 @@ class RoleMembership(
                 "user_id",
             ),
             (
-                "mugen.admin_tenant_membership.tenant_id",
-                "mugen.admin_tenant_membership.user_id",
+                f"{CORE_SCHEMA_TOKEN}.admin_tenant_membership.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.admin_tenant_membership.user_id",
             ),
             name="fkx_role_membership__tenant_user_membership",
             ondelete="CASCADE",
@@ -86,7 +87,7 @@ class RoleMembership(
             "role_id",
             "user_id",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

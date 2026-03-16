@@ -25,6 +25,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class MeterRoundingMode(str, enum.Enum):
@@ -137,8 +138,8 @@ class MeterPolicy(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ["tenant_id", "meter_definition_id"],
             [
-                "mugen.ops_metering_meter_definition.tenant_id",
-                "mugen.ops_metering_meter_definition.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_metering_meter_definition.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_metering_meter_definition.id",
             ],
             name="fkx_ops_metering_meter_policy__tenant_meter_definition",
             ondelete="CASCADE",
@@ -203,7 +204,7 @@ class MeterPolicy(ModelBase, TenantScopedMixin):
             "meter_definition_id",
             "is_active",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

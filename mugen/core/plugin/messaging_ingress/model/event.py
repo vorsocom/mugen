@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class MessagingIngressEventRecord(ModelBase):
@@ -181,7 +182,7 @@ class MessagingIngressEventRecord(ModelBase):
             "client_profile_id",
             "status",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

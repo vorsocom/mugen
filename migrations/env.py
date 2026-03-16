@@ -16,6 +16,10 @@ from mugen.core.contract.migration_config import (
     migration_schema_bootstrap_order,
     resolve_mugen_config_path,
 )
+from mugen.core.utility.rdbms_schema import (
+    clone_metadata_with_schema_map,
+    resolve_rdbms_schema_contract,
+)
 
 # pylint: disable=no-member
 
@@ -142,7 +146,10 @@ def _load_target_metadata(cfg: dict) -> Optional[MetaData]:
     from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase  # pylint: disable=import-outside-toplevel
 
     _import_extension_models(cfg)
-    return ModelBase.metadata
+    return clone_metadata_with_schema_map(
+        ModelBase.metadata,
+        schema_map=_schema_contract.schema_translate_map,
+    )
 
 
 def get_url(cfg: dict) -> str:
@@ -151,14 +158,17 @@ def get_url(cfg: dict) -> str:
 
 
 _mugen_cfg = load_mugen_config(resolve_mugen_config_path())
+_schema_contract = resolve_rdbms_schema_contract(_mugen_cfg)
 
 _RUNTIME_SCHEMA = _get_required_identifier_from_env("MUGEN_ALEMBIC_SCHEMA")
 _VERSION_TABLE = _get_required_identifier_from_env("MUGEN_ALEMBIC_VERSION_TABLE")
 _VERSION_TABLE_SCHEMA = _get_required_identifier_from_env(
     "MUGEN_ALEMBIC_VERSION_TABLE_SCHEMA",
 )
+os.environ.setdefault("MUGEN_ALEMBIC_CORE_SCHEMA", _schema_contract.core_schema)
 
 config.attributes["mugen_cfg"] = _mugen_cfg
+config.attributes["rdbms_schema_contract"] = _schema_contract
 
 # add your model's MetaData object here
 # for 'autogenerate' support

@@ -1,0 +1,14 @@
+schema_version = 1
+
+[app]
+name = "Hrms Agent"
+author = "Your Organization"
+copyright = "Copyright (c) 2026, Your Organization"
+email = "team@example.com"
+version = "0.0.0"
+
+[upstream]
+repo = "vorsocom/mugen"
+branch = "main"
+sync_ref = "<commit-sha>"
+sync_tag = "0.44.0"

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from mugen.core.plugin.acp.model.mixin.role_scoped import RoleScopedMixin
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -34,13 +35,13 @@ class PermissionEntry(ModelBase, RoleScopedMixin, TenantScopedMixin):
 
     permission_object_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_permission_object.id"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_permission_object.id"),
         nullable=False,
     )
 
     permission_type_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_permission_type.id"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_permission_type.id"),
         nullable=False,
     )
 
@@ -67,8 +68,8 @@ class PermissionEntry(ModelBase, RoleScopedMixin, TenantScopedMixin):
                 "role_id",
             ),
             (
-                "mugen.admin_role.tenant_id",
-                "mugen.admin_role.id",
+                f"{CORE_SCHEMA_TOKEN}.admin_role.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.admin_role.id",
             ),
             name="fkx_permission_entry__tenant_role",
             ondelete="CASCADE",
@@ -90,7 +91,7 @@ class PermissionEntry(ModelBase, RoleScopedMixin, TenantScopedMixin):
             "tenant_id",
             "role_id",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

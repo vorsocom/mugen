@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class SlaClockEventType(str, enum.Enum):
@@ -81,7 +82,7 @@ class SlaClockEvent(ModelBase, TenantScopedMixin):
 
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -95,8 +96,8 @@ class SlaClockEvent(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "clock_id"),
             (
-                "mugen.ops_sla_clock.tenant_id",
-                "mugen.ops_sla_clock.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_sla_clock.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_sla_clock.id",
             ),
             name="fkx_ops_sla_clock_event__tenant_clock",
             ondelete="CASCADE",
@@ -104,8 +105,8 @@ class SlaClockEvent(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "clock_definition_id"),
             (
-                "mugen.ops_sla_clock_definition.tenant_id",
-                "mugen.ops_sla_clock_definition.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_sla_clock_definition.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_sla_clock_definition.id",
             ),
             name="fkx_ops_sla_clock_event__tenant_clock_definition",
             ondelete="SET NULL",
@@ -129,7 +130,7 @@ class SlaClockEvent(ModelBase, TenantScopedMixin):
             "clock_id",
             "occurred_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

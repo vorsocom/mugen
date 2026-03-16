@@ -7,6 +7,11 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
+from mugen.core.utility.rdbms_schema import (
+    AGENT_RUNTIME_SCHEMA_TOKEN,
+    CONTEXT_ENGINE_SCHEMA_TOKEN,
+    CORE_SCHEMA_TOKEN,
+)
 
 
 def _make_config(
@@ -28,7 +33,16 @@ def _make_config(
         max_overflow=max_overflow,
         statement_timeout_ms=statement_timeout_ms,
     )
-    return SimpleNamespace(rdbms=SimpleNamespace(sqlalchemy=sqlalchemy))
+    migration_tracks = SimpleNamespace(
+        core=SimpleNamespace(schema="core_runtime"),
+        plugins=[],
+    )
+    return SimpleNamespace(
+        rdbms=SimpleNamespace(
+            sqlalchemy=sqlalchemy,
+            migration_tracks=migration_tracks,
+        )
+    )
 
 
 class TestSharedSQLAlchemyRuntime(unittest.IsolatedAsyncioTestCase):
@@ -162,6 +176,13 @@ class TestSharedSQLAlchemyRuntime(unittest.IsolatedAsyncioTestCase):
             pool_size=13,
             max_overflow=14,
             connect_args={"server_settings": {"statement_timeout": "1500"}},
+            execution_options={
+                "schema_translate_map": {
+                    CORE_SCHEMA_TOKEN: "core_runtime",
+                    CONTEXT_ENGINE_SCHEMA_TOKEN: "core_runtime",
+                    AGENT_RUNTIME_SCHEMA_TOKEN: "core_runtime",
+                }
+            },
         )
         sessionmaker_ctor.assert_called_once_with(engine, expire_on_commit=False)
         self.assertIs(runtime.engine, engine)
@@ -185,6 +206,16 @@ class TestSharedSQLAlchemyRuntime(unittest.IsolatedAsyncioTestCase):
             SharedSQLAlchemyRuntime.from_config(config)
 
         self.assertEqual(
+            create_engine.call_args.kwargs["execution_options"],
+            {
+                "schema_translate_map": {
+                    CORE_SCHEMA_TOKEN: "core_runtime",
+                    CONTEXT_ENGINE_SCHEMA_TOKEN: "core_runtime",
+                    AGENT_RUNTIME_SCHEMA_TOKEN: "core_runtime",
+                }
+            },
+        )
+        self.assertEqual(
             create_engine.call_args.kwargs["connect_args"],
             {"options": "-c statement_timeout=900"},
         )
@@ -206,6 +237,16 @@ class TestSharedSQLAlchemyRuntime(unittest.IsolatedAsyncioTestCase):
         ):
             SharedSQLAlchemyRuntime.from_config(config)
 
+        self.assertEqual(
+            create_engine.call_args.kwargs["execution_options"],
+            {
+                "schema_translate_map": {
+                    CORE_SCHEMA_TOKEN: "core_runtime",
+                    CONTEXT_ENGINE_SCHEMA_TOKEN: "core_runtime",
+                    AGENT_RUNTIME_SCHEMA_TOKEN: "core_runtime",
+                }
+            },
+        )
         self.assertNotIn("connect_args", create_engine.call_args.kwargs)
 
     def test_from_config_without_statement_timeout_uses_base_engine_kwargs(self) -> None:
@@ -222,6 +263,16 @@ class TestSharedSQLAlchemyRuntime(unittest.IsolatedAsyncioTestCase):
         ):
             SharedSQLAlchemyRuntime.from_config(config)
 
+        self.assertEqual(
+            create_engine.call_args.kwargs["execution_options"],
+            {
+                "schema_translate_map": {
+                    CORE_SCHEMA_TOKEN: "core_runtime",
+                    CONTEXT_ENGINE_SCHEMA_TOKEN: "core_runtime",
+                    AGENT_RUNTIME_SCHEMA_TOKEN: "core_runtime",
+                }
+            },
+        )
         self.assertNotIn("connect_args", create_engine.call_args.kwargs)
 
     def test_from_config_requires_url(self) -> None:
