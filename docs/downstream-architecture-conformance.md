@@ -1,7 +1,7 @@
 # Downstream Architecture Conformance
 
 Status: Active  
-Last Updated: 2026-03-15  
+Last Updated: 2026-03-16  
 Audience: Downstream application teams, plugin maintainers, AI coding agents
 
 This guide defines the minimum architecture rules a downstream muGen
@@ -109,8 +109,12 @@ Use this checklist before merging downstream work:
    contracts instead of inventing a parallel transport path.
 8. The change does not require importing core plugin implementations into core
    service or contract layers.
-9. The architecture-boundary tests still pass.
-10. Downstream docs were updated if the extension point, plugin shape, or
+9. Downstream provenance is tracked in project-root `downstream.toml` with
+   `schema_version`, `[app]`, and `[upstream]` metadata. `upstream.sync_ref`
+   points to the exact merged upstream commit, and `upstream.sync_tag` is used
+   only when that sync corresponds to a tag.
+10. The architecture-boundary tests still pass.
+11. Downstream docs were updated if the extension point, plugin shape, or
     operational workflow changed.
 
 ## Safe Defaults For AI-Assisted Changes
@@ -119,6 +123,9 @@ When an AI agent or quick prototype is making downstream changes, default to
 these decisions:
 
 - create a new downstream package instead of editing `mugen/core`;
+- keep upstream/downstream provenance in project-root `downstream.toml`
+  rather than in runtime config, `pyproject.toml`, or executable Python
+  metadata files;
 - use `mugen.modules.extensions` for framework/plugin metadata and runtime
   tokens that already exist;
 - keep all downstream schema in a dedicated plugin track;
