@@ -230,7 +230,12 @@ lease.
 - wake-up time is still in the future;
 - lease is still active for another owner;
 - scheduler returns no due ids;
+- delegated child work has not reached a required terminal state yet;
 - request snapshot could not be resumed because the run was already finalized.
+
+Current reference behavior: `JoinState.timeout_at` does not auto-timeout a
+waiting parent. Expect resume only from child completion, scheduler wake-up, or
+future timeout support.
 
 ### Step-by-step investigation
 

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 from mugen.core.contract.agent import (
     AgentRuntimePolicy,
@@ -29,6 +30,7 @@ from mugen.core.contract.agent import (
     PlanRunRequest,
     PlanRunState,
     PlanRunStatus,
+    PlanRunStepKind,
     PreparedPlanRun,
 )
 from mugen.core.contract.context import (
@@ -43,6 +45,7 @@ from mugen.core.contract.gateway.completion import (
     CompletionRequest,
 )
 import mugen.core.service.agent_runtime as agent_runtime_module
+from mugen.core.plugin.agent_runtime.service.runtime import RelationalPlanRunStore
 from mugen.core.service.agent_runtime import DefaultAgentRuntime
 
 
@@ -146,6 +149,92 @@ def _append_cursor_side_effect():
         )
 
     return _append_step
+
+
+class _InMemoryRunService:
+    def __init__(self) -> None:
+        self.rows: dict[uuid.UUID, SimpleNamespace] = {}
+
+    async def create(self, payload: dict) -> SimpleNamespace:
+        now = datetime.now(timezone.utc)
+        row = SimpleNamespace(
+            id=uuid.uuid4(),
+            created_at=now,
+            updated_at=now,
+            row_version=1,
+            **payload,
+        )
+        self.rows[row.id] = row
+        return row
+
+    async def get(self, where: dict) -> SimpleNamespace | None:
+        return self.rows.get(where["id"])
+
+    async def update_with_row_version(
+        self,
+        where: dict,
+        *,
+        expected_row_version: int | None,
+        changes: dict,
+    ) -> SimpleNamespace | None:
+        row = self.rows.get(where["id"])
+        if row is None:
+            return None
+        if expected_row_version is not None and row.row_version != expected_row_version:
+            return None
+        for key, value in changes.items():
+            setattr(row, key, value)
+        row.row_version = int(row.row_version or 0) + 1
+        row.updated_at = datetime.now(timezone.utc)
+        return row
+
+    async def list(self, *, filter_groups=None, order_by=None, limit=None) -> list:
+        rows = list(self.rows.values())
+        for filter_group in filter_groups or []:
+            where = dict(getattr(filter_group, "where", {}) or {})
+            rows = [
+                row
+                for row in rows
+                if all(getattr(row, key) == value for key, value in where.items())
+            ]
+        for order in reversed(order_by or []):
+            field = getattr(order, "field", None)
+            rows.sort(key=lambda row: getattr(row, field))
+        if limit is not None:
+            rows = rows[:limit]
+        return rows
+
+
+class _InMemoryStepService:
+    def __init__(self) -> None:
+        self.rows: list[SimpleNamespace] = []
+
+    async def create(self, payload: dict) -> SimpleNamespace:
+        row = SimpleNamespace(
+            id=uuid.uuid4(),
+            row_version=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            **payload,
+        )
+        self.rows.append(row)
+        return row
+
+    async def list(self, *, filter_groups=None, order_by=None, limit=None) -> list:
+        rows = list(self.rows)
+        for filter_group in filter_groups or []:
+            where = dict(getattr(filter_group, "where", {}) or {})
+            rows = [
+                row
+                for row in rows
+                if all(getattr(row, key) == value for key, value in where.items())
+            ]
+        for order in reversed(order_by or []):
+            field = getattr(order, "field", None)
+            rows.sort(key=lambda row: getattr(row, field))
+        if limit is not None:
+            rows = rows[:limit]
+        return rows
 
 
 def _runtime(
@@ -348,6 +437,74 @@ class TestMugenAgentRuntimeService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome.status, PlanOutcomeStatus.COMPLETED)
         self.assertEqual(outcome.assistant_response, "second")
         self.assertEqual(planning_engine.next_decision.await_count, 2)
+
+    async def test_run_current_turn_preserves_prior_observations_on_response_replan(
+        self,
+    ) -> None:
+        request = _request(prepared_context=_prepared_context())
+        run = _run(request=request)
+        planning_engine = Mock()
+        planning_engine.prepare_run = AsyncMock(return_value=run)
+        planning_engine.next_decision = AsyncMock(
+            side_effect=[
+                PlanDecision(
+                    kind=PlanDecisionKind.EXECUTE_ACTION,
+                    capability_invocations=(
+                        CapabilityInvocation(capability_key="cap.lookup"),
+                    ),
+                ),
+                PlanDecision(kind=PlanDecisionKind.RESPOND, response_text="first"),
+                PlanDecision(kind=PlanDecisionKind.RESPOND, response_text="second"),
+            ]
+        )
+        planning_engine.finalize_run = AsyncMock(side_effect=lambda *_args: run)
+
+        evaluation_engine = Mock()
+        evaluation_engine.evaluate_step = AsyncMock(
+            return_value=EvaluationResult(status=EvaluationStatus.PASS)
+        )
+        evaluation_engine.evaluate_response = AsyncMock(
+            side_effect=[
+                EvaluationResult(status=EvaluationStatus.REPLAN),
+                EvaluationResult(status=EvaluationStatus.PASS),
+            ]
+        )
+
+        executor = Mock()
+        executor.list_capabilities = AsyncMock(
+            return_value=[CapabilityDescriptor(key="cap.lookup", title="Lookup")]
+        )
+        executor.execute_capability = AsyncMock(
+            return_value=CapabilityResult(
+                capability_key="cap.lookup",
+                ok=True,
+                result={"answer": "42"},
+            )
+        )
+
+        plan_run_store = Mock()
+        plan_run_store.save_run = AsyncMock(side_effect=lambda prepared_run: prepared_run)
+        plan_run_store.append_step = AsyncMock(side_effect=_append_cursor_side_effect())
+        plan_run_store.finalize_run = AsyncMock(
+            side_effect=lambda *, run_id, outcome: outcome
+        )
+
+        runtime = _runtime(
+            planning_engine=planning_engine,
+            evaluation_engine=evaluation_engine,
+            executor=executor,
+            plan_run_store=plan_run_store,
+        )
+
+        outcome = await runtime.run_current_turn(request)
+
+        self.assertEqual(outcome.status, PlanOutcomeStatus.COMPLETED)
+        self.assertEqual(outcome.assistant_response, "second")
+        third_call_observations = planning_engine.next_decision.await_args_list[2].args[2]
+        self.assertEqual(
+            [observation.kind for observation in third_call_observations],
+            ["capability_result", "response_evaluation"],
+        )
 
     async def test_run_current_turn_handoffs_when_evaluator_escalates(self) -> None:
         request = _request(prepared_context=_prepared_context())
@@ -672,7 +829,13 @@ class TestMugenAgentRuntimeService(unittest.IsolatedAsyncioTestCase):
         plan_run_store.finalize_run = AsyncMock(
             side_effect=lambda *, run_id, outcome: outcome
         )
-        plan_run_store.load_run = AsyncMock(side_effect=[parent_run, parent_waiting])
+
+        async def _load_parent_run(_run_id: str):
+            if plan_run_store.load_run.await_count <= 1:
+                return parent_run
+            return parent_waiting
+
+        plan_run_store.load_run = AsyncMock(side_effect=_load_parent_run)
         plan_run_store.list_child_runs = AsyncMock(return_value=[child_completed])
         plan_run_store.load_run_graph = AsyncMock(return_value=[parent_waiting, child_completed])
 
@@ -770,6 +933,155 @@ class TestMugenAgentRuntimeService(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(outcomes[0].status, PlanOutcomeStatus.HANDOFF)
         self.assertEqual(outcomes[0].error_message, "required_child_failed")
+
+    async def test_run_current_turn_with_relational_store_refreshes_run_handle(self) -> None:
+        store = RelationalPlanRunStore(
+            run_service=_InMemoryRunService(),
+            step_service=_InMemoryStepService(),
+        )
+        request = _request(prepared_context=_prepared_context())
+        policy = AgentRuntimePolicy(
+            enabled=True,
+            current_turn_enabled=True,
+            background_enabled=True,
+            max_iterations=2,
+        )
+
+        planning_engine = Mock()
+        async def _prepare_run(plan_request):
+            return await store.create_run(
+                plan_request,
+                state=PlanRunState(
+                    goal=plan_request.user_message,
+                    status=PlanRunStatus.ACTIVE,
+                ),
+                policy=policy,
+            )
+
+        planning_engine.prepare_run = AsyncMock(side_effect=_prepare_run)
+        planning_engine.next_decision = AsyncMock(
+            return_value=PlanDecision(
+                kind=PlanDecisionKind.RESPOND,
+                response_text="final answer",
+            )
+        )
+
+        async def _finalize_run(
+            _request_obj,
+            prepared_run,
+            outcome,
+        ):
+            prepared_run.status = PlanRunStatus.COMPLETED
+            prepared_run.state.status = PlanRunStatus.COMPLETED
+            prepared_run.final_outcome = outcome
+            return await store.save_run(prepared_run)
+
+        planning_engine.finalize_run = AsyncMock(side_effect=_finalize_run)
+
+        evaluation_engine = Mock()
+        evaluation_engine.evaluate_step = AsyncMock()
+        evaluation_engine.evaluate_response = AsyncMock(
+            return_value=EvaluationResult(status=EvaluationStatus.PASS)
+        )
+
+        executor = Mock()
+        executor.list_capabilities = AsyncMock(return_value=[])
+        executor.execute_capability = AsyncMock()
+
+        runtime = _runtime(
+            planning_engine=planning_engine,
+            evaluation_engine=evaluation_engine,
+            executor=executor,
+            plan_run_store=store,
+        )
+
+        outcome = await runtime.run_current_turn(request)
+        saved_run = await store.load_run(request.run_id)
+        saved_steps = await store.list_steps(run_id=request.run_id)
+
+        self.assertEqual(outcome.status, PlanOutcomeStatus.COMPLETED)
+        self.assertEqual(outcome.assistant_response, "final answer")
+        self.assertIsNotNone(saved_run)
+        self.assertEqual(saved_run.final_outcome.status, PlanOutcomeStatus.COMPLETED)
+        self.assertGreaterEqual(saved_run.row_version, 4)
+        self.assertEqual(
+            [step.step_kind for step in saved_steps],
+            [PlanRunStepKind.DECISION, PlanRunStepKind.EVALUATION],
+        )
+
+    async def test_run_background_batch_with_relational_store_reloads_after_lease(
+        self,
+    ) -> None:
+        store = RelationalPlanRunStore(
+            run_service=_InMemoryRunService(),
+            step_service=_InMemoryStepService(),
+        )
+        request = _request(mode=PlanRunMode.BACKGROUND)
+        policy = AgentRuntimePolicy(
+            enabled=True,
+            current_turn_enabled=True,
+            background_enabled=True,
+            max_background_iterations=2,
+        )
+        due_run = await store.create_run(
+            request,
+            state=PlanRunState(goal=request.user_message, status=PlanRunStatus.PREPARED),
+            policy=policy,
+        )
+
+        planning_engine = Mock()
+        planning_engine.prepare_run = AsyncMock()
+        planning_engine.next_decision = AsyncMock(
+            return_value=PlanDecision(
+                kind=PlanDecisionKind.RESPOND,
+                response_text="background answer",
+            )
+        )
+
+        async def _finalize_background_run(
+            _request_obj,
+            prepared_run,
+            outcome,
+        ):
+            prepared_run.status = PlanRunStatus.COMPLETED
+            prepared_run.state.status = PlanRunStatus.COMPLETED
+            prepared_run.final_outcome = outcome
+            return await store.save_run(prepared_run)
+
+        planning_engine.finalize_run = AsyncMock(side_effect=_finalize_background_run)
+
+        evaluation_engine = Mock()
+        evaluation_engine.evaluate_step = AsyncMock()
+        evaluation_engine.evaluate_response = AsyncMock(
+            return_value=EvaluationResult(status=EvaluationStatus.PASS)
+        )
+
+        executor = Mock()
+        executor.list_capabilities = AsyncMock(return_value=[])
+        executor.execute_capability = AsyncMock()
+
+        runtime = _runtime(
+            planning_engine=planning_engine,
+            evaluation_engine=evaluation_engine,
+            executor=executor,
+            plan_run_store=store,
+        )
+
+        outcomes = await runtime.run_background_batch(owner="worker-1", limit=10)
+        saved_run = await store.load_run(due_run.run_id)
+        saved_steps = await store.list_steps(run_id=due_run.run_id)
+
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(outcomes[0].status, PlanOutcomeStatus.COMPLETED)
+        self.assertEqual(outcomes[0].assistant_response, "background answer")
+        self.assertIsNotNone(saved_run)
+        self.assertEqual(saved_run.final_outcome.status, PlanOutcomeStatus.COMPLETED)
+        self.assertIsNone(saved_run.lease)
+        self.assertGreaterEqual(saved_run.row_version, 4)
+        self.assertEqual(
+            [step.step_kind for step in saved_steps],
+            [PlanRunStepKind.DECISION, PlanRunStepKind.EVALUATION],
+        )
 
 
 if __name__ == "__main__":

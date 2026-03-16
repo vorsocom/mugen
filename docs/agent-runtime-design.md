@@ -199,6 +199,10 @@ Decision semantics:
   persist a join barrier, and resume the parent after required children finish.
 - `STOP`: terminate without further action.
 
+Current reference behavior: delegated `JoinState.timeout_at` is persisted as
+reserved metadata only. The current runtime does not auto-timeout waiting
+parents from that field.
+
 Contract guarantee: decisions describe what should happen next. They do not
 perform execution side effects directly.
 
@@ -221,7 +225,7 @@ Default runtime behavior:
 
 - `PASS` continues or finalizes normally.
 - `RETRY` and `REPLAN` feed a structured evaluation observation back into the
-  next planner iteration.
+  next planner iteration while preserving prior observations from the same run.
 - `ESCALATE` becomes terminal handoff.
 - `FAIL` becomes terminal failure.
 
