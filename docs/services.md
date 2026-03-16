@@ -20,6 +20,10 @@ The following layer rules are considered hard constraints for `mugen/core`:
 
 These rules are enforced by architecture-boundary tests and should be preserved during service changes.
 
+For downstream repository structure, extension placement, and a conformance
+checklist that preserves these boundaries, see
+[`docs/downstream-architecture-conformance.md`](./downstream-architecture-conformance.md).
+
 ## Shared Messaging Ingress Service
 
 External messaging platforms now share one durable ingress foundation instead of

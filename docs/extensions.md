@@ -50,24 +50,39 @@ extension-service API, not through module globals.
 ## Loading Extensions
 
 Extensions are loaded from `mugen.modules.extensions` entries in `mugen.toml`.
-Use strict tokens for core extensions and module paths only for your own custom
-extension classes where the loader explicitly expects them.
+The current bootstrap/runtime contract is token-based. Shipped runtime
+extensions resolve through the core token registry, while enabled framework
+plugin entries also carry contributor metadata used by ACP contribution and
+migration loading. Keep downstream plugin modules outside `mugen.core`, for
+example in `acme_extension`.
 
 ```toml
 [[mugen.modules.extensions]]
 type = "fw"
-path = "extension.app1.fw_ext"
+token = "core.fw.acp"
+enabled = true
+name = "com.vorsocomputing.mugen.acp"
+namespace = "com.vorsocomputing.mugen.acp"
+contrib = "mugen.core.plugin.acp.contrib"
 
 [[mugen.modules.extensions]]
-type = "mh"
-path = "extension.app1.media_ext"
-
-[[mugen.modules.extensions]]
-type = "rpp"
-path = "extension.app1.response_ext"
+type = "fw"
+token = "acme.fw.billing"
+enabled = true
+name = "com.acme.billing"
+namespace = "com.acme.billing"
+contrib = "acme_extension.contrib"
+models = "acme_extension.model"
+migration_track = "acme_extension"
 ```
 
 `type = "ctx"` and `type = "rag"` are rejected by bootstrap validation.
+
+Important current-state note: generic module-path loading for new downstream
+CP/MH/RPP/CT/FW runtime classes is not the bootstrap contract today. The class
+examples below describe the Python interfaces used by core. If you need the
+runtime to instantiate a new non-core extension class directly, treat that as a
+framework-registry change.
 
 ## Message Handler Extensions
 

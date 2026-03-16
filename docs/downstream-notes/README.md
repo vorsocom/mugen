@@ -3,11 +3,19 @@
 This folder is for implementation guidance that belongs in downstream plugins
 or downstream applications, not in core ACP/core plugin abstractions.
 
+Read [`../downstream-architecture-conformance.md`](../downstream-architecture-conformance.md)
+before using these notes. The notes in this folder explain downstream
+implementation patterns, but they do not override the core boundary rules:
+downstream code should live in your own top-level package, not under
+`mugen/core` and not as product logic inside the upstream `mugen` package.
+
 ## Purpose
 
 - Capture reusable downstream patterns and decisions.
 - Keep core plugin scope clean while documenting extensibility paths.
 - Provide implementation-ready notes without forcing immediate core changes.
+- Keep downstream teams aligned on where product code belongs and which seams
+  should extend core versus staying downstream-owned.
 
 ## File Conventions
 
