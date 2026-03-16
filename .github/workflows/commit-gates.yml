@@ -28,6 +28,8 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -35,6 +37,14 @@ jobs:
           set -euo pipefail
 
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ "$PR_BASE_REF" == "main" && "$PR_HEAD_REF" == release/* ]]; then
+              git fetch origin develop
+              python3 scripts/check_conventional_commit.py \
+                --from-ref "origin/develop" \
+                --to-ref "$PR_HEAD_SHA"
+              exit 0
+            fi
+
             python3 scripts/check_conventional_commit.py \
               --from-ref "$PR_BASE_SHA" \
               --to-ref "$PR_HEAD_SHA"
