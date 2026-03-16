@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class AdjustmentKind(str, enum.Enum):
@@ -118,19 +119,19 @@ class Adjustment(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "account_id"),
-            ("mugen.billing_account.tenant_id", "mugen.billing_account.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_account.id"),
             name="fkx_billing_adjustment__tenant_account",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "invoice_id"),
-            ("mugen.billing_invoice.tenant_id", "mugen.billing_invoice.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_invoice.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_invoice.id"),
             name="fkx_billing_adjustment__tenant_invoice",
             ondelete="SET NULL",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "credit_note_id"),
-            ("mugen.billing_credit_note.tenant_id", "mugen.billing_credit_note.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_credit_note.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_credit_note.id"),
             name="fkx_billing_adjustment__tenant_credit_note",
             ondelete="SET NULL",
         ),
@@ -178,7 +179,7 @@ class Adjustment(ModelBase, TenantScopedMixin):
             unique=True,
             postgresql_where=sa_text("external_ref IS NOT NULL"),
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

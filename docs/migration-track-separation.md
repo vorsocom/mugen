@@ -84,6 +84,11 @@ they declare `migration_track = "core"` (or another explicit track name).
 The legacy keys `mugen.modules.core.extensions` and
 `mugen.modules.core.plugins` are unsupported and fail fast.
 
+Runtime ORM metadata and plugin Alembic envs treat these configured track
+schemas as the source of truth. Model code should use logical schema tokens,
+and plugin revisions that reference core-owned tables must resolve the core
+schema from the Alembic contract instead of hard-coding `mugen`.
+
 ```toml
 [rdbms.migration_tracks.core]
 enabled = true

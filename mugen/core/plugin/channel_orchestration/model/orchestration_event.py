@@ -20,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -31,7 +32,7 @@ class OrchestrationEvent(ModelBase, TenantScopedMixin):
     conversation_state_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(
-            "mugen.channel_orchestration_conversation_state.id",
+            f"{CORE_SCHEMA_TOKEN}.channel_orchestration_conversation_state.id",
             ondelete="SET NULL",
         ),
         nullable=True,
@@ -41,7 +42,7 @@ class OrchestrationEvent(ModelBase, TenantScopedMixin):
     channel_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(
-            "mugen.channel_orchestration_channel_profile.id",
+            f"{CORE_SCHEMA_TOKEN}.channel_orchestration_channel_profile.id",
             ondelete="SET NULL",
         ),
         nullable=True,
@@ -78,7 +79,7 @@ class OrchestrationEvent(ModelBase, TenantScopedMixin):
 
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -124,7 +125,7 @@ class OrchestrationEvent(ModelBase, TenantScopedMixin):
             "conversation_state_id",
             "occurred_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

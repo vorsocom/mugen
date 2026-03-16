@@ -28,6 +28,7 @@ from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
 from mugen.core.plugin.knowledge_pack.model.knowledge_pack_version import (
     KnowledgePublicationStatus,
 )
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 if TYPE_CHECKING:
     from mugen.core.plugin.knowledge_pack.model.knowledge_entry import KnowledgeEntry
@@ -104,7 +105,7 @@ class KnowledgeEntryRevision(ModelBase, TenantScopedMixin):
 
     published_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -116,7 +117,7 @@ class KnowledgeEntryRevision(ModelBase, TenantScopedMixin):
 
     archived_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -139,8 +140,8 @@ class KnowledgeEntryRevision(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "knowledge_entry_id"),
             (
-                "mugen.knowledge_pack_knowledge_entry.tenant_id",
-                "mugen.knowledge_pack_knowledge_entry.id",
+                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_entry.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_entry.id",
             ),
             name="fkx_knowledge_entry_revision__tenant_entry",
             ondelete="CASCADE",
@@ -148,8 +149,8 @@ class KnowledgeEntryRevision(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "knowledge_pack_version_id"),
             (
-                "mugen.knowledge_pack_knowledge_pack_version.tenant_id",
-                "mugen.knowledge_pack_knowledge_pack_version.id",
+                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_pack_version.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_pack_version.id",
             ),
             name="fkx_knowledge_entry_revision__tenant_pack_version",
             ondelete="CASCADE",
@@ -203,7 +204,7 @@ class KnowledgeEntryRevision(ModelBase, TenantScopedMixin):
             "category",
             "status",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

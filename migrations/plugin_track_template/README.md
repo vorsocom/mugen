@@ -18,12 +18,16 @@ The migration runner sets these automatically:
 
 - `MUGEN_ALEMBIC_TRACK`
 - `MUGEN_ALEMBIC_SCHEMA`
+- `MUGEN_ALEMBIC_CORE_SCHEMA`
 - `MUGEN_ALEMBIC_VERSION_TABLE`
 - `MUGEN_ALEMBIC_VERSION_TABLE_SCHEMA`
 
 The template reads DB URL from `mugen.toml` at:
 
 - `rdbms.alembic.url`
+
+Cross-track foreign keys must qualify core-owned tables with
+`MUGEN_ALEMBIC_CORE_SCHEMA`, not with a literal `mugen` schema name.
 
 ## Optional autogenerate metadata
 

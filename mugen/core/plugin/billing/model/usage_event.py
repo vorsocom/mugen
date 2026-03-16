@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class UsageEventStatus(str, enum.Enum):
@@ -118,19 +119,19 @@ class UsageEvent(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "account_id"),
-            ("mugen.billing_account.tenant_id", "mugen.billing_account.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_account.id"),
             name="fkx_billing_usage_event__tenant_account",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "subscription_id"),
-            ("mugen.billing_subscription.tenant_id", "mugen.billing_subscription.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_subscription.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_subscription.id"),
             name="fkx_billing_usage_event__tenant_subscription",
             ondelete="SET NULL",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "price_id"),
-            ("mugen.billing_price.tenant_id", "mugen.billing_price.id"),
+            (f"{CORE_SCHEMA_TOKEN}.billing_price.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_price.id"),
             name="fkx_billing_usage_event__tenant_price",
             ondelete="SET NULL",
         ),
@@ -171,7 +172,7 @@ class UsageEvent(ModelBase, TenantScopedMixin):
             unique=True,
             postgresql_where=sa_text("external_ref IS NOT NULL"),
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

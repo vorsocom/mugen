@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, relationship
 from mugen.core.plugin.acp.model.mixin.global_role_scoped import GlobalRoleScopedMixin
 from mugen.core.plugin.acp.model.mixin.user_scoped import UserScopedMixin
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -34,7 +35,7 @@ class GlobalRoleMembership(
             "user_id",
             name="ux_global_role_membership__role_user",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

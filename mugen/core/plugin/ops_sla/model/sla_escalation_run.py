@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class SlaEscalationRunStatus(str, enum.Enum):
@@ -94,7 +95,7 @@ class SlaEscalationRun(ModelBase, TenantScopedMixin):
 
     executed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -103,8 +104,8 @@ class SlaEscalationRun(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "escalation_policy_id"),
             (
-                "mugen.ops_sla_escalation_policy.tenant_id",
-                "mugen.ops_sla_escalation_policy.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_sla_escalation_policy.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_sla_escalation_policy.id",
             ),
             name="fkx_ops_sla_escalation_run__tenant_policy",
             ondelete="CASCADE",
@@ -112,8 +113,8 @@ class SlaEscalationRun(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "clock_id"),
             (
-                "mugen.ops_sla_clock.tenant_id",
-                "mugen.ops_sla_clock.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_sla_clock.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_sla_clock.id",
             ),
             name="fkx_ops_sla_escalation_run__tenant_clock",
             ondelete="SET NULL",
@@ -121,8 +122,8 @@ class SlaEscalationRun(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "clock_event_id"),
             (
-                "mugen.ops_sla_clock_event.tenant_id",
-                "mugen.ops_sla_clock_event.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_sla_clock_event.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_sla_clock_event.id",
             ),
             name="fkx_ops_sla_escalation_run__tenant_clock_event",
             ondelete="SET NULL",
@@ -148,7 +149,7 @@ class SlaEscalationRun(ModelBase, TenantScopedMixin):
             "status",
             "executed_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class ConnectorInstanceStatus(str, enum.Enum):
@@ -32,7 +33,7 @@ class ConnectorInstance(ModelBase, TenantScopedMixin):
     __tablename__ = "ops_connector_instance"
 
     connector_type_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("mugen.ops_connector_type.id", ondelete="RESTRICT"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.ops_connector_type.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -123,7 +124,7 @@ class ConnectorInstance(ModelBase, TenantScopedMixin):
             "tenant_id",
             "connector_type_id",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

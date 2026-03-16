@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.global_role_scoped import GlobalRoleScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -26,13 +27,13 @@ class GlobalPermissionEntry(ModelBase, GlobalRoleScopedMixin):
 
     permission_object_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_permission_object.id"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_permission_object.id"),
         nullable=False,
     )
 
     permission_type_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_permission_type.id"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_permission_type.id"),
         nullable=False,
     )
 
@@ -55,7 +56,7 @@ class GlobalPermissionEntry(ModelBase, GlobalRoleScopedMixin):
             "permission_type_id",
             name="ux_global_permission_entry__role_object_type",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

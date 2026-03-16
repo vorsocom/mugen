@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class DataRequestType(str, enum.Enum):
@@ -141,8 +142,8 @@ class DataHandlingRecord(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "retention_policy_id"),
             (
-                "mugen.ops_governance_retention_policy.tenant_id",
-                "mugen.ops_governance_retention_policy.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_governance_retention_policy.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_governance_retention_policy.id",
             ),
             name="fkx_ops_gov_data_handling_record__tenant_retention_policy",
             ondelete="SET NULL",
@@ -150,8 +151,8 @@ class DataHandlingRecord(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "evidence_blob_id"),
             (
-                "mugen.audit_evidence_blob.tenant_id",
-                "mugen.audit_evidence_blob.id",
+                f"{CORE_SCHEMA_TOKEN}.audit_evidence_blob.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.audit_evidence_blob.id",
             ),
             name="fkx_ops_gov_data_handling_record__tenant_evidence_blob",
             ondelete="SET NULL",
@@ -183,7 +184,7 @@ class DataHandlingRecord(ModelBase, TenantScopedMixin):
             "request_status",
             "requested_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

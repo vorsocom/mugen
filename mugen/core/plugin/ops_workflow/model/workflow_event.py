@@ -26,6 +26,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 if TYPE_CHECKING:
     from mugen.core.plugin.ops_workflow.model.workflow_instance import WorkflowInstance
@@ -100,7 +101,7 @@ class WorkflowEvent(ModelBase, TenantScopedMixin):
 
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -134,8 +135,8 @@ class WorkflowEvent(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "workflow_instance_id"),
             (
-                "mugen.ops_workflow_workflow_instance.tenant_id",
-                "mugen.ops_workflow_workflow_instance.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_instance.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_instance.id",
             ),
             name="fkx_ops_wf_event_tenant_instance",
             ondelete="CASCADE",
@@ -143,8 +144,8 @@ class WorkflowEvent(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "workflow_task_id"),
             (
-                "mugen.ops_workflow_workflow_task.tenant_id",
-                "mugen.ops_workflow_workflow_task.id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_task.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.ops_workflow_workflow_task.id",
             ),
             name="fkx_ops_wf_event_tenant_task",
             ondelete="SET NULL",
@@ -174,7 +175,7 @@ class WorkflowEvent(ModelBase, TenantScopedMixin):
             "workflow_instance_id",
             "occurred_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

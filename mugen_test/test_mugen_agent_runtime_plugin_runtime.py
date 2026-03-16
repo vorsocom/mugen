@@ -28,6 +28,7 @@ from mugen.core.plugin.agent_runtime.service.runtime import (
     RelationalAgentScheduler,
     RelationalPlanRunStore,
 )
+from mugen.core.utility.rdbms_schema import AGENT_RUNTIME_SCHEMA_TOKEN
 
 
 def _scope() -> ContextScope:
@@ -146,9 +147,9 @@ class _FakeStepService:
 class TestMugenAgentRuntimePluginRuntime(unittest.IsolatedAsyncioTestCase):
     """Exercises plugin runtime services without DI/bootstrap."""
 
-    async def test_models_use_core_runtime_schema(self) -> None:
-        self.assertEqual(AgentPlanRun.__table__.schema, "mugen")
-        self.assertEqual(AgentPlanStep.__table__.schema, "mugen")
+    async def test_models_use_plugin_runtime_schema_token(self) -> None:
+        self.assertEqual(AgentPlanRun.__table__.schema, AGENT_RUNTIME_SCHEMA_TOKEN)
+        self.assertEqual(AgentPlanStep.__table__.schema, AGENT_RUNTIME_SCHEMA_TOKEN)
         self.assertIn("service_route_key", AgentPlanRun.__table__.c)
         self.assertIn("parent_run_id", AgentPlanRun.__table__.c)
         self.assertIn("root_run_id", AgentPlanRun.__table__.c)

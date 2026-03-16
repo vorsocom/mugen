@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -56,7 +57,7 @@ class VendorCapability(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "vendor_id"),
-            ("mugen.ops_vpn_vendor.tenant_id", "mugen.ops_vpn_vendor.id"),
+            (f"{CORE_SCHEMA_TOKEN}.ops_vpn_vendor.tenant_id", f"{CORE_SCHEMA_TOKEN}.ops_vpn_vendor.id"),
             name="fkx_ops_vpn_vendor_capability__tenant_vendor",
             ondelete="CASCADE",
         ),
@@ -86,7 +87,7 @@ class VendorCapability(ModelBase, TenantScopedMixin):
             "capability_code",
             "service_region",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

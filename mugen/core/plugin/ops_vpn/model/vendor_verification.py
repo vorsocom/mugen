@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class VendorVerificationType(str, enum.Enum):
@@ -91,7 +92,7 @@ class VendorVerification(ModelBase, TenantScopedMixin):
 
     checked_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -124,7 +125,7 @@ class VendorVerification(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "vendor_id"),
-            ("mugen.ops_vpn_vendor.tenant_id", "mugen.ops_vpn_vendor.id"),
+            (f"{CORE_SCHEMA_TOKEN}.ops_vpn_vendor.tenant_id", f"{CORE_SCHEMA_TOKEN}.ops_vpn_vendor.id"),
             name="fkx_ops_vpn_vendor_verification__tenant_vendor",
             ondelete="CASCADE",
         ),
@@ -143,7 +144,7 @@ class VendorVerification(ModelBase, TenantScopedMixin):
             "vendor_id",
             "checked_at",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

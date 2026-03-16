@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 class TenantInvitationStatus(str, enum.Enum):
@@ -49,7 +50,7 @@ class TenantInvitation(ModelBase, TenantScopedMixin):
 
     invited_by_user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id"),
         nullable=True,
     )
 
@@ -73,7 +74,7 @@ class TenantInvitation(ModelBase, TenantScopedMixin):
 
     accepted_by_user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id"),
         nullable=True,
     )
 
@@ -84,7 +85,7 @@ class TenantInvitation(ModelBase, TenantScopedMixin):
 
     revoked_by_user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id"),
         nullable=True,
     )
 
@@ -128,7 +129,7 @@ class TenantInvitation(ModelBase, TenantScopedMixin):
             "id",
             name="ux_tenant_invitation__tenant_id_id",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

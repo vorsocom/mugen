@@ -649,6 +649,9 @@ version_table_schema = "mugen"
 # Downstream plugin tracks run independently from core.
 # New plugin tracks can keep their own Alembic lineage even when they target
 # the shared runtime schema used by the current relational gateway.
+# Runtime ORM and plugin Alembic environments derive both plugin and core
+# schema qualification from these track entries; cross-track foreign keys
+# should never hard-code the literal `mugen` schema.
 [[rdbms.migration_tracks.plugins]]
 name = "context_engine"
 enabled = true

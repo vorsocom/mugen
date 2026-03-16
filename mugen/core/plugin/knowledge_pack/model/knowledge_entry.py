@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 if TYPE_CHECKING:
     from mugen.core.plugin.knowledge_pack.model.knowledge_entry_revision import (
@@ -96,8 +97,8 @@ class KnowledgeEntry(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "knowledge_pack_id"),
             (
-                "mugen.knowledge_pack_knowledge_pack.tenant_id",
-                "mugen.knowledge_pack_knowledge_pack.id",
+                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_pack.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_pack.id",
             ),
             name="fkx_knowledge_entry__tenant_pack",
             ondelete="CASCADE",
@@ -105,8 +106,8 @@ class KnowledgeEntry(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "knowledge_pack_version_id"),
             (
-                "mugen.knowledge_pack_knowledge_pack_version.tenant_id",
-                "mugen.knowledge_pack_knowledge_pack_version.id",
+                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_pack_version.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_pack_version.id",
             ),
             name="fkx_knowledge_entry__tenant_pack_version",
             ondelete="CASCADE",
@@ -140,7 +141,7 @@ class KnowledgeEntry(ModelBase, TenantScopedMixin):
             "knowledge_pack_version_id",
             "is_active",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -40,7 +41,7 @@ class CaseAssignment(ModelBase, TenantScopedMixin):
 
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -53,7 +54,7 @@ class CaseAssignment(ModelBase, TenantScopedMixin):
 
     assigned_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("mugen.admin_user.id", ondelete="SET NULL"),
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.admin_user.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -95,7 +96,7 @@ class CaseAssignment(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "case_id"),
-            ("mugen.ops_case_case.tenant_id", "mugen.ops_case_case.id"),
+            (f"{CORE_SCHEMA_TOKEN}.ops_case_case.tenant_id", f"{CORE_SCHEMA_TOKEN}.ops_case_case.id"),
             name="fkx_ops_case_case_assignment__tenant_case",
             ondelete="CASCADE",
         ),
@@ -128,7 +129,7 @@ class CaseAssignment(ModelBase, TenantScopedMixin):
             "case_id",
             "is_active",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

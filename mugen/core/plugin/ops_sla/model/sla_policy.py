@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
+from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
@@ -45,7 +46,7 @@ class SlaPolicy(ModelBase, TenantScopedMixin):
 
     calendar_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey(
-            "mugen.ops_sla_calendar.id",
+            f"{CORE_SCHEMA_TOKEN}.ops_sla_calendar.id",
             ondelete="SET NULL",
         ),
         nullable=True,
@@ -92,7 +93,7 @@ class SlaPolicy(ModelBase, TenantScopedMixin):
             "tenant_id",
             "calendar_id",
         ),
-        {"schema": "mugen"},
+        {"schema": CORE_SCHEMA_TOKEN},
     )
 
     def __repr__(self) -> str:

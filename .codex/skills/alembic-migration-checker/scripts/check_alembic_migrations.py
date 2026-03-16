@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import configparser
 import getpass
 import os
 from pathlib import Path
@@ -15,6 +16,12 @@ import sys
 import tempfile
 import tomllib
 from typing import Iterable
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from mugen.core.contract.migration_config import load_mugen_config, load_track_specs
 
 
 class CheckerError(RuntimeError):
@@ -83,6 +90,42 @@ def _find_revision_files(migrations_dir: Path) -> list[Path]:
     if not files:
         raise CheckerError(f"No revision files found in: {migrations_dir}")
     return files
+
+
+def _resolve_versions_dir(alembic_config: Path) -> Path:
+    """Resolve one Alembic versions directory from its config file."""
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(alembic_config, encoding="utf-8")
+    if not parser.has_section("alembic"):
+        raise CheckerError(f"Alembic config missing [alembic] section: {alembic_config}")
+    script_location = parser.get("alembic", "script_location", fallback="").strip()
+    if script_location == "":
+        raise CheckerError(f"Alembic config missing script_location: {alembic_config}")
+    script_root = script_location.replace("%(here)s", str(alembic_config.parent))
+    return Path(script_root).resolve() / "versions"
+
+
+def _load_all_revision_files(repo_root: Path, config_path: Path) -> list[Path]:
+    """Load revision files for the core and configured plugin tracks."""
+    cfg = load_mugen_config(config_path)
+    track_specs = load_track_specs(cfg, repo_root)
+    revision_files: list[Path] = []
+    seen_dirs: set[Path] = set()
+    for track_spec in track_specs:
+        versions_dir = _resolve_versions_dir(track_spec.alembic_config)
+        if versions_dir in seen_dirs:
+            continue
+        seen_dirs.add(versions_dir)
+        revision_files.extend(_find_revision_files(versions_dir))
+    return sorted(revision_files)
+
+
+def _find_model_files(repo_root: Path) -> list[Path]:
+    """Return model files that must not hard-code concrete schemas."""
+    plugin_root = repo_root / "mugen" / "core" / "plugin"
+    files = sorted(plugin_root.glob("**/model/**/*.py"))
+    files.extend(sorted(plugin_root.glob("**/model/*.py")))
+    return sorted(set(files))
 
 
 def _check_revision_ast(files: Iterable[Path]) -> list[str]:
@@ -256,6 +299,20 @@ def _check_hardcoded_core_schema_literals(files: Iterable[Path]) -> list[str]:
                 failures.append(
                     f"{path}:{node.lineno}: hardcoded schema literal contains 'mugen.'"
                 )
+    return failures
+
+
+def _check_hardcoded_model_schema_literals(files: Iterable[Path]) -> list[str]:
+    """Reject direct concrete core-schema literals in model code."""
+    failures: list[str] = []
+    for path in files:
+        source = path.read_text(encoding="utf-8")
+        if '{"schema": "mugen"}' in source:
+            failures.append(f"{path}: hardcoded schema dict literal")
+        if 'schema="mugen"' in source:
+            failures.append(f"{path}: hardcoded schema keyword literal")
+        if '"mugen.' in source:
+            failures.append(f"{path}: hardcoded schema-qualified literal")
     return failures
 
 
@@ -450,7 +507,7 @@ def main() -> int:
     warnings: list[str] = []
 
     try:
-        revision_files = _find_revision_files(migrations_dir)
+        revision_files = _load_all_revision_files(repo_root, config_file)
     except CheckerError as exc:
         print(f"ERROR: {exc}")
         return 1
@@ -458,6 +515,7 @@ def main() -> int:
     print(f"[1/6] Checking revision AST on {len(revision_files)} files...")
     failures.extend(_check_revision_ast(revision_files))
     failures.extend(_check_hardcoded_core_schema_literals(revision_files))
+    failures.extend(_check_hardcoded_model_schema_literals(_find_model_files(repo_root)))
 
     print("[2/6] Running alembic heads/history...")
     try:
