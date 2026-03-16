@@ -2,90 +2,116 @@
 # Assistant persona is ACP-managed through context_engine ContextProfiles.Persona.
 debug_conversation = false
 environment = "development"
-logger.level = 10
-logger.name = "COM.VORSOCOMPUTING.MUGEN"
 platforms = [
   "web",
-  # "matrix",
   # "line",
+  # "matrix",
   # "signal",
   # "telegram",
   # "wechat",
   # "whatsapp",
 ]
-storage.keyval.relational.namespace_default = "core"
-storage.keyval.relational.list_limit_default = 200
-runtime.phase_b.readiness_grace_seconds = 0.0
-runtime.phase_b.startup_timeout_seconds = 30.0
-runtime.phase_b.critical_platforms = ["web"]
-runtime.phase_b.degrade_on_critical_exit = true
-runtime.provider_readiness_timeout_seconds = 15.0
-# Required deterministic shutdown timeouts (must be > 0).
-runtime.provider_shutdown_timeout_seconds = 10.0
-runtime.shutdown_timeout_seconds = 60.0
-runtime.profile = "platform_full"
 
 [mugen.commands]
 clear = "..."
+
+[mugen.logger]
+level = 10
+name = "COM.VORSOCOMPUTING.MUGEN"
 
 [mugen.messaging]
 # Controls message-handler requirements:
 # - optional: zero-MH runtime is supported with core built-in text orchestration.
 # - required: startup fails if no MH extension is available for active messaging platforms.
 mh_mode = "optional"
+# Max number of chat history messages persisted and forwarded to completion context.
+history_max_messages = 40
+# Max CAS retries for chat-history persistence across workers/processes.
+history_save_cas_retries = 5
 # Timeout in seconds for extension callbacks (CP/MH/RPP/CT).
 extension_timeout_seconds = 10.0
 # If true, CT extensions with non-empty triggers only run on trigger matches.
 ct_trigger_prefilter_enabled = true
 
-# === IPC (core dispatcher policy) ===
-[ipc.dispatch]
-timeout_seconds = 10.0
-max_timeout_seconds = 30.0
+[mugen.runtime]
+# Required runtime bootstrap mode. Currently only `platform_full` is accepted;
+# `auto`, blank, and legacy profile names are rejected.
+profile = "platform_full"
+provider_readiness_timeout_seconds = 15.0
+# Required deterministic shutdown timeouts (must be > 0).
+provider_shutdown_timeout_seconds = 10.0
+shutdown_timeout_seconds = 60.0
 
-[ingress]
-worker_poll_seconds = 0.5
-worker_lease_seconds = 60
-worker_batch_size = 50
-max_attempts = 5
+[mugen.runtime.phase_b]
+readiness_grace_seconds = 0.0
+startup_timeout_seconds = 30.0
+critical_platforms = ["web"]
+degrade_on_critical_exit = true
 
-[mugen.modules.core]
+[mugen.storage.keyval.relational]
+namespace_default = "core"
+list_limit_default = 200
+
+[mugen.modules.core.client]
 # Provider values are strict tokens (for example `bedrock`, `cerebras`,
 # `openai`, `azure_foundry`, `vertex`, `smtp`),
 # not Python module paths.
-client.matrix = "default"
-client.line = "default"
-client.signal = "default"
-client.telegram = "default"
-client.wechat = "default"
-client.whatsapp = "default"
-client.web = "default"
+line = "default"
+matrix = "default"
+signal = "default"
+telegram = "default"
+wechat = "default"
+web = "default"
+whatsapp = "default"
 
-gateway.completion = "sambanova"
-# gateway.completion = "cerebras"
-# gateway.completion = "azure_foundry"
-# gateway.email = "smtp"
-# gateway.email = "ses"
-# gateway.sms = "twilio"
-# gateway.knowledge = "chromadb"
-# gateway.knowledge = "milvus"
-# gateway.knowledge = "pinecone"
-# gateway.knowledge = "pgvector"
-# gateway.knowledge = "qdrant"
-# gateway.knowledge = "weaviate"
-gateway.logging = "standard"
-gateway.storage.keyval = "relational"
-gateway.storage.media = "default"
-gateway.storage.relational = "sqlalchemy"
-gateway.storage.web_runtime = "relational"
+[mugen.modules.core.gateway]
+# Completion gateway.
+# Available tokens:
+completion = "deterministic"
+# completion = "azure_foundry"
+# completion = "bedrock"
+# completion = "cerebras"
+# completion = "sambanova"
+# completion = "groq"
+# completion = "openai"
+# completion = "vertex"
 
-service.ipc = "default"
-service.ingress = "default"
-service.context_engine = "default"
-service.messaging = "default"
-service.nlp = "default"
-service.platform = "default"
-service.user = "default"
+# Email gateway (optional).
+# Available tokens:
+# email = "smtp"
+# email = "ses"
+
+# Knowledge gateway (optional).
+# Available tokens:
+# knowledge = "chromadb"
+# knowledge = "milvus"
+# knowledge = "pinecone"
+# knowledge = "pgvector"
+# knowledge = "qdrant"
+# knowledge = "weaviate"
+
+# Logging gateway.
+# Available tokens:
+logging = "standard"
+
+# SMS gateway (optional).
+# Available tokens:
+# sms = "twilio"
+
+[mugen.modules.core.gateway.storage]
+keyval = "relational"
+media = "default"
+relational = "sqlalchemy"
+web_runtime = "relational"
+
+[mugen.modules.core.service]
+ipc = "default"
+ingress = "default"
+context_engine = "default"
+messaging = "default"
+nlp = "default"
+platform = "default"
+user = "default"
 
 # Unified extensions.
 [[mugen.modules.extensions]]
@@ -97,6 +123,7 @@ token = "core.cp.clear_history"
 # name = "com.vorsocomputing.mugen.plugin_name"
 # namespace = "com.vorsocomputing.mugen.plugin_name"
 # contrib = "mugen.core.plugin.plugin_name.contrib"
+# Model-bearing FW plugins should also declare:
 # models = "mugen.core.plugin.plugin_name.model"
 # migration_track = "core"
 #
@@ -107,6 +134,8 @@ token = "core.fw.acp"
 enabled = true
 name = "com.vorsocomputing.mugen.acp"
 namespace = "com.vorsocomputing.mugen.acp"
+models = "mugen.core.plugin.acp.model"
+migration_track = "core"
 contrib = "mugen.core.plugin.acp.contrib"
 
 [[mugen.modules.extensions]]
@@ -115,6 +144,8 @@ token = "core.fw.web"
 enabled = true
 name = "com.vorsocomputing.mugen.web"
 namespace = "com.vorsocomputing.mugen.web"
+models = "mugen.core.plugin.web.model"
+migration_track = "core"
 contrib = "mugen.core.plugin.web.contrib"
 
 [[mugen.modules.extensions]]
@@ -125,19 +156,137 @@ name = "com.vorsocomputing.mugen.context_engine"
 namespace = "com.vorsocomputing.mugen.context_engine"
 contrib = "mugen.core.plugin.context_engine.contrib"
 
-# Telegram platform FW/IPC contract (required when `telegram` is active).
+# Additional shipped core FW plugins (enable as needed).
 # [[mugen.modules.extensions]]
 # type = "fw"
-# token = "core.fw.telegram_botapi"
+# token = "core.fw.agent_runtime"
 # enabled = true
-# name = "com.vorsocomputing.mugen.telegram"
-# namespace = "com.vorsocomputing.mugen.telegram"
-# contrib = "mugen.core.plugin.telegram.botapi.contrib"
+# name = "com.vorsocomputing.mugen.agent_runtime"
+# namespace = "com.vorsocomputing.mugen.agent_runtime"
+# models = "mugen.core.plugin.agent_runtime.model"
+# migration_track = "agent_runtime"
+# contrib = "mugen.core.plugin.agent_runtime.contrib"
 #
 # [[mugen.modules.extensions]]
-# type = "ipc"
-# token = "core.ipc.telegram_botapi"
-
+# type = "fw"
+# token = "core.fw.audit"
+# enabled = true
+# name = "com.vorsocomputing.mugen.audit"
+# namespace = "com.vorsocomputing.mugen.audit"
+# models = "mugen.core.plugin.audit.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.audit.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.billing"
+# enabled = true
+# name = "com.vorsocomputing.mugen.billing"
+# namespace = "com.vorsocomputing.mugen.billing"
+# models = "mugen.core.plugin.billing.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.billing.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.channel_orchestration"
+# enabled = true
+# name = "com.vorsocomputing.mugen.channel_orchestration"
+# namespace = "com.vorsocomputing.mugen.channel_orchestration"
+# models = "mugen.core.plugin.channel_orchestration.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.channel_orchestration.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.knowledge_pack"
+# enabled = true
+# name = "com.vorsocomputing.mugen.knowledge_pack"
+# namespace = "com.vorsocomputing.mugen.knowledge_pack"
+# models = "mugen.core.plugin.knowledge_pack.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.knowledge_pack.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.ops_case"
+# enabled = true
+# name = "com.vorsocomputing.mugen.ops_case"
+# namespace = "com.vorsocomputing.mugen.ops_case"
+# models = "mugen.core.plugin.ops_case.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.ops_case.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.ops_connector"
+# enabled = true
+# name = "com.vorsocomputing.mugen.ops_connector"
+# namespace = "com.vorsocomputing.mugen.ops_connector"
+# models = "mugen.core.plugin.ops_connector.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.ops_connector.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.ops_governance"
+# enabled = true
+# name = "com.vorsocomputing.mugen.ops_governance"
+# namespace = "com.vorsocomputing.mugen.ops_governance"
+# models = "mugen.core.plugin.ops_governance.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.ops_governance.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.ops_metering"
+# enabled = true
+# name = "com.vorsocomputing.mugen.ops_metering"
+# namespace = "com.vorsocomputing.mugen.ops_metering"
+# models = "mugen.core.plugin.ops_metering.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.ops_metering.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.ops_reporting"
+# enabled = true
+# name = "com.vorsocomputing.mugen.ops_reporting"
+# namespace = "com.vorsocomputing.mugen.ops_reporting"
+# models = "mugen.core.plugin.ops_reporting.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.ops_reporting.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.ops_sla"
+# enabled = true
+# name = "com.vorsocomputing.mugen.ops_sla"
+# namespace = "com.vorsocomputing.mugen.ops_sla"
+# models = "mugen.core.plugin.ops_sla.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.ops_sla.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.ops_vpn"
+# enabled = true
+# name = "com.vorsocomputing.mugen.ops_vpn"
+# namespace = "com.vorsocomputing.mugen.ops_vpn"
+# models = "mugen.core.plugin.ops_vpn.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.ops_vpn.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.ops_workflow"
+# enabled = true
+# name = "com.vorsocomputing.mugen.ops_workflow"
+# namespace = "com.vorsocomputing.mugen.ops_workflow"
+# models = "mugen.core.plugin.ops_workflow.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.ops_workflow.contrib"
+#
 # LINE platform FW/IPC contract (required when `line` is active).
 # [[mugen.modules.extensions]]
 # type = "fw"
@@ -145,21 +294,47 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 # enabled = true
 # name = "com.vorsocomputing.mugen.line"
 # namespace = "com.vorsocomputing.mugen.line"
+# models = "mugen.core.plugin.line.messagingapi.model"
+# migration_track = "core"
 # contrib = "mugen.core.plugin.line.messagingapi.contrib"
 #
 # [[mugen.modules.extensions]]
 # type = "ipc"
 # token = "core.ipc.line_messagingapi"
 
+# Matrix platform IPC contract (required when `matrix` is active).
+# [[mugen.modules.extensions]]
+# type = "ipc"
+# token = "core.ipc.matrix_ingress"
+#
+# Optional Matrix management IPCs.
+# [[mugen.modules.extensions]]
+# type = "ipc"
+# token = "core.ipc.matrix_device_management"
+#
+# [[mugen.modules.extensions]]
+# type = "ipc"
+# token = "core.ipc.matrix_room_management"
+
 # Signal platform IPC contract (required when `signal` is active).
 # [[mugen.modules.extensions]]
 # type = "ipc"
 # token = "core.ipc.signal_restapi"
 
-# Matrix platform IPC contract (required when `matrix` is active).
+# Telegram platform FW/IPC contract (required when `telegram` is active).
+# [[mugen.modules.extensions]]
+# type = "fw"
+# token = "core.fw.telegram_botapi"
+# enabled = true
+# name = "com.vorsocomputing.mugen.telegram"
+# namespace = "com.vorsocomputing.mugen.telegram"
+# models = "mugen.core.plugin.telegram.botapi.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.telegram.botapi.contrib"
+#
 # [[mugen.modules.extensions]]
 # type = "ipc"
-# token = "core.ipc.matrix_ingress"
+# token = "core.ipc.telegram_botapi"
 
 # WeChat platform FW/IPC contract (required when `wechat` is active).
 # [[mugen.modules.extensions]]
@@ -168,6 +343,8 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 # enabled = true
 # name = "com.vorsocomputing.mugen.wechat"
 # namespace = "com.vorsocomputing.mugen.wechat"
+# models = "mugen.core.plugin.wechat.model"
+# migration_track = "core"
 # contrib = "mugen.core.plugin.wechat.contrib"
 #
 # [[mugen.modules.extensions]]
@@ -181,6 +358,8 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 # enabled = true
 # name = "com.vorsocomputing.mugen.whatsapp"
 # namespace = "com.vorsocomputing.mugen.whatsapp"
+# models = "mugen.core.plugin.whatsapp.wacapi.model"
+# migration_track = "core"
 # contrib = "mugen.core.plugin.whatsapp.wacapi.contrib"
 #
 # [[mugen.modules.extensions]]
@@ -198,24 +377,34 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 
 # === ACP plugin ===
 [acp]
+# Identity and bootstrap user.
 admin_login_email = "admin@example.com"
-test_email_recipient = "<set-test-email-recipient>"
+# Plaintext bootstrap password; must satisfy password_policy when
+# enforce_password_policy = true.
 admin_password = "<set-admin-password>"
+# Optional bootstrap hash. When set, use a Werkzeug
+# `generate_password_hash` value.
 admin_password_hash = ""
 admin_username = "admin"
 
+# Auth and password policy.
 cors_origins = ["*"]
 enforce_password_policy = true
 
 login_access_expiry = 300   # 5 minutes
+# Optional Werkzeug `generate_password_hash` value used for constant-time
+# auth failure paths.
 login_dummy_hash = ""
 login_refresh_expiry = 604800   # 7 days
 tenant_invitation_ttl_seconds = 604800   # 7 days
 tenant_invitation_invite_base_url = "https://example.com/invite"
 
 password_policy = "^(?=.*[A-Z])(?=.*[a-z])(?=.*\\d)(?=.*[!@#\\$&*~,]).{8,}$"
+# Extra secret mixed into refresh and tenant-invitation token hashes.
+# Rotating it invalidates existing refresh tokens and invite links.
 refresh_token_pepper = "<set-refresh-token-pepper>"
 
+# RGQL guardrails.
 rgql_allow_expand_wildcard = true
 rgql_default_top = 100
 rgql_max_expand_depth = 4
@@ -227,6 +416,9 @@ rgql_max_select = 50
 rgql_max_skip = 10_000
 rgql_max_top = 500
 
+# Bootstrap secrets and seeding.
+# Operator-supplied ACP bootstrap secret. No dedicated format validator is
+# currently applied here.
 secret_key = "<set-acp-secret-key>"
 seed_acp = true
 
@@ -234,7 +426,10 @@ seed_acp = true
 timeout_seconds = 10.0
 max_timeout_seconds = 30.0
 # Explicit allow-list entries in "<platform>:<command>" format.
-allowed_commands = ["whatsapp:whatsapp_wacapi_event", "matrix:matrix_event"]
+allowed_commands = [
+  "matrix:matrix_event",
+  "whatsapp:whatsapp_wacapi_event",
+]
 
 [acp.argon2]
 time_cost = 2
@@ -243,36 +438,31 @@ parallelism = 2
 hash_len = 32
 
 [acp.jwt]
+# Must match one [[acp.jwt.keys]].kid value.
 active_kid = "<kid>"
 audience = "<audience>"
 issuer = "<issuer>"
 
 [[acp.jwt.keys]]
+# kid values must be unique across entries.
 kid = "<kid>"
+# Must stay `EdDSA` for the ACP JWT keystore.
 alg = "EdDSA"
+# Must be an unencrypted PKCS#8 private PEM for Ed25519 or Ed448.
 pem = "-----BEGIN PRIVATE KEY-----\\n<replace-with-private-key>\\n-----END PRIVATE KEY-----\\n"
 
 # Default tenant-facing ACP secret storage provider.
 [acp.key_management.providers.managed]
+# Must be a non-empty string, at least 32 characters, and not a placeholder.
 encryption_key = "<set-acp-managed-secret-encryption-key>"
 
 # Local key maps are operator-owned bootstrap / emergency material only.
 [acp.key_management.providers.local.keys.ops_connector_secret]
 ops_connector_default = "dev-ops-connector-secret"
 
-# === OPS CONNECTOR ===
-[ops_connector]
-# Process-level bootstrap defaults. Tenant/global overlays can now also be
-# managed through ACP RuntimeConfigProfiles(category="ops_connector.defaults").
-timeout_seconds_default = 10.0
-max_retries_default = 2
-retry_backoff_seconds_default = 0.5
-retry_status_codes_default = [429, 500, 502, 503, 504]
-secret_purpose = "ops_connector_secret"
-redacted_keys = ["password", "token", "secret", "authorization", "api_key"]
-
 # === AWS Bedrock ===
 [aws.bedrock]
+# Optional explicit AWS access key passed through to boto3.
 api.access_key_id = "<aws-access-key-id>"
 # Set model IDs per operation.
 # In auto mode, the Bedrock gateway tries Converse first and falls back to
@@ -289,6 +479,7 @@ api.completion.max_completion_tokens = 1024
 api.completion.temp = 0.0
 api.completion.top_p = 0.9
 api.region = ""
+# Pair with api.access_key_id when using explicit AWS credentials.
 api.secret_access_key = "<aws-secret-access-key>"
 api.connect_timeout_seconds = 10.0
 api.read_timeout_seconds = 30.0
@@ -297,74 +488,17 @@ api.max_attempts = 3
 # === AWS SES (optional outbound email gateway) ===
 [aws.ses]
 api.region = "us-east-1"
-# Optional: leave blank to use environment/instance profile credentials.
+# Optional: leave both blank to use environment/instance profile credentials.
+# When either is set, both access_key_id and secret_access_key must be set.
 api.access_key_id = ""
 api.secret_access_key = ""
-# Optional temporary-session credential token.
+# Optional temporary-session credential token; requires access_key_id and
+# secret_access_key.
 api.session_token = ""
 # Optional endpoint override (for testing/emulation).
 api.endpoint_url = ""
 default_from = "noreply@example.com"
 configuration_set_name = ""
-
-# === Groq ===
-[groq]
-# Operation defaults for Groq chat completions.
-# top_p defaults to 1.0 when omitted; kept explicit here for readability.
-api.classification.model = ""
-api.classification.temp = 0.0
-api.classification.top_p = 1.0
-api.completion.model = ""
-api.completion.temp = 0.0
-api.completion.top_p = 1.0
-api.timeout_seconds = 30.0
-api.key = "<groq-api-key>"
-
-# === OpenAI ===
-[openai]
-# Operation defaults for OpenAI gateway.
-# surface selects OpenAI API surface per operation:
-# - "chat_completions" (default)
-# - "responses"
-# Per-request override remains available through
-# CompletionRequest.vendor_params["openai_api"].
-# max_completion_tokens is the canonical token-limit field.
-# stream behavior and provider-specific extras can be overridden per request
-# through CompletionRequest vendor_params.
-api.classification.model = ""
-api.classification.surface = "chat_completions"
-api.classification.temp = 0.0
-api.classification.top_p = 1.0
-api.classification.max_completion_tokens = 1024
-api.completion.model = ""
-api.completion.surface = "chat_completions"
-api.completion.temp = 0.0
-api.completion.top_p = 1.0
-api.completion.max_completion_tokens = 1024
-api.base_url = ""
-api.timeout_seconds = 30.0
-api.key = "<openai-api-key>"
-
-# === Cerebras ===
-[cerebras]
-# Operation defaults for Cerebras chat completions.
-# Only chat_completions surface is supported.
-# Per-request override remains available through
-# CompletionRequest.vendor_params["cerebras_api"].
-# max_completion_tokens is the canonical token-limit field.
-api.classification.model = ""
-api.classification.surface = "chat_completions"
-api.classification.temp = 0.0
-api.classification.top_p = 1.0
-api.classification.max_completion_tokens = 1024
-api.completion.model = ""
-api.completion.surface = "chat_completions"
-api.completion.temp = 0.0
-api.completion.top_p = 1.0
-api.completion.max_completion_tokens = 1024
-api.base_url = "https://api.cerebras.ai/v1"
-api.timeout_seconds = 30.0
-api.key = "<cerebras-api-key>"
 
 # === Azure AI Foundry (OpenAI-compatible models endpoint) ===
 [azure.foundry]
@@ -389,7 +523,49 @@ api.base_url = ""
 # Optional query parameter sent as `api-version=<value>`.
 api.version = ""
 api.timeout_seconds = 30.0
+# Required non-empty string when `gateway.completion = "azure_foundry"`.
+# `api.base_url` is also required for this provider.
 api.key = "<azure-foundry-api-key>"
+
+# === Cerebras ===
+[cerebras]
+# Operation defaults for Cerebras chat completions.
+# Only chat_completions surface is supported.
+# Per-request override remains available through
+# CompletionRequest.vendor_params["cerebras_api"].
+# max_completion_tokens is the canonical token-limit field.
+api.classification.model = ""
+api.classification.surface = "chat_completions"
+api.classification.temp = 0.0
+api.classification.top_p = 1.0
+api.classification.max_completion_tokens = 1024
+api.completion.model = ""
+api.completion.surface = "chat_completions"
+api.completion.temp = 0.0
+api.completion.top_p = 1.0
+api.completion.max_completion_tokens = 1024
+api.base_url = "https://api.cerebras.ai/v1"
+api.timeout_seconds = 30.0
+# Required non-empty string when `gateway.completion = "cerebras"`.
+api.key = "<cerebras-api-key>"
+
+# === ChromaDB ===
+[chromadb]
+api.host = "localhost"
+api.port = 8000
+api.ssl = false
+api.headers = {}
+api.tenant = ""
+api.database = ""
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.collection = "downstream_kp_search_doc"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
 
 # === GCP Vertex (Gemini native generateContent) ===
 [gcp.vertex]
@@ -411,6 +587,53 @@ api.completion.top_p = 1.0
 api.completion.max_completion_tokens = 1024
 api.connect_timeout_seconds = 10.0
 api.read_timeout_seconds = 30.0
+
+# === Groq ===
+[groq]
+# Operation defaults for Groq chat completions.
+# top_p defaults to 1.0 when omitted; kept explicit here for readability.
+api.classification.model = ""
+api.classification.temp = 0.0
+api.classification.top_p = 1.0
+api.completion.model = ""
+api.completion.temp = 0.0
+api.completion.top_p = 1.0
+api.timeout_seconds = 30.0
+# Provider auth key used for Groq requests.
+api.key = "<groq-api-key>"
+
+# === Ingress ===
+[ingress]
+worker_poll_seconds = 0.5
+worker_lease_seconds = 60
+worker_batch_size = 50
+max_attempts = 5
+
+# === IPC (core dispatcher policy) ===
+[ipc.dispatch]
+timeout_seconds = 10.0
+max_timeout_seconds = 30.0
+
+# === LINE ===
+[line]
+# Dedupe retention window for webhook event keys.
+webhook.dedupe_ttl_seconds = 86400
+api.base_url = "https://api.line.me"
+api.timeout_seconds = 10.0
+api.max_api_retries = 2
+api.retry_backoff_seconds = 0.5
+media.allowed_mimetypes = [
+  "audio/*",
+  "image/*",
+  "video/*",
+  "application/*",
+  "text/*",
+]
+media.max_download_bytes = 20_971_520   # 20 MiB
+# Enables best-effort LINE loading indicator signaling.
+typing.enabled = true
+# LINE webhook path tokens and channel secrets are managed through ACP
+# MessagingClientProfiles and KeyRefs.
 
 # === Matrix ===
 [matrix]
@@ -439,137 +662,13 @@ storage.olm.path = "/absolute/path/to/data/.olmstore"
 # Optional sender gating also lives per client profile in
 # MessagingClientProfiles.Settings.user_access.
 # Required whenever Matrix platform is enabled.
+# Must be a non-empty string, at least 32 characters, and not a placeholder.
 security.credentials.encryption_key = "<set-secret-encryption-key>"
-
-# === LINE ===
-[line]
-# Dedupe retention window for webhook event keys.
-webhook.dedupe_ttl_seconds = 86400
-api.base_url = "https://api.line.me"
-api.timeout_seconds = 10.0
-api.max_api_retries = 2
-api.retry_backoff_seconds = 0.5
-media.allowed_mimetypes = [
-  "audio/*",
-  "image/*",
-  "video/*",
-  "application/*",
-  "text/*",
-]
-media.max_download_bytes = 20_971_520   # 20 MiB
-# Enables best-effort LINE loading indicator signaling.
-typing.enabled = true
-# LINE webhook path tokens and channel secrets are managed through ACP
-# MessagingClientProfiles and KeyRefs.
-
-# === Telegram ===
-[telegram]
-# Dedupe retention window for webhook event keys.
-webhook.dedupe_ttl_seconds = 86400
-api.base_url = "https://api.telegram.org"
-api.timeout_seconds = 10.0
-api.max_api_retries = 2
-api.retry_backoff_seconds = 0.5
-media.allowed_mimetypes = [
-  "audio/*",
-  "image/*",
-  "video/*",
-  "application/*",
-  "text/*",
-]
-media.max_download_bytes = 20_971_520   # 20 MiB
-# Enables best-effort typing indicators for processing messages.
-typing.enabled = true
-# Telegram bot tokens, webhook path tokens, and secret tokens are managed
-# through ACP MessagingClientProfiles and KeyRefs.
-
-# === Signal ===
-[signal]
-api.timeout_seconds = 10.0
-api.max_api_retries = 2
-api.retry_backoff_seconds = 0.5
-# Receive websocket controls.
-receive.heartbeat_seconds = 30.0
-receive.reconnect_base_seconds = 1.0
-receive.reconnect_max_seconds = 30.0
-receive.reconnect_jitter_seconds = 0.25
-receive.dedupe_ttl_seconds = 86400
-media.allowed_mimetypes = [
-  "audio/*",
-  "image/*",
-  "video/*",
-  "application/*",
-  "text/*",
-]
-media.max_download_bytes = 20_971_520   # 20 MiB
-# Enables best-effort typing indicators for processing messages.
-typing.enabled = true
-# Signal account numbers, gateway base URLs, and bearer tokens are managed
-# through ACP MessagingClientProfiles and KeyRefs.
-
-# === WeChat ===
-[wechat]
-# Dedupe retention window for webhook event keys.
-webhook.dedupe_ttl_seconds = 86400
-api.timeout_seconds = 10.0
-api.max_api_retries = 2
-api.retry_backoff_seconds = 0.5
-api.max_download_bytes = 20_971_520   # 20 MiB
-# Enables best-effort typing indicators for processing messages.
-typing.enabled = true
-# WeChat provider selection, webhook path tokens, signature material, and app
-# credentials are managed through ACP MessagingClientProfiles and KeyRefs.
-
-# === Qdrant ===
-[qdrant]
-api.key = "<qdrant-api-key>"
-api.url = ""
-api.timeout_seconds = 10.0
-api.max_retries = 2
-api.retry_backoff_seconds = 0.5
-search.collection = "downstream_kp_search_doc"
-search.default_top_k = 10
-search.max_top_k = 50
-search.snippet_max_chars = 240
-encoder.model = "all-mpnet-base-v2"
-encoder.max_concurrency = 4
-
-# === Pinecone ===
-[pinecone]
-api.key = "<pinecone-api-key>"
-api.host = "https://your-index-host.svc.pinecone.io"
-api.timeout_seconds = 10.0
-api.max_retries = 2
-api.retry_backoff_seconds = 0.5
-search.namespace = ""
-search.metric = "cosine"
-search.default_top_k = 10
-search.max_top_k = 50
-search.snippet_max_chars = 240
-encoder.model = "all-mpnet-base-v2"
-encoder.max_concurrency = 4
-
-# === ChromaDB ===
-[chromadb]
-api.host = "localhost"
-api.port = 8000
-api.ssl = false
-api.headers = {}
-api.tenant = ""
-api.database = ""
-api.timeout_seconds = 10.0
-api.max_retries = 2
-api.retry_backoff_seconds = 0.5
-search.collection = "downstream_kp_search_doc"
-search.default_top_k = 10
-search.max_top_k = 50
-search.snippet_max_chars = 240
-encoder.model = "all-mpnet-base-v2"
-encoder.max_concurrency = 4
 
 # === Milvus ===
 [milvus]
 api.uri = "http://localhost:19530"
+# Optional bearer token; leave blank for unauthenticated deployments.
 api.token = ""
 api.timeout_seconds = 10.0
 api.max_retries = 2
@@ -581,6 +680,43 @@ search.max_top_k = 50
 search.snippet_max_chars = 240
 encoder.model = "all-mpnet-base-v2"
 encoder.max_concurrency = 4
+
+# === OpenAI ===
+[openai]
+# Operation defaults for OpenAI gateway.
+# surface selects OpenAI API surface per operation:
+# - "chat_completions" (default)
+# - "responses"
+# Per-request override remains available through
+# CompletionRequest.vendor_params["openai_api"].
+# max_completion_tokens is the canonical token-limit field.
+# stream behavior and provider-specific extras can be overridden per request
+# through CompletionRequest vendor_params.
+api.classification.model = ""
+api.classification.surface = "chat_completions"
+api.classification.temp = 0.0
+api.classification.top_p = 1.0
+api.classification.max_completion_tokens = 1024
+api.completion.model = ""
+api.completion.surface = "chat_completions"
+api.completion.temp = 0.0
+api.completion.top_p = 1.0
+api.completion.max_completion_tokens = 1024
+api.base_url = ""
+api.timeout_seconds = 30.0
+# Provider auth key used for OpenAI requests.
+api.key = "<openai-api-key>"
+
+# === OPS CONNECTOR ===
+[ops_connector]
+# Process-level bootstrap defaults. Tenant/global overlays can now also be
+# managed through ACP RuntimeConfigProfiles(category="ops_connector.defaults").
+timeout_seconds_default = 10.0
+max_retries_default = 2
+retry_backoff_seconds_default = 0.5
+retry_status_codes_default = [429, 500, 502, 503, 504]
+secret_purpose = "ops_connector_secret"
+redacted_keys = ["password", "token", "secret", "authorization", "api_key"]
 
 # === pgvector ===
 [pgvector]
@@ -598,21 +734,32 @@ api.retry_backoff_seconds = 0.5
 encoder.model = "all-mpnet-base-v2"
 encoder.max_concurrency = 4
 
-# === Weaviate ===
-[weaviate]
-api.http_host = "localhost"
-api.http_port = 8080
-api.http_secure = false
-api.grpc_host = "localhost"
-api.grpc_port = 50051
-api.grpc_secure = false
-api.key = ""
-api.headers = {}
+# === Pinecone ===
+[pinecone]
+# Required non-empty string when `gateway.knowledge = "pinecone"`.
+# `api.host` is also required for this provider.
+api.key = "<pinecone-api-key>"
+api.host = "https://your-index-host.svc.pinecone.io"
 api.timeout_seconds = 10.0
 api.max_retries = 2
 api.retry_backoff_seconds = 0.5
-search.collection = "DownstreamKPSearchDoc"
-search.target_vector = ""
+search.namespace = ""
+search.metric = "cosine"
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
+
+# === Qdrant ===
+[qdrant]
+# Optional API key; leave blank for unauthenticated/self-hosted deployments.
+api.key = "<qdrant-api-key>"
+api.url = ""
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.collection = "downstream_kp_search_doc"
 search.default_top_k = 10
 search.max_top_k = 50
 search.snippet_max_chars = 240
@@ -621,6 +768,7 @@ encoder.max_concurrency = 4
 
 # === Quart ===
 [quart]
+# Must be a non-empty string, at least 32 characters, and not a placeholder.
 secret_key = "<set-quart-secret-key>"
 
 # === RDBMS ===
@@ -687,7 +835,32 @@ api.completion.stop = []
 api.endpoint = ""
 api.connect_timeout_seconds = 10.0
 api.read_timeout_seconds = 30.0
+# Provider auth key used for SambaNova requests.
 api.key = "<sambanova-api-key>"
+
+# === Signal ===
+[signal]
+api.timeout_seconds = 10.0
+api.max_api_retries = 2
+api.retry_backoff_seconds = 0.5
+# Receive websocket controls.
+receive.heartbeat_seconds = 30.0
+receive.reconnect_base_seconds = 1.0
+receive.reconnect_max_seconds = 30.0
+receive.reconnect_jitter_seconds = 0.25
+receive.dedupe_ttl_seconds = 86400
+media.allowed_mimetypes = [
+  "audio/*",
+  "image/*",
+  "video/*",
+  "application/*",
+  "text/*",
+]
+media.max_download_bytes = 20_971_520   # 20 MiB
+# Enables best-effort typing indicators for processing messages.
+typing.enabled = true
+# Signal account numbers, gateway base URLs, and bearer tokens are managed
+# through ACP MessagingClientProfiles and KeyRefs.
 
 # === SMTP (optional outbound email gateway) ===
 [smtp]
@@ -701,20 +874,26 @@ use_ssl = false
 starttls = true
 starttls_required = true
 
-# === Twilio SMS (optional outbound SMS gateway) ===
-[twilio]
-api.account_sid = "<twilio-account-sid>"
-# Choose exactly one auth mode:
-# 1) auth_token, or
-# 2) api_key_sid + api_key_secret
-api.auth_token = "<twilio-auth-token>"
-api.api_key_sid = ""
-api.api_key_secret = ""
-api.base_url = "https://api.twilio.com"
+# === Telegram ===
+[telegram]
+# Dedupe retention window for webhook event keys.
+webhook.dedupe_ttl_seconds = 86400
+api.base_url = "https://api.telegram.org"
 api.timeout_seconds = 10.0
-# Choose exactly one sender default:
-messaging.default_from = ""
-messaging.messaging_service_sid = ""
+api.max_api_retries = 2
+api.retry_backoff_seconds = 0.5
+media.allowed_mimetypes = [
+  "audio/*",
+  "image/*",
+  "video/*",
+  "application/*",
+  "text/*",
+]
+media.max_download_bytes = 20_971_520   # 20 MiB
+# Enables best-effort typing indicators for processing messages.
+typing.enabled = true
+# Telegram bot tokens, webhook path tokens, and secret tokens are managed
+# through ACP MessagingClientProfiles and KeyRefs.
 
 # === Telnet (dev/test harness only) ===
 [telnet]
@@ -728,6 +907,81 @@ max_prompt_bytes = 4096
 # === Transformers ===
 [transformers]
 hf.home = "/absolute/path/to/hf/cache"
+
+# === Twilio SMS (optional outbound SMS gateway) ===
+[twilio]
+# Must be a non-empty string.
+api.account_sid = "<twilio-account-sid>"
+# Choose exactly one auth mode:
+# 1) non-empty auth_token, or
+# 2) non-empty api_key_sid + api_key_secret
+api.auth_token = "<twilio-auth-token>"
+api.api_key_sid = ""
+api.api_key_secret = ""
+api.base_url = "https://api.twilio.com"
+api.timeout_seconds = 10.0
+# Choose exactly one sender default:
+messaging.default_from = ""
+messaging.messaging_service_sid = ""
+
+# === Weaviate ===
+[weaviate]
+api.http_host = "localhost"
+api.http_port = 8080
+api.http_secure = false
+api.grpc_host = "localhost"
+api.grpc_port = 50051
+api.grpc_secure = false
+# Optional API key; leave blank when Weaviate auth is disabled.
+api.key = ""
+api.headers = {}
+api.timeout_seconds = 10.0
+api.max_retries = 2
+api.retry_backoff_seconds = 0.5
+search.collection = "DownstreamKPSearchDoc"
+search.target_vector = ""
+search.default_top_k = 10
+search.max_top_k = 50
+search.snippet_max_chars = 240
+encoder.model = "all-mpnet-base-v2"
+encoder.max_concurrency = 4
+
+# === Web ===
+[web]
+sse.keepalive_seconds = 15
+sse.replay_max_events = 200
+sse.cross_instance_poll_seconds = 1.0
+queue.poll_interval_seconds = 0.25
+queue.processing_lease_seconds = 30
+queue.max_pending_jobs = 2000
+media.backend = "object"
+media.storage.path = "data/web_media"
+media.max_upload_bytes = 20971520
+# Max attachments per structured message payload.
+media.max_attachments_per_message = 10
+media.allowed_mimetypes = [
+  "audio/*",
+  "video/*",
+  "image/*",
+  "application/*",
+]
+media.download_token_ttl_seconds = 900
+media.retention_seconds = 86400
+media.object.cache_path = "data/web_media_object_cache"
+media.object.key_prefix = "web:media:object"
+
+# === WeChat ===
+[wechat]
+# Dedupe retention window for webhook event keys.
+webhook.dedupe_ttl_seconds = 86400
+api.timeout_seconds = 10.0
+api.max_api_retries = 2
+api.retry_backoff_seconds = 0.5
+api.max_download_bytes = 20_971_520   # 20 MiB
+# Enables best-effort typing indicators for processing messages.
+typing.enabled = true
+# WeChat provider selection, webhook path tokens, signature material, and app
+# credentials are managed through ACP MessagingClientProfiles and KeyRefs.
 
 # === WhatsApp ===
 [whatsapp]
@@ -754,27 +1008,3 @@ webhook.dedupe_ttl_seconds = 86400
 # MessagingClientProfiles and KeyRefs.
 # Optional sender gating and deny replies also live per client profile in
 # MessagingClientProfiles.Settings.user_access.
-
-# === Web ===
-[web]
-sse.keepalive_seconds = 15
-sse.replay_max_events = 200
-sse.cross_instance_poll_seconds = 1.0
-queue.poll_interval_seconds = 0.25
-queue.processing_lease_seconds = 30
-queue.max_pending_jobs = 2000
-media.backend = "object"
-media.storage.path = "data/web_media"
-media.max_upload_bytes = 20971520
-# Max attachments per structured message payload.
-media.max_attachments_per_message = 10
-media.allowed_mimetypes = [
-  "audio/*",
-  "video/*",
-  "image/*",
-  "application/*",
-]
-media.download_token_ttl_seconds = 900
-media.retention_seconds = 86400
-media.object.cache_path = "data/web_media_object_cache"
-media.object.key_prefix = "web:media:object"
