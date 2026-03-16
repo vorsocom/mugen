@@ -6,7 +6,20 @@ import unittest.mock
 
 from quart import Quart
 
-from mugen import create_quart_app
+from mugen import BootstrapConfigError, create_quart_app as _create_quart_app
+
+
+def _logger_provider():
+    return unittest.mock.Mock(
+        debug=unittest.mock.Mock(),
+        error=unittest.mock.Mock(),
+    )
+
+
+def create_quart_app(*args, **kwargs):
+    """Wrapper to avoid depending on DI-backed logger provider in unit tests."""
+    kwargs.setdefault("logger_provider", _logger_provider)
+    return _create_quart_app(*args, **kwargs)
 
 
 class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
@@ -18,8 +31,8 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
             # Create dummy configuration for testing.
             dummy_config = SimpleNamespace()
 
-            with self.assertRaises(SystemExit):
-                create_quart_app(config=dummy_config)
+            with self.assertRaises(BootstrapConfigError):
+                create_quart_app(config_provider=lambda: dummy_config)
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.
@@ -35,8 +48,8 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-            with self.assertRaises(SystemExit):
-                create_quart_app(dummy_config)
+            with self.assertRaises(BootstrapConfigError):
+                create_quart_app(config_provider=lambda: dummy_config)
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.
@@ -50,9 +63,10 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="default",
                 ),
+                quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
             )
 
-            app = create_quart_app(dummy_config)
+            app = create_quart_app(config_provider=lambda: dummy_config)
             self.assertIsInstance(app, Quart)
             self.assertEqual(app.config["DEBUG"], True)
             self.assertEqual(app.config["LOG_LEVEL"], 10)
@@ -69,9 +83,10 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="development",
                 ),
+                quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
             )
 
-            app = create_quart_app(dummy_config)
+            app = create_quart_app(config_provider=lambda: dummy_config)
             self.assertIsInstance(app, Quart)
             self.assertEqual(app.config["DEBUG"], True)
             self.assertEqual(app.config["LOG_LEVEL"], 10)
@@ -88,9 +103,10 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="testing",
                 ),
+                quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
             )
 
-            app = create_quart_app(dummy_config)
+            app = create_quart_app(config_provider=lambda: dummy_config)
             self.assertIsInstance(app, Quart)
             self.assertEqual(app.config["DEBUG"], True)
             self.assertEqual(app.config["TESTING"], True)
@@ -108,9 +124,10 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     environment="production",
                 ),
+                quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
             )
 
-            app = create_quart_app(dummy_config)
+            app = create_quart_app(config_provider=lambda: dummy_config)
             self.assertIsInstance(app, Quart)
             self.assertEqual(app.config["DEBUG"], False)
             self.assertEqual(app.config["LOG_LEVEL"], 30)
@@ -118,3 +135,48 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
             # We should not get here because all exceptions
             # should be handled in the called function.
             self.fail("Exception raised unexpectedly.")
+
+    async def test_rejects_weak_quart_secret_key(self):
+        dummy_config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                environment="development",
+            ),
+            quart=SimpleNamespace(secret_key="short-secret"),
+        )
+
+        with self.assertRaises(BootstrapConfigError):
+            create_quart_app(config_provider=lambda: dummy_config)
+
+    async def test_rejects_placeholder_quart_secret_key(self):
+        dummy_config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                environment="development",
+            ),
+            quart=SimpleNamespace(secret_key="<set-quart-secret-key>"),
+        )
+
+        with self.assertRaises(BootstrapConfigError):
+            create_quart_app(config_provider=lambda: dummy_config)
+
+    async def test_create_quart_app_falls_back_when_logger_provider_raises(self):
+        dummy_config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                environment="development",
+            ),
+            quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
+        )
+
+        app = _create_quart_app(
+            config_provider=lambda: dummy_config,
+            logger_provider=lambda: (_ for _ in ()).throw(RuntimeError("logger down")),
+        )
+        self.assertIsInstance(app, Quart)
+
+    async def test_create_quart_app_wraps_config_provider_failure(self):
+        logger = unittest.mock.Mock()
+        with self.assertRaises(BootstrapConfigError):
+            _create_quart_app(
+                config_provider=lambda: (_ for _ in ()).throw(RuntimeError("bad config")),
+                logger_provider=lambda: logger,
+            )
+        logger.error.assert_called_with("Configuration unavailable.")

@@ -3,8 +3,11 @@
 __all__ = ["AppConfig"]
 
 import os
+from types import SimpleNamespace
 
 from quart import Quart
+
+from mugen.core.utility.security import validate_quart_secret_key
 
 
 class Config:  # pylint: disable=too-few-public-methods
@@ -19,12 +22,19 @@ class Config:  # pylint: disable=too-few-public-methods
     LOG_LEVEL: int = 10
 
     @staticmethod
-    def init_app(app: Quart):
+    def init_app(app: Quart, config: SimpleNamespace):
         """Configuration specific application initialisation."""
         try:
             app.logger.setLevel(app.config["LOG_LEVEL"])
         except KeyError:
             app.logger.error("LOG_LEVEL not configured.")
+
+        quart_config = getattr(config, "quart", None)
+        if quart_config is None:
+            raise RuntimeError("Invalid configuration: [quart] section is required.")
+        app.config["SECRET_KEY"] = validate_quart_secret_key(
+            getattr(quart_config, "secret_key", None)
+        )
 
 
 class DevelopmentConfig(Config):  # pylint: disable=too-few-public-methods

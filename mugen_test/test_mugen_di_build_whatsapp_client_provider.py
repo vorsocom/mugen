@@ -33,7 +33,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                 injector = None
 
                 # Attempt to build the WhatsApp service.
-                di._build_whatsapp_client_provider(config, injector)
+                di._build_provider(config, injector, provider_name="whatsapp_client")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -78,7 +78,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the WhatsApp service.
-                di._build_whatsapp_client_provider(config, injector)
+                di._build_provider(config, injector, provider_name="whatsapp_client")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -122,7 +122,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the WhatsApp service.
-                di._build_whatsapp_client_provider(config, injector)
+                di._build_provider(config, injector, provider_name="whatsapp_client")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -161,7 +161,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "whatsapp": "nonexistent_module",
+                                    "whatsapp": "nonexistent_module:MissingClass",
                                 }
                             }
                         },
@@ -173,7 +173,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the WhatsApp service.
-                di._build_whatsapp_client_provider(config, injector)
+                di._build_provider(config, injector, provider_name="whatsapp_client")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -184,7 +184,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (whatsapp_client).",
+                    "ERROR:root:Invalid configuration (whatsapp_client): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -212,7 +212,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "whatsapp": "valid_whatsapp_module",
+                                    "whatsapp": "valid_whatsapp_module:MissingClass",
                                 }
                             }
                         },
@@ -224,8 +224,6 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -238,11 +236,13 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.client.whatsapp.IWhatsAppClient.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the WhatsApp service.
-                    di._build_whatsapp_client_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="whatsapp_client"
+                    )
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -253,7 +253,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (whatsapp_client).",
+                        "ERROR:root:Invalid configuration (whatsapp_client): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -282,7 +282,7 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "whatsapp": "valid_whatsapp_module",
+                                    "whatsapp": "valid_whatsapp_module:DummyWhatsAppClientClass",
                                 }
                             }
                         },
@@ -302,11 +302,20 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                         config,
                         ipc_service,
                         keyval_storage_gateway,
+                        relational_storage_gateway,
                         logging_gateway,
                         messaging_service,
                         user_service,
                     ):
-                        pass
+                        _ = (
+                            config,
+                            ipc_service,
+                            keyval_storage_gateway,
+                            relational_storage_gateway,
+                            logging_gateway,
+                            messaging_service,
+                            user_service,
+                        )
 
                     async def __aenter__(self):
                         pass
@@ -316,6 +325,9 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
 
                     async def init(self):
                         pass
+
+                    async def verify_startup(self) -> bool:
+                        return True
 
                     async def close(self):
                         pass
@@ -414,6 +426,15 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                     ):
                         pass
 
+                    async def emit_processing_signal(
+                        self,
+                        recipient: str,
+                        *,
+                        state: str,
+                        message_id: str | None = None,
+                    ) -> bool | None:
+                        return True
+
                     async def upload_media(
                         self,
                         file_path: str,
@@ -421,25 +442,31 @@ class TestDIBuildWhatsAppClient(unittest.TestCase):
                     ):
                         pass
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyWhatsAppClientClass]
+                DummyWhatsAppClientClass.__module__ = "valid_whatsapp_module"
+
 
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_whatsapp_module": unittest.mock.Mock(),
+                            "valid_whatsapp_module": unittest.mock.Mock(DummyWhatsAppClientClass=DummyWhatsAppClientClass),
                         },
                     ),
                     unittest.mock.patch(
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.client.whatsapp.IWhatsAppClient.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyWhatsAppClientClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyWhatsAppClientClass,
                     ),
                 ):
                     # Attempt to build the WhatsApp service.
-                    di._build_whatsapp_client_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="whatsapp_client"
+                    )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

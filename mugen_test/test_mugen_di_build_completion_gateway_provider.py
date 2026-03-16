@@ -33,7 +33,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                 injector = None
 
                 # Attempt to build the completion gateway.
-                di._build_completion_gateway_provider(config, injector)
+                di._build_provider(config, injector, provider_name="completion_gateway")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -74,7 +74,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the completion gateway.
-                di._build_completion_gateway_provider(config, injector)
+                di._build_provider(config, injector, provider_name="completion_gateway")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -113,7 +113,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "completion": "nonexistent_module",
+                                    "completion": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -124,7 +124,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the completion gateway.
-                di._build_completion_gateway_provider(config, injector)
+                di._build_provider(config, injector, provider_name="completion_gateway")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -135,7 +135,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (completion_gateway).",
+                    "ERROR:root:Invalid configuration (completion_gateway): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -163,7 +163,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "completion": "valid_completion_module",
+                                    "completion": "valid_completion_module:MissingClass",
                                 }
                             }
                         }
@@ -174,8 +174,6 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -186,11 +184,13 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",  # pylint: disable=line-too-long
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the completion gateway.
-                    di._build_completion_gateway_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="completion_gateway"
+                    )
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -201,7 +201,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (completion_gateway).",
+                        "ERROR:root:Invalid configuration (completion_gateway): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -230,7 +230,7 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "completion": "valid_completion_module",
+                                    "completion": "valid_completion_module:DummyCompletionGatewayClass",
                                 }
                             }
                         }
@@ -248,26 +248,38 @@ class TestDIBuildCompletionGateway(unittest.TestCase):
                     def __init__(self, config, logging_gateway):
                         pass
 
-                    async def get_completion(self, context, operation="completion"):
+                    async def check_readiness(self):
                         pass
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyCompletionGatewayClass]
+                    async def aclose(self):
+                        pass
+
+                    async def get_completion(self, request):
+                        pass
+
+                DummyCompletionGatewayClass.__module__ = "valid_completion_module"
+
 
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_completion_module": unittest.mock.Mock(),
+                            "valid_completion_module": unittest.mock.Mock(DummyCompletionGatewayClass=DummyCompletionGatewayClass),
                         },
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.completion.ICompletionGateway.__subclasses__",  # pylint: disable=line-too-long
-                        new_callable=sc,
+                        return_value=[DummyCompletionGatewayClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyCompletionGatewayClass,
                     ),
                 ):
                     # Attempt to build the completion gateway.
-                    di._build_completion_gateway_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="completion_gateway"
+                    )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

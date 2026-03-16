@@ -1,0 +1,38 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "auth": {
+    "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "web": {
+    "base_url": "http://127.0.0.1:8081/api/core/web/v1"
+  },
+  "scenario": {
+    "conversation_id": "__WEB_CONVERSATION_ID__",
+    "text": "__WEB_TEXT__",
+    "stream_timeout_secs": 30
+  },
+  "assertions": {
+    "required_event_order": [
+      "ack",
+      "message"
+    ],
+    "message_create_status": 202,
+    "negative_statuses": {
+      "unauthenticated_message": 401,
+      "missing_conversation_id": 400,
+      "media_token_not_found": 404
+    },
+    "availability_status_available": 400,
+    "availability_status_unavailable": [
+      404,
+      501
+    ]
+  }
+}

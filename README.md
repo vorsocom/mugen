@@ -1,119 +1,161 @@
-
 <p align="center">
     <img src="assets/images/mugen-logotype.png" width="401">
 </p>
 
-# muGen - The GenAI Microframework
+# muGen: Python Framework for Multi-Channel AI Assistants and Agent Applications
 
 [![Static Badge](https://img.shields.io/badge/License-Sustainable_Use_1.0-blue)](LICENSE.md)
-[![Static Badge](https://img.shields.io/badge/Latest_Release-v0.43.2-blue)](https://github.com/vorsocom/mugen/releases/tag/0.43.2)
-![Static Badge](https://img.shields.io/badge/Test_Coverage-63%25-green)
+[![Test Gates](https://github.com/vorsocom/mugen/actions/workflows/test-gates.yml/badge.svg?branch=develop)](https://github.com/vorsocom/mugen/actions/workflows/test-gates.yml?query=branch%3Adevelop)
+[![Release Automation](https://github.com/vorsocom/mugen/actions/workflows/release.yml/badge.svg)](https://github.com/vorsocom/mugen/actions/workflows/release.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/vorsocom/mugen)](https://github.com/vorsocom/mugen/releases)
+![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
+![Static Badge](https://img.shields.io/badge/Test_Coverage-100%25-green)
 
-muGen (pronounced "mew-jen") is a [fair-code](https://faircode.io) licensed microframework for prototyping and deploying multimodal/multichannel (MM/MC or 3MC) Generative AI applications. Written in Python, muGen aims to have a simple, lean, and extensible codebase that allows developers to mix and match technologies and vendors—such as LLMs, vector storage, and communication platforms—to get from zero to deployment quickly. Read on for an overview of the framework, or skip ahead to our [quick start guide](#quick-start).
+muGen (pronounced "mew-jen") is a Python framework for building multi-tenant AI assistants and agent-backed applications that run across web and messaging channels. It is designed for teams that want one runtime for chat, web, retrieval, governance, and provider integration without hard-wiring the system to a single model vendor or transport.
 
-## Contents
+At its core, muGen combines a multi-channel messaging runtime, an ACP-backed control plane, a provider-neutral context engine, and an optional agent runtime for durable background work. Read on for the high-level framework story, or jump straight to the [quick start](#quick-start).
 
-1. [Architecture](#architecture)
-2. [Quick Start Guide](#quick-start)
-3. [Building Applications with muGen](#building-applications-with-mugen)
-4. [License](#license)
-5. [Why Source-Available](#why-source-available)
-6. [Enterprise Services](#enterprise-services)
+## Why muGen
+
+- **Build one assistant runtime for multiple channels.** muGen supports web chat plus messaging platforms from the same core runtime and extension model.
+- **Keep tenant control and operations in the framework.** ACP-backed resources, actions, RBAC, runtime profiles, and admin APIs make multi-tenant control-plane concerns first-class.
+- **Use retrieval and context without locking into one provider.** The context engine composes contributors, guards, rankers, caches, provenance, and writeback behind typed contracts.
+- **Add agent behavior without replacing the core messaging path.** Routes can opt into an agent runtime that supports planning, evaluation, capability execution, and resumable background continuation.
+- **Swap infrastructure through gateways.** Completion, knowledge, email, SMS, and storage surfaces are exposed through provider-neutral contracts.
+- **Get durable transport behavior.** Web delivery includes queueing and SSE replay semantics, while supported messaging platforms share durable ingress, dedupe, retries, and dead-letter handling.
+
+## Supported Channels
+
+Core platform support is documented in [clients](docs/clients.md), the shared [messaging ingress contract](docs/messaging-ingress-contract.md), and the platform-specific support contracts.
+
+| Channel | Current core surface |
+| --- | --- |
+| Web | Authenticated REST + SSE chat transport with queueing, replay, and tokenized media delivery |
+| Matrix | DM-first transport with ACP-managed client profiles and shared ingress durability |
+| LINE | Webhook ingress via shared durable ingress foundation |
+| Signal | Shared durable ingress with account-scoped routing |
+| Telegram | Webhook ingress via shared durable ingress foundation |
+| WeChat | Webhook ingress via shared durable ingress foundation |
+| WhatsApp | Webhook ingress via shared durable ingress foundation |
+
+## Supported Providers
+
+muGen uses strict provider tokens in config and exposes provider-neutral contracts for gateway integrations. See [gateways](docs/gateways.md) and [dependency injection](docs/dependency-injection.md) for the current runtime contract.
+
+| Gateway category | Supported providers |
+| --- | --- |
+| Completion | AWS Bedrock, Azure AI Foundry, Cerebras, Groq, OpenAI, SambaNova, Vertex AI |
+| Knowledge | ChromaDB, Milvus, Pinecone, pgvector, Qdrant, Weaviate |
+| Email | Amazon SES, SMTP |
+| SMS | Twilio |
 
 ## Architecture
 
-A muGen application consists of five layers, ranging from high-level platform interfaces to low-level core modules. These layers help maintain a [clean architecture](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html), ensuring that dependencies always point towards lower layers. This approach increases flexibility, testability, and separation of concerns. Note, however, that clients which communicate with pull APIs and extensions which implement API endpoint will decrease "cleanliness".
+muGen keeps the runtime split into a small number of explicit seams so web, messaging, context, agent execution, and provider integrations can evolve independently.
 
-<p align="center">
-    <img src="assets/images/mugen-architecture.png" width="501">
-</p>
+- **Platforms and transport:** web uses authenticated REST + SSE contracts, while Matrix, LINE, Signal, Telegram, WeChat, and WhatsApp share one durable ingress foundation for staging, dedupe, retries, and checkpoints.
+- **ACP and framework extensions:** ACP-backed plugins expose tenant-scoped CRUD, actions, RBAC, runtime profiles, and admin APIs, while framework extensions register platform and feature surfaces during bootstrap.
+- **Context engine:** the core messaging path prepares one normalized completion request through provider-neutral contributors, guards, rankers, caches, trace sinks, and post-turn commit behavior.
+- **Agent runtime:** routes can optionally hand prepared turns to a dedicated agent runtime for plan-act-evaluate loops, capability execution, and durable background continuation.
+- **Gateways and services:** completion, knowledge, email, SMS, and storage integrations stay behind typed contracts so providers can be swapped without rewriting the application boundary.
 
-### Platforms
-
-The platform layer includes communication platforms through which users interact with your application. These platforms can range from instant messaging services like Matrix and WhatsApp (currently supported by muGen core) to custom web applications. As muGen evolves, support for additional platforms will be added. A single muGen instance can handle multiple platforms concurrently, allowing for flexible multi-channel deployment.
-
-### API
-
-muGen runs on the same asyncio event loop as [Quart](https://palletsprojects.com/projects/quart), a Python web framework that supports asynchronous programming. This allows muGen to coexist with Quart and leverage its API-building functionality without being entirely dependent on it. The registration muGen's core API blueprint is delayed until extensions have been registered, enabling extensions to define custom endpoints or add routes to the core API seamlessly.
-
-
-### Extensions
-
-muGen supports various types of extensions, which can be platform-agnostic or specific, and are activated at different stages of the message lifecycle. The extensions allow developers to customize how the application behaves in response to user interactions. These extension types are:
-
-1. **Framework (FW) Extensions:** These operate outside the message lifecycle, adding core functionalities like API endpoints. They are initialized during application startup.
-2. **Inter-process Communication (IPC) Extensions:** These handle incoming requests to execute commands, enabling tasks such as running scheduled jobs and processing push API requests.
-3. **Message Handler (MH) Extensions:** These manage non-text input, such as images or audio, and handle their processing within the system.
-4. **Context (CTX) Extensions:** These provide additional context for the language model by injecting information into conversation histories.
-5. **Retrieval Augmented Generation (RAG) Extensions:** These perform knowledge retrieval from external sources, enriching the language model's context with relevant information.
-6. **Response Pre-processor (RPP) Extensions:** These modify the language model's responses before they are sent to the user, allowing for custom transformations.
-7. **Conversational Trigger (CT) Extensions:** These detect specific cues in the final version of the language model's response and trigger operations based on those cues.
-
-Extensions are built against object-oriented programming (OOP) style interfaces, not concrete implementations, and rely on dependency injection to interact with core modules. This design promotes flexibility and reusability.
-
-### Clients
-
-Clients provide platform-specific functionality and can be built for either push or pull APIs. Push API clients rely on IPC extensions to handle incoming requests. Configuration for the client modules is managed using a TOML configuration file, allowing for easy customization.
-
-### Gateways and Services
-
-Gateways and services form the core of muGen, providing platform-agnostic functionality such as communication with chat completion APIs, vector databases, and key-value storage. The naming convention distinguishes between:
-
-- **Services:** Core functionality implemented within the framework.
-- **Gateways:** Integrations with external libraries or systems.
-
-The configuration for these modules is also managed using a TOML file, giving developers flexibility in selecting and configuring the services they need.
+For the deeper runtime contracts, start with [services](docs/services.md), [context engine design](docs/context-engine-design.md), [agent runtime design](docs/agent-runtime-design.md), and [extensions](docs/extensions.md).
 
 ## Quick Start
 
-To quickly set up and evaluate a muGen environment, follow these steps:
+### 1. Clone the repository and copy the sample config files
 
 ```bash
-# Clone the main branch.
-~$ git clone -b main --single-branch git@github.com:vorsocom/mugen.git
-
-# Switch to the repository directory.
+~$ git clone git@github.com:vorsocom/mugen.git
 ~$ cd mugen
-
-# Create a Hypercorn config file in the root folder.
-~$ echo 'bind = "127.0.0.1:8081"' > hypercorn.toml
-
-# Copy the app configuration sample to the root folder.
+~$ cp conf/hypercorn.toml.sample hypercorn.toml
 ~$ cp conf/mugen.toml.sample mugen.toml
+```
 
-# Edit mugen.toml to set your preferred values.
-# At minimum, configure the completion gateway by
-# setting mugen.modules.core.gateway.completion.
-# Gateways are currently provided for AWS Bedrock,
-# Groq, and SambaNova.
-# For example, to use AWS Bedrock:
-#   1. Set mugen.modules.core.gateway.completion to
-#      "mugen.core.gateway.completion.bedrock".
-#   2. Configure your AWS Bedrock credentials in the
-#      [aws.bedrock] section.
-~$ nano mugen.toml
+### 2. Configure `mugen.toml`
 
-# Install Python dependencies.
+At minimum:
+
+- set `mugen.modules.core.gateway.completion` to your completion provider token;
+- keep `mugen.modules.core.service.context_engine = "default"` unless you are intentionally swapping the runtime implementation;
+- keep `mugen.runtime.profile = "platform_full"` unless you are intentionally using a different runtime profile;
+- if `web` is enabled, keep the default web/runtime framework extensions enabled, including `core.fw.acp`, `core.fw.context_engine`, and `core.fw.web`;
+- if `matrix` is enabled, set `security.secrets.encryption_key`.
+
+Provider config values are strict tokens, not Python module paths. Current completion gateways include AWS Bedrock, Azure AI Foundry, Cerebras, Groq, OpenAI, SambaNova, and Vertex AI. For provider-specific config details, see [gateways](docs/gateways.md) and [dependency injection](docs/dependency-injection.md).
+
+### 3. Install dependencies and activate the Poetry environment
+
+```bash
 ~$ poetry install
-
-# Activate the Python environment.
 ~$ poetry shell
+```
 
-# Run the application.
+### 4. Apply migrations for enabled tracks
+
+```bash
+~$ python scripts/run_migration_tracks.py upgrade head
+```
+
+### 5. Start the application
+
+```bash
 ~$ hypercorn -c hypercorn.toml quartman
 ```
 
-You can now open a new terminal and connect to the running instance using Telnet:
+Bootstrap lifecycle:
+
+1. **Phase A (blocking):** load extensions and register API routes.
+2. **Phase B (background):** start long-running platform clients such as Matrix, WhatsApp, or web workers.
+
+The server does not begin serving requests until Phase A completes successfully.
+
+### 6. Optional development harness
+
+For local development and testing, you can run the telnet harness in a separate process:
+
+```bash
+~$ python -m mugen.devtools.telnet_harness
+```
+
+Then connect locally:
 
 ```bash
 ~$ telnet localhost 8888
 ```
 
-**Note:** The Telnet client is for **development use only** and should not be used in production environments.
+The telnet harness is for development and testing only and is blocked in production.
 
-## Building Applications with muGen
+## Read Next
 
-To start building, check out the guide on [building muGen applications](docs/apps.md).
+- [Building muGen applications](docs/apps.md)
+- [Downstream architecture conformance](docs/downstream-architecture-conformance.md)
+- [Developing extensions](docs/extensions.md)
+- [Working with gateways](docs/gateways.md)
+- [Web platform support contract](docs/web-support-contract.md)
+- [Working with services](docs/services.md)
+- [ACP RBAC policy](docs/acp-rbac-policy.md)
+- [Context engine design](docs/context-engine-design.md)
+- [Context engine authoring](docs/context-engine-authoring.md)
+- [Agent runtime design](docs/agent-runtime-design.md)
+- [Agent runtime authoring](docs/agent-runtime-authoring.md)
+
+## Release Automation
+
+muGen includes a release automation script that mirrors the release workflow:
+
+```bash
+# On develop, prepare a release branch and run full gates.
+poetry run python scripts/release.py prepare --bump patch --python "$(poetry run which python)"
+
+# Finish release: open the release PR to main.
+poetry run python scripts/release.py finish --version 0.43.3
+
+# After the release PR is merged on main, tag it, sync develop, and clean up.
+poetry run python scripts/release.py publish --version 0.43.3
+```
+
+A manual GitHub Actions workflow is also available at `.github/workflows/release.yml`.
 
 ## License
 
@@ -121,8 +163,8 @@ muGen is [fair-code](https://faircode.io), distributed under the [**Sustainable 
 
 ## Why Source-Available?
 
-muGen began as a closed-source project. However, we realized that many clients prefer software that is open to public scrutiny and offers protection against consultancy lock-in. By making muGen source-available and adopting a fair-code license, we allow broader use of the framework in ways that do not harm our business objectives while increasing transparency.
+muGen began as a closed-source project. We moved to a source-available model because many teams want public scrutiny, operational transparency, and protection against consultancy lock-in while still needing a sustainable licensing model for the framework.
 
 ## Enterprise Services
 
-We provide enterprise support for building applications using muGen. Leverage our expertise to accelerate your project. [**Get in touch**](mailto:brightideas@vorsocomputing.com) to learn more or request a quote.
+We provide enterprise support for teams building on muGen. If you need help with architecture, extensions, platform rollout, or provider integration, [get in touch](mailto:brightideas@vorsocomputing.com).

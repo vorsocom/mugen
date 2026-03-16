@@ -33,7 +33,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                 injector = None
 
                 # Attempt to build the NLP service.
-                di._build_nlp_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="nlp_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -74,7 +74,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the NLP service.
-                di._build_nlp_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="nlp_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -113,7 +113,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "nlp": "nonexistent_module",
+                                    "nlp": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -124,7 +124,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the NLP service.
-                di._build_nlp_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="nlp_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -135,7 +135,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (nlp_service).",
+                    "ERROR:root:Invalid configuration (nlp_service): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -163,7 +163,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "nlp": "valid_nlp_module",
+                                    "nlp": "valid_nlp_module:MissingClass",
                                 }
                             }
                         }
@@ -174,8 +174,6 @@ class TestDIBuildNLPService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -188,11 +186,11 @@ class TestDIBuildNLPService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.nlp.INLPService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the NLP service.
-                    di._build_nlp_service_provider(config, injector)
+                    di._build_provider(config, injector, provider_name="nlp_service")
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -203,7 +201,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (nlp_service).",
+                        "ERROR:root:Invalid configuration (nlp_service): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -232,7 +230,7 @@ class TestDIBuildNLPService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "nlp": "valid_nlp_module",
+                                    "nlp": "valid_nlp_module:DummyNLPServiceClass",
                                 }
                             }
                         }
@@ -253,25 +251,29 @@ class TestDIBuildNLPService(unittest.TestCase):
                     def get_keywords(self, text):
                         pass
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyNLPServiceClass]
+                DummyNLPServiceClass.__module__ = "valid_nlp_module"
+
 
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_nlp_module": unittest.mock.Mock(),
+                            "valid_nlp_module": unittest.mock.Mock(DummyNLPServiceClass=DummyNLPServiceClass),
                         },
                     ),
                     unittest.mock.patch(
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.nlp.INLPService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyNLPServiceClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyNLPServiceClass,
                     ),
                 ):
                     # Attempt to build the NLP service.
-                    di._build_nlp_service_provider(config, injector)
+                    di._build_provider(config, injector, provider_name="nlp_service")
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

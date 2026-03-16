@@ -22,7 +22,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the logging gateway.
-                di._build_logging_gateway_provider(config, injector)
+                di._build_provider(config, injector, provider_name="logging_gateway")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -50,7 +50,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "logging": "nonexistent_module",
+                                    "logging": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -61,7 +61,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the logging gateway.
-                di._build_logging_gateway_provider(config, injector)
+                di._build_provider(config, injector, provider_name="logging_gateway")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -72,7 +72,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (logging_gateway).",
+                    "ERROR:root:Invalid configuration (logging_gateway): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -89,7 +89,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "logging": "valid_logging_module",
+                                    "logging": "standard",
                                 }
                             }
                         }
@@ -99,14 +99,37 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 # New injector
                 injector = None
 
+                class DummyLoggingGatewayClass(ILoggingGateway):
+                    """Dummy logging class."""
+
+                    def __init__(self, config: dict):
+                        pass
+
+                    def critical(self, message):
+                        pass
+
+                    def debug(self, message):
+                        pass
+
+                    def error(self, message):
+                        pass
+
+                    def info(self, message):
+                        pass
+
+                    def warning(self, message):
+                        pass
+
                 with unittest.mock.patch.dict(
                     "sys.modules",
                     {
-                        "valid_logging_module": unittest.mock.Mock(),
+                        "valid_logging_module": unittest.mock.Mock(DummyLoggingGatewayClass=DummyLoggingGatewayClass),
                     },
                 ):
                     # Attempt to build the logging gateway.
-                    di._build_logging_gateway_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="logging_gateway"
+                    )
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -135,7 +158,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "logging": "valid_logging_module",
+                                    "logging": "valid_logging_module:MissingClass",
                                 }
                             }
                         }
@@ -146,8 +169,6 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -158,11 +179,13 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.logging.ILoggingGateway.__subclasses__",
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the logging gateway.
-                    di._build_logging_gateway_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="logging_gateway"
+                    )
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -173,7 +196,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     # subclass of ILoggingGateway would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (logging_gateway).",
+                        "ERROR:root:Invalid configuration (logging_gateway): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -191,7 +214,7 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "gateway": {
-                                    "logging": "valid_logging_module",
+                                    "logging": "valid_logging_module:DummyLoggingGatewayClass",
                                 }
                             }
                         }
@@ -223,23 +246,29 @@ class TestDIBuildLoggingGateway(unittest.TestCase):
                     def warning(self, message):
                         pass
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyLoggingGatewayClass]
+                DummyLoggingGatewayClass.__module__ = "valid_logging_module"
+
 
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_logging_module": unittest.mock.Mock(),
+                            "valid_logging_module": unittest.mock.Mock(DummyLoggingGatewayClass=DummyLoggingGatewayClass),
                         },
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.logging.ILoggingGateway.__subclasses__",
-                        new_callable=sc,
+                        return_value=[DummyLoggingGatewayClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyLoggingGatewayClass,
                     ),
                 ):
                     # Attempt to build the logging gateway.
-                    di._build_logging_gateway_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="logging_gateway"
+                    )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

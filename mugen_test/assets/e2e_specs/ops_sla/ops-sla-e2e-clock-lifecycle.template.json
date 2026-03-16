@@ -1,0 +1,82 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsSlaClocks",
+  "create_payload": {
+    "TrackedNamespace": "ops_case",
+    "TrackedRef": "__TRACKED_REF__",
+    "Metric": "response",
+    "Priority": "high",
+    "Severity": "high"
+  },
+  "lookup": {
+    "field": "TrackedRef",
+    "value": "__TRACKED_REF__"
+  },
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "start_clock",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__"
+      }
+    },
+    {
+      "name": "pause_clock",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__"
+      }
+    },
+    {
+      "name": "resume_clock",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__"
+      }
+    },
+    {
+      "name": "mark_breached",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "EventType": "breached",
+        "Reason": "e2e breach marker"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": "breached",
+    "event_entity_set": "OpsSlaBreachEvents",
+    "event_entity_id_field": "SlaClockId",
+    "event_type_field": "EventType",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [
+    {
+      "name": "missing_tracking_target",
+      "entity_set": "OpsSlaClocks",
+      "expect_code": 400,
+      "payload": {
+        "TrackedNamespace": "ops_case",
+        "Metric": "response"
+      }
+    }
+  ],
+  "positive_creates": []
+}

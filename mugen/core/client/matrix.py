@@ -1,21 +1,33 @@
 """Provides an implementation of IMatrixClient."""
 
-__all__ = ["DefaultMatrixClient"]
+__all__ = ["DefaultMatrixClient", "MultiProfileMatrixClient"]
 
 from io import BytesIO
 
+import asyncio
+import base64
+import hashlib
+import importlib
+import inspect
+import json
+from math import isfinite
 import mimetypes
 import os
-import pickle
-import sys
+import random
+import re
 import tempfile
+import textwrap
 import traceback
 from types import SimpleNamespace
-from typing import Coroutine
+from typing import Any, Coroutine
+import uuid
 
 import aiofiles
+from cryptography.fernet import Fernet, InvalidToken
 
 from nio import (
+    AsyncClient,
+    Api,
     InviteAliasEvent,
     InviteMemberEvent,
     InviteNameEvent,
@@ -25,7 +37,6 @@ from nio import (
     MatrixInvitedRoom,
     MatrixRoom,
     MegolmEvent,
-    ProfileGetResponse,
     RoomCreateEvent,
     RoomKeyEvent,
     RoomKeyRequest,
@@ -43,53 +54,174 @@ from nio import (
 
 import nio.crypto
 from nio.exceptions import OlmUnverifiedDeviceError
-from nio.responses import UploadResponse, DiskDownloadResponse
+from nio.responses import (
+    DirectRoomsResponse,
+    DiskDownloadResponse,
+    EmptyResponse,
+    UploadResponse,
+)
 
+from mugen.core.client.runtime_profile_manager import (
+    MultiProfileClientCloseError,
+    _close_clients_fail_closed,
+)
 from mugen.core.contract.client.matrix import IMatrixClient
+from mugen.core.contract.client.matrix_event_hook import MatrixEventHookPayload
+from mugen.core.contract.client.matrix_types import (
+    MatrixJSONValue,
+    MatrixPresence,
+    MatrixProfile,
+)
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.storage.keyval import IKeyValStorageGateway
-from mugen.core.contract.service.ipc import IIPCService
+from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
+from mugen.core.contract.service.ingress import (
+    IMessagingIngressService,
+    MessagingIngressCheckpointUpdate,
+    MessagingIngressEvent,
+    MessagingIngressStageEntry,
+)
+from mugen.core.contract.service.ingress_routing import (
+    IIngressRoutingService,
+    IngressRouteReason,
+    IngressRouteRequest,
+    IngressRouteResolution,
+)
+from mugen.core.contract.service.ipc import (
+    IIPCService,
+    IPCCommandRequest,
+    IPCAggregateResult,
+    IPCCriticalDispatchError,
+)
 from mugen.core.contract.service.messaging import IMessagingService
 from mugen.core.contract.service.user import IUserService
+from mugen.core.contract.runtime_bootstrap import parse_runtime_bootstrap_settings
+from mugen.core.service.context_scope_resolution import (
+    ContextScopeResolutionError,
+    context_scope_from_ingress_route,
+    resolve_context_ingress,
+)
+from mugen.core.service.ingress_routing import DefaultIngressRoutingService
+from mugen.core.utility.client_profile_runtime import normalize_client_profile_id
+from mugen.core.utility.messaging_client_federation import (
+    MessagingClientFederationPolicy,
+    parse_matrix_sender_domain,
+    resolve_messaging_client_federation_policy,
+)
+from mugen.core.utility.messaging_client_user_access import (
+    MessagingClientUserAccessPolicy,
+    resolve_messaging_client_user_access_policy,
+)
+from mugen.core.utility.platforms import normalize_platforms
+from mugen.core.utility.processing_signal import (
+    PROCESSING_STATE_START,
+    PROCESSING_STATE_STOP,
+    normalize_processing_state,
+)
+from mugen.core.utility.security import validate_matrix_secret_encryption_key
+
+MessagingClientProfileService = None
+
+
+def _messaging_client_profile_service_class():
+    service_class = MessagingClientProfileService
+    if service_class is not None:
+        return service_class
+    module = importlib.import_module(
+        "mugen.core.plugin.acp.service.messaging_client_profile"
+    )
+    return getattr(module, "MessagingClientProfileService")
 
 
 class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
-    IMatrixClient
+    IMatrixClient,
 ):
     """A custom implementation of IMatrixClient."""
 
-    _flags_key: str = "m.agent_flags"
+    _callback_skip_reason_dm_scope: str = "unsupported_dm_scope"
+
+    _device_trust_mode_allowlist: str = "allowlist"
+
+    _device_trust_mode_permissive: str = "permissive"
+
+    _device_trust_mode_strict_known: str = "strict_known"
+
+    _direct_rooms_event_type: str = "m.direct"
 
     _ipc_callback: Coroutine
 
     _known_devices_list_key: str = "known_devices_list"
 
+    _matrix_event_hook_command: str = "matrix_event"
+    _matrix_ingress_command: str = "matrix_ingress_event"
+
+    _matrix_event_hook_payload_version: int = 1
+
+    _default_matrix_ipc_queue_size: int = 256
+
     _sync_key: str = "matrix_client_sync_next_batch"
+    _sync_checkpoint_key: str = "sync_token"
+    _encrypted_secret_prefix: str = "enc:v1:"
+    _federation_guarded_to_device_callbacks = frozenset(
+        {
+            "_cb_key_verification_event",
+            "_cb_room_key_event",
+            "_cb_room_key_request",
+        }
+    )
 
     # pylint: disable=too-many-arguments
     def __init__(
         self,
         config: SimpleNamespace = None,
         ipc_service: IIPCService = None,
+        ingress_service: IMessagingIngressService = None,
         keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway = None,
         logging_gateway: ILoggingGateway = None,
         messaging_service: IMessagingService = None,
         user_service: IUserService = None,
     ):
         self._config = config
-        super().__init__(
+        olm_store_path = self._ensure_olm_store_path()
+        self._vendor_client = AsyncClient(
             homeserver=self._config.matrix.homeserver,
             user=self._config.matrix.client.user,
-            store_path=os.path.join(
-                self._config.basedir,
-                self._config.matrix.storage.olm.path,
-            ),
+            store_path=olm_store_path,
         )
+        self.synced = getattr(self._vendor_client, "synced", asyncio.Event())
         self._ipc_service = ipc_service
+        self._ingress_service = ingress_service
         self._keyval_storage_gateway = keyval_storage_gateway
+        self._relational_storage_gateway = relational_storage_gateway
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._user_service = user_service
+        self._ingress_routing_service: IIngressRoutingService | None = None
+        self._pending_sync_ingress: list[MessagingIngressStageEntry] = []
+        self._pending_sync_lock = asyncio.Lock()
+        self._direct_room_ids: set[str] = set()
+        self._matrix_ipc_queue_size = self._resolve_matrix_ipc_queue_size()
+        self._matrix_ipc_queue: asyncio.Queue | None = None
+        self._matrix_ipc_worker_task: asyncio.Task | None = None
+        self._matrix_ipc_worker_stop = asyncio.Event()
+        self._matrix_runtime_health_error: BaseException | None = None
+        self._matrix_runtime_health_signal = asyncio.Event()
+        self._shutdown_timeout_seconds = self._resolve_shutdown_timeout_seconds()
+        self._credentials_key_prefix = self._resolve_credentials_key_prefix()
+        self._known_devices_list_key = self._keyval_key("known_devices_list")
+        self._sync_key = self._keyval_key("matrix_client_sync_next_batch")
+        self._client_access_token_key = self._keyval_key("client_access_token")
+        self._client_device_id_key = self._keyval_key("client_device_id")
+        self._client_user_id_key = self._keyval_key("client_user_id")
+        self._sync_token: str | None = None
+        self._secret_cipher: Fernet | None = self._build_secret_cipher()
+
+        if self._matrix_secrets_encryption_required() and self._secret_cipher is None:
+            raise RuntimeError(
+                "Matrix secret encryption key is required when matrix platform is enabled. "
+                "Set matrix.security.credentials.encryption_key."
+            )
 
         ## Callbacks
         # Invite Room Events.
@@ -113,109 +245,1256 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         # Responses.
         self.add_response_callback(self._cb_sync_response, SyncResponse)
 
-    async def __aenter__(self) -> None:
+    @property
+    def access_token(self) -> str | None:
+        return getattr(self._vendor_client, "access_token", None)
+
+    @access_token.setter
+    def access_token(self, value: str | None) -> None:
+        self._vendor_client.access_token = value
+
+    @property
+    def device_id(self) -> str | None:
+        return getattr(self._vendor_client, "device_id", None)
+
+    @device_id.setter
+    def device_id(self, value: str | None) -> None:
+        self._vendor_client.device_id = value
+
+    @property
+    def user_id(self) -> str | None:
+        return getattr(self._vendor_client, "user_id", None)
+
+    @user_id.setter
+    def user_id(self, value: str | None) -> None:
+        self._vendor_client.user_id = value
+
+    @property
+    def current_user_id(self) -> str:
+        value = self.user_id
+        return value if isinstance(value, str) else ""
+
+    @property
+    def device_store(self):
+        return getattr(self._vendor_client, "device_store", {})
+
+    @device_store.setter
+    def device_store(self, value) -> None:
+        self._vendor_client.device_store = value
+
+    @property
+    def client_session(self):
+        return getattr(self._vendor_client, "client_session", None)
+
+    @client_session.setter
+    def client_session(self, value) -> None:
+        self._vendor_client.client_session = value
+
+    @client_session.deleter
+    def client_session(self) -> None:
+        if hasattr(self._vendor_client, "client_session"):
+            del self._vendor_client.client_session
+
+    @property
+    def olm(self):
+        return getattr(self._vendor_client, "olm", None)
+
+    @olm.setter
+    def olm(self, value) -> None:
+        self._vendor_client.olm = value
+
+    def verify_device(self, olm_device) -> None:
+        self._vendor_client.verify_device(olm_device)
+
+    async def login(self, password: str, device_name: str):
+        return await self._vendor_client.login(password, device_name)
+
+    def load_store(self) -> None:
+        self._vendor_client.load_store()
+
+    async def join(self, room_id: str):
+        return await self._vendor_client.join(room_id)
+
+    async def list_direct_rooms(self):
+        return await self._vendor_client.list_direct_rooms()
+
+    async def joined_rooms(self):
+        return await self._vendor_client.joined_rooms()
+
+    async def joined_members(self, room_id: str):
+        return await self._vendor_client.joined_members(room_id)
+
+    async def room_get_state(self, room_id: str):
+        return await self._vendor_client.room_get_state(room_id)
+
+    async def room_kick(self, room_id: str, user_id: str):
+        return await self._vendor_client.room_kick(room_id, user_id)
+
+    async def room_leave(self, room_id: str):
+        return await self._vendor_client.room_leave(room_id)
+
+    async def room_send(self, *args, **kwargs):
+        return await self._vendor_client.room_send(*args, **kwargs)
+
+    async def room_typing(self, *args, **kwargs):
+        return await self._vendor_client.room_typing(*args, **kwargs)
+
+    async def room_read_markers(self, *args, **kwargs):
+        return await self._vendor_client.room_read_markers(*args, **kwargs)
+
+    async def upload(self, *args, **kwargs):
+        return await self._vendor_client.upload(*args, **kwargs)
+
+    async def download(self, *args, **kwargs):
+        return await self._vendor_client.download(*args, **kwargs)
+
+    async def _send(self, *args, **kwargs):
+        send_fn = getattr(self._vendor_client, "_send", None)
+        if callable(send_fn) is not True:
+            raise RuntimeError("Matrix vendor client does not expose _send().")
+        return await send_fn(*args, **kwargs)
+
+    async def __aenter__(self) -> "DefaultMatrixClient":
         """Initialisation."""
+        self._clear_runtime_health_failure()
         self._logging_gateway.debug("DefaultMatrixClient.__aenter__")
-        if self._keyval_storage_gateway.get("client_access_token") is None:
-            # Load password and device name from storage.
-            pw = self._config.matrix.client.password
-            dn = self._config.matrix.client.device
+        try:
+            self._ensure_credential_keys_initialized()
+            stored_access_token = await self._keyval_storage_gateway.get_text(
+                self._client_access_token_key
+            )
+            stored_access_token = self._decode_secret_value(
+                stored_access_token,
+                field_name="client_access_token",
+            )
+            if stored_access_token is None:
+                # Load password and device name from storage.
+                pw = self._config.matrix.client.password
+                dn = self._config.matrix.client.device
 
-            # Attempt  password login.
-            resp = await self.login(pw, dn)
+                # Attempt  password login.
+                resp = await self.login(pw, dn)
 
-            # check login successful
-            if isinstance(resp, LoginResponse):
-                self._logging_gateway.debug("Password login successful.")
-                self._logging_gateway.debug("Saving credentials.")
+                # check login successful
+                if isinstance(resp, LoginResponse):
+                    self._logging_gateway.debug("Password login successful.")
+                    self._logging_gateway.debug("Saving credentials.")
 
-                # Save credentials.
-                self._keyval_storage_gateway.put(
-                    "client_access_token", resp.access_token
-                )
-                self._keyval_storage_gateway.put("client_device_id", resp.device_id)
-                self._keyval_storage_gateway.put("client_user_id", resp.user_id)
-            else:
-                self._logging_gateway.debug("Password login failed.")
-                sys.exit(1)
-            sys.exit(0)
+                    await self._keyval_storage_gateway.put_text(
+                        self._client_access_token_key,
+                        self._encode_secret_value(
+                            resp.access_token,
+                            field_name="client_access_token",
+                        ),
+                    )
+                    await self._keyval_storage_gateway.put_text(
+                        self._client_device_id_key,
+                        self._encode_secret_value(
+                            resp.device_id,
+                            field_name="client_device_id",
+                        ),
+                    )
+                    await self._keyval_storage_gateway.put_text(
+                        self._client_user_id_key,
+                        self._encode_secret_value(
+                            resp.user_id,
+                            field_name="client_user_id",
+                        ),
+                    )
+                    self.access_token = resp.access_token
+                    self.device_id = resp.device_id
+                    self.user_id = resp.user_id
+                    self.load_store()
+                    self._sync_token = await self._load_sync_checkpoint()
+                    return self
+                self._logging_gateway.error("Password login failed.")
+                raise RuntimeError("Matrix password login failed.")
 
-        # Otherwise the config file exists, so we'll use the stored credentials.
-        self._logging_gateway.debug("Login using saved credentials.")
-        # open the file in read-only mode.
-        self.access_token = self._keyval_storage_gateway.get("client_access_token")
-        self.device_id = self._keyval_storage_gateway.get("client_device_id")
-        self.user_id = self._keyval_storage_gateway.get("client_user_id")
-        self.load_store()
-        return self
+            # Otherwise the config file exists, so we'll use the stored credentials.
+            self._logging_gateway.debug("Login using saved credentials.")
+            # open the file in read-only mode.
+            self.access_token = stored_access_token
+            self.device_id = self._decode_secret_value(
+                await self._keyval_storage_gateway.get_text(self._client_device_id_key),
+                field_name="client_device_id",
+            )
+            self.user_id = self._decode_secret_value(
+                await self._keyval_storage_gateway.get_text(self._client_user_id_key),
+                field_name="client_user_id",
+            )
+            self._sync_token = await self._load_sync_checkpoint()
+            self.load_store()
+            return self
+        except Exception:
+            await self.close()
+            raise
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
         """Finalisation."""
         self._logging_gateway.debug("DefaultMatrixClient.__aexit__")
+        await self.close()
+        return False
+
+    async def close(self) -> None:
+        """Close Matrix IPC worker and vendor client session safely."""
+        await self._stop_matrix_ipc_worker()
+        session = self.client_session
+        if session is None:
+            return
+        if getattr(session, "closed", False) is True:
+            return
+        timeout_seconds = self._effective_shutdown_timeout_seconds()
         try:
-            await self.client_session.close()
+            await asyncio.wait_for(
+                session.close(),
+                timeout=timeout_seconds,
+            )
         except AttributeError:
             ...
+        except asyncio.TimeoutError:
+            message = (
+                "Matrix client session close timed out "
+                f"(timeout_seconds={timeout_seconds:.2f})."
+            )
+            self._logging_gateway.error(message)
+            raise RuntimeError(message)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            message = (
+                "Matrix client session close failed "
+                f"error_type={type(exc).__name__} error={exc}"
+            )
+            self._logging_gateway.error(message)
+            raise RuntimeError(message) from exc
+
+    async def sync_forever(
+        self,
+        *,
+        since: str | None = None,
+        timeout: int = 100,
+        full_state: bool = True,
+        set_presence: MatrixPresence = "online",
+    ) -> None:
+        """Run long-polling sync loop using vendor client."""
+        await self._vendor_client.sync_forever(
+            since=since,
+            timeout=timeout,
+            full_state=full_state,
+            set_presence=set_presence,
+        )
+
+    async def monitor_runtime_health(self) -> None:
+        """Block until matrix runtime reports a health failure."""
+        self._ensure_runtime_health_state()
+        await self._matrix_runtime_health_signal.wait()
+        error = self._matrix_runtime_health_error
+        if isinstance(error, BaseException):
+            raise error
+        raise RuntimeError("Matrix runtime health monitor exited without an error.")
+
+    def add_event_callback(self, callback, event_type) -> None:
+        """Delegate event callback registration to the vendor client."""
+        self._vendor_client.add_event_callback(callback, event_type)
+
+    def add_to_device_callback(self, callback, event_type) -> None:
+        """Delegate to-device callback registration to the vendor client."""
+        self._vendor_client.add_to_device_callback(callback, event_type)
+
+    def add_response_callback(self, callback, response_type) -> None:
+        """Delegate response callback registration to the vendor client."""
+        self._vendor_client.add_response_callback(callback, response_type)
+
+    async def get_profile(self, user_id: str | None = None) -> MatrixProfile:
+        """Return normalized profile payload for core runtime orchestration."""
+        response = await self._vendor_client.get_profile(user_id=user_id)
+        return MatrixProfile(
+            user_id=user_id,
+            displayname=getattr(response, "displayname", None),
+            avatar_url=getattr(response, "avatar_url", None),
+            metadata={
+                "vendor_response_type": type(response).__name__,
+            },
+        )
+
+    async def set_displayname(self, displayname: str) -> None:
+        """Set profile display name."""
+        await self._vendor_client.set_displayname(displayname)
+
+    async def joined_room_ids(self) -> list[str]:
+        """List joined room ids as plain strings."""
+        response = await self.joined_rooms()
+        rooms = getattr(response, "rooms", None)
+        if not isinstance(rooms, list):
+            return []
+        return [room_id for room_id in rooms if isinstance(room_id, str) and room_id]
+
+    async def joined_member_ids(self, room_id: str) -> list[str]:
+        """List room member ids as plain strings."""
+        response = await self.joined_members(room_id)
+        members = getattr(response, "members", None)
+        if not isinstance(members, list):
+            return []
+        member_ids: list[str] = []
+        for member in members:
+            user_id = getattr(member, "user_id", None)
+            if not isinstance(user_id, str) or user_id == "":
+                continue
+            member_ids.append(user_id)
+        return member_ids
+
+    async def room_state_events(self, room_id: str) -> list[dict[str, object]]:
+        """List room state events using plain dictionaries."""
+        response = await self.room_get_state(room_id)
+        events = getattr(response, "events", None)
+        if not isinstance(events, list):
+            return []
+
+        normalized_events: list[dict[str, object]] = []
+        for event in events:
+            if isinstance(event, dict):
+                normalized_events.append(dict(event))
+                continue
+            normalized_events.append(
+                {
+                    "type": getattr(event, "type", None),
+                    "content": getattr(event, "content", None),
+                }
+            )
+        return normalized_events
+
+    async def direct_room_ids(self) -> set[str]:
+        """List direct-message room ids from account data."""
+        response = await self.list_direct_rooms()
+        rooms = getattr(response, "rooms", None)
+        if not isinstance(rooms, dict):
+            return set()
+
+        direct_ids: set[str] = set()
+        for room_ids in rooms.values():
+            if not isinstance(room_ids, list):
+                continue
+            for room_id in room_ids:
+                if isinstance(room_id, str) and room_id != "":
+                    direct_ids.add(room_id)
+        return direct_ids
+
+    def device_ed25519_key(self) -> str:
+        """Return current device ED25519 verification key."""
+        identity_keys = getattr(
+            getattr(self.olm, "account", None),
+            "identity_keys",
+            None,
+        )
+        if not isinstance(identity_keys, dict):
+            return ""
+        raw_key = identity_keys.get("ed25519")
+        if not isinstance(raw_key, str) or raw_key == "":
+            return ""
+        return raw_key
+
+    def device_verification_data(self) -> dict[str, str]:
+        """Return formatted device verification data for this runtime client."""
+        public_name = getattr(
+            getattr(getattr(self._config, "matrix", SimpleNamespace()), "client", None),
+            "device",
+            "",
+        )
+        return {
+            "client_profile_id": str(self._resolve_client_profile_id()),
+            "client_profile_key": self._resolve_client_profile_key(),
+            "recipient_user_id": str(self.current_user_id or ""),
+            "public_name": str(public_name or ""),
+            "session_id": str(self.device_id or ""),
+            "session_key": self._format_device_verification_key(
+                self.device_ed25519_key()
+            ),
+        }
+
+    @staticmethod
+    def _format_device_verification_key(raw_key: Any) -> str:
+        """Group one device verification key for operator readability."""
+        if not isinstance(raw_key, str) or raw_key == "":
+            return ""
+        return " ".join(textwrap.wrap(raw_key, 4))
+
+    def _matrix_secrets_encryption_required(self) -> bool:
+        platforms = normalize_platforms(
+            getattr(getattr(self._config, "mugen", SimpleNamespace()), "platforms", [])
+        )
+        return "matrix" in platforms
+
+    def _build_secret_cipher(self) -> Fernet | None:
+        raw_key = getattr(
+            getattr(
+                getattr(
+                    getattr(self._config, "matrix", SimpleNamespace()),
+                    "security",
+                    SimpleNamespace(),
+                ),
+                "credentials",
+                None,
+            ),
+            "encryption_key",
+            None,
+        )
+        if not isinstance(raw_key, str) or raw_key.strip() == "":
+            return None
+        if self._matrix_secrets_encryption_required():
+            raw_key = validate_matrix_secret_encryption_key(raw_key)
+        else:
+            raw_key = raw_key.strip()
+
+        # Derive stable Fernet key from operator-provided secret material.
+        digest = hashlib.sha256(raw_key.encode("utf-8")).digest()
+        return Fernet(base64.urlsafe_b64encode(digest))
+
+    def _encode_secret_value(self, value: str, *, field_name: str) -> str:
+        cipher = getattr(self, "_secret_cipher", None)
+        if cipher is None:
+            raise RuntimeError(
+                f"Cannot persist {field_name}: "
+                "matrix.security.credentials.encryption_key is not configured."
+            )
+        if not isinstance(value, str):
+            raise RuntimeError(f"Expected string value for {field_name}.")
+        encrypted = cipher.encrypt(value.encode("utf-8")).decode("utf-8")
+        return f"{self._encrypted_secret_prefix}{encrypted}"
+
+    def _decode_secret_value(self, value: str | None, *, field_name: str) -> str | None:
+        if value in [None, ""]:
+            return None
+        if not isinstance(value, str):
+            return None
+
+        if value.startswith(self._encrypted_secret_prefix) is not True:
+            raise RuntimeError(
+                f"Persisted value for {field_name} must be encrypted. "
+                "Clear stored matrix credentials and restart with "
+                "matrix.security.credentials.encryption_key configured."
+            )
+        cipher = getattr(self, "_secret_cipher", None)
+        if cipher is None:
+            raise RuntimeError(
+                f"Encrypted persisted value for {field_name} cannot be decrypted: "
+                "matrix.security.credentials.encryption_key is not configured. "
+                "Configure the matching key or clear stored matrix credentials."
+            )
+
+        encrypted_payload = value[len(self._encrypted_secret_prefix) :]
+        try:
+            decoded = cipher.decrypt(encrypted_payload.encode("utf-8"))
+        except InvalidToken as exc:
+            raise RuntimeError(
+                f"Encrypted persisted value for {field_name} could not be decrypted "
+                "with the configured matrix.security.credentials.encryption_key. "
+                "Use the original key or clear stored matrix credentials."
+            ) from exc
+        return decoded.decode("utf-8")
+
+    def _log_send_failure(self, message: str) -> None:
+        self._logging_gateway.warning(f"{message}\n{traceback.format_exc()}")
+
+    @staticmethod
+    def _coerce_optional_string(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        if normalized == "":
+            return None
+        return normalized
+
+    @staticmethod
+    def _coerce_optional_int(value: object) -> int | None:
+        if value in [None, ""]:
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed
+
+    @staticmethod
+    def _normalize_event_dict(value: object) -> dict[str, MatrixJSONValue] | None:
+        if not isinstance(value, dict):
+            return None
+        try:
+            normalized = json.loads(
+                json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+            )
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(normalized, dict):
+            return None
+        return normalized
+
+    def _build_matrix_event_hook_payload(
+        self,
+        *,
+        callback_name: str,
+        event: object = None,
+        room: MatrixRoom | MatrixInvitedRoom | None = None,
+        reason: str = _callback_skip_reason_dm_scope,
+    ) -> dict[str, MatrixJSONValue]:
+        room_id = self._coerce_optional_string(getattr(room, "room_id", None))
+        payload = MatrixEventHookPayload(
+            version=self._matrix_event_hook_payload_version,
+            callback=callback_name,
+            event_type=type(event).__name__ if event is not None else "UnknownEvent",
+            reason=reason,
+            room_id=room_id,
+            sender=self._coerce_optional_string(getattr(event, "sender", None)),
+            content=self._normalize_event_dict(getattr(event, "content", None)),
+            source=self._normalize_event_dict(getattr(event, "source", None)),
+            event_id=self._coerce_optional_string(getattr(event, "event_id", None)),
+            state_key=self._coerce_optional_string(getattr(event, "state_key", None)),
+            origin_server_ts=self._coerce_optional_int(
+                getattr(event, "origin_server_ts", None)
+            ),
+        )
+        return payload.to_dict()
+
+    @staticmethod
+    def _build_ingress_dedupe_key(event_type: str, event_id: str | None, payload: dict[str, Any]) -> str:
+        if isinstance(event_id, str) and event_id.strip() != "":
+            return f"{event_type}:{event_id.strip()}"
+        normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        payload_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return f"{event_type}:{payload_hash}"
+
+    def _build_non_core_ingress_entry(
+        self,
+        *,
+        callback_name: str,
+        event: object = None,
+        room: MatrixRoom | MatrixInvitedRoom | None = None,
+        reason: str = _callback_skip_reason_dm_scope,
+    ) -> MessagingIngressStageEntry:
+        payload = self._build_matrix_event_hook_payload(
+            callback_name=callback_name,
+            event=event,
+            room=room,
+            reason=reason,
+        )
+        event_type = str(payload.get("event_type", "UnknownEvent"))
+        event_id = self._coerce_optional_string(payload.get("event_id"))
+        room_id = self._coerce_optional_string(payload.get("room_id"))
+        sender = self._coerce_optional_string(payload.get("sender"))
+        return MessagingIngressStageEntry(
+            ipc_command=self._matrix_ingress_command,
+            event=MessagingIngressEvent(
+                version=1,
+                platform="matrix",
+                client_profile_id=self._resolve_client_profile_id(),
+                source_mode="sync_callback",
+                event_type=event_type,
+                event_id=event_id,
+                dedupe_key=self._build_ingress_dedupe_key(event_type, event_id, payload),
+                identifier_type="recipient_user_id",
+                identifier_value=self.current_user_id,
+                room_id=room_id,
+                sender=sender,
+                payload=payload,
+                provider_context={
+                    "callback": callback_name,
+                    "client_profile_key": self._resolve_client_profile_key(),
+                    "reason": reason,
+                },
+            ),
+        )
+
+    def _build_room_message_ingress_entry(
+        self,
+        *,
+        room: MatrixRoom,
+        message: RoomMessage,
+        ingress_metadata: dict[str, Any],
+    ) -> MessagingIngressStageEntry:
+        event_class = self._matrix_message_event_class(message)
+        payload = {
+            "event_class": event_class,
+            "room_id": room.room_id,
+            "sender": getattr(message, "sender", None),
+            "body": getattr(message, "body", None),
+            "content": self._normalize_event_dict(getattr(message, "content", None)) or {},
+            "source": self._normalize_event_dict(getattr(message, "source", None)) or {},
+            "event_id": getattr(message, "event_id", None),
+        }
+        event_type = event_class
+        event_id = self._coerce_optional_string(payload.get("event_id"))
+        return MessagingIngressStageEntry(
+            ipc_command=self._matrix_ingress_command,
+            event=MessagingIngressEvent(
+                version=1,
+                platform="matrix",
+                client_profile_id=self._resolve_client_profile_id(),
+                source_mode="sync_room_message",
+                event_type=event_type,
+                event_id=event_id,
+                dedupe_key=self._build_ingress_dedupe_key(event_type, event_id, payload),
+                identifier_type="recipient_user_id",
+                identifier_value=self.current_user_id,
+                room_id=room.room_id,
+                sender=self._coerce_optional_string(getattr(message, "sender", None)),
+                payload=payload,
+                provider_context={
+                    "client_profile_key": self._resolve_client_profile_key(),
+                    "ingress_metadata": dict(ingress_metadata),
+                },
+            ),
+        )
+
+    async def _queue_sync_ingress_entry(
+        self,
+        entry: MessagingIngressStageEntry,
+    ) -> None:
+        self._ensure_ingress_runtime_state()
+        async with self._pending_sync_lock:
+            self._pending_sync_ingress.append(entry)
+
+    def _resolve_credentials_key_prefix(self) -> str:
+        environment = (
+            str(
+                getattr(
+                    getattr(self._config, "mugen", SimpleNamespace()), "environment", ""
+                )
+            )
+            .strip()
+            .lower()
+        )
+        homeserver = str(
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()), "homeserver", ""
+            )
+        )
+        client_cfg = getattr(
+            getattr(self._config, "matrix", SimpleNamespace()),
+            "client",
+            SimpleNamespace(),
+        )
+        client_user = str(getattr(client_cfg, "user", ""))
+        client_profile_id = str(self._resolve_client_profile_id())
+        identity_material = "|".join(
+            [
+                environment,
+                "matrix",
+                client_profile_id,
+                homeserver.strip().lower(),
+                client_user.strip().lower(),
+            ]
+        )
+        digest = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:16]
+        return f"matrix:{environment}:{digest}"
+
+    def _resolve_client_profile_id(self) -> uuid.UUID:
+        raw_value = getattr(
+            getattr(self._config, "matrix", SimpleNamespace()),
+            "client_profile_id",
+            None,
+        )
+        normalized = normalize_client_profile_id(raw_value)
+        if normalized is None:
+            raise RuntimeError("Matrix client_profile_id is required.")
+        return normalized
+
+    def _resolve_client_profile_key(self) -> str:
+        raw_value = getattr(
+            getattr(self._config, "matrix", SimpleNamespace()),
+            "client_profile_key",
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()),
+                "key",
+                "default",
+            ),
+        )
+        if not isinstance(raw_value, str) or raw_value.strip() == "":
+            return "default"
+        return raw_value.strip()
+
+    def _resolve_profile_display_name(self) -> str | None:
+        return self._coerce_optional_string(
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()),
+                "profile_displayname",
+                None,
+            )
+        )
+
+    def _resolve_olm_store_path(self) -> str:
+        relative_path = str(
+            getattr(self._config.matrix.storage.olm, "path", "")
+        ).strip()
+        if relative_path == "":
+            relative_path = ".olmstore"
+        return os.path.join(
+            self._config.basedir,
+            relative_path,
+            str(self._resolve_client_profile_id()),
+        )
+
+    def _ensure_olm_store_path(self) -> str:
+        store_path = self._resolve_olm_store_path()
+        try:
+            os.makedirs(store_path, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                "Unable to initialize Matrix OLM store path: "
+                f"{store_path}"
+            ) from exc
+        return store_path
+
+    def _keyval_key(self, key_name: str) -> str:
+        return f"{self._credentials_key_prefix}:{key_name}"
+
+    def _ensure_credential_keys_initialized(self) -> None:
+        if "_credentials_key_prefix" not in self.__dict__:
+            self._credentials_key_prefix = self._resolve_credentials_key_prefix()
+        if "_known_devices_list_key" not in self.__dict__:
+            self._known_devices_list_key = self._keyval_key("known_devices_list")
+        if "_sync_key" not in self.__dict__:
+            self._sync_key = self._keyval_key("matrix_client_sync_next_batch")
+        if "_client_access_token_key" not in self.__dict__:
+            self._client_access_token_key = self._keyval_key("client_access_token")
+        if "_client_device_id_key" not in self.__dict__:
+            self._client_device_id_key = self._keyval_key("client_device_id")
+        if "_client_user_id_key" not in self.__dict__:
+            self._client_user_id_key = self._keyval_key("client_user_id")
+
+    def _ensure_ingress_runtime_state(self) -> None:
+        if "_ingress_service" not in self.__dict__:
+            self._ingress_service = None
+        if "_pending_sync_ingress" not in self.__dict__:
+            self._pending_sync_ingress = []
+        if "_pending_sync_lock" not in self.__dict__:
+            self._pending_sync_lock = asyncio.Lock()
+
+    def _matrix_ingress_enabled(self) -> bool:
+        self._ensure_ingress_runtime_state()
+        return self._ingress_service is not None
+
+    @staticmethod
+    def _matrix_message_event_class(message: RoomMessage) -> str:
+        if isinstance(message, RoomEncryptedAudio):
+            return "RoomEncryptedAudio"
+        if isinstance(message, RoomEncryptedFile):
+            return "RoomEncryptedFile"
+        if isinstance(message, RoomEncryptedImage):
+            return "RoomEncryptedImage"
+        if isinstance(message, RoomEncryptedVideo):
+            return "RoomEncryptedVideo"
+        if isinstance(message, RoomMessageText):
+            return "RoomMessageText"
+        return type(message).__name__
+
+    def _resolve_matrix_ipc_queue_size(self) -> int:
+        raw_value = getattr(
+            getattr(getattr(self._config, "matrix", SimpleNamespace()), "ipc", None),
+            "queue_size",
+            self._default_matrix_ipc_queue_size,
+        )
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            parsed = self._default_matrix_ipc_queue_size
+        if parsed <= 0:
+            return self._default_matrix_ipc_queue_size
+        return parsed
+
+    async def _load_sync_checkpoint(self) -> str | None:
+        self._ensure_ingress_runtime_state()
+        if self._ingress_service is not None:
+            checkpoint = await self._ingress_service.get_checkpoint(
+                platform="matrix",
+                client_profile_id=self._resolve_client_profile_id(),
+                checkpoint_key=self._sync_checkpoint_key,
+            )
+            if isinstance(checkpoint, str) and checkpoint.strip() != "":
+                return checkpoint
+        if self._keyval_storage_gateway is None:
+            return None
+        return await self._keyval_storage_gateway.get_text(self._sync_key)
+
+    def _resolve_shutdown_timeout_seconds(self) -> float:
+        settings = parse_runtime_bootstrap_settings(self._config)
+        return float(settings.shutdown_timeout_seconds)
+
+    def _effective_shutdown_timeout_seconds(self) -> float:
+        raw_value = getattr(self, "_shutdown_timeout_seconds", None)
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            parsed = self._resolve_shutdown_timeout_seconds()
+            self._shutdown_timeout_seconds = parsed
+            return parsed
+        if isfinite(parsed) is not True or parsed <= 0:
+            parsed = self._resolve_shutdown_timeout_seconds()
+            self._shutdown_timeout_seconds = parsed
+        return parsed
+
+    def _ensure_runtime_health_state(self) -> None:
+        if "_matrix_runtime_health_error" not in self.__dict__:
+            self._matrix_runtime_health_error = None
+        if "_matrix_runtime_health_signal" not in self.__dict__:
+            self._matrix_runtime_health_signal = asyncio.Event()
+
+    def _clear_runtime_health_failure(self) -> None:
+        self._ensure_runtime_health_state()
+        self._matrix_runtime_health_error = None
+        self._matrix_runtime_health_signal.clear()
+
+    def _signal_runtime_health_failure(self, error: BaseException) -> None:
+        self._ensure_runtime_health_state()
+        if self._matrix_runtime_health_signal.is_set():
+            return
+        self._matrix_runtime_health_error = error
+        self._matrix_runtime_health_signal.set()
+
+    def _start_matrix_ipc_worker(self) -> None:
+        if self._ipc_service is None:
+            return
+        if (
+            self._matrix_ipc_worker_task is not None
+            and not self._matrix_ipc_worker_task.done()
+        ):
+            return
+        self._matrix_ipc_worker_stop.clear()
+        self._matrix_ipc_queue = asyncio.Queue(maxsize=self._matrix_ipc_queue_size)
+        self._matrix_ipc_worker_task = asyncio.create_task(
+            self._matrix_ipc_worker_loop(),
+            name="mugen.matrix.ipc.worker",
+        )
+
+    async def _stop_matrix_ipc_worker(self) -> None:
+        self._matrix_ipc_worker_stop.set()
+        task = self._matrix_ipc_worker_task
+        if task is not None and not task.done():
+            timeout_seconds = self._effective_shutdown_timeout_seconds()
+            task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(task, return_exceptions=True),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.CancelledError:
+                ...
+            except asyncio.TimeoutError:
+                message = (
+                    "Matrix IPC worker shutdown timed out "
+                    f"(timeout_seconds={timeout_seconds:.2f})."
+                )
+                self._logging_gateway.warning(message)
+                raise RuntimeError(message)
+        self._matrix_ipc_worker_task = None
+        self._matrix_ipc_queue = None
+
+    async def _dispatch_matrix_ipc_request(
+        self,
+        request_payload: IPCCommandRequest,
+    ) -> None:
+        if self._ipc_service is None:
+            return
+        handle_ipc_request = getattr(self._ipc_service, "handle_ipc_request", None)
+        if not callable(handle_ipc_request):
+            return
+        maybe_dispatch = handle_ipc_request(request_payload)
+        if inspect.isawaitable(maybe_dispatch):
+            dispatch_result = await maybe_dispatch
+            self._consume_matrix_ipc_dispatch_result(
+                request_payload=request_payload,
+                dispatch_result=dispatch_result,
+            )
+
+    def _consume_matrix_ipc_dispatch_result(
+        self,
+        *,
+        request_payload: IPCCommandRequest,
+        dispatch_result: object,
+    ) -> None:
+        if not isinstance(dispatch_result, IPCAggregateResult):
+            return
+        if not dispatch_result.errors:
+            return
+
+        payload_data = (
+            request_payload.data if isinstance(request_payload.data, dict) else {}
+        )
+        callback = str(payload_data.get("callback", "unknown_callback"))
+        event_type = str(payload_data.get("event_type", "UnknownEvent"))
+        error_codes: list[str] = []
+        for aggregate_error in dispatch_result.errors:
+            normalized_code = str(aggregate_error.code or "unknown")
+            error_codes.append(normalized_code)
+            self._increment_matrix_metric("matrix.ipc.dispatch.non_critical_failure")
+            self._increment_matrix_metric(
+                f"matrix.ipc.dispatch.non_critical_failure.{normalized_code}"
+            )
+        self._logging_gateway.warning(
+            "Matrix event extension dispatch completed with non-critical errors."
+            f" callback={callback}"
+            f" event={event_type}"
+            f" error_count={len(dispatch_result.errors)}"
+            f" error_codes={','.join(sorted(set(error_codes)))}"
+        )
+
+    async def _matrix_ipc_worker_loop(self) -> None:
+        while self._matrix_ipc_worker_stop.is_set() is not True:
+            queue = self._matrix_ipc_queue
+            if queue is None:
+                await asyncio.sleep(0.05)
+                continue
+            try:
+                payload = await asyncio.wait_for(queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                continue
+            try:
+                await self._dispatch_matrix_ipc_request(payload)
+            except IPCCriticalDispatchError as exc:
+                self._increment_matrix_metric("matrix.ipc.dispatch.critical_failure")
+                self._logging_gateway.error(
+                    "Matrix event extension dispatch failed for critical handler."
+                    f" error={exc}"
+                )
+                self._signal_runtime_health_failure(exc)
+                self._matrix_ipc_worker_stop.set()
+                return
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self._logging_gateway.warning(
+                    "Matrix event extension dispatch failed."
+                    f" error={type(exc).__name__}: {exc}"
+                )
 
     @property
     def sync_token(self) -> str:
         """Get the key to access the sync key from persistent storage."""
-        return self._keyval_storage_gateway.get(self._sync_key)
+        return "" if self._sync_token is None else self._sync_token
 
-    def cleanup_known_user_devices_list(self) -> None:
+    async def _load_known_devices(self) -> dict[str, list[str]]:
+        self._ensure_credential_keys_initialized()
+        payload = await self._keyval_storage_gateway.get_text(
+            self._known_devices_list_key
+        )
+        if payload is None:
+            return {}
+
+        try:
+            loaded = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            self._logging_gateway.warning("Invalid known devices payload; resetting.")
+            return {}
+
+        if not isinstance(loaded, dict):
+            self._logging_gateway.warning(
+                "Known devices payload type mismatch; resetting."
+            )
+            return {}
+
+        known_devices: dict[str, list[str]] = {}
+        for user_id, devices in loaded.items():
+            if not isinstance(devices, list):
+                continue
+            known_devices[user_id] = [str(device_id) for device_id in devices]
+        return known_devices
+
+    async def _save_known_devices(self, known_devices: dict[str, list[str]]) -> None:
+        self._ensure_credential_keys_initialized()
+        await self._keyval_storage_gateway.put_json(
+            self._known_devices_list_key,
+            known_devices,
+        )
+
+    async def cleanup_known_user_devices_list(self) -> None:
         """Clean up known user devices list."""
         self._logging_gateway.debug("Cleaning up known user devices.")
-        if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
-            known_devices = pickle.loads(
-                self._keyval_storage_gateway.get(self._known_devices_list_key, False)
-            )
-            for user_id in known_devices.keys():
-                active_devices = [
-                    x.device_id for x in self.device_store.active_user_devices(user_id)
-                ]
-                self._logging_gateway.debug(f"Active devices: {active_devices}")
-                known_devices[user_id] = active_devices
+        known_devices = await self._load_known_devices()
+        if not known_devices:
+            return
 
-            # Persist changes.
-            self._keyval_storage_gateway.put(
-                self._known_devices_list_key, pickle.dumps(known_devices)
-            )
+        for user_id in known_devices.keys():
+            active_devices = [
+                x.device_id for x in self.device_store.active_user_devices(user_id)
+            ]
+            self._logging_gateway.debug(f"Active devices: {active_devices}")
+            known_devices[user_id] = active_devices
 
-    def trust_known_user_devices(self) -> None:
+        # Persist changes.
+        await self._save_known_devices(known_devices)
+
+    async def trust_known_user_devices(self) -> None:
         """Trust all known user devices."""
         self._logging_gateway.debug("Trusting all known user devices.")
-        if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
-            known_devices = pickle.loads(
-                self._keyval_storage_gateway.get(self._known_devices_list_key, False)
-            )
-            for user_id in known_devices.keys():
-                self._logging_gateway.debug(f"User: {user_id}")
-                for device_id, olm_device in self.device_store[user_id].items():
-                    if device_id in known_devices[user_id]:
-                        # Verify the device.
-                        self._logging_gateway.debug(f"Trusting {device_id}.")
-                        self.verify_device(olm_device)
+        known_devices = await self._load_known_devices()
+        for user_id in known_devices.keys():
+            self._logging_gateway.debug(f"User: {user_id}")
+            for device_id, olm_device in self.device_store[user_id].items():
+                if device_id in known_devices[user_id]:
+                    # Verify the device.
+                    self._logging_gateway.debug(f"Trusting {device_id}.")
+                    self.verify_device(olm_device)
 
-    def verify_user_devices(self, user_id: str) -> None:
-        """Verify all of a user's devices."""
-        self._logging_gateway.debug(f"Verifying all user devices ({user_id}).")
-        # This has to be revised when we figure out a trust mechanism.
-        # A solution might be to require users to visit sys admin to perform SAS
-        # verification whenever using a new device.
-        for device_id, olm_device in self.device_store[user_id].items():
-            self._logging_gateway.debug(f"Found {device_id}.")
-            known_devices = {}
-            # Load the known devices list if it already exists.
-            if self._keyval_storage_gateway.has_key(self._known_devices_list_key):
-                known_devices = pickle.loads(
-                    self._keyval_storage_gateway.get(
-                        self._known_devices_list_key, False
-                    )
+    def _resolve_device_trust_mode(self) -> str:
+        mode = getattr(
+            getattr(
+                getattr(
+                    getattr(self._config, "matrix", SimpleNamespace()),
+                    "security",
+                    SimpleNamespace(),
+                ),
+                "device_trust",
+                SimpleNamespace(),
+            ),
+            "mode",
+            None,
+        )
+        if not isinstance(mode, str) or mode.strip() == "":
+            raise RuntimeError(
+                "Invalid configuration: matrix.security.device_trust.mode "
+                "must be a non-empty string."
+            )
+
+        mode = mode.strip().lower()
+        supported_modes = {
+            self._device_trust_mode_strict_known,
+            self._device_trust_mode_allowlist,
+            self._device_trust_mode_permissive,
+        }
+        if mode in supported_modes:
+            return mode
+
+        raise RuntimeError(
+            "Invalid configuration: matrix.security.device_trust.mode "
+            "must be one of: allowlist, permissive, strict_known."
+        )
+
+    def _resolve_device_trust_allowlist(self) -> dict[str, set[str]]:
+        allowlist = getattr(
+            getattr(
+                getattr(
+                    getattr(self._config, "matrix", SimpleNamespace()),
+                    "security",
+                    SimpleNamespace(),
+                ),
+                "device_trust",
+                SimpleNamespace(),
+            ),
+            "allowlist",
+            None,
+        )
+
+        if not isinstance(allowlist, list):
+            raise RuntimeError(
+                "Invalid configuration: matrix.security.device_trust.allowlist "
+                "must be a list."
+            )
+        if not allowlist:
+            raise RuntimeError(
+                "Invalid configuration: matrix.security.device_trust.allowlist "
+                "must be non-empty when mode=allowlist."
+            )
+
+        parsed_allowlist: dict[str, set[str]] = {}
+        for index, entry in enumerate(allowlist):
+            user_id = None
+            device_ids = None
+
+            if isinstance(entry, dict):
+                user_id = entry.get("user_id")
+                device_ids = entry.get("device_ids")
+            elif isinstance(entry, SimpleNamespace):
+                user_id = getattr(entry, "user_id", None)
+                device_ids = getattr(entry, "device_ids", None)
+            else:
+                raise RuntimeError(
+                    "Invalid configuration: matrix.security.device_trust.allowlist"
+                    f"[{index}] must be a table."
                 )
 
-            # If the list (new or loaded) does not contain an entry for the user.
+            if not isinstance(user_id, str) or user_id.strip() == "":
+                raise RuntimeError(
+                    "Invalid configuration: matrix.security.device_trust.allowlist"
+                    f"[{index}].user_id must be a non-empty string."
+                )
+            if not isinstance(device_ids, list) or not device_ids:
+                raise RuntimeError(
+                    "Invalid configuration: matrix.security.device_trust.allowlist"
+                    f"[{index}].device_ids must be a non-empty list of strings."
+                )
+            normalized_device_ids: set[str] = set()
+            for device_index, device_id in enumerate(device_ids):
+                if not isinstance(device_id, str) or device_id.strip() == "":
+                    raise RuntimeError(
+                        "Invalid configuration: matrix.security.device_trust.allowlist"
+                        f"[{index}].device_ids[{device_index}] must be a non-empty string."
+                    )
+                normalized_device_ids.add(device_id.strip())
+
+            normalized_user_id = user_id.strip()
+            if normalized_user_id not in parsed_allowlist:
+                parsed_allowlist[normalized_user_id] = set()
+            parsed_allowlist[normalized_user_id].update(normalized_device_ids)
+
+        return parsed_allowlist
+
+    def _resolve_user_access_policy(self) -> MessagingClientUserAccessPolicy:
+        return resolve_messaging_client_user_access_policy(
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()),
+                "user_access",
+                None,
+            ),
+            field_name="matrix.user_access",
+        )
+
+    def _log_untrusted_device(
+        self,
+        user_id: str,
+        device_id: str,
+        mode: str,
+        reason: str,
+    ) -> None:
+        self._logging_gateway.warning(
+            "Matrix device not trusted."
+            f" user_id={user_id}"
+            f" device_id={device_id}"
+            f" mode={mode}"
+            f" reason={reason}"
+        )
+
+    @staticmethod
+    def _parse_sender_domain(sender_id: str) -> str | None:
+        return parse_matrix_sender_domain(sender_id)
+
+    def _resolve_federation_policy(self) -> MessagingClientFederationPolicy:
+        return resolve_messaging_client_federation_policy(
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()),
+                "federation",
+                {},
+            ),
+            field_name="matrix.federation",
+        )
+
+    def _direct_invites_only(self) -> bool:
+        direct_only = getattr(
+            getattr(
+                getattr(self._config, "matrix", SimpleNamespace()), "invites", None
+            ),
+            "direct_only",
+            None,
+        )
+        if isinstance(direct_only, bool) is not True:
+            raise RuntimeError(
+                "Invalid configuration: matrix.invites.direct_only must be a boolean."
+            )
+        return direct_only
+
+    def _resolve_media_max_download_bytes(self) -> int:
+        max_download_bytes = getattr(
+            getattr(getattr(self._config, "matrix", SimpleNamespace()), "media", None),
+            "max_download_bytes",
+            None,
+        )
+        if isinstance(max_download_bytes, bool) or not isinstance(
+            max_download_bytes, int
+        ):
+            raise RuntimeError(
+                "Invalid configuration: matrix.media.max_download_bytes "
+                "must be a positive integer."
+            )
+        if max_download_bytes <= 0:
+            raise RuntimeError(
+                "Invalid configuration: matrix.media.max_download_bytes "
+                "must be a positive integer."
+            )
+        return max_download_bytes
+
+    def _resolve_media_allowed_mimetypes(self) -> list[str]:
+        allowed_mimetypes = getattr(
+            getattr(getattr(self._config, "matrix", SimpleNamespace()), "media", None),
+            "allowed_mimetypes",
+            None,
+        )
+        if not isinstance(allowed_mimetypes, list) or not allowed_mimetypes:
+            raise RuntimeError(
+                "Invalid configuration: matrix.media.allowed_mimetypes "
+                "must be a non-empty list of strings."
+            )
+        normalized: list[str] = []
+        for index, pattern in enumerate(allowed_mimetypes):
+            if not isinstance(pattern, str) or pattern.strip() == "":
+                raise RuntimeError(
+                    "Invalid configuration: matrix.media.allowed_mimetypes"
+                    f"[{index}] must be a non-empty string."
+                )
+            normalized.append(pattern.strip().lower())
+
+        return normalized
+
+    def _media_mimetype_allowed(self, mimetype: str) -> bool:
+        normalized = mimetype.strip().lower()
+        allowed_mimetypes = self._resolve_media_allowed_mimetypes()
+        for pattern in allowed_mimetypes:
+            if pattern.endswith("/*"):
+                if normalized.startswith(pattern[:-1]):
+                    return True
+            elif normalized == pattern:
+                return True
+
+        return False
+
+    def _cleanup_temp_file(self, file_path: str | None) -> None:
+        if not isinstance(file_path, str) or file_path.strip() == "":
+            return
+
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        except OSError:
+            self._logging_gateway.warning(
+                f"Matrix media cleanup failed for temp file: {file_path}."
+            )
+
+    async def verify_user_devices(self, user_id: str) -> None:
+        """Verify all of a user's devices."""
+        self._logging_gateway.debug(f"Verifying all user devices ({user_id}).")
+        mode = self._resolve_device_trust_mode()
+        allowlist = {}
+        if mode == self._device_trust_mode_allowlist:
+            allowlist = self._resolve_device_trust_allowlist()
+
+        known_devices = await self._load_known_devices()
+        try:
+            user_devices = self.device_store[user_id]
+        except KeyError:
+            user_devices = {}
+
+        for device_id, olm_device in user_devices.items():
+            self._logging_gateway.debug(f"Found {device_id}.")
+            if mode == self._device_trust_mode_strict_known:
+                if device_id in known_devices.get(user_id, []):
+                    self._logging_gateway.debug(f"Verifying {device_id}.")
+                    self.verify_device(olm_device)
+                else:
+                    self._log_untrusted_device(
+                        user_id=user_id,
+                        device_id=device_id,
+                        mode=mode,
+                        reason="unknown_device",
+                    )
+                continue
+
+            if mode == self._device_trust_mode_allowlist:
+                if device_id in allowlist.get(user_id, set()):
+                    self._logging_gateway.debug(f"Verifying {device_id}.")
+                    self.verify_device(olm_device)
+                else:
+                    self._log_untrusted_device(
+                        user_id=user_id,
+                        device_id=device_id,
+                        mode=mode,
+                        reason="not_in_allowlist",
+                    )
+                continue
+
+            # Ensure the list contains an entry for the user.
             if user_id not in known_devices.keys():
-                # Add an entry for the user.
                 known_devices[user_id] = []
 
             # If the device is not already in the known devices list for the user.
@@ -228,120 +1507,550 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 self.verify_device(olm_device)
 
                 # Persist changes to the known devices list.
-                self._keyval_storage_gateway.put(
-                    self._known_devices_list_key, pickle.dumps(known_devices)
+                await self._save_known_devices(known_devices)
+
+    def _log_skipped_callback(
+        self,
+        callback_name: str,
+        event: object = None,
+        reason: str = _callback_skip_reason_dm_scope,
+    ) -> None:
+        event_type = type(event).__name__ if event is not None else "UnknownEvent"
+        self._logging_gateway.debug(
+            "Matrix callback skipped."
+            f" callback={callback_name}"
+            f" event={event_type}"
+            f" reason={reason}"
+        )
+
+    def _increment_matrix_metric(self, metric_name: str) -> None:
+        metrics = getattr(self, "_matrix_metrics", None)
+        if not isinstance(metrics, dict):
+            metrics = {}
+            self._matrix_metrics = metrics
+        metrics[metric_name] = metrics.get(metric_name, 0) + 1
+
+    def _track_matrix_decision(
+        self,
+        domain: str,
+        action: str,
+        reason: str,
+        **fields,
+    ) -> None:
+        self._increment_matrix_metric(f"matrix.{domain}.{action}.{reason}")
+        structured_fields = " ".join(
+            f"{key}={value}" for key, value in fields.items() if value is not None
+        )
+        self._logging_gateway.debug(
+            "Matrix decision"
+            f" domain={domain}"
+            f" action={action}"
+            f" reason={reason}"
+            f" {structured_fields}"
+        )
+
+    def _allow_non_core_event_callback(
+        self,
+        *,
+        callback_name: str,
+        event: object = None,
+    ) -> bool:
+        if callback_name not in self._federation_guarded_to_device_callbacks:
+            return True
+
+        sender_id = self._coerce_optional_string(getattr(event, "sender", None))
+        if sender_id is None:
+            return True
+
+        sender_domain = self._parse_sender_domain(sender_id)
+        if sender_domain is None:
+            self._track_matrix_decision(
+                domain="to_device",
+                action="dropped",
+                reason="malformed_sender",
+                callback=callback_name,
+                sender=sender_id,
+            )
+            self._logging_gateway.warning(
+                "Matrix to-device callback dropped. Reason: Malformed sender."
+                f" callback={callback_name}"
+                f" sender={sender_id}"
+            )
+            return False
+
+        try:
+            federation_policy = self._resolve_federation_policy()
+        except RuntimeError as exc:
+            self._track_matrix_decision(
+                domain="to_device",
+                action="dropped",
+                reason="invalid_federation_policy",
+                callback=callback_name,
+                sender=sender_id,
+                sender_domain=sender_domain,
+            )
+            self._logging_gateway.warning(
+                "Matrix to-device callback dropped. Reason: Invalid federation"
+                f" policy. callback={callback_name}"
+                f" sender={sender_id}"
+                f" error={exc}"
+            )
+            return False
+
+        if federation_policy.allows_domain(sender_domain):
+            return True
+
+        self._track_matrix_decision(
+            domain="to_device",
+            action="dropped",
+            reason="domain_not_allowed",
+            callback=callback_name,
+            sender=sender_id,
+            sender_domain=sender_domain,
+        )
+        self._logging_gateway.warning(
+            "Matrix to-device callback dropped. Reason: Domain not allowed."
+            f" callback={callback_name}"
+            f" sender={sender_id}"
+        )
+        return False
+
+    def _ingress_router(self) -> IIngressRoutingService:
+        if self._ingress_routing_service is not None:
+            return self._ingress_routing_service
+        if self._relational_storage_gateway is None:
+            raise RuntimeError(
+                "Relational storage gateway is required for Matrix ingress routing."
+            )
+        self._ingress_routing_service = DefaultIngressRoutingService(
+            relational_storage_gateway=self._relational_storage_gateway,
+            logging_gateway=self._logging_gateway,
+        )
+        return self._ingress_routing_service
+
+    async def _resolve_message_ingress(
+        self,
+        *,
+        room: MatrixRoom,
+        message: RoomMessage,
+    ) -> tuple[object, dict[str, object]] | None:
+        room_id = self._coerce_optional_string(getattr(room, "room_id", None))
+        sender_id = self._coerce_optional_string(getattr(message, "sender", None)) or ""
+        recipient_user_id = self._coerce_optional_string(self.current_user_id)
+        claims = {"sender_mxid": sender_id}
+        if room_id is not None:
+            claims["room_id"] = room_id
+        if recipient_user_id is not None:
+            claims["recipient_user_id"] = recipient_user_id
+
+        if recipient_user_id is None:
+            resolution = IngressRouteResolution(
+                ok=False,
+                reason_code=IngressRouteReason.MISSING_IDENTIFIER.value,
+            )
+        else:
+            try:
+                resolution = await self._ingress_router().resolve(
+                    IngressRouteRequest(
+                        platform="matrix",
+                        channel_key="matrix",
+                        identifier_type="recipient_user_id",
+                        identifier_value=recipient_user_id,
+                        claims=claims,
+                    )
                 )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                resolution = IngressRouteResolution(
+                    ok=False,
+                    reason_code=IngressRouteReason.RESOLUTION_ERROR.value,
+                    reason_detail=f"{type(exc).__name__}: {exc}",
+                )
+
+        try:
+            resolved = resolve_context_ingress(
+                platform="matrix",
+                channel_key="matrix",
+                room_id=room_id or "",
+                sender_id=sender_id,
+                conversation_id=room_id or sender_id,
+                routing=resolution,
+                source="matrix.ingress_routing",
+                identifier_claims=claims,
+                global_fallback_reasons=(),
+            )
+        except ContextScopeResolutionError as exc:
+            reason_code = str(exc.reason_code or "route_unresolved")
+            self._track_matrix_decision(
+                domain="routing",
+                action="dropped",
+                reason=reason_code,
+                room_id=room_id,
+                sender=sender_id,
+            )
+            self._logging_gateway.warning(
+                "Dropped Matrix ingress due to unresolved route "
+                f"reason_code={reason_code}"
+                f" room_id={room_id!r}"
+                f" sender={sender_id!r}"
+                f" detail={exc.detail!r}"
+            )
+            return None
+
+        self._track_matrix_decision(
+            domain="routing",
+            action="resolved",
+            reason="binding_resolved",
+            room_id=room_id,
+            sender=sender_id,
+            tenant_id=resolved.scope.tenant_id,
+        )
+
+        return resolved.scope, {
+            "ingress_route": dict(resolved.ingress_route),
+            "tenant_resolution": dict(resolved.tenant_resolution),
+        }
+
+    async def _dispatch_matrix_event_hook(
+        self,
+        callback_name: str,
+        event: object = None,
+        room: MatrixRoom | MatrixInvitedRoom | None = None,
+        reason: str = _callback_skip_reason_dm_scope,
+    ) -> None:
+        if self._ipc_service is None:
+            return
+
+        if not callable(getattr(self._ipc_service, "handle_ipc_request", None)):
+            return
+
+        payload_data = self._build_matrix_event_hook_payload(
+            callback_name=callback_name,
+            event=event,
+            room=room,
+            reason=reason,
+        )
+        event_type = str(payload_data.get("event_type", "UnknownEvent"))
+        payload = IPCCommandRequest(
+            platform="matrix",
+            command=self._matrix_event_hook_command,
+            data=payload_data,
+        )
+        self._start_matrix_ipc_worker()
+        if self._matrix_ipc_queue is None:
+            self._logging_gateway.warning(
+                "Matrix IPC queue unavailable; dropping event."
+                f" callback={callback_name}"
+                f" event={event_type}"
+            )
+            self._increment_matrix_metric(
+                "matrix.ipc.dispatch.queue_unavailable_drop_new"
+            )
+            return
+
+        try:
+            self._matrix_ipc_queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            self._increment_matrix_metric("matrix.ipc.dispatch.queue_full_drop_new")
+            self._logging_gateway.warning(
+                "Matrix event extension queue full; dropping event."
+                f" callback={callback_name}"
+                f" event={event_type}"
+            )
+
+    async def _handle_non_core_event_callback(
+        self,
+        callback_name: str,
+        event: object = None,
+        room: MatrixRoom | MatrixInvitedRoom | None = None,
+        reason: str = _callback_skip_reason_dm_scope,
+    ) -> None:
+        if not self._allow_non_core_event_callback(
+            callback_name=callback_name,
+            event=event,
+        ):
+            return
+        self._log_skipped_callback(
+            callback_name=callback_name,
+            event=event,
+            reason=reason,
+        )
+        if not self._matrix_ingress_enabled():
+            await self._dispatch_matrix_event_hook(
+                callback_name=callback_name,
+                event=event,
+                room=room,
+                reason=reason,
+            )
+            return
+        await self._queue_sync_ingress_entry(
+            self._build_non_core_ingress_entry(
+                callback_name=callback_name,
+                event=event,
+                room=room,
+                reason=reason,
+            )
+        )
 
     ## Callbacks.
     # Events
     async def _cb_megolm_event(self, _room: MatrixRoom, _event: MegolmEvent) -> None:
         """Handle MegolmEvents."""
-        self._logging_gateway.debug("MegolmEvent")
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_megolm_event",
+            event=_event,
+            room=_room,
+        )
 
-    async def _cb_invite_alias_event(self, _event: InviteAliasEvent) -> None:
+    async def _cb_invite_alias_event(
+        self,
+        _room: MatrixInvitedRoom,
+        _event: InviteAliasEvent,
+    ) -> None:
         """Handle InviteAliasEvents."""
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_invite_alias_event",
+            event=_event,
+            room=_room,
+        )
 
     async def _cb_invite_member_event(
         self, room: MatrixInvitedRoom, event: InviteMemberEvent
     ) -> None:
         """Handle InviteMemberEvents."""
+        event_content = event.content if isinstance(event.content, dict) else {}
+
         # Filter out events that do not have membership set to invite.
-        membership = event.content.get("membership")
+        membership = event_content.get("membership")
         if membership is not None and membership != "invite":
+            self._track_matrix_decision(
+                domain="invites",
+                action="ignored",
+                reason="membership_not_invite",
+                sender=event.sender,
+                room_id=room.room_id,
+                membership=membership,
+            )
             return
 
-        # Only process invites from allowed domains.
-        # Federated servers need to be in the allowed domains list for their users
-        # to initiate conversations with the assistant.
-        allowed_domains: list = self._config.matrix.domains.allowed
-        denied_domains: list = self._config.matrix.domains.denied
-        sender_domain: str = event.sender.split(":")[1]
-        if sender_domain not in allowed_domains or sender_domain in denied_domains:
+        try:
+            federation_policy = self._resolve_federation_policy()
+        except RuntimeError as exc:
             await self.room_leave(room.room_id)
+            self._track_matrix_decision(
+                domain="invites",
+                action="rejected",
+                reason="invalid_federation_policy",
+                sender=event.sender,
+                room_id=room.room_id,
+            )
+            self._logging_gateway.warning(
+                "InviteMemberEvent: Rejected invitation. Reason: Invalid"
+                f" federation policy. ({event.sender}) error={exc}"
+            )
+            return
+
+        sender_domain = self._parse_sender_domain(event.sender)
+        if sender_domain is None:
+            await self.room_leave(room.room_id)
+            self._track_matrix_decision(
+                domain="invites",
+                action="rejected",
+                reason="malformed_sender",
+                sender=event.sender,
+                room_id=room.room_id,
+            )
+            self._logging_gateway.warning(
+                "InviteMemberEvent: Rejected invitation. Reason: Malformed sender."
+                f" ({event.sender})"
+            )
+            return
+
+        if not federation_policy.allows_domain(sender_domain):
+            await self.room_leave(room.room_id)
+            self._track_matrix_decision(
+                domain="invites",
+                action="rejected",
+                reason="domain_not_allowed",
+                sender=event.sender,
+                room_id=room.room_id,
+                sender_domain=sender_domain,
+            )
             self._logging_gateway.warning(
                 "InviteMemberEvent: Rejected invitation. Reason: Domain"
                 f" not allowed. ({event.sender})"
             )
             return
 
-        # If the assistant is in limited-beta mode, only process invites from the
-        # list of selected beta users.
-        if self._config.mugen.beta.active:
-            beta_users: list = self._config.matrix.beta.users
-            if event.sender not in beta_users:
-                await self.room_leave(room.room_id)
-                self._logging_gateway.warning(
-                    "InviteMemberEvent: Rejected invitation. Reason:"
-                    f" Non-beta user. ({event.sender})"
-                )
-                return
-
-        # Only accept invites to Direct Messages for now.
-        is_direct = event.content.get("is_direct")
-        if is_direct is None:
+        try:
+            user_access_policy = self._resolve_user_access_policy()
+        except RuntimeError as exc:
             await self.room_leave(room.room_id)
+            self._track_matrix_decision(
+                domain="invites",
+                action="rejected",
+                reason="invalid_user_access_policy",
+                sender=event.sender,
+                room_id=room.room_id,
+            )
             self._logging_gateway.warning(
-                "InviteMemberEvent: Rejected invitation. Reason: Not direct"
-                f" message. ({event.sender})"
+                "InviteMemberEvent: Rejected invitation. Reason: Invalid user"
+                f" access policy. ({event.sender}) error={exc}"
             )
             return
 
+        if not user_access_policy.allows(event.sender):
+            await self.room_leave(room.room_id)
+            self._track_matrix_decision(
+                domain="invites",
+                action="rejected",
+                reason="user_access_denied",
+                sender=event.sender,
+                room_id=room.room_id,
+            )
+            self._logging_gateway.warning(
+                "InviteMemberEvent: Rejected invitation. Reason: User access"
+                f" denied. ({event.sender})"
+            )
+            return
+
+        # Only accept invites to Direct Messages for now.
+        if self._direct_invites_only():
+            is_direct = event_content.get("is_direct")
+            if is_direct is not True:
+                await self.room_leave(room.room_id)
+                self._track_matrix_decision(
+                    domain="invites",
+                    action="rejected",
+                    reason="not_direct_message",
+                    sender=event.sender,
+                    room_id=room.room_id,
+                )
+                self._logging_gateway.warning(
+                    "InviteMemberEvent: Rejected invitation. Reason: Not direct"
+                    f" message. ({event.sender})"
+                )
+                return
+
         # Verify user devices.
-        self.verify_user_devices(event.sender)
+        await self.verify_user_devices(event.sender)
 
         # Join room.
         await self.join(room.room_id)
-
-        # Flag room as direct chat.
-        await self.room_put_state(
+        await self._mark_room_as_direct(event.sender, room.room_id)
+        self._track_matrix_decision(
+            domain="invites",
+            action="accepted",
+            reason="joined",
+            sender=event.sender,
             room_id=room.room_id,
-            event_type=self._flags_key,
-            content={"m.direct": 1},
         )
 
         # Get profile and add user to list of known users if required.
         resp = await self.get_profile(event.sender)
-        if isinstance(resp, ProfileGetResponse):
-            self._user_service.add_known_user(
-                event.sender, resp.displayname, room.room_id
+        displayname = getattr(resp, "displayname", None)
+        if isinstance(displayname, str):
+            await self._user_service.add_known_user(
+                event.sender, displayname, room.room_id
             )
 
     async def _cb_invite_name_event(
         self, _room: MatrixInvitedRoom, _event: InviteNameEvent
     ) -> None:
         """Handle InviteNameEvents."""
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_invite_name_event",
+            event=_event,
+            room=_room,
+        )
 
     async def _cb_room_create_event(
         self, _room: MatrixRoom, _event: RoomCreateEvent
     ) -> None:
         """Handle RoomCreateEvents."""
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_room_create_event",
+            event=_event,
+            room=_room,
+        )
 
     async def _cb_key_verification_event(self, event: KeyVerificationEvent) -> None:
         """Handle key verification events."""
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_key_verification_event",
+            event=event,
+        )
 
     async def _cb_room_key_event(self, _event: RoomKeyEvent) -> None:
         """Handle RoomKeyEvents."""
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_room_key_event",
+            event=_event,
+        )
 
-    async def _cb_room_key_request(
-        self, _room: MatrixRoom, _event: RoomKeyRequest
-    ) -> None:
+    async def _cb_room_key_request(self, _event: RoomKeyRequest) -> None:
         """Handle RoomKeyRequests."""
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_room_key_request",
+            event=_event,
+        )
 
     async def _validate_message(self, room: MatrixRoom, message) -> bool:
         """Validate an incoming message"""
+        sender_id = getattr(message, "sender", None)
+        if self._parse_sender_domain(sender_id) is None:
+            self._track_matrix_decision(
+                domain="messages",
+                action="rejected",
+                reason="malformed_sender",
+                sender=sender_id,
+                room_id=room.room_id,
+            )
+            self._logging_gateway.warning(
+                "RoomMessage: Rejected message. Reason: Malformed sender."
+                f" ({sender_id})"
+            )
+            return False
+
         # Only process messages from direct chats for now.
         # And ignore the assistant's messages, otherwise it
         # will create a message loop.
         is_direct = await self._is_direct_message(room.room_id)
-        if message.sender == self.user_id or not is_direct:
+        if sender_id == self.user_id:
+            self._track_matrix_decision(
+                domain="messages",
+                action="ignored",
+                reason="self_message",
+                sender=sender_id,
+                room_id=room.room_id,
+            )
+            return False
+        if not is_direct:
+            self._track_matrix_decision(
+                domain="messages",
+                action="ignored",
+                reason="room_not_direct",
+                sender=sender_id,
+                room_id=room.room_id,
+            )
+            self._logging_gateway.debug(
+                "RoomMessage: Ignored message. Reason: Room not marked direct."
+                f" ({room.room_id})"
+            )
             return False
 
         # Verify user devices.
-        self.verify_user_devices(message.sender)
+        await self.verify_user_devices(sender_id)
 
         # Set the room read marker to indicate that the assistant has read the
         # message.
         await self.room_read_markers(room.room_id, message.event_id, message.event_id)
+        self._track_matrix_decision(
+            domain="messages",
+            action="accepted",
+            reason="validated",
+            sender=sender_id,
+            room_id=room.room_id,
+        )
 
         return True
 
@@ -351,107 +2060,448 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         if not await self._validate_message(room, message):
             return
 
-        message_responses: list[dict] = []
-
-        # Handle audio messages.
-        if isinstance(message, RoomEncryptedAudio):
-            get_media = await self._download_file(
-                message.source["content"]["file"],
-                message.source["content"]["info"],
-            )
-            if get_media:
-                message_responses = await self._messaging_service.handle_audio_message(
-                    platform="matrix",
-                    room_id=room.room_id,
-                    sender=message.sender,
-                    message={
-                        "message": message,
-                        "file": get_media,
-                    },
-                )
-        # Handle file messages.
-        elif isinstance(message, RoomEncryptedFile):
-            get_media = await self._download_file(
-                message.source["content"]["file"],
-                message.source["content"]["info"],
-            )
-            if get_media:
-                message_responses = await self._messaging_service.handle_file_message(
-                    platform="matrix",
-                    room_id=room.room_id,
-                    sender=message.sender,
-                    message={
-                        "message": message,
-                        "file": get_media,
-                    },
-                )
-        # Handle image messages.
-        elif isinstance(message, RoomEncryptedImage):
-            get_media = await self._download_file(
-                message.source["content"]["file"],
-                message.source["content"]["info"],
-            )
-            if get_media:
-                message_responses = await self._messaging_service.handle_image_message(
-                    platform="matrix",
-                    room_id=room.room_id,
-                    sender=message.sender,
-                    message={
-                        "message": message,
-                        "file": get_media,
-                    },
-                )
-        # Handle text messages.
-        elif isinstance(message, RoomMessageText):
-            message_responses = await self._messaging_service.handle_text_message(
-                platform="matrix",
-                room_id=room.room_id,
-                sender=message.sender,
-                message=message.body,
-            )
-        # Handle video messages.
-        elif isinstance(message, RoomEncryptedVideo):
-            get_media = await self._download_file(
-                message.source["content"]["file"],
-                message.source["content"]["info"],
-            )
-            if get_media:
-                message_responses = await self._messaging_service.handle_video_message(
-                    platform="matrix",
-                    room_id=room.room_id,
-                    sender=message.sender,
-                    message={
-                        "message": message,
-                        "file": get_media,
-                    },
-                )
-
-        await self._process_message_responses(
-            room_id=room.room_id,
-            message_responses=message_responses,
+        resolved_ingress = await self._resolve_message_ingress(
+            room=room,
+            message=message,
         )
+        if resolved_ingress is None:
+            return
+        if self._matrix_ingress_enabled():
+            _scope, ingress_metadata = resolved_ingress
+            await self._queue_sync_ingress_entry(
+                self._build_room_message_ingress_entry(
+                    room=room,
+                    message=message,
+                    ingress_metadata=ingress_metadata,
+                )
+            )
+            return
+
+        scope, ingress_metadata = resolved_ingress
+
+        await self._emit_room_processing_signal(
+            room_id=room.room_id,
+            state=PROCESSING_STATE_START,
+        )
+        try:
+            message_responses: list[dict] = []
+
+            if isinstance(message, RoomEncryptedAudio):
+                get_media = await self._download_file(
+                    message.source["content"]["file"],
+                    message.source["content"]["info"],
+                )
+                if get_media:
+                    try:
+                        message_responses = (
+                            await self._messaging_service.handle_audio_message(
+                                platform="matrix",
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message={
+                                    "message": message,
+                                    "file": get_media,
+                                },
+                                ingress_metadata=ingress_metadata,
+                                scope=scope,
+                            )
+                        )
+                    finally:
+                        self._cleanup_temp_file(get_media)
+            elif isinstance(message, RoomEncryptedFile):
+                get_media = await self._download_file(
+                    message.source["content"]["file"],
+                    message.source["content"]["info"],
+                )
+                if get_media:
+                    try:
+                        message_responses = (
+                            await self._messaging_service.handle_file_message(
+                                platform="matrix",
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message={
+                                    "message": message,
+                                    "file": get_media,
+                                },
+                                ingress_metadata=ingress_metadata,
+                                scope=scope,
+                            )
+                        )
+                    finally:
+                        self._cleanup_temp_file(get_media)
+            elif isinstance(message, RoomEncryptedImage):
+                get_media = await self._download_file(
+                    message.source["content"]["file"],
+                    message.source["content"]["info"],
+                )
+                if get_media:
+                    try:
+                        message_responses = (
+                            await self._messaging_service.handle_image_message(
+                                platform="matrix",
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message={
+                                    "message": message,
+                                    "file": get_media,
+                                },
+                                ingress_metadata=ingress_metadata,
+                                scope=scope,
+                            )
+                        )
+                    finally:
+                        self._cleanup_temp_file(get_media)
+            elif isinstance(message, RoomMessageText):
+                message_responses = await self._messaging_service.handle_text_message(
+                    platform="matrix",
+                    room_id=room.room_id,
+                    sender=message.sender,
+                    message=message.body,
+                    ingress_metadata=ingress_metadata,
+                    scope=scope,
+                )
+            elif isinstance(message, RoomEncryptedVideo):
+                get_media = await self._download_file(
+                    message.source["content"]["file"],
+                    message.source["content"]["info"],
+                )
+                if get_media:
+                    try:
+                        message_responses = (
+                            await self._messaging_service.handle_video_message(
+                                platform="matrix",
+                                room_id=room.room_id,
+                                sender=message.sender,
+                                message={
+                                    "message": message,
+                                    "file": get_media,
+                                },
+                                ingress_metadata=ingress_metadata,
+                                scope=scope,
+                            )
+                        )
+                    finally:
+                        self._cleanup_temp_file(get_media)
+
+            await self._process_message_responses(
+                room_id=room.room_id,
+                message_responses=message_responses,
+            )
+        finally:
+            await self._emit_room_processing_signal(
+                room_id=room.room_id,
+                state=PROCESSING_STATE_STOP,
+            )
+
+    async def _emit_room_processing_signal(
+        self,
+        *,
+        room_id: str,
+        state: str,
+    ) -> None:
+        try:
+            normalized_state = normalize_processing_state(state)
+            await self.room_typing(
+                room_id,
+                normalized_state == PROCESSING_STATE_START,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Failed to emit Matrix thinking signal "
+                f"(room_id={room_id} state={state}): {exc}"
+            )
+
+    async def emit_ingress_processing_signal(
+        self,
+        room_id: str,
+        *,
+        state: str,
+    ) -> None:
+        await self._emit_room_processing_signal(room_id=room_id, state=state)
+
+    async def send_ingress_responses(
+        self,
+        room_id: str,
+        responses: list[dict[str, Any]],
+    ) -> None:
+        await self._process_message_responses(
+            room_id=room_id,
+            message_responses=responses,
+        )
+
+    async def download_ingress_media(
+        self,
+        event: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        source = payload.get("source")
+        if not isinstance(source, dict):
+            return None
+        content = source.get("content")
+        if not isinstance(content, dict):
+            return None
+        file_info = content.get("file")
+        media_info = content.get("info")
+        if not isinstance(file_info, dict) or not isinstance(media_info, dict):
+            return None
+        return await self._download_file(file_info, media_info)
+
+    async def process_ingress_event(self, event: dict[str, Any]) -> None:
+        if not isinstance(event, dict):
+            raise TypeError("Matrix ingress event must be a dict.")
+        source_mode = str(event.get("source_mode") or "").strip().lower()
+        if source_mode != "sync_room_message":
+            return
+
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            raise TypeError("Matrix ingress event payload must be a dict.")
+
+        room_id = self._coerce_optional_string(event.get("room_id"))
+        sender = self._coerce_optional_string(event.get("sender"))
+        if room_id is None or sender is None:
+            raise ValueError("Matrix ingress room_id and sender are required.")
+
+        provider_context = event.get("provider_context")
+        provider_context = provider_context if isinstance(provider_context, dict) else {}
+        ingress_metadata = provider_context.get("ingress_metadata")
+        ingress_metadata = dict(ingress_metadata) if isinstance(ingress_metadata, dict) else {}
+        resolved_ingress = context_scope_from_ingress_route(
+            platform="matrix",
+            channel_key="matrix",
+            room_id=room_id,
+            sender_id=sender,
+            ingress_route=ingress_metadata.get("ingress_route"),
+            ingress_metadata=ingress_metadata,
+            source="matrix.ingress_worker",
+        )
+        ingress_metadata["ingress_route"] = dict(resolved_ingress.ingress_route)
+        ingress_metadata["tenant_resolution"] = dict(resolved_ingress.tenant_resolution)
+
+        await self.emit_ingress_processing_signal(
+            room_id,
+            state=PROCESSING_STATE_START,
+        )
+        try:
+            responses: list[dict[str, Any]] = []
+            event_class = str(payload.get("event_class") or "")
+            if event_class == "RoomMessageText":
+                text = payload.get("body")
+                if isinstance(text, str):
+                    maybe_responses = await self._messaging_service.handle_text_message(
+                        platform="matrix",
+                        room_id=room_id,
+                        sender=sender,
+                        message=text,
+                        ingress_metadata=ingress_metadata,
+                        scope=resolved_ingress.scope,
+                    )
+                    if isinstance(maybe_responses, list):
+                        responses = maybe_responses
+            elif event_class in {
+                "RoomEncryptedAudio",
+                "RoomEncryptedFile",
+                "RoomEncryptedImage",
+                "RoomEncryptedVideo",
+            }:
+                media = await self.download_ingress_media(event)
+                if media is not None:
+                    try:
+                        message_payload = {
+                            "message": payload,
+                            "file": media,
+                        }
+                        if event_class == "RoomEncryptedAudio":
+                            maybe_responses = await self._messaging_service.handle_audio_message(
+                                platform="matrix",
+                                room_id=room_id,
+                                sender=sender,
+                                message=message_payload,
+                                ingress_metadata=ingress_metadata,
+                                scope=resolved_ingress.scope,
+                            )
+                        elif event_class == "RoomEncryptedFile":
+                            maybe_responses = await self._messaging_service.handle_file_message(
+                                platform="matrix",
+                                room_id=room_id,
+                                sender=sender,
+                                message=message_payload,
+                                ingress_metadata=ingress_metadata,
+                                scope=resolved_ingress.scope,
+                            )
+                        elif event_class == "RoomEncryptedImage":
+                            maybe_responses = await self._messaging_service.handle_image_message(
+                                platform="matrix",
+                                room_id=room_id,
+                                sender=sender,
+                                message=message_payload,
+                                ingress_metadata=ingress_metadata,
+                                scope=resolved_ingress.scope,
+                            )
+                        else:
+                            maybe_responses = await self._messaging_service.handle_video_message(
+                                platform="matrix",
+                                room_id=room_id,
+                                sender=sender,
+                                message=message_payload,
+                                ingress_metadata=ingress_metadata,
+                                scope=resolved_ingress.scope,
+                            )
+                        if isinstance(maybe_responses, list):
+                            responses = maybe_responses
+                    finally:
+                        self._cleanup_temp_file(media)
+            await self.send_ingress_responses(room_id, responses)
+        finally:
+            await self.emit_ingress_processing_signal(
+                room_id,
+                state=PROCESSING_STATE_STOP,
+            )
 
     async def _cb_room_member_event(
         self, _room: MatrixRoom, _event: RoomMemberEvent
     ) -> None:
         """Handle RoomMemberEvents."""
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_room_member_event",
+            event=_event,
+            room=_room,
+        )
 
     async def _cb_tag_event(self, _event: TagEvent) -> None:
         """Handle TagEvents."""
+        await self._handle_non_core_event_callback(
+            callback_name="_cb_tag_event",
+            event=_event,
+        )
 
     # Responses
     async def _cb_sync_response(self, resp: SyncResponse):
         """Handle SyncResponses."""
-        self._keyval_storage_gateway.put(self._sync_key, resp.next_batch)
+        self._ensure_ingress_runtime_state()
+        if self._ingress_service is None:
+            await self._keyval_storage_gateway.put_text(self._sync_key, resp.next_batch)
+            self._sync_token = resp.next_batch
+            return
+
+        async with self._pending_sync_lock:
+            pending_entries = list(self._pending_sync_ingress)
+            self._pending_sync_ingress.clear()
+
+        await self._ingress_service.stage(
+            pending_entries,
+            checkpoints=[
+                MessagingIngressCheckpointUpdate(
+                    platform="matrix",
+                    client_profile_id=self._resolve_client_profile_id(),
+                    checkpoint_key=self._sync_checkpoint_key,
+                    checkpoint_value=resp.next_batch,
+                    provider_context={
+                        "client_profile_key": self._resolve_client_profile_key(),
+                        "next_batch": resp.next_batch,
+                    },
+                )
+            ],
+        )
+        self._sync_token = resp.next_batch
 
     ## Utilities.
+    def _normalize_direct_rooms(self, payload: object) -> dict[str, list[str]]:
+        if not isinstance(payload, dict):
+            return {}
+
+        direct_rooms: dict[str, list[str]] = {}
+        for user_id, room_ids in payload.items():
+            if not isinstance(user_id, str) or not isinstance(room_ids, list):
+                continue
+            direct_rooms[user_id] = [str(room_id) for room_id in room_ids]
+        return direct_rooms
+
+    async def _load_direct_rooms(self) -> dict[str, list[str]]:
+        try:
+            response = await self.list_direct_rooms()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Matrix direct room lookup failed."
+                f" error={type(exc).__name__}: {exc}"
+            )
+            return {}
+        rooms = self._normalize_direct_rooms(getattr(response, "rooms", None))
+        if rooms or isinstance(response, DirectRoomsResponse):
+            return rooms
+
+        self._logging_gateway.debug(
+            "Matrix direct room list unavailable; continuing with fallback checks."
+        )
+        return {}
+
+    async def _persist_direct_rooms(self, direct_rooms: dict[str, list[str]]) -> bool:
+        try:
+            path = Api._build_path(
+                [
+                    "user",
+                    self.user_id,
+                    "account_data",
+                    self._direct_rooms_event_type,
+                ],
+                {"access_token": self.access_token},
+            )
+            response = await self._send(
+                EmptyResponse,
+                "PUT",
+                path,
+                json.dumps(direct_rooms),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "Matrix direct room marker update failed."
+                f" error={type(exc).__name__}: {exc}"
+            )
+            return False
+
+        if isinstance(response, EmptyResponse):
+            return True
+
+        self._logging_gateway.warning(
+            "Matrix direct room marker update failed."
+            f" response={type(response).__name__}"
+        )
+        return False
+
+    async def _mark_room_as_direct(self, sender: str, room_id: str) -> None:
+        if not isinstance(room_id, str) or room_id.strip() == "":
+            return
+
+        if isinstance(sender, str) and sender.strip() != "":
+            direct_rooms = await self._load_direct_rooms()
+            user_rooms = direct_rooms.get(sender, [])
+            if room_id not in user_rooms:
+                user_rooms.append(room_id)
+                direct_rooms[sender] = user_rooms
+                if not await self._persist_direct_rooms(direct_rooms):
+                    self._logging_gateway.warning(
+                        "Matrix direct room marker not persisted."
+                        f" sender={sender}"
+                        f" room_id={room_id}"
+                    )
+
+        self._direct_room_ids.add(room_id)
+
     async def _is_direct_message(self, room_id: str) -> bool:
-        """Indicate if the given room was flagged as a 1:1 chat."""
-        room_state = await self.room_get_state(room_id)
-        flags: list[dict[str, dict[str, int]]] = [
-            x for x in room_state.events if x["type"] == self._flags_key
-        ]
-        return len(flags) > 0 and "m.direct" in flags[0].get("content").keys()
+        """Indicate if the room is marked direct via Matrix account data."""
+        if room_id in self._direct_room_ids:
+            return True
+
+        direct_rooms = await self._load_direct_rooms()
+        for direct_room_ids in direct_rooms.values():
+            if room_id in direct_room_ids:
+                self._direct_room_ids.add(room_id)
+                return True
+
+        return False
 
     async def _process_message_responses(
         self, room_id: str, message_responses: list[dict]
@@ -492,6 +2542,41 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 case _:
                     pass
 
+    async def _room_send_with_unverified_self_device_fallback(
+        self,
+        room_id: str,
+        content: dict,
+    ) -> None:
+        try:
+            await self.room_send(
+                room_id=room_id,
+                message_type="m.room.message",
+                content=content,
+            )
+        except OlmUnverifiedDeviceError as exc:
+            unverified_device = getattr(exc, "device", None)
+            unverified_user_id = getattr(unverified_device, "user_id", None)
+            if unverified_user_id != self.user_id:
+                raise
+
+            unverified_device_id = getattr(unverified_device, "device_id", None)
+            if unverified_device_id is None:
+                unverified_device_id = getattr(unverified_device, "id", None)
+
+            self._logging_gateway.warning(
+                "Matrix send encountered unverified local device; retrying with"
+                " ignore_unverified_devices."
+                f" user_id={unverified_user_id}"
+                f" device_id={unverified_device_id}"
+                f" room_id={room_id}"
+            )
+            await self.room_send(
+                room_id=room_id,
+                message_type="m.room.message",
+                content=content,
+                ignore_unverified_devices=True,
+            )
+
     async def _send_audio_message(
         self,
         room_id: str,
@@ -504,9 +2589,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return
 
             if isinstance(resp, UploadResponse):
-                await self.room_send(
+                await self._room_send_with_unverified_self_device_fallback(
                     room_id=room_id,
-                    message_type="m.room.message",
                     content={
                         "msgtype": "m.audio",
                         "file": {
@@ -526,10 +2610,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 )
 
         except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-            self._logging_gateway.warning(
-                "DefaultMatrixClient: Error sending audio message."
-            )
-            traceback.print_exc()
+            self._log_send_failure("DefaultMatrixClient: Error sending audio message.")
 
     async def _send_file_message(
         self,
@@ -542,9 +2623,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return
 
             if isinstance(resp, UploadResponse):
-                await self.room_send(
+                await self._room_send_with_unverified_self_device_fallback(
                     room_id=room_id,
-                    message_type="m.room.message",
                     content={
                         "msgtype": "m.file",
                         "file": {
@@ -563,10 +2643,7 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 )
 
         except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-            self._logging_gateway.warning(
-                "DefaultMatrixClient: Error sending file message."
-            )
-            traceback.print_exc()
+            self._log_send_failure("DefaultMatrixClient: Error sending file message.")
 
     async def _send_image_message(
         self,
@@ -580,9 +2657,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return
 
             if isinstance(resp, UploadResponse):
-                await self.room_send(
+                await self._room_send_with_unverified_self_device_fallback(
                     room_id=room_id,
-                    message_type="m.room.message",
                     content={
                         "msgtype": "m.image",
                         "file": {
@@ -603,26 +2679,19 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 )
 
         except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-            self._logging_gateway.warning(
-                "DefaultMatrixClient: Error sending image message."
-            )
-            traceback.print_exc()
+            self._log_send_failure("DefaultMatrixClient: Error sending image message.")
 
     async def _send_text_message(self, room_id: str, body: str) -> None:
         try:
-            await self.room_send(
+            await self._room_send_with_unverified_self_device_fallback(
                 room_id=room_id,
-                message_type="m.room.message",
                 content={
                     "msgtype": "m.text",
                     "body": body,
                 },
             )
         except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-            self._logging_gateway.warning(
-                "DefaultMatrixClient: Error sending text message."
-            )
-            traceback.print_exc()
+            self._log_send_failure("DefaultMatrixClient: Error sending text message.")
 
     async def _send_video_message(
         self,
@@ -636,9 +2705,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 return
 
             if isinstance(resp, UploadResponse):
-                await self.room_send(
+                await self._room_send_with_unverified_self_device_fallback(
                     room_id=room_id,
-                    message_type="m.room.message",
                     content={
                         "msgtype": "m.video",
                         "file": {
@@ -659,14 +2727,64 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                     },
                 )
         except (SendRetryError, LocalProtocolError, OlmUnverifiedDeviceError):
-            self._logging_gateway.warning(
-                "DefaultMatrixClient: Error sending video message."
-            )
-            traceback.print_exc()
+            self._log_send_failure("DefaultMatrixClient: Error sending video message.")
 
     async def _download_file(self, file: dict, info: dict) -> str | None:
+        if not isinstance(info, dict):
+            self._track_matrix_decision(
+                domain="media",
+                action="rejected",
+                reason="invalid_metadata",
+            )
+            self._logging_gateway.warning(
+                "Matrix media download rejected. Reason: Invalid metadata payload."
+            )
+            return None
+
+        mimetype = info.get("mimetype")
+        if not isinstance(mimetype, str) or mimetype.strip() == "":
+            self._track_matrix_decision(
+                domain="media",
+                action="rejected",
+                reason="missing_mimetype",
+            )
+            self._logging_gateway.warning(
+                "Matrix media download rejected. Reason: Missing mimetype."
+            )
+            return None
+
+        mimetype = mimetype.strip().lower()
+        if not self._media_mimetype_allowed(mimetype):
+            self._track_matrix_decision(
+                domain="media",
+                action="rejected",
+                reason="mimetype_not_allowed",
+                mimetype=mimetype,
+            )
+            self._logging_gateway.warning(
+                "Matrix media download rejected."
+                f" Reason: Mimetype not allowed ({mimetype})."
+            )
+            return None
+
+        max_download_bytes = self._resolve_media_max_download_bytes()
+        declared_size = info.get("size")
+        if isinstance(declared_size, int) and declared_size > max_download_bytes:
+            self._track_matrix_decision(
+                domain="media",
+                action="rejected",
+                reason="declared_size_exceeded",
+                declared_size=declared_size,
+                max_download_bytes=max_download_bytes,
+            )
+            self._logging_gateway.warning(
+                "Matrix media download rejected."
+                f" Reason: Declared size exceeds limit ({declared_size} > {max_download_bytes})."
+            )
+            return None
+
         # Guess extension using mimetype.
-        extension = mimetypes.guess_extension(info["mimetype"])
+        extension = mimetypes.guess_extension(mimetype)
 
         # Successfully guessed extension.
         if extension:
@@ -681,27 +2799,72 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
 
                 # Download successful.
                 if isinstance(resp, DiskDownloadResponse):
+                    downloaded_size = os.path.getsize(tf.name)
+                    if downloaded_size > max_download_bytes:
+                        self._track_matrix_decision(
+                            domain="media",
+                            action="rejected",
+                            reason="downloaded_size_exceeded",
+                            downloaded_size=downloaded_size,
+                            max_download_bytes=max_download_bytes,
+                        )
+                        self._logging_gateway.warning(
+                            "Matrix media download rejected."
+                            f" Reason: Downloaded size exceeds limit ({downloaded_size} > {max_download_bytes})."
+                        )
+                        return None
 
                     # Open ecrypted file for reading.
                     with open(tf.name, "rb") as tfb:
+                        try:
+                            # Decrypt file.
+                            decrypted_file = nio.crypto.decrypt_attachment(
+                                tfb.read(),
+                                key=file["key"]["k"],
+                                hash=file["hashes"]["sha256"],
+                                iv=file["iv"],
+                            )
 
-                        # Decrypt file.
-                        decrypted_file = nio.crypto.decrypt_attachment(
-                            tfb.read(),
-                            key=file["key"]["k"],
-                            hash=file["hashes"]["sha256"],
-                            iv=file["iv"],
-                        )
-
-                        # Use tempfile for saving decrypted file.
-                        with tempfile.NamedTemporaryFile(
-                            suffix=extension, delete=False
-                        ) as df:
-
-                            # Open tempfile to save decrypted bytes.
-                            with open(df.name, "wb"):
+                            # Use tempfile for saving decrypted file.
+                            with tempfile.NamedTemporaryFile(
+                                suffix=extension, delete=False
+                            ) as df:
                                 df.write(decrypted_file)
+                                self._track_matrix_decision(
+                                    domain="media",
+                                    action="accepted",
+                                    reason="downloaded",
+                                    mimetype=mimetype,
+                                )
                                 return df.name
+                        except (
+                            Exception
+                        ) as exc:  # pylint: disable=broad-exception-caught
+                            self._track_matrix_decision(
+                                domain="media",
+                                action="rejected",
+                                reason="decrypt_failed",
+                            )
+                            self._logging_gateway.warning(
+                                "Matrix media decryption failed."
+                                f" error={type(exc).__name__}: {exc}"
+                            )
+                            return None
+
+                self._track_matrix_decision(
+                    domain="media",
+                    action="rejected",
+                    reason="download_response_unexpected",
+                )
+                return None
+
+        self._track_matrix_decision(
+            domain="media",
+            action="rejected",
+            reason="extension_unknown",
+            mimetype=mimetype,
+        )
+        return None
 
     async def _upload_file(self, file: dict):
         resp = None
@@ -740,3 +2903,653 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                 filesize=file["size"],
                 encrypt=encrypt,
             )
+
+
+class MultiProfileMatrixClient(IMatrixClient):
+    """Matrix client manager that runs multiple runtime profiles concurrently."""
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        config: SimpleNamespace = None,
+        ipc_service: IIPCService = None,
+        ingress_service: IMessagingIngressService = None,
+        keyval_storage_gateway: IKeyValStorageGateway = None,
+        relational_storage_gateway: IRelationalStorageGateway = None,
+        logging_gateway: ILoggingGateway = None,
+        messaging_service: IMessagingService = None,
+        user_service: IUserService = None,
+    ) -> None:
+        self._root_config = config
+        self._ipc_service = ipc_service
+        self._ingress_service = ingress_service
+        self._keyval_storage_gateway = keyval_storage_gateway
+        self._relational_storage_gateway = relational_storage_gateway
+        self._logging_gateway = logging_gateway
+        self._messaging_service = messaging_service
+        self._user_service = user_service
+        self._lock = asyncio.Lock()
+        self.synced = asyncio.Event()
+        self._entered = False
+        self._generation = 0
+        self._initialized = False
+        self._failure_queue: asyncio.Queue[BaseException] = asyncio.Queue()
+        self._sync_tasks: dict[str, asyncio.Task] = {}
+        self._health_tasks: dict[str, asyncio.Task] = {}
+        self._client_profile_service = None
+        if relational_storage_gateway is not None:
+            self._client_profile_service = _messaging_client_profile_service_class()(
+                table="admin_messaging_client_profile",
+                rsg=relational_storage_gateway,
+            )
+        self._clients: dict[str, DefaultMatrixClient] = {}
+        self._profile_snapshots: dict[str, dict[str, Any]] = {}
+
+    async def _build_clients(
+        self,
+        config: SimpleNamespace,
+    ) -> tuple[dict[str, DefaultMatrixClient], dict[str, dict[str, Any]]]:
+        clients: dict[str, DefaultMatrixClient] = {}
+        snapshots: dict[str, dict[str, Any]] = {}
+        if self._client_profile_service is None:
+            return clients, snapshots
+        specs = await self._client_profile_service.list_active_runtime_specs(
+            config=config,
+            platform_key="matrix",
+        )
+
+        for spec in specs:
+            client_profile_id = str(spec.client_profile_id)
+            clients[client_profile_id] = DefaultMatrixClient(
+                config=spec.config,
+                ipc_service=self._ipc_service,
+                ingress_service=self._ingress_service,
+                keyval_storage_gateway=self._keyval_storage_gateway,
+                relational_storage_gateway=self._relational_storage_gateway,
+                logging_gateway=self._logging_gateway,
+                messaging_service=self._messaging_service,
+                user_service=self._user_service,
+            )
+            snapshots[client_profile_id] = dict(spec.snapshot)
+        return clients, snapshots
+
+    async def init(self) -> None:
+        async with self._lock:
+            if self._initialized:
+                return
+            self._clients, self._profile_snapshots = await self._build_clients(
+                self._root_config
+            )
+            self._initialized = True
+
+    def managed_clients(self) -> dict[str, DefaultMatrixClient]:
+        """Return active managed Matrix clients keyed by client profile id."""
+        return dict(self._clients)
+
+    async def active_device_verification_data(
+        self,
+        *,
+        client_profile_id: object | None = None,
+        include_internal: bool = False,
+    ) -> list[dict[str, str]]:
+        """Return device verification data for active Matrix runtime profiles."""
+        await self.init()
+        normalized_client_profile_id = normalize_client_profile_id(client_profile_id)
+        entries: list[dict[str, str]] = []
+        for active_client_profile_id, client in self._clients.items():
+            if (
+                normalized_client_profile_id is not None
+                and active_client_profile_id != str(normalized_client_profile_id)
+            ):
+                continue
+            entry = client.device_verification_data()
+            if include_internal:
+                snapshot = self._profile_snapshots.get(active_client_profile_id, {})
+                tenant_id = snapshot.get("tenant_id")
+                if tenant_id not in [None, ""]:
+                    entry["tenant_id"] = str(tenant_id)
+            entries.append(entry)
+        entries.sort(
+            key=lambda entry: (
+                entry.get("client_profile_key", ""),
+                entry.get("client_profile_id", ""),
+            )
+        )
+        return entries
+
+    @property
+    def sync_token(self) -> str:
+        first = next(iter(self._clients.values()), None)
+        if first is None:
+            return ""
+        value = getattr(first, "sync_token", None)
+        return value if isinstance(value, str) else ""
+
+    async def _enter_clients(
+        self,
+        clients: dict[str, DefaultMatrixClient],
+    ) -> None:
+        for client in clients.values():
+            await client.__aenter__()
+
+    async def _close_clients(
+        self,
+        clients: dict[str, DefaultMatrixClient],
+    ) -> None:
+        await _close_clients_fail_closed(
+            platform="matrix",
+            clients=clients,
+        )
+
+    async def _cancel_runtime_tasks(
+        self,
+        sync_tasks: dict[str, asyncio.Task],
+        health_tasks: dict[str, asyncio.Task],
+    ) -> None:
+        tasks = tuple(sync_tasks.values()) + tuple(health_tasks.values())
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _bind_runtime_task(
+        self,
+        task: asyncio.Task,
+        *,
+        generation: int,
+        client_profile_id: str,
+        kind: str,
+    ) -> None:
+        def _callback(done: asyncio.Task) -> None:
+            if generation != self._generation:
+                return
+            if done.cancelled():
+                return
+            try:
+                error = done.exception()
+            except asyncio.CancelledError:
+                return
+            if error is None:
+                error = RuntimeError(
+                    "Matrix runtime task exited unexpectedly "
+                    f"(client_profile_id={client_profile_id!r} kind={kind})."
+                )
+            self._failure_queue.put_nowait(error)
+
+        task.add_done_callback(_callback)
+
+    async def _prepare_client_set(
+        self,
+        clients: dict[str, DefaultMatrixClient],
+        *,
+        generation: int,
+    ) -> tuple[dict[str, asyncio.Task], dict[str, asyncio.Task]]:
+        self.synced.clear()
+        sync_tasks: dict[str, asyncio.Task] = {}
+        health_tasks: dict[str, asyncio.Task] = {}
+
+        if not clients:
+            self.synced.set()
+            return sync_tasks, health_tasks
+
+        for client_profile_id, client in clients.items():
+            clear_sync_signal = getattr(getattr(client, "synced", None), "clear", None)
+            if callable(clear_sync_signal):
+                result = clear_sync_signal()
+                if inspect.isawaitable(result):
+                    await result
+
+            sync_task = asyncio.create_task(
+                client.sync_forever(
+                    since=client.sync_token,
+                    timeout=100,
+                    full_state=True,
+                    set_presence="online",
+                ),
+                name=f"mugen.matrix.sync_forever.{client_profile_id}",
+            )
+            health_task = asyncio.create_task(
+                client.monitor_runtime_health(),
+                name=f"mugen.matrix.runtime_health.{client_profile_id}",
+            )
+            self._bind_runtime_task(
+                sync_task,
+                generation=generation,
+                client_profile_id=client_profile_id,
+                kind="sync",
+            )
+            self._bind_runtime_task(
+                health_task,
+                generation=generation,
+                client_profile_id=client_profile_id,
+                kind="health",
+            )
+            sync_tasks[client_profile_id] = sync_task
+            health_tasks[client_profile_id] = health_task
+
+        async def _wait_until_all_synced() -> None:
+            await asyncio.gather(*(client.synced.wait() for client in clients.values()))
+
+        async def _wait_for_initial_failure():
+            return await asyncio.wait(
+                tuple(sync_tasks.values()) + tuple(health_tasks.values()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+        ready_task = asyncio.create_task(
+            _wait_until_all_synced(),
+            name=f"mugen.matrix.initial_sync.{generation}",
+        )
+        failure_task = asyncio.create_task(
+            _wait_for_initial_failure(),
+            name=f"mugen.matrix.initial_failure_wait.{generation}",
+        )
+        done, pending = await asyncio.wait(
+            (ready_task, failure_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+        if failure_task in done:
+            completed, _ = await failure_task
+            first_task = next(iter(completed))
+            error = first_task.exception()
+            if error is None:
+                error = RuntimeError("Matrix runtime task exited before initial sync.")
+            await self._cancel_runtime_tasks(sync_tasks, health_tasks)
+            raise error
+
+        await ready_task
+        await self._apply_profile_post_sync_setup(clients)
+        return sync_tasks, health_tasks
+
+    async def _apply_profile_post_sync_setup(
+        self,
+        clients: dict[str, DefaultMatrixClient],
+    ) -> None:
+        for client in clients.values():
+            profile = await client.get_profile()
+            profile_display_name = (
+                client._resolve_profile_display_name()  # pylint: disable=protected-access
+            )
+            if (
+                profile_display_name is not None
+                and profile.displayname != profile_display_name
+            ):
+                await client.set_displayname(profile_display_name)
+            await client.trust_known_user_devices()
+
+    async def run_profiles_forever(
+        self,
+        *,
+        started_callback=None,
+        degraded_callback=None,
+        healthy_callback=None,
+    ) -> None:
+        max_sync_retries = 5
+        backoff_base_seconds = 1.0
+        backoff_max_seconds = 30.0
+        backoff_jitter_seconds = 0.25
+        started_signalled = False
+        runtime_degraded = False
+        consecutive_sync_failures = 0
+
+        async with self:
+            while True:
+                try:
+                    if not self._clients:
+                        if started_signalled is not True:
+                            if callable(started_callback):
+                                started_callback()
+                            if callable(healthy_callback):
+                                healthy_callback()
+                            started_signalled = True
+                            runtime_degraded = False
+                        elif runtime_degraded is True and callable(healthy_callback):
+                            healthy_callback()
+                            runtime_degraded = False
+                        self.synced.set()
+                        await asyncio.sleep(1.0)
+                        continue
+
+                    async with self._lock:
+                        next_generation = self._generation + 1
+                    sync_tasks, health_tasks = await self._prepare_client_set(
+                        self._clients,
+                        generation=next_generation,
+                    )
+                    async with self._lock:
+                        self._generation = next_generation
+                        self._sync_tasks = sync_tasks
+                        self._health_tasks = health_tasks
+                        self.synced.set()
+                    consecutive_sync_failures = 0
+
+                    if started_signalled is not True:
+                        if callable(started_callback):
+                            started_callback()
+                        if callable(healthy_callback):
+                            healthy_callback()
+                        started_signalled = True
+                        runtime_degraded = False
+                    elif runtime_degraded is True and callable(healthy_callback):
+                        healthy_callback()
+                        runtime_degraded = False
+
+                    error = await self._failure_queue.get()
+                    raise error
+                except asyncio.CancelledError:
+                    raise
+                except IPCCriticalDispatchError:
+                    raise
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    auth_failure = (
+                        re.search(
+                            r"(m_unknown_token|unauthorized|forbidden|invalid token|access token)",
+                            str(exc).lower(),
+                        )
+                        is not None
+                    )
+                    if auth_failure:
+                        raise RuntimeError(
+                            "Matrix client authentication failed."
+                        ) from exc
+
+                    async with self._lock:
+                        sync_tasks = self._sync_tasks
+                        health_tasks = self._health_tasks
+                        self._sync_tasks = {}
+                        self._health_tasks = {}
+                        self.synced.clear()
+                    await self._cancel_runtime_tasks(sync_tasks, health_tasks)
+
+                    if consecutive_sync_failures >= max_sync_retries:
+                        raise RuntimeError(
+                            "Matrix client sync failed after max retries."
+                        ) from exc
+
+                    if runtime_degraded is not True and callable(degraded_callback):
+                        degraded_callback(f"{type(exc).__name__}: {exc}")
+                    runtime_degraded = True
+
+                    delay_seconds = min(
+                        backoff_max_seconds,
+                        (backoff_base_seconds * (2**consecutive_sync_failures))
+                        + random.uniform(0, backoff_jitter_seconds),
+                    )
+                    consecutive_sync_failures += 1
+                    await asyncio.sleep(delay_seconds)
+
+    async def reload_profiles(
+        self,
+        config: SimpleNamespace | None = None,
+    ) -> dict[str, list[str]]:
+        next_config = self._root_config if config is None else config
+        next_clients, next_snapshots = await self._build_clients(next_config)
+
+        try:
+            if self._entered:
+                await self._enter_clients(next_clients)
+
+            if self._entered and next_clients:
+                async with self._lock:
+                    next_generation = self._generation + 1
+                next_sync_tasks, next_health_tasks = await self._prepare_client_set(
+                    next_clients,
+                    generation=next_generation,
+                )
+            else:
+                next_generation = self._generation
+                next_sync_tasks = {}
+                next_health_tasks = {}
+        except Exception as exc:
+            await self._cancel_runtime_tasks(
+                locals().get("next_sync_tasks", {}),
+                locals().get("next_health_tasks", {}),
+            )
+            if self._entered:
+                try:
+                    await self._close_clients(next_clients)
+                except MultiProfileClientCloseError as close_exc:
+                    raise RuntimeError(
+                        "matrix runtime profile reload failed after "
+                        f"{type(exc).__name__}: {exc}; cleanup failed: {close_exc}"
+                    ) from close_exc
+            raise
+
+        async with self._lock:
+            current_clients = self._clients
+            current_snapshots = self._profile_snapshots
+            current_sync_tasks = self._sync_tasks
+            current_health_tasks = self._health_tasks
+            self._root_config = next_config
+            self._clients = next_clients
+            self._profile_snapshots = next_snapshots
+            self._generation = next_generation
+            self._sync_tasks = next_sync_tasks
+            self._health_tasks = next_health_tasks
+            self._initialized = True
+            if next_sync_tasks or next_health_tasks:
+                self.synced.set()
+
+        await self._cancel_runtime_tasks(current_sync_tasks, current_health_tasks)
+        if self._entered:
+            await self._close_clients(current_clients)
+
+        before_keys = set(current_snapshots)
+        after_keys = set(next_snapshots)
+        updated = sorted(
+            key
+            for key in (before_keys & after_keys)
+            if current_snapshots.get(key) != next_snapshots.get(key)
+        )
+        unchanged = sorted(
+            key
+            for key in (before_keys & after_keys)
+            if current_snapshots.get(key) == next_snapshots.get(key)
+        )
+        return {
+            "added": sorted(after_keys - before_keys),
+            "removed": sorted(before_keys - after_keys),
+            "updated": updated,
+            "unchanged": unchanged,
+        }
+
+    async def __aenter__(self) -> "MultiProfileMatrixClient":
+        await self.init()
+        async with self._lock:
+            if self._entered:
+                return self
+            await self._enter_clients(self._clients)
+            self._entered = True
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
+        await self.close()
+        return False
+
+    async def close(self) -> None:
+        async with self._lock:
+            current_sync_tasks = self._sync_tasks
+            current_health_tasks = self._health_tasks
+            current_clients = self._clients
+            self._sync_tasks = {}
+            self._health_tasks = {}
+            self._generation += 1
+            was_entered = self._entered
+            self._entered = False
+            self.synced.clear()
+        await self._cancel_runtime_tasks(current_sync_tasks, current_health_tasks)
+        if was_entered:
+            await self._close_clients(current_clients)
+
+    def _first_client(self) -> DefaultMatrixClient:
+        first = next(iter(self._clients.values()), None)
+        if first is None:
+            raise RuntimeError("No active client profiles configured for matrix.")
+        return first
+
+    async def sync_forever(
+        self,
+        *,
+        since: str | None = None,
+        timeout: int = 100,
+        full_state: bool = True,
+        set_presence: MatrixPresence = "online",
+    ) -> None:
+        _ = since, timeout, full_state, set_presence
+        raise RuntimeError("Use run_profiles_forever() with MultiProfileMatrixClient.")
+
+    async def get_profile(self, user_id: str | None = None) -> MatrixProfile:
+        await self.init()
+        if user_id is not None:
+            for client in self._clients.values():
+                if client.current_user_id == user_id:
+                    return await client.get_profile(user_id)
+        return await self._first_client().get_profile(user_id)
+
+    async def set_displayname(self, displayname: str) -> None:
+        await self.init()
+        await asyncio.gather(
+            *(client.set_displayname(displayname) for client in self._clients.values()),
+            return_exceptions=False,
+        )
+
+    async def monitor_runtime_health(self) -> None:
+        error = await self._failure_queue.get()
+        raise error
+
+    async def cleanup_known_user_devices_list(self) -> None:
+        await self.init()
+        await asyncio.gather(
+            *(
+                client.cleanup_known_user_devices_list()
+                for client in self._clients.values()
+            ),
+            return_exceptions=False,
+        )
+
+    async def trust_known_user_devices(self) -> None:
+        await self.init()
+        await asyncio.gather(
+            *(client.trust_known_user_devices() for client in self._clients.values()),
+            return_exceptions=False,
+        )
+
+    async def verify_user_devices(self, user_id: str) -> None:
+        await self.init()
+        await asyncio.gather(
+            *(client.verify_user_devices(user_id) for client in self._clients.values()),
+            return_exceptions=False,
+        )
+
+    async def process_ingress_event(self, event: dict[str, Any]) -> None:
+        await self.init()
+        client_profile_id = None
+        if isinstance(event, dict):
+            client_profile_id = normalize_client_profile_id(event.get("client_profile_id"))
+        if client_profile_id is not None and str(client_profile_id) in self._clients:
+            await self._clients[str(client_profile_id)].process_ingress_event(event)
+            return
+        await self._first_client().process_ingress_event(event)
+
+    async def emit_ingress_processing_signal(
+        self,
+        room_id: str,
+        *,
+        state: str,
+    ) -> None:
+        await self.init()
+        await self._first_client().emit_ingress_processing_signal(room_id, state=state)
+
+    async def send_ingress_responses(
+        self,
+        room_id: str,
+        responses: list[dict[str, Any]],
+    ) -> None:
+        await self.init()
+        await self._first_client().send_ingress_responses(room_id, responses)
+
+    async def download_ingress_media(
+        self,
+        event: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        await self.init()
+        client_profile_id = None
+        if isinstance(event, dict):
+            client_profile_id = normalize_client_profile_id(event.get("client_profile_id"))
+        if client_profile_id is not None and str(client_profile_id) in self._clients:
+            return await self._clients[str(client_profile_id)].download_ingress_media(
+                event
+            )
+        return await self._first_client().download_ingress_media(event)
+
+    @property
+    def current_user_id(self) -> str:
+        first = next(iter(self._clients.values()), None)
+        if first is None:
+            return ""
+        return first.current_user_id
+
+    @property
+    def device_id(self) -> str:
+        first = next(iter(self._clients.values()), None)
+        if first is None:
+            return ""
+        return first.device_id or ""
+
+    def device_ed25519_key(self) -> str:
+        first = next(iter(self._clients.values()), None)
+        if first is None:
+            return ""
+        method = getattr(first, "device_ed25519_key", None)
+        if callable(method):
+            return str(method())
+        return ""
+
+    async def joined_room_ids(self) -> list[str]:
+        await self.init()
+        room_ids: list[str] = []
+        for client in self._clients.values():
+            room_ids.extend(await client.joined_room_ids())
+        return sorted({room_id for room_id in room_ids if isinstance(room_id, str)})
+
+    async def joined_member_ids(self, room_id: str) -> list[str]:
+        await self.init()
+        for client in self._clients.values():
+            room_ids = await client.joined_room_ids()
+            if room_id in room_ids:
+                return await client.joined_member_ids(room_id)
+        return await self._first_client().joined_member_ids(room_id)
+
+    async def room_state_events(self, room_id: str) -> list[dict[str, Any]]:
+        await self.init()
+        for client in self._clients.values():
+            room_ids = await client.joined_room_ids()
+            if room_id in room_ids:
+                return await client.room_state_events(room_id)
+        return await self._first_client().room_state_events(room_id)
+
+    async def direct_room_ids(self) -> set[str]:
+        direct_ids: set[str] = set()
+        for client in self._clients.values():
+            direct_ids.update(await client.direct_room_ids())
+        return direct_ids
+
+    async def room_kick(self, room_id: str, user_id: str) -> None:
+        for client in self._clients.values():
+            room_ids = await client.joined_room_ids()
+            if room_id in room_ids:
+                await client.room_kick(room_id, user_id)
+                return
+        await self._first_client().room_kick(room_id, user_id)
+
+    async def room_leave(self, room_id: str) -> None:
+        for client in self._clients.values():
+            room_ids = await client.joined_room_ids()
+            if room_id in room_ids:
+                await client.room_leave(room_id)
+                return
+        await self._first_client().room_leave(room_id)

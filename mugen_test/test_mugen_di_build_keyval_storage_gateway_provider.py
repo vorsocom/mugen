@@ -33,7 +33,9 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                 injector = None
 
                 # Attempt to build the key-value storage gateway.
-                di._build_keyval_storage_gateway_provider(config, injector)
+                di._build_provider(
+                    config, injector, provider_name="keyval_storage_gateway"
+                )
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -74,7 +76,9 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the key-value storage gateway.
-                di._build_keyval_storage_gateway_provider(config, injector)
+                di._build_provider(
+                    config, injector, provider_name="keyval_storage_gateway"
+                )
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -114,7 +118,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                             "core": {
                                 "gateway": {
                                     "storage": {
-                                        "keyval": "nonexistent_module",
+                                        "keyval": "nonexistent_module:MissingClass",
                                     }
                                 }
                             }
@@ -126,7 +130,9 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the key-value storage gateway.
-                di._build_keyval_storage_gateway_provider(config, injector)
+                di._build_provider(
+                    config, injector, provider_name="keyval_storage_gateway"
+                )
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -137,7 +143,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (keyval_storage_gateway).",
+                    "ERROR:root:Invalid configuration (keyval_storage_gateway): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -166,7 +172,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                             "core": {
                                 "gateway": {
                                     "storage": {
-                                        "keyval": "valid_keyval_storage_module",
+                                        "keyval": "valid_keyval_storage_module:MissingClass",
                                     }
                                 }
                             }
@@ -178,8 +184,6 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -190,11 +194,13 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.storage.keyval.IKeyValStorageGateway.__subclasses__",  # pylint: disable=line-too-long
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the key-value storage gateway.
-                    di._build_keyval_storage_gateway_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="keyval_storage_gateway"
+                    )
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -205,7 +211,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (keyval_storage_gateway).",
+                        "ERROR:root:Invalid configuration (keyval_storage_gateway): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -235,7 +241,7 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
                             "core": {
                                 "gateway": {
                                     "storage": {
-                                        "keyval": "valid_keyval_storage_module",
+                                        "keyval": "valid_keyval_storage_module:DummyKeyValStorageGatewayClass",
                                     }
                                 }
                             }
@@ -245,49 +251,102 @@ class TestDIBuildKeyValStorageGateway(unittest.TestCase):
 
                 # New injector
                 injector = di.injector.DependencyInjector()
+                injector.relational_runtime = unittest.mock.Mock()
 
                 # Dummy subclasses
                 class DummyKeyValStorageGatewayClass(IKeyValStorageGateway):
                     """Dummy key-value storage class."""
 
-                    def __init__(self, config, logging_gateway):
+                    def __init__(self, config, logging_gateway, relational_runtime):
+                        _ = relational_runtime
                         pass
 
-                    def close(self):
+                    async def aclose(self):
                         pass
 
-                    def get(self, key, decode=True):
+                    async def check_readiness(self):
                         pass
 
-                    def has_key(self, key):
+                    async def get_entry(
+                        self,
+                        key,
+                        *,
+                        namespace=None,
+                        include_expired=False,
+                    ):
                         pass
 
-                    def keys(self):
+                    async def put_bytes(
+                        self,
+                        key,
+                        value,
+                        *,
+                        namespace=None,
+                        codec="bytes",
+                        expected_row_version=None,
+                        ttl_seconds=None,
+                    ):
                         pass
 
-                    def put(self, key, value):
+                    async def delete(
+                        self,
+                        key,
+                        *,
+                        namespace=None,
+                        expected_row_version=None,
+                    ):
                         pass
 
-                    def remove(self, key):
+                    async def exists(self, key, *, namespace=None):
                         pass
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyKeyValStorageGatewayClass]
+                    async def list_keys(
+                        self,
+                        *,
+                        prefix="",
+                        namespace=None,
+                        limit=None,
+                        cursor=None,
+                    ):
+                        pass
+
+                    async def compare_and_set(
+                        self,
+                        key,
+                        value,
+                        *,
+                        namespace=None,
+                        codec="bytes",
+                        expected_row_version=0,
+                        ttl_seconds=None,
+                    ):
+                        pass
+
+                DummyKeyValStorageGatewayClass.__module__ = (
+                    "valid_keyval_storage_module:DummyKeyValStorageGatewayClass"
+                )
+
 
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_keyval_storage_module": unittest.mock.Mock(),
+                            "valid_keyval_storage_module": unittest.mock.Mock(DummyKeyValStorageGatewayClass=DummyKeyValStorageGatewayClass),
                         },
                     ),
                     unittest.mock.patch(
                         target="mugen.core.contract.gateway.storage.keyval.IKeyValStorageGateway.__subclasses__",  # pylint: disable=line-too-long
-                        new_callable=sc,
+                        return_value=[DummyKeyValStorageGatewayClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyKeyValStorageGatewayClass,
                     ),
                 ):
                     # Attempt to build the key-value storage gateway.
-                    di._build_keyval_storage_gateway_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="keyval_storage_gateway"
+                    )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

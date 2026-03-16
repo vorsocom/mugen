@@ -1,6 +1,6 @@
 """Provides an abstract base class for extensions."""
 
-__all__ = ["IExtensionBase"]
+__all__ = ["IExtensionBase", "IExtensionRegistry"]
 
 from abc import ABC, abstractmethod
 
@@ -16,3 +16,6 @@ class IExtensionBase(ABC):
     def platform_supported(self, platform: str) -> bool:
         """Determine if the extension supports the specified platform."""
         return not self.platforms or platform in self.platforms
+
+
+from mugen.core.contract.extension.registry import IExtensionRegistry

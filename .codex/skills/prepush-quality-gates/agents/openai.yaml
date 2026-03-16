@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prepush Quality Gates"
+  short_description: "Run full tests, coverage 100%, and full E2E."
+  default_prompt: "Use this skill to run mugen pre-push quality gates: full pytest suite, coverage fail-under 100, and full E2E template validation in one deterministic flow."

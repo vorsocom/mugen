@@ -1,16 +1,127 @@
 """Provides an abstract base class for creating chat completion gateways."""
 
-from typing import Any
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
+
+CompletionMessageContent = str | dict[str, Any] | list[dict[str, Any]] | None
+CompletionResponseContent = str | dict[str, Any] | list[dict[str, Any]] | None
+
+
+@dataclass(frozen=True)
+class CompletionMessage:
+    """A normalised completion message."""
+
+    role: str
+    content: CompletionMessageContent
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "CompletionMessage":
+        """Build a message from a dict payload."""
+        role = payload.get("role")
+        content = payload.get("content")
+
+        if not isinstance(role, str):
+            raise ValueError("Message role must be a string.")
+        if content is not None and not isinstance(content, (str, dict, list)):
+            raise ValueError("Message content must be a string, object, list, or null.")
+
+        if isinstance(content, list) and not all(
+            isinstance(item, dict) for item in content
+        ):
+            raise ValueError("Message content list items must be objects.")
+
+        return cls(role=role, content=content)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert message to a plain dict."""
+        return {"role": self.role, "content": self.content}
+
+
+@dataclass(frozen=True)
+class CompletionInferenceConfig:
+    """Provider-agnostic inference controls."""
+
+    max_completion_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    stop: list[str] = field(default_factory=list)
+    stream: bool = False
+    stream_options: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CompletionRequest:
+    """Normalized completion request payload."""
+
+    messages: list[CompletionMessage]
+    operation: str = "completion"
+    model: str | None = None
+    inference: CompletionInferenceConfig = field(
+        default_factory=CompletionInferenceConfig
+    )
+    vendor_params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CompletionUsage:
+    """Normalized token-usage details."""
+
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    vendor_fields: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CompletionResponse:
+    """Normalized completion response payload."""
+
+    content: CompletionResponseContent
+    model: str | None = None
+    stop_reason: str | None = None
+    message: dict[str, Any] | None = None
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    usage: CompletionUsage | None = None
+    vendor_fields: dict[str, Any] = field(default_factory=dict)
+    raw: Any = None
+
+
+class CompletionGatewayError(RuntimeError):
+    """Raised when a completion gateway cannot fulfill a request."""
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        operation: str,
+        message: str,
+        cause: Exception | None = None,
+        timeout_applied: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.operation = operation
+        self.cause = cause
+        self.timeout_applied = timeout_applied
 
 
 class ICompletionGateway(ABC):  # pylint: disable=too-few-public-methods
     """A chat completion gateway base class."""
 
     @abstractmethod
+    async def check_readiness(self) -> None:
+        """Validate provider readiness for startup fail-fast checks."""
+
+    @abstractmethod
+    async def aclose(self) -> None:
+        """Close provider resources asynchronously."""
+
+    @abstractmethod
     async def get_completion(
         self,
-        context: list[dict],
-        operation: str = "completion",
-    ) -> Any | None:
-        """Get LLM response based on context (conversation history + relevant data)."""
+        request: CompletionRequest,
+    ) -> CompletionResponse:
+        """Get LLM response from normalized completion request data."""

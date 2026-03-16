@@ -1,0 +1,141 @@
+name: Release Automation
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Release mode to run"
+        required: true
+        type: choice
+        options:
+          - prepare
+          - finish
+          - publish
+      bump:
+        description: "Semver bump for prepare mode (ignored if version is set)"
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: "Explicit release version (required for finish/publish modes)"
+        required: false
+        type: string
+      run_gates:
+        description: "Run full pre-push quality gates during prepare mode"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mugen
+          POSTGRES_USER: mugen
+          POSTGRES_PASSWORD: mugen
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mugen -d mugen"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install Dependencies
+        run: poetry install --with dev --no-interaction --no-root
+
+      - name: Configure Git Identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare Test Config
+        if: ${{ inputs.mode == 'prepare' && inputs.run_gates }}
+        run: |
+          mkdir -p .tmp/ci
+          poetry run python scripts/prepare_ci_config.py \
+            --sample conf/mugen.toml.sample \
+            --output mugen.e2e.toml \
+            --rdbms-url postgresql+psycopg://mugen:mugen@127.0.0.1:5432/mugen \
+            --aws-region us-east-1 \
+            --enable-web-platform
+          MUGEN_CONFIG_FILE=mugen.e2e.toml \
+            poetry run python scripts/run_migration_tracks.py \
+              --config-file mugen.e2e.toml \
+              upgrade head
+
+      - name: Run Release Automation
+        env:
+          ACP_E2E_STARTUP_TIMEOUT_SECS: "90"
+          GH_TOKEN: ${{ github.token }}
+          MUGEN_E2E_CONFIG_FILE: mugen.e2e.toml
+          MUGEN_CONFIG_FILE: mugen.e2e.toml
+        run: |
+          set -euo pipefail
+
+          release_python="$(poetry run which python)"
+
+          if [[ "${{ inputs.mode }}" == "prepare" ]]; then
+            cmd=(poetry run python scripts/release.py prepare --python "$release_python" --push)
+
+            if [[ -n "${{ inputs.version }}" ]]; then
+              cmd+=(--version "${{ inputs.version }}")
+            else
+              cmd+=(--bump "${{ inputs.bump }}")
+            fi
+
+            if [[ "${{ inputs.run_gates }}" != "true" ]]; then
+              cmd+=(--skip-gates)
+            fi
+
+            "${cmd[@]}"
+            exit 0
+          fi
+
+          if [[ "${{ inputs.mode }}" == "finish" ]]; then
+            if [[ -z "${{ inputs.version }}" ]]; then
+              echo "ERROR: version is required for finish mode." >&2
+              exit 1
+            fi
+
+            poetry run python scripts/release.py finish --version "${{ inputs.version }}"
+            exit 0
+          fi
+
+          if [[ "${{ inputs.mode }}" == "publish" ]]; then
+            if [[ -z "${{ inputs.version }}" ]]; then
+              echo "ERROR: version is required for publish mode." >&2
+              exit 1
+            fi
+
+            poetry run python scripts/release.py publish --version "${{ inputs.version }}"
+            exit 0
+          fi
+
+          echo "ERROR: unsupported mode '${{ inputs.mode }}'." >&2
+          exit 1

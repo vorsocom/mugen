@@ -1,0 +1,67 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsReportingReportSnapshots",
+  "create_payload": {
+    "MetricCodes": [
+      "ops_reporting_e2e_missing_metric"
+    ],
+    "WindowStart": "2025-01-01T00:00:00Z",
+    "WindowEnd": "2027-01-01T00:00:00Z",
+    "ScopeKey": "__all__",
+    "Note": "__SNAP_NOTE__"
+  },
+  "lookup": {
+    "field": "Note",
+    "value": "__SNAP_NOTE__"
+  },
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "generate_snapshot",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Note": "generate from e2e spec"
+      }
+    },
+    {
+      "name": "publish_snapshot",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Note": "publish from e2e spec"
+      }
+    },
+    {
+      "name": "archive_snapshot",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Note": "archive from e2e spec"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": "archived",
+    "event_entity_set": "OpsReportingReportSnapshots",
+    "event_entity_id_field": "Id",
+    "event_type_field": "Status",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [],
+  "positive_creates": []
+}

@@ -178,13 +178,17 @@ cython_debug/
 
 ### APPPLICATION
 hypercorn.toml
+hypercorn.e2e.toml
 mugen.toml
+mugen.e2e.toml
 
 data/fb.allow.list.txt
 data/storage.*
 data/*.db
 data/*.sqlite
 data/*.sqlite3
-data/.olmstore/@*
+data/web_media/
+data/.olmstore/*
 
 _dev*
+.tmp/

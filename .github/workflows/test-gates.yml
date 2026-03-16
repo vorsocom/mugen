@@ -1,0 +1,260 @@
+name: Test Gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - develop
+
+concurrency:
+  group: test-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-coverage:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mugen
+          POSTGRES_USER: mugen
+          POSTGRES_PASSWORD: mugen
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mugen -d mugen"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Cache Poetry Download Artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry/artifacts
+            ~/.cache/pypoetry/cache
+            ~/.cache/pip
+          key: ${{ runner.os }}-py312-poetry-cache-v2-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-py312-poetry-cache-v2-
+
+      - name: Install Dependencies
+        run: poetry install --with dev --no-interaction --no-root
+
+      - name: Prepare Test Config
+        run: |
+          mkdir -p .tmp/ci
+          poetry run python scripts/prepare_ci_config.py \
+            --sample conf/mugen.toml.sample \
+            --output mugen.e2e.toml \
+            --rdbms-url postgresql+psycopg://mugen:mugen@127.0.0.1:5432/mugen \
+            --aws-region us-east-1 \
+            --enable-web-platform
+          MUGEN_CONFIG_FILE=mugen.e2e.toml \
+            poetry run python scripts/run_migration_tracks.py \
+              --config-file mugen.e2e.toml \
+              upgrade head
+
+      - name: Run Unit Coverage Gate
+        run: |
+          set -euo pipefail
+
+          gate_python="$(poetry run which python)"
+          "$gate_python" -m coverage erase
+          MUGEN_CONFIG_FILE=mugen.e2e.toml \
+            "$gate_python" -m coverage run -m pytest mugen_test -q
+          "$gate_python" -m coverage report --fail-under=100
+
+      - name: Validate Coverage Badge
+        run: |
+          set -euo pipefail
+
+          gate_python="$(poetry run which python)"
+          coverage_total="$("$gate_python" -m coverage report --format=total)"
+          if [[ ! "$coverage_total" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: could not parse coverage total from coverage report." >&2
+            exit 1
+          fi
+          "$gate_python" scripts/update_coverage_badge.py \
+            --coverage "$coverage_total" \
+            --check
+
+  e2e-full:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mugen
+          POSTGRES_USER: mugen
+          POSTGRES_PASSWORD: mugen
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mugen -d mugen"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Cache Poetry Download Artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry/artifacts
+            ~/.cache/pypoetry/cache
+            ~/.cache/pip
+          key: ${{ runner.os }}-py312-poetry-cache-v2-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-py312-poetry-cache-v2-
+
+      - name: Install Dependencies
+        run: poetry install --with dev --no-interaction --no-root
+
+      - name: Prepare Test Config
+        run: |
+          mkdir -p .tmp/ci
+          poetry run python scripts/prepare_ci_config.py \
+            --sample conf/mugen.toml.sample \
+            --output mugen.e2e.toml \
+            --rdbms-url postgresql+psycopg://mugen:mugen@127.0.0.1:5432/mugen \
+            --aws-region us-east-1 \
+            --enable-web-platform
+          MUGEN_CONFIG_FILE=mugen.e2e.toml \
+            poetry run python scripts/run_migration_tracks.py \
+              --config-file mugen.e2e.toml \
+              upgrade head
+
+      - name: Run Full E2E Suite
+        env:
+          ACP_E2E_STARTUP_TIMEOUT_SECS: "90"
+        run: |
+          gate_python="$(poetry run which python)"
+          ACP_E2E_PYTHON_BIN="$gate_python" \
+          MUGEN_E2E_CONFIG_FILE=mugen.e2e.toml \
+          MUGEN_CONFIG_FILE=mugen.e2e.toml \
+          bash mugen_test/assets/e2e_specs/run_all_e2e_templates.sh \
+            --suite full \
+            --server-mode shared \
+            --no-ephemeral-db
+
+  migration-roundtrip:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mugen
+          POSTGRES_USER: mugen
+          POSTGRES_PASSWORD: mugen
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mugen -d mugen"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Cache Poetry Download Artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry/artifacts
+            ~/.cache/pypoetry/cache
+            ~/.cache/pip
+          key: ${{ runner.os }}-py312-poetry-cache-v2-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-py312-poetry-cache-v2-
+
+      - name: Install Dependencies
+        run: poetry install --with dev --no-interaction --no-root
+
+      - name: Install PostgreSQL Binaries
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y postgresql postgresql-client
+
+          if ! command -v initdb >/dev/null 2>&1; then
+            pg_bin_dir="$(find /usr/lib/postgresql -maxdepth 3 -type f -name initdb -printf '%h\n' | head -n 1)"
+            if [[ -z "$pg_bin_dir" ]]; then
+              echo "ERROR: initdb not found after PostgreSQL install." >&2
+              exit 1
+            fi
+            echo "$pg_bin_dir" >> "$GITHUB_PATH"
+            export PATH="$pg_bin_dir:$PATH"
+          fi
+
+          command -v initdb
+          command -v pg_ctl
+          command -v psql
+
+      - name: Prepare Test Config
+        run: |
+          mkdir -p .tmp/ci
+          poetry run python scripts/prepare_ci_config.py \
+            --sample conf/mugen.toml.sample \
+            --output mugen.e2e.toml \
+            --rdbms-url postgresql+psycopg://mugen:mugen@127.0.0.1:5432/mugen \
+            --aws-region us-east-1 \
+            --enable-web-platform
+
+      - name: Run Migration Roundtrip Gate
+        run: |
+          set -euo pipefail
+
+          gate_python="$(poetry run which python)"
+          MUGEN_CONFIG_FILE=mugen.e2e.toml \
+            "$gate_python" .codex/skills/alembic-migration-checker/scripts/check_alembic_migrations.py \
+              --roundtrip \
+              --config-file mugen.e2e.toml
+
+  test-gates:
+    if: ${{ always() }}
+    needs:
+      - unit-coverage
+      - e2e-full
+      - migration-roundtrip
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate Gate Results
+        run: |
+          if [[ "${{ needs.unit-coverage.result }}" != "success" || "${{ needs.e2e-full.result }}" != "success" || "${{ needs.migration-roundtrip.result }}" != "success" ]]; then
+            echo "One or more test gate jobs failed." >&2
+            exit 1
+          fi
+          echo "All test gate jobs passed."

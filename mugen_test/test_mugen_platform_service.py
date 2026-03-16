@@ -1,0 +1,33 @@
+"""Unit tests for mugen.core.service.platform.DefaultPlatformService."""
+
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock
+
+from mugen.core.service.platform import DefaultPlatformService
+
+
+class TestMugenPlatformService(unittest.TestCase):
+    """Tests active platform resolution and extension support checks."""
+
+    def test_active_platforms_and_extension_supported(self) -> None:
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(platforms=["matrix", "web"])
+        )
+        service = DefaultPlatformService(config=config, logging_gateway=Mock())
+
+        self.assertEqual(service.active_platforms, ["matrix", "web"])
+        self.assertTrue(service.extension_supported(SimpleNamespace(platforms=[])))
+        self.assertTrue(service.extension_supported(SimpleNamespace(platforms=["matrix"])))
+        self.assertFalse(service.extension_supported(SimpleNamespace(platforms=["whatsapp"])))
+
+    def test_platform_normalization_is_case_and_whitespace_insensitive(self) -> None:
+        config = SimpleNamespace(
+            mugen=SimpleNamespace(platforms=[" WEB ", "web", "Matrix"])
+        )
+        service = DefaultPlatformService(config=config, logging_gateway=Mock())
+
+        self.assertEqual(service.active_platforms, ["web", "matrix"])
+        self.assertTrue(service.extension_supported(SimpleNamespace(platforms=["Web"])))
+        self.assertTrue(service.extension_supported(SimpleNamespace(platforms=(" matrix ",))))
+        self.assertFalse(service.extension_supported(SimpleNamespace(platforms=["whatsapp"])))

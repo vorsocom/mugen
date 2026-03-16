@@ -33,7 +33,7 @@ class TestDIBuildUserService(unittest.TestCase):
                 injector = None
 
                 # Attempt to build the User service.
-                di._build_user_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="user_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -74,7 +74,7 @@ class TestDIBuildUserService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the User service.
-                di._build_user_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="user_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -113,7 +113,7 @@ class TestDIBuildUserService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "user": "nonexistent_module",
+                                    "user": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -124,7 +124,7 @@ class TestDIBuildUserService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the User service.
-                di._build_user_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="user_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -135,7 +135,7 @@ class TestDIBuildUserService(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (user_service).",
+                    "ERROR:root:Invalid configuration (user_service): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -163,7 +163,7 @@ class TestDIBuildUserService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "user": "valid_user_module",
+                                    "user": "valid_user_module:MissingClass",
                                 }
                             }
                         }
@@ -174,8 +174,6 @@ class TestDIBuildUserService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -188,11 +186,11 @@ class TestDIBuildUserService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.user.IUserService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the User service.
-                    di._build_user_service_provider(config, injector)
+                    di._build_provider(config, injector, provider_name="user_service")
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -203,7 +201,7 @@ class TestDIBuildUserService(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (user_service).",
+                        "ERROR:root:Invalid configuration (user_service): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -232,7 +230,7 @@ class TestDIBuildUserService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "user": "valid_user_module",
+                                    "user": "valid_user_module:DummyUserServiceClass",
                                 }
                             }
                         }
@@ -249,37 +247,41 @@ class TestDIBuildUserService(unittest.TestCase):
                     def __init__(self, keyval_storage_gateway, logging_gateway):
                         pass
 
-                    def add_known_user(self, user_id, displayname, room_id):
+                    async def add_known_user(self, user_id, displayname, room_id):
                         pass
 
-                    def get_known_users_list(self):
+                    async def get_known_users_list(self):
                         pass
 
-                    def get_user_display_name(self, user_id):
+                    async def get_user_display_name(self, user_id):
                         pass
 
-                    def save_known_users_list(self, known_users):
+                    async def save_known_users_list(self, known_users):
                         pass
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyUserServiceClass]
+                DummyUserServiceClass.__module__ = "valid_user_module"
+
 
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_user_module": unittest.mock.Mock(),
+                            "valid_user_module": unittest.mock.Mock(DummyUserServiceClass=DummyUserServiceClass),
                         },
                     ),
                     unittest.mock.patch(
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.user.IUserService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyUserServiceClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyUserServiceClass,
                     ),
                 ):
                     # Attempt to build the User service.
-                    di._build_user_service_provider(config, injector)
+                    di._build_provider(config, injector, provider_name="user_service")
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

@@ -33,7 +33,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                 injector = None
 
                 # Attempt to build the Platform service.
-                di._build_platform_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="platform_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -74,7 +74,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the Platform service.
-                di._build_platform_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="platform_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -113,7 +113,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "platform": "nonexistent_module",
+                                    "platform": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -124,7 +124,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the Platform service.
-                di._build_platform_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="platform_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -135,7 +135,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (platform_service).",
+                    "ERROR:root:Invalid configuration (platform_service): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -163,7 +163,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "platform": "valid_platform_module",
+                                    "platform": "valid_platform_module:MissingClass",
                                 }
                             }
                         }
@@ -174,8 +174,6 @@ class TestDIBuildPlatformService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -188,11 +186,13 @@ class TestDIBuildPlatformService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.platform.IPlatformService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the Platform service.
-                    di._build_platform_service_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="platform_service"
+                    )
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -203,7 +203,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (platform_service).",
+                        "ERROR:root:Invalid configuration (platform_service): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -232,7 +232,7 @@ class TestDIBuildPlatformService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "platform": "valid_platform_module",
+                                    "platform": "valid_platform_module:DummyPlatformServiceClass",
                                 }
                             }
                         }
@@ -256,25 +256,31 @@ class TestDIBuildPlatformService(unittest.TestCase):
                     def extension_supported(self, ext):
                         pass
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyPlatformServiceClass]
+                DummyPlatformServiceClass.__module__ = "valid_platform_module"
+
 
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_platform_module": unittest.mock.Mock(),
+                            "valid_platform_module": unittest.mock.Mock(DummyPlatformServiceClass=DummyPlatformServiceClass),
                         },
                     ),
                     unittest.mock.patch(
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.platform.IPlatformService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyPlatformServiceClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyPlatformServiceClass,
                     ),
                 ):
                     # Attempt to build the Platform service.
-                    di._build_platform_service_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="platform_service"
+                    )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

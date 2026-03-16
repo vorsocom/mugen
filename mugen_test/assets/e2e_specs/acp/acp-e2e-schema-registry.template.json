@@ -1,0 +1,115 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "__ACP_USERNAME__",
+    "password": "__ACP_PASSWORD__"
+  },
+  "tenant_id": null,
+  "entity_set": "Schemas",
+  "create_payload": {
+    "Key": "__CODE__",
+    "Version": 1,
+    "Title": "E2E Schema __CODE__",
+    "SchemaKind": "json_schema",
+    "SchemaJson": {
+      "type": "object",
+      "properties": {
+        "Name": {
+          "type": "string",
+          "default": "fallback-name"
+        },
+        "Count": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "Name"
+      ],
+      "additionalProperties": false
+    },
+    "Attributes": {
+      "channel": "e2e"
+    }
+  },
+  "lookup": {
+    "field": "Key",
+    "value": "__CODE__"
+  },
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "validate",
+      "target": "entity_set",
+      "expect_code": 200,
+      "payload": {
+        "SchemaDefinitionId": "__ENTITY_ID__",
+        "Payload": {
+          "Name": "ok",
+          "Count": 3
+        }
+      }
+    },
+    {
+      "name": "coerce",
+      "target": "entity_set",
+      "expect_code": 200,
+      "payload": {
+        "SchemaDefinitionId": "__ENTITY_ID__",
+        "Payload": {
+          "Count": 7
+        }
+      }
+    },
+    {
+      "name": "activate_version",
+      "target": "entity_set",
+      "expect_code": 200,
+      "payload": {
+        "Key": "__CODE__",
+        "Version": 1
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": "active",
+    "event_entity_set": "AuditEvents",
+    "event_entity_id_field": "EntityId",
+    "event_type_field": "Operation",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [
+    {
+      "name": "schema_bindings_missing_binding_kind",
+      "entity_set": "SchemaBindings",
+      "expect_code": 400,
+      "payload": {
+        "SchemaDefinitionId": "__ENTITY_ID__",
+        "TargetNamespace": "com.vorsocomputing.mugen.acp",
+        "TargetEntitySet": "TenantDomains__CODE__",
+        "IsRequired": true
+      }
+    }
+  ],
+  "positive_creates": [
+    {
+      "name": "schema_bindings_valid_create",
+      "entity_set": "SchemaBindings",
+      "expect_code": 201,
+      "payload": {
+        "SchemaDefinitionId": "__ENTITY_ID__",
+        "TargetNamespace": "com.vorsocomputing.mugen.acp",
+        "TargetEntitySet": "TenantDomains__CODE__",
+        "TargetAction": null,
+        "BindingKind": "create",
+        "IsRequired": true,
+        "IsActive": true
+      }
+    }
+  ]
+}

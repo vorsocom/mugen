@@ -1,0 +1,92 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsConnectorInstances",
+  "create_payload": {
+    "ConnectorTypeId": "6f886d5e-6a4d-4d7c-8d27-2f4878fbc4d0",
+    "DisplayName": "Ops Connector __CODE__",
+    "ConfigJson": {
+      "BaseUrl": "http://127.0.0.1:8081",
+      "HealthPath": "/api/core/acp/v1/auth/.well-known/jwks.json"
+    },
+    "SecretRef": "ops_connector_default",
+    "Status": "active"
+  },
+  "lookup": {
+    "field": "DisplayName",
+    "value": "Ops Connector __CODE__"
+  },
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "test_connection",
+      "target": "entity",
+      "expect_code": 200,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "TraceId": "ops-connector-test-__CODE__"
+      }
+    },
+    {
+      "name": "invoke",
+      "target": "entity",
+      "expect_code": 200,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "CapabilityName": "get_jwks",
+        "InputJson": {},
+        "TraceId": "ops-connector-invoke-__CODE__",
+        "ClientActionKey": "ops-connector-__CODE__"
+      }
+    },
+    {
+      "name": "invoke",
+      "target": "entity",
+      "expect_code": 200,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "CapabilityName": "get_jwks",
+        "InputJson": {},
+        "TraceId": "ops-connector-invoke-__CODE__",
+        "ClientActionKey": "ops-connector-__CODE__"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": "active",
+    "event_entity_set": "OpsConnectorCallLogs",
+    "event_entity_id_field": "ConnectorInstanceId",
+    "event_type_field": "Status",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [],
+  "positive_creates": [
+    {
+      "name": "create_connector_type",
+      "entity_set": "OpsConnectorTypes",
+      "scope": "global",
+      "expect_code": 201,
+      "payload": {
+        "Key": "ops_connector_type___CODE__",
+        "DisplayName": "Ops Connector Type __CODE__",
+        "AdapterKind": "http_json",
+        "CapabilitiesJson": {
+          "probe": {
+            "Method": "GET",
+            "PathTemplate": "/api/core/acp/v1/auth/.well-known/jwks.json"
+          }
+        }
+      }
+    }
+  ]
+}

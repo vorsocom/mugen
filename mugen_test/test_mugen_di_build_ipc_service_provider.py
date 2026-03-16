@@ -33,7 +33,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                 injector = None
 
                 # Attempt to build the IPC service.
-                di._build_ipc_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="ipc_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -74,7 +74,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the IPC service.
-                di._build_ipc_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="ipc_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -113,7 +113,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "ipc": "nonexistent_module",
+                                    "ipc": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -124,7 +124,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the IPC service.
-                di._build_ipc_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="ipc_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -135,7 +135,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (ipc_service).",
+                    "ERROR:root:Invalid configuration (ipc_service): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -163,7 +163,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "ipc": "valid_ipc_module",
+                                    "ipc": "valid_ipc_module:MissingClass",
                                 }
                             }
                         }
@@ -174,8 +174,6 @@ class TestDIBuildIPCService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -188,11 +186,11 @@ class TestDIBuildIPCService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.ipc.IIPCService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the IPC service.
-                    di._build_ipc_service_provider(config, injector)
+                    di._build_provider(config, injector, provider_name="ipc_service")
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -203,7 +201,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (ipc_service).",
+                        "ERROR:root:Invalid configuration (ipc_service): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -232,7 +230,7 @@ class TestDIBuildIPCService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "ipc": "valid_ipc_module",
+                                    "ipc": "valid_ipc_module:DummyIPCServiceClass",
                                 }
                             }
                         }
@@ -247,34 +245,39 @@ class TestDIBuildIPCService(unittest.TestCase):
                 class DummyIPCServiceClass(IIPCService):
                     """Dummy IPC class."""
 
-                    def __init__(self, logging_gateway):
+                    def __init__(self, config, logging_gateway):
                         pass
 
-                    def register_ipc_extension(self, ext):
+                    def bind_ipc_extension(self, ext, *, critical: bool = False):
+                        _ = critical
                         pass
 
-                    async def handle_ipc_request(self, platform, ipc_payload):
+                    async def handle_ipc_request(self, request):
                         pass
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyIPCServiceClass]
+                DummyIPCServiceClass.__module__ = "valid_ipc_module"
+
 
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_ipc_module": unittest.mock.Mock(),
+                            "valid_ipc_module": unittest.mock.Mock(DummyIPCServiceClass=DummyIPCServiceClass),
                         },
                     ),
                     unittest.mock.patch(
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.ipc.IIPCService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyIPCServiceClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyIPCServiceClass,
                     ),
                 ):
                     # Attempt to build the IPC service.
-                    di._build_ipc_service_provider(config, injector)
+                    di._build_provider(config, injector, provider_name="ipc_service")
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

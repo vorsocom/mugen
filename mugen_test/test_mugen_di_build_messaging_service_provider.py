@@ -1,5 +1,6 @@
 """Provides unit tests for mugen.core.di._build_messaging_service_provider."""
 
+from types import SimpleNamespace
 import unittest
 import unittest.mock
 
@@ -33,7 +34,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 injector = None
 
                 # Attempt to build the Messaging service.
-                di._build_messaging_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="messaging_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -74,7 +75,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the Messaging service.
-                di._build_messaging_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="messaging_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -113,7 +114,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "messaging": "nonexistent_module",
+                                    "messaging": "nonexistent_module:MissingClass",
                                 }
                             }
                         }
@@ -124,7 +125,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the Messaging service.
-                di._build_messaging_service_provider(config, injector)
+                di._build_provider(config, injector, provider_name="messaging_service")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -135,7 +136,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (messaging_service).",
+                    "ERROR:root:Invalid configuration (messaging_service): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -163,7 +164,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "messaging": "valid_messaging_module",
+                                    "messaging": "valid_messaging_module:MissingClass",
                                 }
                             }
                         }
@@ -174,8 +175,6 @@ class TestDIBuildMessagingService(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -188,11 +187,13 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.messaging.IMessagingService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the Messaging service.
-                    di._build_messaging_service_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="messaging_service"
+                    )
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -203,7 +204,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (messaging_service).",
+                        "ERROR:root:Invalid configuration (messaging_service): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -232,7 +233,7 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "service": {
-                                    "messaging": "valid_messaging_module",
+                                    "messaging": "default",
                                 }
                             }
                         }
@@ -250,11 +251,17 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         self,
                         config,
                         completion_gateway,
-                        keyval_storage_gateway,
+                        context_engine_service,
                         logging_gateway,
                         user_service,
                     ):
-                        pass
+                        _ = (
+                            config,
+                            completion_gateway,
+                            context_engine_service,
+                            logging_gateway,
+                            user_service,
+                        )
 
                     @property
                     def cp_extensions(self):
@@ -265,104 +272,67 @@ class TestDIBuildMessagingService(unittest.TestCase):
                         pass
 
                     @property
-                    def ctx_extensions(self):
-                        pass
-
-                    @property
                     def mh_extensions(self):
-                        pass
-
-                    @property
-                    def rag_extensions(self):
                         pass
 
                     @property
                     def rpp_extensions(self):
                         pass
 
-                    async def handle_audio_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: dict,
-                    ) -> list[dict] | None:
+                    async def handle_message(self, request):
+                        _ = request
                         pass
 
-                    async def handle_file_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: dict,
-                    ) -> list[dict] | None:
+                    def bind_cp_extension(self, ext, *, critical: bool = False):
+                        _ = ext
+                        _ = critical
                         pass
 
-                    async def handle_image_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: dict,
-                    ) -> list[dict] | None:
+                    def bind_ct_extension(self, ext, *, critical: bool = False):
+                        _ = ext
+                        _ = critical
                         pass
 
-                    async def handle_text_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: str,
-                        message_context: list[str] = None,
-                    ):
+                    def bind_mh_extension(self, ext, *, critical: bool = False):
+                        _ = ext
+                        _ = critical
                         pass
 
-                    async def handle_video_message(
-                        self,
-                        platform: str,
-                        room_id: str,
-                        sender: str,
-                        message: dict,
-                    ) -> list[dict] | None:
+                    def bind_rpp_extension(self, ext, *, critical: bool = False):
+                        _ = ext
+                        _ = critical
                         pass
 
-                    def register_cp_extension(self, ext):
-                        pass
+                DummyMessagingServiceClass.__module__ = "valid_messaging_module"
 
-                    def register_ct_extension(self, ext):
-                        pass
-
-                    def register_ctx_extension(self, ext):
-                        pass
-
-                    def register_mh_extension(self, ext):
-                        pass
-
-                    def register_rag_extension(self, ext):
-                        pass
-
-                    def register_rpp_extension(self, ext):
-                        pass
-
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyMessagingServiceClass]
+                injector.config = SimpleNamespace()
+                injector.completion_gateway = object()
+                injector.context_engine_service = object()
+                injector.logging_gateway = object()
+                injector.user_service = object()
 
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_messaging_module": unittest.mock.Mock(),
+                            "valid_messaging_module": unittest.mock.Mock(DummyMessagingServiceClass=DummyMessagingServiceClass),
                         },
                     ),
                     unittest.mock.patch(
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.service.messaging.IMessagingService.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyMessagingServiceClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyMessagingServiceClass,
                     ),
                 ):
                     # Attempt to build the Messaging service.
-                    di._build_messaging_service_provider(config, injector)
+                    di._build_provider(
+                        config, injector, provider_name="messaging_service"
+                    )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

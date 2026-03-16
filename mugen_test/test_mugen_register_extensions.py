@@ -1,1099 +1,248 @@
-"""Provides unit tests for mugen.register_extensions."""
+"""Unit tests for tokenized extension registration."""
 
-# pylint: disable=too-many-lines
+from __future__ import annotations
 
 from types import SimpleNamespace
 import unittest
-import unittest.mock
+from unittest.mock import patch
 
 from quart import Quart
 
-from mugen import register_extensions
-from mugen.core.contract.extension.ct import ICTExtension
-from mugen.core.contract.extension.ctx import ICTXExtension
-from mugen.core.contract.extension.fw import IFWExtension
-from mugen.core.contract.extension.ipc import IIPCExtension
-from mugen.core.contract.extension.mh import IMHExtension
-from mugen.core.contract.extension.rag import IRAGExtension
-from mugen.core.contract.extension.rpp import IRPPExtension
+import mugen as mugen_mod
+from mugen.core.bootstrap.extensions import ExtensionTokenSpec
+from mugen.core.contract.extension.cp import ICPExtension
+from mugen import BootstrapConfigError, ExtensionLoadError, register_extensions
 
 
-# pylint: disable=too-many-public-methods
-class TestMuGenInitRegisterExtensions(unittest.IsolatedAsyncioTestCase):
-    """Unit tests for mugen.register_extensions."""
+class _RegistryStub:
+    def __init__(self, *, result: bool = True) -> None:
+        self.calls: list[dict] = []
+        self._result = result
 
-    async def test_plugin_config_unavailable(self) -> None:
-        """Test effects of missing plugins configuration."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
+    async def register(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return self._result
 
-        # Create dummy config for testing.
-        config = SimpleNamespace(mugen=SimpleNamespace())
 
-        with self.assertLogs(logger="test_app", level="ERROR") as logger:
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[0],
-                "ERROR:test_app:Plugin configuration attribute error.",
+class _DummyCPExt(ICPExtension):
+    @property
+    def platforms(self) -> list[str]:
+        return []
+
+    @property
+    def commands(self) -> list[str]:
+        return ["clear"]
+
+    async def process_message(self, message: str, room_id: str, user_id: str):
+        _ = (message, room_id, user_id)
+        return None
+
+
+def _provider_kwargs(app: Quart) -> dict[str, object]:
+    return {
+        "ipc_provider": lambda: SimpleNamespace(),
+        "logger_provider": lambda: app.logger,
+        "messaging_provider": lambda: SimpleNamespace(),
+        "platform_provider": lambda: SimpleNamespace(),
+    }
+
+
+def _base_cfg(
+    extensions: list[SimpleNamespace],
+    *,
+    legacy_core_extensions: object | None = None,
+    legacy_core_plugins: object | None = None,
+) -> SimpleNamespace:
+    core = SimpleNamespace()
+    if legacy_core_extensions is not None:
+        core.extensions = legacy_core_extensions
+    if legacy_core_plugins is not None:
+        core.plugins = legacy_core_plugins
+    return SimpleNamespace(
+        mugen=SimpleNamespace(
+            modules=SimpleNamespace(
+                core=core,
+                extensions=extensions,
             )
+        )
+    )
 
-    async def test_plugin_config_available(self) -> None:
-        """Test effects of having plugins configuration."""
-        # Create dummy app to get context.
+
+class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
+    async def test_extension_enabled_parses_string_values(self) -> None:
+        self.assertTrue(mugen_mod._extension_enabled(SimpleNamespace(enabled="yes")))  # pylint: disable=protected-access
+        self.assertFalse(mugen_mod._extension_enabled(SimpleNamespace(enabled="off")))  # pylint: disable=protected-access
+        self.assertTrue(mugen_mod._extension_enabled(SimpleNamespace(enabled="maybe")))  # pylint: disable=protected-access
+
+    async def test_register_extensions_rejects_legacy_path_config(self) -> None:
         app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    core=SimpleNamespace(
-                        plugins=[],
-                    ),
+        config = _base_cfg(
+            [
+                SimpleNamespace(
+                    type="cp",
+                    path="legacy.module:LegacyClass",
                 )
-            )
+            ]
         )
-
-        with self.assertLogs(logger="test_app", level="DEBUG") as logger:
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[0],
-                "DEBUG:test_app:Adding plugins for loading.",
+        with self.assertRaises(ExtensionLoadError):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
             )
 
-    async def test_extension_config_unavailable(self) -> None:
-        """Test effects of missing extensions configuration."""
-        # Create dummy app to get context.
+    async def test_register_extensions_fails_for_critical_unknown_token(self) -> None:
         app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(mugen=SimpleNamespace())
-
-        with self.assertLogs(logger="test_app", level="ERROR") as logger:
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[1],
-                "ERROR:test_app:Extension configuration attribute error.",
-            )
-
-    async def test_extension_config_available(self) -> None:
-        """Test effects of having extensions configuration."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[],
+        config = _base_cfg(
+            [
+                SimpleNamespace(
+                    type="cp",
+                    token="unknown.token",
+                    critical=True,
                 )
-            )
+            ]
         )
-
-        with self.assertLogs(logger="test_app", level="DEBUG") as logger:
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[1],
-                "DEBUG:test_app:Adding extensions for loading.",
+        with self.assertRaises(ExtensionLoadError):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
             )
 
-    async def test_import_module_failure(self) -> None:
-        """Test effects of module import failing."""
-        # Create dummy app to get context.
+    async def test_register_extensions_ignores_noncritical_unknown_token(self) -> None:
         app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="extension_type",
-                            path="extension.module",
-                        )
-                    ],
+        config = _base_cfg(
+            [
+                SimpleNamespace(
+                    type="cp",
+                    token="unknown.token",
+                    critical=False,
                 )
-            )
+            ]
+        )
+        await register_extensions(
+            app=app,
+            config_provider=lambda: config,
+            **_provider_kwargs(app),
         )
 
-        with (
-            self.assertLogs(logger="test_app"),
-            self.assertRaises(SystemExit),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-
-    async def test_missing_subclass(self) -> None:
-        """Test effects of missing subclass of the relevant extension type."""
-        # Create dummy app to get context.
+    async def test_register_extensions_skips_disabled_entries(self) -> None:
         app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="ct",
-                            path="ct_ext",
-                        )
-                    ],
+        config = _base_cfg(
+            [
+                SimpleNamespace(
+                    type="cp",
+                    token="core.cp.clear_history",
+                    enabled=False,
                 )
-            )
+            ]
         )
+        registry = _RegistryStub()
+        await register_extensions(
+            app=app,
+            config_provider=lambda: config,
+            **_provider_kwargs(app),
+            extension_registry_provider=lambda: registry,
+        )
+        self.assertEqual(registry.calls, [])
 
-        sc = unittest.mock.Mock
-        sc.return_value = []
-
-        with (
-            self.assertLogs(logger="test_app"),
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "ct_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
-                new_callable=sc,
-            ),
-            self.assertRaises(SystemExit),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-
-    async def test_incomplete_subclass_implmentation(self) -> None:
-        """Test effects of incomplete subclass implementation."""
-        # Create dummy app to get context.
+    async def test_register_extensions_passes_resolved_type_and_token_to_registry(self) -> None:
         app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="ct",
-                            path="ct_ext",
-                        )
-                    ],
+        config = _base_cfg(
+            [
+                SimpleNamespace(
+                    type="cp",
+                    token="core.cp.clear_history",
+                    critical=True,
                 )
-            )
+            ]
         )
-
-        class DummyExtensionClass(ICTExtension):
-            """Dummy extension class."""
-
-            __module__ = "ct_ext"
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app"),
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "ct_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
-                new_callable=sc,
-            ),
-            self.assertRaises(SystemExit),
+        registry = _RegistryStub(result=True)
+        with patch(
+            "mugen.resolve_extension_spec",
+            return_value=ExtensionTokenSpec("cp", ICPExtension, _DummyCPExt),
         ):
-            await register_extensions(config=config, logger=app.logger)
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
+                extension_registry_provider=lambda: registry,
+            )
+        self.assertEqual(len(registry.calls), 1)
+        self.assertEqual(registry.calls[0]["extension_type"], "cp")
+        self.assertEqual(registry.calls[0]["token"], "core.cp.clear_history")
+        self.assertTrue(registry.calls[0]["critical"])
 
-    async def test_register_unsupported_conversational_trigger_extension(self) -> None:
-        """Test registration of unsupported conversational trigger extension."""
-        # Create dummy app to get context.
+    async def test_register_extensions_rejects_type_token_mismatch_when_critical(self) -> None:
         app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="ct",
-                            path="ct_ext",
-                        )
-                    ],
-                ),
-                platforms=["telnet"],
-            )
-        )
-
-        class DummyExtensionClass(ICTExtension):
-            """Dummy extension class."""
-
-            __module__ = "ct_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-                return ["unsupported_platform"]
-
-            @property
-            def triggers(self) -> list[str]:
-                """Get the list of triggers that activate the service provider."""
-
-            async def process_message(
-                self,
-                message: str,
-                role: str,
-                room_id: str,
-                user_id: str,
-            ) -> None:
-                """Process message for conversational triggers."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "ct_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "WARNING:test_app:Extension not supported by active platforms: ct_ext.",
-            )
-
-    async def test_register_supported_conversational_trigger_extension(self) -> None:
-        """Test registration of supported conversational trigger extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="ct",
-                            path="ct_ext",
-                        )
-                    ],
-                ),
-            )
-        )
-
-        class DummyExtensionClass(ICTExtension):
-            """Dummy extension class."""
-
-            __module__ = "ct_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-
-            @property
-            def triggers(self) -> list[str]:
-                """Get the list of triggers that activate the service provider."""
-
-            async def process_message(
-                self,
-                message: str,
-                role: str,
-                room_id: str,
-                user_id: str,
-            ) -> None:
-                """Process message for conversational triggers."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "ct_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.ct.ICTExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "DEBUG:test_app:Registered CT extension: ct_ext.",
-            )
-
-    async def test_register_unsupported_context_extension(self) -> None:
-        """Test registration of unsupported context extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="ctx",
-                            path="ctx_ext",
-                        )
-                    ],
-                ),
-                platforms=["telnet"],
-            )
-        )
-
-        class DummyExtensionClass(ICTXExtension):
-            """Dummy extension class."""
-
-            __module__ = "ctx_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-                return ["unsupported_platform"]
-
-            def get_context(self, user_id: str) -> list[dict]:
-                """Provides conversation context through system messages."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "ctx_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.ctx.ICTXExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "WARNING:test_app:Extension not supported by active platforms:"
-                " ctx_ext.",
-            )
-
-    async def test_register_supported_context_extension(self) -> None:
-        """Test registration of supported context extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="ctx",
-                            path="ctx_ext",
-                        )
-                    ],
-                ),
-            )
-        )
-
-        class DummyExtensionClass(ICTXExtension):
-            """Dummy extension class."""
-
-            __module__ = "ctx_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-
-            def get_context(self, user_id: str) -> list[dict]:
-                """Provides conversation context through system messages."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "ctx_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.ctx.ICTXExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "DEBUG:test_app:Registered CTX extension: ctx_ext.",
-            )
-
-    async def test_register_unsupported_framework_extension(self) -> None:
-        """Test registration of unsupported framework extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="fw",
-                            path="fw_ext",
-                        )
-                    ],
-                ),
-                platforms=["telnet"],
-            )
-        )
-
-        class DummyExtensionClass(IFWExtension):
-            """Dummy extension class."""
-
-            __module__ = "fw_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-                return ["unsupported_platform"]
-
-            async def setup(self) -> None:
-                """Perform extension setup."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "fw_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.fw.IFWExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "WARNING:test_app:Extension not supported by active platforms: fw_ext.",
-            )
-
-    async def test_register_supported_framework_extension(self) -> None:
-        """Test registration of supported framework extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="fw",
-                            path="fw_ext",
-                        )
-                    ],
-                ),
-            )
-        )
-
-        class DummyExtensionClass(IFWExtension):
-            """Dummy extension class."""
-
-            __module__ = "fw_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-
-            async def setup(self) -> None:
-                """Perform extension setup."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "fw_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.fw.IFWExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "DEBUG:test_app:Registered FW extension: fw_ext.",
-            )
-
-    async def test_register_unsupported_interprocess_communication_extension(
-        self,
-    ) -> None:
-        """Test registration of unsupported inter-process communication extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="ipc",
-                            path="ipc_ext",
-                        )
-                    ],
-                ),
-                platforms=["telnet"],
-            )
-        )
-
-        class DummyExtensionClass(IIPCExtension):
-            """Dummy extension class."""
-
-            __module__ = "ipc_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-                return ["unsupported_platform"]
-
-            @property
-            def ipc_commands(self) -> list[str]:
-                """Get the list of ipc commands processed by this provider.."""
-
-            async def process_ipc_command(self, payload: dict) -> None:
-                """Process an IPC command."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "ipc_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.ipc.IIPCExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "WARNING:test_app:Extension not supported by active platforms:"
-                " ipc_ext.",
-            )
-
-    async def test_register_supported_interprocess_communication_extension(
-        self,
-    ) -> None:
-        """Test registration of supported inter-process communication extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="ipc",
-                            path="ipc_ext",
-                        )
-                    ],
-                ),
-            )
-        )
-
-        class DummyExtensionClass(IIPCExtension):
-            """Dummy extension class."""
-
-            __module__ = "ipc_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-
-            @property
-            def ipc_commands(self) -> list[str]:
-                """Get the list of ipc commands processed by this provider.."""
-
-            async def process_ipc_command(self, payload: dict) -> None:
-                """Process an IPC command."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "ipc_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.ipc.IIPCExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "DEBUG:test_app:Registered IPC extension: ipc_ext.",
-            )
-
-    async def test_register_unsupported_message_handler_extension(self) -> None:
-        """Test registration of unsupported message handler extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="mh",
-                            path="mh_ext",
-                        )
-                    ],
-                ),
-                platforms=["telnet"],
-            )
-        )
-
-        class DummyExtensionClass(IMHExtension):
-            """Dummy extension class."""
-
-            __module__ = "mh_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-                return ["unsupported_platform"]
-
-            @property
-            def message_types(self) -> list[str]:
-                """Get the list of message types that the extension handles."""
-
-            # pylint: disable=too-many-arguments
-            # pylint: disable=too-many-positional-arguments
-            async def handle_message(
-                self,
-                platform: str,
-                room_id: str,
-                sender: str,
-                message: dict | str,
-                message_context: list[dict] = None,
-            ) -> None:
-                """Handle a message."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "mh_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.mh.IMHExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "WARNING:test_app:Extension not supported by active platforms: mh_ext.",
-            )
-
-    async def test_register_supported_message_handler_extension(self) -> None:
-        """Test registration of supported message handler extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="mh",
-                            path="mh_ext",
-                        )
-                    ],
-                ),
-            )
-        )
-
-        class DummyExtensionClass(IMHExtension):
-            """Dummy extension class."""
-
-            __module__ = "mh_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-
-            @property
-            def message_types(self) -> list[str]:
-                """Get the list of message types that the extension handles."""
-
-            # pylint: disable=too-many-arguments
-            # pylint: disable=too-many-positional-arguments
-            async def handle_message(
-                self,
-                platform: str,
-                room_id: str,
-                sender: str,
-                message: dict | str,
-                message_context: list[dict] = None,
-            ) -> None:
-                """Handle a message."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "mh_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.mh.IMHExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "DEBUG:test_app:Registered MH extension: mh_ext.",
-            )
-
-    async def test_register_unsupported_retrieval_augnmented_generation_extension(
-        self,
-    ) -> None:
-        """Test registration of unsupported retrieval augmented generation extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="rag",
-                            path="rag_ext",
-                        )
-                    ],
-                ),
-                platforms=["telnet"],
-            )
-        )
-
-        class DummyExtensionClass(IRAGExtension):
-            """Dummy extension class."""
-
-            __module__ = "rag_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-                return ["unsupported_platform"]
-
-            @property
-            def cache_key(self) -> str:
-                """Get key used to access the provider cache."""
-
-            async def retrieve(
-                self,
-                sender: str,
-                message: str,
-                chat_history: dict,
-            ) -> None:
-                """Perform knowledge retrieval."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "rag_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.rag.IRAGExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "WARNING:test_app:Extension not supported by active platforms:"
-                " rag_ext.",
-            )
-
-    async def test_register_supported_retrieval_augnmented_generation_extension(
-        self,
-    ) -> None:
-        """Test registration of supported retrieval augmented generation extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="rag",
-                            path="rag_ext",
-                        )
-                    ],
-                ),
-            )
-        )
-
-        class DummyExtensionClass(IRAGExtension):
-            """Dummy extension class."""
-
-            __module__ = "rag_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-
-            @property
-            def cache_key(self) -> str:
-                """Get key used to access the provider cache."""
-
-            async def retrieve(
-                self,
-                sender: str,
-                message: str,
-                chat_history: dict,
-            ) -> None:
-                """Perform knowledge retrieval."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "rag_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.rag.IRAGExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "DEBUG:test_app:Registered RAG extension: rag_ext.",
-            )
-
-    async def test_register_unsupported_response_preprocessor_extension(self) -> None:
-        """Test registration of unsupported response pre-processor extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="rpp",
-                            path="rpp_ext",
-                        )
-                    ],
-                ),
-                platforms=["telnet"],
-            )
-        )
-
-        class DummyExtensionClass(IRPPExtension):
-            """Dummy extension class."""
-
-            __module__ = "rpp_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-                return ["unsupported_platform"]
-
-            async def preprocess_response(
-                self,
-                room_id: str,
-                user_id: str,
-            ) -> str:
-                """Preprocess the assistant response."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "rpp_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.rpp.IRPPExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "WARNING:test_app:Extension not supported by active platforms:"
-                " rpp_ext.",
-            )
-
-    async def test_register_supported_response_preprocessor_extension(self) -> None:
-        """Test registration of supported response pre-processor extension."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="rpp",
-                            path="rpp_ext",
-                        )
-                    ],
-                ),
-            )
-        )
-
-        class DummyExtensionClass(IRPPExtension):
-            """Dummy extension class."""
-
-            __module__ = "rpp_ext"
-
-            @property
-            def platforms(self) -> list[str]:
-                """Get the platform that the extension is targeting."""
-
-            async def preprocess_response(
-                self,
-                room_id: str,
-                user_id: str,
-            ) -> str:
-                """Preprocess the assistant response."""
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "rpp_ext": unittest.mock.Mock(),
-                },
-            ),
-            unittest.mock.patch(
-                target="mugen.core.contract.extension.rpp.IRPPExtension.__subclasses__",
-                new_callable=sc,
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "DEBUG:test_app:Registered RPP extension: rpp_ext.",
-            )
-
-    async def test_unknown_extension_type(self) -> None:
-        """Test effects of unknown extension type."""
-        # Create dummy app to get context.
-        app = Quart("test_app")
-
-        # Create dummy config for testing.
-        config = SimpleNamespace(
-            mugen=SimpleNamespace(
-                modules=SimpleNamespace(
-                    extensions=[
-                        SimpleNamespace(
-                            type="xxx",
-                            path="xxx_ext",
-                        )
-                    ],
+        config = _base_cfg(
+            [
+                SimpleNamespace(
+                    type="mh",
+                    token="core.cp.clear_history",
+                    critical=True,
                 )
-            )
+            ]
         )
-
-        # pylint: disable=too-few-public-methods
-        class DummyExtensionClass:
-            """Dummy extension class."""
-
-            __module__ = "xxx_ext"
-
-        sc = unittest.mock.Mock
-        sc.return_value = [DummyExtensionClass]
-
-        with (
-            self.assertLogs(logger="test_app", level="DEBUG") as logger,
-            unittest.mock.patch.dict(
-                "sys.modules",
-                {
-                    "xxx_ext": unittest.mock.Mock(),
-                },
-            ),
-        ):
-            await register_extensions(config=config, logger=app.logger)
-            self.assertEqual(
-                logger.output[2],
-                "WARNING:test_app:Unknown extension type: xxx.",
+        with self.assertRaises(ExtensionLoadError):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
             )
-            self.assertEqual(
-                logger.output[3],
-                "WARNING:test_app:Extension not supported by active platforms:"
-                " xxx_ext.",
+
+    async def test_register_extensions_wraps_invalid_extension_schema(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(mugen=SimpleNamespace(modules=SimpleNamespace(extensions="bad")))
+        with self.assertRaises(BootstrapConfigError):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
+            )
+
+    async def test_register_extensions_returns_grouped_registered_tokens(self) -> None:
+        app = Quart("test_app")
+        config = _base_cfg(
+            [
+                SimpleNamespace(type="cp", token="core.cp.clear_history"),
+                SimpleNamespace(type="cp", token="core.cp.clear_history"),
+            ]
+        )
+        registry = _RegistryStub(result=True)
+
+        with patch(
+            "mugen.resolve_extension_spec",
+            return_value=ExtensionTokenSpec("cp", ICPExtension, _DummyCPExt),
+        ):
+            report = await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
+                extension_registry_provider=lambda: registry,
+            )
+
+        self.assertEqual(report, {"cp": ["core.cp.clear_history"]})
+
+    async def test_register_extensions_rejects_removed_core_extensions_key(self) -> None:
+        app = Quart("test_app")
+        config = _base_cfg(
+            [],
+            legacy_core_extensions=[SimpleNamespace(type="cp", token="core.cp.clear_history")],
+        )
+        with self.assertRaises(BootstrapConfigError):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
+            )
+
+    async def test_register_extensions_rejects_removed_core_plugins_key(self) -> None:
+        app = Quart("test_app")
+        config = _base_cfg([], legacy_core_plugins=[])
+        with self.assertRaises(BootstrapConfigError):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
             )

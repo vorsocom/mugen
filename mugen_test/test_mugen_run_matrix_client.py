@@ -8,11 +8,51 @@ import unittest.mock
 
 from quart import Quart
 
+import mugen as mugen_mod
 from mugen import run_matrix_client
+from mugen.core.contract.service.ipc import IPCCriticalDispatchError
+
+
+def _sync_signal(wait_side_effect=None) -> SimpleNamespace:
+    wait_kwargs = {}
+    if wait_side_effect is not None:
+        wait_kwargs["side_effect"] = wait_side_effect
+    return SimpleNamespace(
+        wait=unittest.mock.AsyncMock(**wait_kwargs),
+        clear=unittest.mock.Mock(),
+    )
+
+
+def _matrix_config(profile_displayname: str | None = "Test Agent") -> SimpleNamespace:
+    payload: dict[str, object] = {}
+    if profile_displayname is not None:
+        payload["profile_displayname"] = profile_displayname
+    return SimpleNamespace(matrix=SimpleNamespace(**payload))
 
 
 class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
     """Unit tests for mugen.run_matrix_client."""
+
+    async def test_run_matrix_client_uses_multi_profile_runner_when_available(
+        self,
+    ) -> None:
+        runner = unittest.mock.AsyncMock()
+        client = SimpleNamespace(run_profiles_forever=runner)
+
+        await run_matrix_client(
+            config_provider=lambda: SimpleNamespace(),
+            logger_provider=lambda: unittest.mock.Mock(),
+            matrix_provider=lambda: client,
+            started_callback="started",
+            degraded_callback="degraded",
+            healthy_callback="healthy",
+        )
+
+        runner.assert_awaited_once_with(
+            started_callback="started",
+            degraded_callback="degraded",
+            healthy_callback="healthy",
+        )
 
     async def test_normal_run(self) -> None:
         """Test normal run of matrix client."""
@@ -20,24 +60,18 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClientNormal:
             """Dummy matrix client."""
 
-            synced = unittest.mock.AsyncMock()
+            synced = _sync_signal()
             get_profile = unittest.mock.AsyncMock()
             get_profile.return_value = SimpleNamespace(displayname="")
             set_displayname = unittest.mock.AsyncMock()
             sync_forever = unittest.mock.AsyncMock()
             sync_token = unittest.mock.MagicMock()
-            trust_known_user_devices = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
 
             async def __aenter__(self) -> None:
                 """Initialisation routine."""
@@ -53,9 +87,9 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
         with self.assertLogs(logger="test_app", level="DEBUG") as logger:
             await run_matrix_client(
-                config=config,
-                logger=app.logger,
-                matrix_client=DummyMatrixClientNormal(),
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClientNormal,
             )
             self.assertEqual(logger.output[0], "DEBUG:test_app:Matrix client started.")
 
@@ -67,24 +101,18 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClientNormal:
             """Dummy matrix client."""
 
-            synced = unittest.mock.AsyncMock()
+            synced = _sync_signal()
             get_profile = unittest.mock.AsyncMock()
             get_profile.return_value = SimpleNamespace(displayname="Test Agent")
             set_displayname = unittest.mock.AsyncMock()
             sync_forever = unittest.mock.AsyncMock()
             sync_token = unittest.mock.MagicMock()
-            trust_known_user_devices = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
 
             async def __aenter__(self) -> None:
                 """Initialisation routine."""
@@ -100,11 +128,145 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
 
         with self.assertLogs(logger="test_app", level="DEBUG") as logger:
             await run_matrix_client(
-                config=config,
-                logger=app.logger,
-                matrix_client=DummyMatrixClientNormal(),
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClientNormal,
             )
             self.assertEqual(logger.output[0], "DEBUG:test_app:Matrix client started.")
+
+    async def test_normal_run_ignores_legacy_root_assistant_name(self) -> None:
+        app = Quart("test_app")
+        config = SimpleNamespace(
+            matrix=SimpleNamespace(
+                assistant=SimpleNamespace(name="Legacy Agent"),
+            )
+        )
+
+        class DummyMatrixClientNormal:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock()
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        await run_matrix_client(
+            config_provider=lambda: config,
+            logger_provider=lambda: app.logger,
+            matrix_provider=DummyMatrixClientNormal,
+        )
+
+        DummyMatrixClientNormal.set_displayname.assert_not_awaited()
+
+    async def test_started_callback_is_invoked_after_first_sync(self) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+        started = unittest.mock.Mock()
+
+        class DummyMatrixClient:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(return_value=None)
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        await run_matrix_client(
+            config_provider=lambda: config,
+            logger_provider=lambda: app.logger,
+            matrix_provider=DummyMatrixClient,
+            started_callback=started,
+        )
+        started.assert_called_once_with()
+
+    async def test_sync_signal_clear_awaitable_is_awaited(self) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+        clear_mock = unittest.mock.AsyncMock()
+
+        class DummyMatrixClient:
+            synced = SimpleNamespace(
+                wait=unittest.mock.AsyncMock(),
+                clear=clear_mock,
+            )
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(return_value=None)
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        await run_matrix_client(
+            config_provider=lambda: config,
+            logger_provider=lambda: app.logger,
+            matrix_provider=DummyMatrixClient,
+        )
+        clear_mock.assert_awaited_once_with()
+
+    async def test_sync_signal_without_clear_is_supported(self) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+
+        class DummyMatrixClient:
+            synced = SimpleNamespace(wait=unittest.mock.AsyncMock())
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(return_value=None)
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        await run_matrix_client(
+            config_provider=lambda: config,
+            logger_provider=lambda: app.logger,
+            matrix_provider=DummyMatrixClient,
+        )
 
     async def test_cancelled_error(self) -> None:
         """Test effects of asyncio.exceptions.CancelledError."""
@@ -112,18 +274,12 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
         app = Quart("test_app")
 
         # Create dummy config for testing.
-        config = SimpleNamespace(
-            matrix=SimpleNamespace(
-                assistant=SimpleNamespace(
-                    name="Test Agent",
-                )
-            )
-        )
+        config = _matrix_config()
 
         class DummyMatrixClient:
             """Dummy matrix client."""
 
-            synced = unittest.mock.AsyncMock()
+            synced = _sync_signal()
             profile = unittest.mock.Mock()
             get_profile = unittest.mock.AsyncMock()
             get_profile.return_value = SimpleNamespace(displayname="")
@@ -132,7 +288,7 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
                 side_effect=asyncio.exceptions.CancelledError
             )
             sync_token = unittest.mock.MagicMock()
-            trust_known_user_devices = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
 
             async def __aenter__(self) -> None:
                 """Initialisation routine."""
@@ -146,12 +302,637 @@ class TestMuGenInitRunMatrixClient(unittest.IsolatedAsyncioTestCase):
             ) -> bool:
                 """Finalisation routine."""
 
-        with self.assertLogs(logger="test_app", level="DEBUG") as logger:
+        with (
+            self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            self.assertRaises(asyncio.exceptions.CancelledError),
+        ):
             await run_matrix_client(
-                config=config,
-                logger=app.logger,
-                matrix_client=DummyMatrixClient(),
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
             )
-            self.assertEqual(
-                logger.output[0], "ERROR:test_app:Matrix client shutting down."
+        self.assertEqual(
+            logger.output[0], "ERROR:test_app:Matrix client shutting down."
+        )
+
+    async def test_sync_transient_error_retries_and_recovers(self) -> None:
+        """Retry after transient sync failure and recover."""
+        app = Quart("test_app")
+        config = _matrix_config()
+
+        class DummyMatrixClient:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(
+                side_effect=[RuntimeError("temporary sync error"), None]
+            )
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with (
+            unittest.mock.patch.object(mugen_mod.random, "uniform", return_value=0.0),
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "sleep",
+                new=unittest.mock.AsyncMock(),
+            ) as sleep_mock,
+            self.assertLogs(logger="test_app", level="DEBUG") as logger,
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+            )
+
+        self.assertEqual(DummyMatrixClient.sync_forever.await_count, 2)
+        sleep_mock.assert_awaited_once_with(1.0)
+        self.assertTrue(any("retrying." in line for line in logger.output))
+        self.assertTrue(any("Matrix client started." in line for line in logger.output))
+
+    async def test_runtime_health_monitor_critical_failure_fails_closed(self) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+        degraded = unittest.mock.Mock()
+
+        async def _sync_forever(*, since=None, timeout=100, full_state=True, set_presence="online"):
+            _ = (since, timeout, full_state, set_presence)
+            await asyncio.Event().wait()
+
+        class DummyMatrixClient:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(side_effect=_sync_forever)
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+            monitor_runtime_health = unittest.mock.AsyncMock(
+                side_effect=IPCCriticalDispatchError(
+                    platform="matrix",
+                    command="matrix_event",
+                    handler="CriticalHandler",
+                    code="handler_exception",
+                    error="boom",
+                )
+            )
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with self.assertRaises(IPCCriticalDispatchError):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+                degraded_callback=degraded,
+            )
+
+        degraded.assert_called_once()
+        self.assertIn(
+            "IPCCriticalDispatchError",
+            degraded.call_args.args[0],
+        )
+
+    async def test_sync_transient_error_emits_runtime_health_callbacks(self) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+        degraded = unittest.mock.Mock()
+        healthy = unittest.mock.Mock()
+
+        class DummyMatrixClient:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(
+                side_effect=[RuntimeError("temporary sync error"), None]
+            )
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with (
+            unittest.mock.patch.object(mugen_mod.random, "uniform", return_value=0.0),
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "sleep",
+                new=unittest.mock.AsyncMock(),
+            ),
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+                degraded_callback=degraded,
+                healthy_callback=healthy,
+            )
+
+        degraded.assert_called_once_with("RuntimeError: temporary sync error")
+        self.assertGreaterEqual(healthy.call_count, 1)
+
+    async def test_sync_transient_failures_before_sync_emit_degraded_once(self) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+        degraded = unittest.mock.Mock()
+
+        async def _wait_never() -> None:
+            await asyncio.Future()
+
+        class DummyMatrixClient:
+            synced = _sync_signal(wait_side_effect=_wait_never)
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(side_effect=RuntimeError("network"))
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with (
+            unittest.mock.patch.object(mugen_mod.random, "uniform", return_value=0.0),
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "sleep",
+                new=unittest.mock.AsyncMock(),
+            ),
+            self.assertRaises(RuntimeError),
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+                degraded_callback=degraded,
+            )
+
+        degraded.assert_called_once_with("RuntimeError: network")
+
+    async def test_sync_recovery_resets_retry_budget(self) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+
+        class DummyMatrixClient:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(
+                side_effect=[
+                    RuntimeError("network"),
+                    RuntimeError("network"),
+                    RuntimeError("network"),
+                    RuntimeError("network"),
+                    RuntimeError("network"),
+                    RuntimeError("network"),
+                    None,
+                ]
+            )
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with (
+            unittest.mock.patch.object(mugen_mod.random, "uniform", return_value=0.0),
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "sleep",
+                new=unittest.mock.AsyncMock(),
+            ) as sleep_mock,
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+            )
+
+        self.assertEqual(DummyMatrixClient.sync_forever.await_count, 7)
+        self.assertEqual(sleep_mock.await_count, 6)
+
+    async def test_sync_authentication_failure_stops_without_retry(self) -> None:
+        """Auth-like sync failures should shut down immediately."""
+        app = Quart("test_app")
+        config = _matrix_config()
+
+        class DummyMatrixClient:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(
+                side_effect=RuntimeError("M_UNKNOWN_TOKEN")
+            )
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "sleep",
+                new=unittest.mock.AsyncMock(),
+            ) as sleep_mock,
+            self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            self.assertRaises(RuntimeError),
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+            )
+
+        self.assertEqual(DummyMatrixClient.sync_forever.await_count, 1)
+        sleep_mock.assert_not_awaited()
+        self.assertTrue(
+            any(
+                "Matrix client authentication failed; shutting down." in line
+                for line in logger.output
+            )
+        )
+
+    async def test_sync_failure_stops_after_retry_budget(self) -> None:
+        """Repeated transient failures should stop after max retries."""
+        app = Quart("test_app")
+        config = _matrix_config()
+        wait_call_count = 0
+
+        async def _wait_once_then_block() -> None:
+            nonlocal wait_call_count
+            wait_call_count += 1
+            if wait_call_count == 1:
+                return
+            await asyncio.Future()
+
+        class DummyMatrixClient:
+            synced = _sync_signal(wait_side_effect=_wait_once_then_block)
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(side_effect=RuntimeError("network"))
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with (
+            unittest.mock.patch.object(mugen_mod.random, "uniform", return_value=0.0),
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "sleep",
+                new=unittest.mock.AsyncMock(),
+            ) as sleep_mock,
+            self.assertLogs(logger="test_app", level="DEBUG") as logger,
+            self.assertRaises(RuntimeError),
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+            )
+
+        self.assertEqual(DummyMatrixClient.sync_forever.await_count, 6)
+        self.assertEqual(sleep_mock.await_count, 5)
+        self.assertTrue(
+            any(
+                "Matrix client sync failed after max retries." in line
+                for line in logger.output
+            )
+        )
+
+    async def test_runtime_health_monitor_unexpected_exit_retries_then_fails_closed(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+
+        async def _sync_forever(
+            *,
+            since=None,
+            timeout=100,
+            full_state=True,
+            set_presence="online",
+        ):
+            _ = (since, timeout, full_state, set_presence)
+            await asyncio.Future()
+
+        monitor_runtime_health = unittest.mock.AsyncMock(
+            side_effect=[
+                None,
+                IPCCriticalDispatchError(
+                    platform="matrix",
+                    command="matrix_event",
+                    handler="CriticalHandler",
+                    code="handler_exception",
+                    error="boom",
+                ),
+            ]
+        )
+
+        class DummyMatrixClient:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(side_effect=_sync_forever)
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        DummyMatrixClient.monitor_runtime_health = monitor_runtime_health
+
+        with (
+            unittest.mock.patch.object(mugen_mod.random, "uniform", return_value=0.0),
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "sleep",
+                new=unittest.mock.AsyncMock(),
+            ),
+            self.assertRaises(IPCCriticalDispatchError),
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+            )
+
+        self.assertEqual(monitor_runtime_health.await_count, 2)
+
+    async def test_runtime_health_failure_handles_already_completed_sync_task(self) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+
+        class DummyMatrixClient:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(
+                side_effect=RuntimeError("sync-failed-fast")
+            )
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+            monitor_runtime_health = unittest.mock.AsyncMock(
+                side_effect=IPCCriticalDispatchError(
+                    platform="matrix",
+                    command="matrix_event",
+                    handler="CriticalHandler",
+                    code="handler_exception",
+                    error="boom",
+                )
+            )
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with self.assertRaises(IPCCriticalDispatchError):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+            )
+
+    async def test_run_matrix_client_cancels_pending_runtime_tasks_on_cancellation(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+
+        async def _wait_never():
+            await asyncio.Future()
+
+        async def _wait_cancelled(*_args, **_kwargs):
+            raise asyncio.CancelledError()
+
+        class DummyMatrixClient:
+            synced = _sync_signal(wait_side_effect=_wait_never)
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(side_effect=_wait_never)
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+            monitor_runtime_health = unittest.mock.AsyncMock(side_effect=_wait_never)
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with (
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "wait",
+                new=_wait_cancelled,
+            ),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+            )
+
+    async def test_run_matrix_client_handles_pre_completed_health_task_branch(self) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+
+        async def _wait_never():
+            await asyncio.Future()
+
+        async def _wait_sync_first(tasks, return_when):  # noqa: ARG001
+            task_map = {task.get_name(): task for task in tasks}
+            sync_task = task_map["mugen.matrix.sync_forever"]
+            health_task = task_map["mugen.matrix.runtime_health"]
+            await asyncio.gather(sync_task, return_exceptions=True)
+            health_task.cancel()
+            await asyncio.gather(health_task, return_exceptions=True)
+            return {sync_task}, set()
+
+        class DummyMatrixClient:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(return_value=None)
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+            monitor_runtime_health = unittest.mock.AsyncMock(side_effect=_wait_never)
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        with unittest.mock.patch.object(
+            mugen_mod.asyncio,
+            "wait",
+            new=_wait_sync_first,
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
+            )
+
+    async def test_runtime_health_unexpected_exit_skips_sync_cancel_when_already_done(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _matrix_config()
+
+        monitor_runtime_health = unittest.mock.AsyncMock(
+            side_effect=[
+                None,
+                IPCCriticalDispatchError(
+                    platform="matrix",
+                    command="matrix_event",
+                    handler="CriticalHandler",
+                    code="handler_exception",
+                    error="boom",
+                ),
+            ]
+        )
+
+        async def _wait_all_done(tasks, return_when):  # noqa: ARG001
+            await asyncio.gather(*tasks, return_exceptions=True)
+            return set(tasks), set()
+
+        class DummyMatrixClient:
+            synced = _sync_signal()
+            get_profile = unittest.mock.AsyncMock()
+            get_profile.return_value = SimpleNamespace(displayname="Test Agent")
+            set_displayname = unittest.mock.AsyncMock()
+            sync_forever = unittest.mock.AsyncMock(return_value=None)
+            sync_token = unittest.mock.MagicMock()
+            trust_known_user_devices = unittest.mock.AsyncMock()
+
+            async def __aenter__(self) -> None:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                return False
+
+        DummyMatrixClient.monitor_runtime_health = monitor_runtime_health
+
+        with (
+            unittest.mock.patch.object(mugen_mod.random, "uniform", return_value=0.0),
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "sleep",
+                new=unittest.mock.AsyncMock(),
+            ),
+            unittest.mock.patch.object(
+                mugen_mod.asyncio,
+                "wait",
+                new=_wait_all_done,
+            ),
+            self.assertRaises(IPCCriticalDispatchError),
+        ):
+            await run_matrix_client(
+                config_provider=lambda: config,
+                logger_provider=lambda: app.logger,
+                matrix_provider=DummyMatrixClient,
             )

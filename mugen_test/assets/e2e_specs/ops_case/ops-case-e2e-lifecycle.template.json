@@ -1,0 +1,139 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsCases",
+  "create_payload": {
+    "Title": "__CASE_TITLE__"
+  },
+  "lookup": {
+    "field": "Title",
+    "value": "__CASE_TITLE__"
+  },
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "triage",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Priority": "high",
+        "Severity": "critical",
+        "TargetStatus": "in_progress",
+        "Note": "triage from template"
+      }
+    },
+    {
+      "name": "assign",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "OwnerUserId": "__USER_ID__",
+        "QueueName": "ops-l2",
+        "Reason": "assignment from template",
+        "Note": "assign from template"
+      }
+    },
+    {
+      "name": "escalate",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "EscalationLevel": 2,
+        "Reason": "escalation from template",
+        "Note": "escalate from template"
+      }
+    },
+    {
+      "name": "resolve",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "ResolutionSummary": "resolved from template",
+        "Note": "resolve from template"
+      }
+    },
+    {
+      "name": "close",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Note": "close from template"
+      }
+    },
+    {
+      "name": "reopen",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Note": "reopen from template"
+      }
+    },
+    {
+      "name": "cancel",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Reason": "cancel from template",
+        "Note": "cancel from template"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": "cancelled",
+    "event_entity_set": "OpsCaseEvents",
+    "event_entity_id_field": "CaseId",
+    "event_type_field": "EventType",
+    "expected_event_sequence": [
+      "created",
+      "triaged",
+      "assigned",
+      "escalated",
+      "resolved",
+      "closed",
+      "reopened",
+      "cancelled"
+    ]
+  },
+  "negative_creates": [
+    {
+      "name": "ops_case_links_missing_target",
+      "entity_set": "OpsCaseLinks",
+      "expect_code": 400,
+      "payload": {
+        "CaseId": "__ENTITY_ID__",
+        "LinkType": "invoice",
+        "TargetType": "billing.invoice"
+      }
+    }
+  ],
+  "positive_creates": [
+    {
+      "name": "ops_case_links_with_target_ref",
+      "entity_set": "OpsCaseLinks",
+      "expect_code": 201,
+      "payload": {
+        "CaseId": "__ENTITY_ID__",
+        "LinkType": "invoice",
+        "TargetType": "billing.invoice",
+        "TargetRef": "INV-E2E-1001"
+      }
+    }
+  ]
+}

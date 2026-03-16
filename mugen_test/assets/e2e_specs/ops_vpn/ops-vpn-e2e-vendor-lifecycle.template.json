@@ -1,0 +1,75 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsVpnVendors",
+  "create_payload": {
+    "Code": "__VENDOR_CODE__",
+    "DisplayName": "Vendor __VENDOR_CODE__"
+  },
+  "lookup": {
+    "field": "Code",
+    "value": "__VENDOR_CODE__"
+  },
+  "status_field": "Status",
+  "actions": [
+    {
+      "name": "activate",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__"
+      }
+    },
+    {
+      "name": "reverify",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__"
+      }
+    },
+    {
+      "name": "suspend",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__"
+      }
+    },
+    {
+      "name": "activate",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__"
+      }
+    },
+    {
+      "name": "delist",
+      "target": "entity",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__"
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": "delisted",
+    "event_entity_set": "OpsVpnVendorScorecards",
+    "event_entity_id_field": "VendorId",
+    "event_type_field": "Id",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [],
+  "positive_creates": []
+}

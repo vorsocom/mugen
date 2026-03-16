@@ -1,0 +1,112 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsPolicyDefinitions",
+  "create_payload": {
+    "Code": "__POLICY_CODE__",
+    "Name": "Governance Policy __POLICY_CODE__",
+    "Engine": "dsl",
+    "DocumentJson": {
+      "Rules": [
+        {
+          "Name": "priority_review",
+          "Condition": {
+            "Path": "risk.priority",
+            "Op": "eq",
+            "Value": "high"
+          },
+          "Effect": "review",
+          "Reasons": [
+            "risk_priority_high"
+          ],
+          "Obligations": [
+            {
+              "Type": "require_approval",
+              "Required": true
+            }
+          ]
+        },
+        {
+          "Name": "default_allow",
+          "Effect": "allow",
+          "Reasons": [
+            "default_allow"
+          ],
+          "Obligations": [
+            {
+              "Type": "log_reason",
+              "Required": false
+            }
+          ]
+        }
+      ],
+      "Default": {
+        "Decision": "deny",
+        "Reasons": [
+          "default_deny"
+        ]
+      }
+    }
+  },
+  "lookup": {
+    "field": "Code",
+    "value": "__POLICY_CODE__"
+  },
+  "status_field": "Code",
+  "actions": [
+    {
+      "name": "evaluate_policy",
+      "target": "entity",
+      "expect_code": 200,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "TraceId": "gov-e2e-__POLICY_CODE__",
+        "SubjectNamespace": "ops_case",
+        "SubjectRef": "CASE-E2E-001",
+        "InputJson": {
+          "risk": {
+            "priority": "low"
+          },
+          "case": {
+            "type": "incident"
+          }
+        },
+        "ActorJson": {
+          "Type": "user",
+          "Id": "__USER_ID__"
+        }
+      }
+    }
+  ],
+  "assertions": {
+    "final_status": null,
+    "event_entity_set": "OpsPolicyDecisionLogs",
+    "event_entity_id_field": "PolicyDefinitionId",
+    "event_type_field": "Decision",
+    "expected_event_sequence": [
+      "allow"
+    ]
+  },
+  "negative_creates": [
+    {
+      "name": "retention_missing_target_namespace",
+      "entity_set": "OpsRetentionPolicies",
+      "expect_code": 400,
+      "payload": {
+        "Code": "RET-__POLICY_CODE__",
+        "Name": "Retention __POLICY_CODE__"
+      }
+    }
+  ],
+  "positive_creates": []
+}

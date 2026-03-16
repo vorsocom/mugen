@@ -33,7 +33,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 injector = None
 
                 # Attempt to build the Matrix service.
-                di._build_matrix_client_provider(config, injector)
+                di._build_provider(config, injector, provider_name="matrix_client")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -76,9 +76,10 @@ class TestDIBuildMatrixClient(unittest.TestCase):
 
                 # New injector
                 injector = di.injector.DependencyInjector()
+                injector.ingress_service = unittest.mock.Mock()
 
                 # Attempt to build the Matrix service.
-                di._build_matrix_client_provider(config, injector)
+                di._build_provider(config, injector, provider_name="matrix_client")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -90,6 +91,39 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 self.assertEqual(
                     logger.output[1],
                     "WARNING:root:Matrix platform not active. Client not loaded.",
+                )
+        except:  # pylint: disable=bare-except
+            # We should not get here because all exceptions
+            # should be handled in the called function.
+            self.fail("Exception raised unexpectedly.")
+
+    def test_platform_configuration_unavailable(self):
+        """Test effects of missing platform configuration."""
+        try:
+            # Replacement config loader that does
+            # not load the application config file.
+            _load_config = unittest.mock.Mock()
+            _load_config.return_value = {}
+
+            with (
+                self.assertLogs("root", level="ERROR") as logger,
+                unittest.mock.patch(
+                    target="mugen.core.di._load_config",
+                    new_callable=_load_config,
+                ),
+            ):
+                config = {
+                    "mugen": {},
+                }
+
+                injector = di.injector.DependencyInjector()
+
+                di._build_provider(config, injector, provider_name="matrix_client")
+
+                self.assertEqual(logger.records[0].name, "root")
+                self.assertEqual(
+                    logger.output[0],
+                    "ERROR:root:Invalid configuration (matrix_client).",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -122,7 +156,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the Matrix service.
-                di._build_matrix_client_provider(config, injector)
+                di._build_provider(config, injector, provider_name="matrix_client")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -161,7 +195,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "matrix": "nonexistent_module",
+                                    "matrix": "nonexistent_module:MissingClass",
                                 }
                             }
                         },
@@ -173,7 +207,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Attempt to build the Matrix service.
-                di._build_matrix_client_provider(config, injector)
+                di._build_provider(config, injector, provider_name="matrix_client")
 
                 # The root logger should be used since the name
                 # of the muGen logger is not available from the
@@ -184,7 +218,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 # since a nonexistent module was supplied.
                 self.assertEqual(
                     logger.output[0],
-                    "ERROR:root:Could not import module (matrix_client).",
+                    "ERROR:root:Invalid configuration (matrix_client): module:Class paths are not supported.",
                 )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -212,7 +246,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "matrix": "valid_matrix_module",
+                                    "matrix": "valid_matrix_module:MissingClass",
                                 }
                             }
                         },
@@ -224,8 +258,6 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                 injector = di.injector.DependencyInjector()
 
                 # Dummy subclasses
-                sc = unittest.mock.Mock
-                sc.return_value = []
 
                 with (
                     unittest.mock.patch.dict(
@@ -238,11 +270,11 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.client.matrix.IMatrixClient.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[],
                     ),
                 ):
                     # Attempt to build the Matrix service.
-                    di._build_matrix_client_provider(config, injector)
+                    di._build_provider(config, injector, provider_name="matrix_client")
 
                     # The root logger should be used since the name
                     # of the muGen logger is not available from the
@@ -253,7 +285,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                     # subclass would not be found.
                     self.assertEqual(
                         logger.output[0],
-                        "ERROR:root:Valid subclass not found (matrix_client).",
+                        "ERROR:root:Invalid configuration (matrix_client): module:Class paths are not supported.",
                     )
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
@@ -282,7 +314,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         "modules": {
                             "core": {
                                 "client": {
-                                    "matrix": "valid_matrix_module",
+                                    "matrix": "valid_matrix_module:DummyMatrixClientClass",
                                 }
                             }
                         },
@@ -292,6 +324,7 @@ class TestDIBuildMatrixClient(unittest.TestCase):
 
                 # New injector
                 injector = di.injector.DependencyInjector()
+                injector.ingress_service = unittest.mock.Mock()
 
                 # Dummy subclasses
                 class DummyMatrixClientClass(IMatrixClient):
@@ -301,17 +334,31 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                         self,
                         config,
                         ipc_service,
+                        ingress_service,
                         keyval_storage_gateway,
+                        relational_storage_gateway,
                         logging_gateway,
                         messaging_service,
                         user_service,
                     ):
-                        pass
+                        _ = (
+                            config,
+                            ipc_service,
+                            ingress_service,
+                            keyval_storage_gateway,
+                            relational_storage_gateway,
+                            logging_gateway,
+                            messaging_service,
+                            user_service,
+                        )
 
                     async def __aenter__(self):
                         pass
 
                     async def __aexit__(self, exc_type, exc_val, exc_tb):
+                        pass
+
+                    async def close(self):
                         pass
 
                     @property
@@ -327,25 +374,52 @@ class TestDIBuildMatrixClient(unittest.TestCase):
                     def verify_user_devices(self, user_id):
                         pass
 
-                sc = unittest.mock.Mock
-                sc.return_value = [DummyMatrixClientClass]
+                    async def sync_forever(
+                        self,
+                        *,
+                        since=None,
+                        timeout=100,
+                        full_state=True,
+                        set_presence="online",
+                    ):
+                        _ = (since, timeout, full_state, set_presence)
+                        return None
+
+                    async def get_profile(self, user_id=None):
+                        _ = user_id
+                        return None
+
+                    async def set_displayname(self, displayname):
+                        _ = displayname
+                        return None
+
+                    async def monitor_runtime_health(self):
+                        return None
+
+                DummyMatrixClientClass.__module__ = "valid_matrix_module"
 
                 with (
                     unittest.mock.patch.dict(
                         "sys.modules",
                         {
-                            "valid_matrix_module": unittest.mock.Mock(),
+                            "valid_matrix_module": unittest.mock.Mock(
+                                DummyMatrixClientClass=DummyMatrixClientClass
+                            ),
                         },
                     ),
                     unittest.mock.patch(
                         target=(  # pylint: disable=line-too-long
                             "mugen.core.contract.client.matrix.IMatrixClient.__subclasses__"
                         ),
-                        new_callable=sc,
+                        return_value=[DummyMatrixClientClass],
+                    ),
+                    unittest.mock.patch(
+                        target="mugen.core.di.resolve_provider_class",
+                        return_value=DummyMatrixClientClass,
                     ),
                 ):
                     # Attempt to build the Matrix service.
-                    di._build_matrix_client_provider(config, injector)
+                    di._build_provider(config, injector, provider_name="matrix_client")
         except:  # pylint: disable=bare-except
             # We should not get here because all exceptions
             # should be handled in the called function.

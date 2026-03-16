@@ -1,0 +1,12 @@
+minimum_pre_commit_version: "4.0.0"
+
+repos:
+  - repo: local
+    hooks:
+      - id: conventional-commit
+        name: conventional commit message
+        entry: python3 scripts/check_conventional_commit.py --message-file
+        language: system
+        stages: [commit-msg]
+        pass_filenames: true
+        always_run: true

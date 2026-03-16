@@ -1,0 +1,65 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsWorkflowDefinitions",
+  "create_payload": {
+    "Key": "__WF_KEY__",
+    "Name": "Ops Workflow E2E __WF_KEY__",
+    "Attributes": {
+      "Phase3Decisioning": true
+    }
+  },
+  "lookup": {
+    "field": "Key",
+    "value": "__WF_KEY__"
+  },
+  "status_field": "Key",
+  "actions": [],
+  "assertions": {
+    "final_status": null,
+    "event_entity_set": "OpsWorkflowEvents",
+    "event_entity_id_field": "WorkflowInstanceId",
+    "event_type_field": "EventType",
+    "expected_event_sequence": []
+  },
+  "negative_creates": [
+    {
+      "name": "missing_key",
+      "entity_set": "OpsWorkflowDefinitions",
+      "expect_code": 400,
+      "payload": {
+        "Name": "Missing key"
+      }
+    }
+  ],
+  "positive_creates": [
+    {
+      "name": "workflow_version_for_definition",
+      "entity_set": "OpsWorkflowVersions",
+      "expect_code": 201,
+      "payload": {
+        "WorkflowDefinitionId": "__ENTITY_ID__",
+        "VersionNumber": 1
+      }
+    },
+    {
+      "name": "workflow_version_two_for_definition",
+      "entity_set": "OpsWorkflowVersions",
+      "expect_code": 201,
+      "payload": {
+        "WorkflowDefinitionId": "__ENTITY_ID__",
+        "VersionNumber": 2
+      }
+    }
+  ]
+}
