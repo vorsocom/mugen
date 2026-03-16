@@ -1,216 +1,178 @@
-# Building muGen Applications
+# Building Downstream muGen Applications
 
-muGen is a lightweight microframework designed for developers who need flexibility and customization. It provides foundational components for building applications but does not include built-in solutions for complex, real-world use cases. To address these, developers can extend muGen by adding custom code and functionality. This guide will walk you through setting up a project directory and integrating muGen to start building your application.
+Status: Active  
+Last Updated: 2026-03-15  
+Audience: Downstream application teams, plugin maintainers
 
-## Prerequisites
+muGen is meant to be extended, but the extension path matters. The goal for a
+downstream application is to add business behavior, policies, and integrations
+without collapsing the core architecture or forking `mugen/core` into an
+unmaintainable custom platform.
 
-Before starting, ensure the following:
+Use this guide for the downstream workflow. Use
+[`docs/downstream-architecture-conformance.md`](./downstream-architecture-conformance.md)
+for the non-negotiable architecture rules and extension-boundary checklist.
 
-1. You have a GitHub (or similar) repository set up for source control.
+## Start With An Upstream/Downstream Workflow
 
-2. You are familiar with basic command-line usage and have Git installed on your system.
-
-## Creating a Downstream Repository
-
-To simplify long-term maintenance, treat your application repository as
-downstream and the official `vorsocom/mugen` repository as upstream. The key
-principle is: **never modify `mugen/core`**.
-
-### Step 1: Clone muGen
-
-Start from the upstream codebase so your downstream repository has the same
-baseline structure and history.
+Treat the official `vorsocom/mugen` repository as upstream and your product
+repository as downstream.
 
 ```shell
 ~$ git clone git@github.com:vorsocom/mugen.git hrms-agent
 ~$ cd hrms-agent
-```
-
-### Step 2: Rewire Remotes
-
-Rename the cloned `origin` remote to `upstream`, then point `origin` to your
-new downstream repository.
-
-```shell
 ~$ git remote rename origin upstream
 ~$ git remote set-url --push upstream PUSH_DISABLED
 ~$ git remote add origin [downstream-repo-url]
-~$ git remote -v
-```
-
-### Step 3: Add Downstream Tracking Metadata
-
-Create a downstream tracking file in the repository root.
-
-```shell
-~$ touch downstream.py
-```
-
-Populate it with project-specific metadata:
-
-```python
-"""Custom metadata for the downstream application."""
-
-__app__ = "My Awesome GenAI App"
-__author__ = "Your Name"
-__copyright__ = "Project copyright notice"
-__email__ = "Project contact email"
-__version__ = "0.0.0"
-```
-
-### Step 4: Publish Downstream Main and Develop
-
-Commit the downstream tracking file, then push both `main` and `develop` to
-your downstream `origin`.
-
-```shell
-~$ git add downstream.py
-~$ git commit -m "chore: initialize downstream metadata"
-~$ git push -u origin main
 ~$ git checkout -b develop
-~$ git push -u origin develop
 ```
 
-## Downstream Development Boundary
+This keeps upstream syncs explicit and makes it easier to distinguish framework
+changes from product-specific behavior.
 
-During feature development:
+## Keep Custom Code Outside `mugen/core`
 
-- Keep downstream application logic in `mugen/extension`.
-- Leave `mugen/core` unchanged.
-- Wire downstream extensions through `mugen.toml`.
+Downstream code should live in your own import package, not under
+`mugen/core`.
 
-This boundary keeps upstream merges small and conflict-resistant.
+Recommended layout:
 
-## Updating Downstream With Upstream Changes
-
-When you need upstream updates, pull `upstream main` while on your downstream
-`develop` branch (which fetches and merges in one step).
-
-```shell
-~$ git checkout develop
-~$ git pull upstream main
-~$ git push origin develop
+```text
+hrms-agent/
+├── mugen/
+├── acme_extension/
+│   ├── __init__.py
+│   ├── contrib.py
+│   ├── fw_ext.py
+│   ├── service/
+│   ├── model/
+│   └── migrations/
+├── conf/
+├── docs/
+├── mugen.toml
+└── hypercorn.toml
 ```
 
-## Recommended Guardrails for Downstream Repositories
+Practical rules:
 
-The baseline flow above works well for small teams. For larger teams or
-frequent upstream syncs, add the following safeguards.
+- keep downstream business logic, projections, workers, and ACP-aligned plugin
+  code in a top-level package such as `acme_extension` or `my_org_support`;
+- leave `mugen/core` unchanged unless you are intentionally contributing a core
+  framework change upstream;
+- wire downstream extensions and model modules through `mugen.toml`, not by
+  importing them directly into core packages.
 
-### 1) Merge Upstream Through a Sync Branch and PR
+## Configure muGen For Downstream Extensions
 
-Instead of updating `develop` directly, perform upstream integration on a
-temporary branch and merge it through code review:
-
-```shell
-~$ git checkout develop
-~$ git pull origin develop --ff-only
-~$ git checkout -b chore/sync-upstream-YYYYMMDD
-~$ git pull upstream main
-~$ git push -u origin chore/sync-upstream-YYYYMMDD
-```
-
-Then open a PR from the sync branch into `develop`.
-
-### 2) Enforce the Core Boundary in CI
-
-Protect `mugen/core` from accidental edits in downstream feature work.
-Add a CI check that fails when non-sync PRs include paths under `mugen/core/`.
-
-### 3) Track Upstream Baseline in `downstream.py`
-
-Keep a machine-readable record of the upstream revision used by downstream:
-
-```python
-__upstream_repo__ = "vorsocom/mugen"
-__upstream_branch__ = "main"
-__upstream_sync_ref__ = "vX.Y.Z or <commit-sha>"
-```
-
-Update `__upstream_sync_ref__` each time you merge upstream.
-
-### 4) Run Full Gates for Every Upstream Sync
-
-After each upstream merge, run full tests, full E2E validation, and confirm
-coverage stays at `100%` before merging to `develop`.
-
-```shell
-~$ bash .codex/skills/prepush-quality-gates/scripts/run_prepush_quality_gates.sh --python "$(poetry run which python)"
-```
-
-### Step 5: Create the muGen Configuration File
-
-muGen requires a configuration file named `mugen.toml` for its settings. Create it by copying a sample file provided in the muGen repository:
+Create local config from the samples:
 
 ```shell
 ~$ cp conf/mugen.toml.sample mugen.toml
-```
-
-The default configurations can be used initially. However, you must configure access credentials for your chosen completion API provider (AWS Bedrock, Cerebras, Groq, OpenAI, Azure AI Foundry, SambaNova, or Vertex). See `docs/gateways.md` for provider-specific options, including Bedrock `Converse`/`InvokeModel` behavior. The default configuration also enables a Telnet client for basic communication with the system.
-
-### Step 6: Create the Hypercorn Configuration File
-
-[Hypercorn](https://github.com/pgjones/hypercorn/) is an ASGI server that runs asynchronous web frameworks like Quart, which muGen is built upon. It can handle concurrent requests efficiently and supports modern web technologies, including HTTP/2 and WebSockets.
-
-To configure Hypercorn, create a `hypercorn.toml` file from the sample:
-
-```shell
 ~$ cp conf/hypercorn.toml.sample hypercorn.toml
 ```
 
-For a local TLS listener, edit `hypercorn.toml` and set the bind address to:
+Use `mugen.modules.extensions` for runtime extension wiring.
+
+Core runtime extensions use strict tokens. Downstream ACP-aligned framework
+plugins declare their identity and contributor metadata on enabled `fw`
+entries. The current bootstrap extension registry itself is token-based; do not
+assume arbitrary module-path loading for custom runtime extension classes.
 
 ```toml
-bind = "0.0.0.0:8443"
+[[mugen.modules.extensions]]
+type = "fw"
+token = "core.fw.acp"
+enabled = true
+name = "com.vorsocomputing.mugen.acp"
+namespace = "com.vorsocomputing.mugen.acp"
+contrib = "mugen.core.plugin.acp.contrib"
+
+[[mugen.modules.extensions]]
+type = "fw"
+token = "acme.fw.billing"
+enabled = true
+name = "com.acme.billing"
+namespace = "com.acme.billing"
+contrib = "acme_extension.contrib"
+models = "acme_extension.model"
+migration_track = "acme_extension"
+
+[[rdbms.migration_tracks.plugins]]
+name = "acme_extension"
+enabled = true
+alembic_config = "acme_extension/migrations/alembic.ini"
+schema = "acme_extension"
+version_table = "alembic_version"
+version_table_schema = "acme_extension"
+model_modules = ["acme_extension.model"]
 ```
 
-Also configure `certfile` and `keyfile` for your local certificate. With that setup, local ACP and web endpoints are served over `https` on port `8443`. You can change the address or port later to meet your deployment requirements.
+See [`docs/extensions.md`](./extensions.md) for extension types and
+[`docs/migration-track-separation.md`](./migration-track-separation.md) for the
+migration-track contract.
 
-### Step 7: Initialize the Python Environment
+If you need the runtime to instantiate a brand-new non-core CP/MH/RPP/CT/FW
+extension class directly, treat that as a framework-extension-registry change,
+not as a pure downstream config task.
 
-muGen uses [Poetry](https://python-poetry.org/) for dependency management. Poetry simplifies the process of installing and managing Python libraries. Make sure Poetry is installed, then run the following commands to set up your environment:
+## Choose The Right Extension Boundary
+
+Use the narrowest seam that matches the behavior you are adding:
+
+- use ACP-backed framework plugins when you need new resources, actions,
+  runtime binding, or admin/API registration;
+- use command, message-handler, response-preprocessor, or conversational
+  trigger extensions for messaging-path customization when the runtime already
+  exposes the required token/registry support;
+- use context-engine collaborators when the change is about retrieval, state,
+  provenance, ranking, or context compilation;
+- use agent-runtime collaborators when the change is about planning,
+  evaluation, capability execution, or resumable background work;
+- keep product-specific workflow policy, projections, SLA logic, and external
+  side effects in downstream packages and workers.
+
+If a change can be expressed without editing `mugen/core`, it should be.
+
+## Install, Migrate, And Run
 
 ```shell
-~$ poetry install  # Install dependencies defined in pyproject.toml
-
-~$ poetry shell    # Activate a virtual environment for your project
-```
-
-### Step 8: Run the Application
-
-Now, you can run your muGen application using Hypercorn:
-
-```shell
+~$ poetry install
+~$ poetry shell
+~$ python scripts/run_migration_tracks.py upgrade head
 ~$ hypercorn -c hypercorn.toml quartman
 ```
 
-This command tells Hypercorn to use the configuration file `hypercorn.toml` and run the app exposed by the `quartman` module.
-
 Startup lifecycle:
+
 1. **Phase A (blocking):** bootstrap extensions and register API routes.
-2. **Phase B (background):** start long-running platform clients.
+2. **Phase B (background):** start long-running platform clients and workers.
 
-Requests are served only after Phase A completes.
+Requests are served only after Phase A completes successfully.
 
-### Step 9: Communicate with Your Application
-
-The Telnet client is enabled by default, allowing you to interact with your application. Connect to it on port 8888:
+For local development and testing, you can still use the telnet harness:
 
 ```shell
+~$ python -m mugen.devtools.telnet_harness
 ~$ telnet localhost 8888
 ```
 
-You should see output similar to:
+## Keep Downstream Repositories Conformant
 
-```text
-Trying 127.0.0.1...
-Connected to localhost.
-Escape character is '^]'.
-~ user:
-```
+Recommended guardrails:
 
-At the `~ user:` prompt, type messages to send to the system. Responses from muGen will be prefixed with `~ assistant:`.
+1. Sync upstream through a branch and PR instead of merging directly into
+   `develop`.
+2. Block accidental edits to `mugen/core/` in downstream feature PRs unless the
+   change is an intentional upstream contribution.
+3. Keep downstream schema in plugin-owned migration tracks, not in
+   `migrations/versions`.
+4. Treat ACP resources/actions as the control plane for core-owned domains
+   instead of writing directly to core tables.
+5. Keep the core architecture-boundary tests passing and add downstream tests
+   for your own package boundaries.
+6. Run the full project quality gates after upstream syncs and before release
+   candidates.
 
-## Next Steps
-
-With your application directory set up, you can start [developing extensions for muGen](extensions.md) to add custom functionality, integrate external services, or build new features.
+For architecture-specific rules, decision points, and a checklist that is safe
+to hand to an AI coding agent, see
+[`docs/downstream-architecture-conformance.md`](./downstream-architecture-conformance.md).

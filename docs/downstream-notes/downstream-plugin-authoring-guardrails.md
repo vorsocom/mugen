@@ -19,6 +19,9 @@ downstream plugins, but should not be pushed into ACP core abstractions.
 
 ## Decision
 
+- Keep downstream plugin code in a dedicated top-level package outside the
+  upstream `mugen` package whenever practical (for example `acme_extension`),
+  and reserve `mugen/core` for intentional framework changes.
 - Follow workspace formatter policy from `.vscode/settings.json` as the default
   formatting baseline for downstream plugin Python code.
 - Prefer `TYPE_CHECKING` imports for unsuppressed forward-referenced model types
@@ -41,8 +44,8 @@ downstream plugins, but should not be pushed into ACP core abstractions.
 - Core responsibilities:
   Provide stable ACP contracts, mixins, and extension points.
 - Downstream responsibilities:
-  Implement plugin-specific persistence/typing policy, runtime behavior, and
-  local quality gates.
+  Implement plugin-specific persistence/typing policy, runtime behavior,
+  package structure, and local quality gates.
 - Why this boundary:
   Core should remain reusable and strict; downstream should own plugin-specific
   tradeoffs and delivery velocity.
@@ -68,17 +71,22 @@ downstream plugins, but should not be pushed into ACP core abstractions.
 - No ACP API surface changes required for these guardrails.
 - Apply guardrails at plugin model/service layer and in plugin-local coding
   conventions.
+- Register downstream framework/plugin metadata through
+  `mugen.modules.extensions`; do not assume that arbitrary new runtime
+  extension classes can be loaded without matching framework-registry support.
 
 ### Operational Notes
 
 - Treat these rules as authoring defaults for new downstream plugin files.
 - For existing files, apply incrementally during touched-file edits instead of
   mass refactors unless explicitly scheduled.
+- Read `docs/downstream-architecture-conformance.md` before introducing a new
+  package, migration track, or extension boundary.
 
 ## Validation
 
 - Run ACP-style checker on changed files:
-  `/home/sando/.cache/pypoetry/virtualenvs/mugen-_kg0ytOG-py3.12/bin/python .codex/skills/acp-python-style/scripts/check_acp_style.py <paths...>`
+  `python .codex/skills/acp-python-style/scripts/check_acp_style.py <paths...>`
 - Confirm no unsuppressed unresolved `Mapped["Type"]` forward refs in changed
   files.
 - Ensure warnings are addressed via `TYPE_CHECKING` imports first, not blanket
