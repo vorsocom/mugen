@@ -10,7 +10,9 @@ __all__ = [
     "DefaultPlanningEngine",
 ]
 
+from dataclasses import fields
 from datetime import datetime, timedelta, timezone
+import inspect
 from types import SimpleNamespace
 from typing import Any
 
@@ -794,6 +796,17 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
             if lease is None:
                 continue
             due_run.lease = lease
+            try:
+                due_run = await self._reload_run_handle(
+                    due_run,
+                    operation="lease acquisition",
+                )
+            except RuntimeError:
+                await self._plan_run_store_service.release_lease(
+                    run_id=due_run.run_id,
+                    owner=normalized_owner,
+                )
+                raise
             request = _request_from_snapshot(due_run.request_snapshot, run_id=due_run.run_id)
             request.mode = PlanRunMode.BACKGROUND
             request.available_capabilities = tuple(
@@ -833,7 +846,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         run.state.status = PlanRunStatus.ACTIVE
         run = await self._plan_run_store_service.save_run(run)
         for observation in observations:
-            run.cursor = await self._append_step(
+            run = await self._append_step(
                 request=request,
                 run=run,
                 step_kind=PlanRunStepKind.OBSERVATION,
@@ -855,7 +868,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 run,
                 observations,
             )
-            run.cursor = await self._append_step(
+            run = await self._append_step(
                 request=request,
                 run=run,
                 step_kind=PlanRunStepKind.DECISION,
@@ -876,7 +889,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                         observations=observations,
                     )
                 )
-                run.cursor = await self._append_step(
+                run = await self._append_step(
                     request=request,
                     run=run,
                     step_kind=PlanRunStepKind.EVALUATION,
@@ -928,7 +941,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                         final_user_responses=tuple(responses),
                     )
                 )
-                run.cursor = await self._append_step(
+                run = await self._append_step(
                     request=request,
                     run=run,
                     step_kind=PlanRunStepKind.EVALUATION,
@@ -949,7 +962,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                     EvaluationStatus.RETRY,
                     EvaluationStatus.REPLAN,
                 }:
-                    observations = (
+                    observations = observations + (
                         PlanObservation(
                             kind="response_evaluation",
                             summary="retry_response",
@@ -1318,7 +1331,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         run.state.status = PlanRunStatus.WAITING
         run.next_wakeup_at = None
         run = await self._plan_run_store_service.save_run(run)
-        run.cursor = await self._append_step(
+        run = await self._append_step(
             request=request,
             run=run,
             step_kind=PlanRunStepKind.EFFECT,
@@ -1403,7 +1416,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 capability_result=result,
             )
             observations.append(observation)
-            run.cursor = await self._append_step(
+            run = await self._append_step(
                 request=request,
                 run=run,
                 step_kind=PlanRunStepKind.OBSERVATION,
@@ -1521,6 +1534,12 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
             run_id=run.run_id,
             outcome=outcome,
         )
+        run.status = _status_from_outcome(finalized_outcome)
+        run.state.status = run.status
+        run.final_outcome = finalized_outcome
+        run.lease = None
+        run.next_wakeup_at = None
+        run = await self._reload_run_handle(run, operation="terminal finalization")
         updated_run = await self._planning_engine_service.finalize_run(
             request,
             run,
@@ -1540,7 +1559,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         run: PreparedPlanRun,
         step_kind: PlanRunStepKind,
         payload: dict[str, Any],
-    ) -> PlanRunCursor:
+    ) -> PreparedPlanRun:
         step = PlanRunStep(
             run_id=run.run_id,
             sequence_no=run.cursor.next_sequence_no,
@@ -1550,6 +1569,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         )
         cursor = await self._plan_run_store_service.append_step(run_id=run.run_id, step=step)
         run.cursor = cursor
+        run = await self._reload_run_handle(run, operation=f"{step_kind.value} step append")
         for trace_sink in list(getattr(self._registry(), "trace_sinks", []) or []):
             try:
                 await trace_sink.record_step(request=request, run=run, step=step)
@@ -1558,7 +1578,36 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                     "Agent trace sink failed during step recording "
                     f"(run_id={run.run_id} error={type(exc).__name__}: {exc})."
                 )
-        return cursor
+        return run
+
+    @staticmethod
+    def _apply_refreshed_run(
+        run: PreparedPlanRun,
+        refreshed_run: PreparedPlanRun,
+    ) -> PreparedPlanRun:
+        for field_def in fields(PreparedPlanRun):
+            setattr(run, field_def.name, getattr(refreshed_run, field_def.name))
+        return run
+
+    async def _reload_run_handle(
+        self,
+        run: PreparedPlanRun,
+        *,
+        operation: str,
+    ) -> PreparedPlanRun:
+        loader = getattr(self._plan_run_store_service, "load_run", None)
+        if loader is None:
+            return run
+        loaded = loader(run.run_id)
+        if not inspect.isawaitable(loaded):
+            return run
+        refreshed_run = await loaded
+        if refreshed_run is None:
+            raise RuntimeError(
+                "Agent runtime run refresh failed during "
+                f"{operation} (run_id={run.run_id})."
+            )
+        return self._apply_refreshed_run(run, refreshed_run)
 
     async def _record_outcome(
         self,

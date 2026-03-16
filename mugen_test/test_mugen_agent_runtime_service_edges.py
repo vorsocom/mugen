@@ -950,6 +950,49 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(outcomes, [])
 
+    async def test_agent_runtime_background_batch_releases_lease_when_refresh_fails(
+        self,
+    ) -> None:
+        due_run = _run(mode=PlanRunMode.BACKGROUND, request=_request(mode=PlanRunMode.BACKGROUND))
+        plan_run_store = Mock()
+        plan_run_store.list_runnable_runs = AsyncMock(return_value=[due_run])
+        plan_run_store.acquire_lease = AsyncMock(
+            return_value=SimpleNamespace(owner="worker")
+        )
+        plan_run_store.load_run = AsyncMock(return_value=None)
+        plan_run_store.release_lease = AsyncMock()
+        runtime = DefaultAgentRuntime(
+            config=SimpleNamespace(),
+            logging_gateway=Mock(),
+            planning_engine_service=Mock(),
+            evaluation_engine_service=Mock(),
+            agent_executor_service=Mock(),
+            plan_run_store_service=plan_run_store,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "lease acquisition"):
+            await runtime.run_background_batch(owner="worker")
+
+        plan_run_store.release_lease.assert_awaited_once_with(
+            run_id=due_run.run_id,
+            owner="worker",
+        )
+
+    async def test_reload_run_handle_returns_existing_run_without_load_run(self) -> None:
+        run = _run()
+        runtime = DefaultAgentRuntime(
+            config=SimpleNamespace(),
+            logging_gateway=Mock(),
+            plan_run_store_service=SimpleNamespace(),
+        )
+
+        refreshed_run = await runtime._reload_run_handle(  # pylint: disable=protected-access
+            run,
+            operation="test refresh",
+        )
+
+        self.assertIs(refreshed_run, run)
+
     async def test_agent_runtime_multi_agent_helper_edges(self) -> None:
         runtime = DefaultAgentRuntime(
             config=SimpleNamespace(),
@@ -1090,6 +1133,7 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
         waiting_run.join_state = JoinState(
             child_run_ids=("child-pending",),
             required_child_run_ids=("child-pending",),
+            timeout_at=datetime.now(timezone.utc) - timedelta(minutes=1),
         )
         observations, outcome, finalize_pending = await runtime._resume_join_state(  # pylint: disable=protected-access
             request=_request(mode=PlanRunMode.BACKGROUND),
@@ -1097,6 +1141,10 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(observations, ())
         self.assertEqual(outcome.status, PlanOutcomeStatus.WAITING)
+        self.assertEqual(
+            outcome.metadata["waiting_on_child_run_ids"],
+            ["child-pending"],
+        )
         self.assertFalse(finalize_pending)
 
         self.assertIsNone(
@@ -1337,7 +1385,7 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
             side_effect=lambda prepared_run: prepared_run
         )
         runtime._plan_run_store_service.load_run = AsyncMock(  # pylint: disable=protected-access
-            side_effect=[run, None]
+            side_effect=[run, run, None]
         )
 
         fallback_payloads = await runtime._synthesize_response(  # pylint: disable=protected-access

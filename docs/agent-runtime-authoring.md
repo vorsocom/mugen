@@ -187,7 +187,11 @@ Run-store rules:
 - preserve append-only step history;
 - make finalize idempotent;
 - keep leases explicit and replay-safe;
+- keep durable run handles fresh when persistence uses optimistic row versions;
 - persist structured decision/evaluation summaries, not raw chain-of-thought.
+
+Current reference behavior: `JoinState.timeout_at` is reserved metadata and is
+not enforced by the core runtime's background resume flow.
 
 ### `IAgentScheduler`
 

@@ -1134,6 +1134,20 @@ class RelationalPlanRunStore(IPlanRunStore):
         self._run_service = run_service
         self._step_service = step_service
 
+    @staticmethod
+    def _require_updated_row(
+        updated: AgentPlanRunDE | None,
+        *,
+        run_id: str,
+        operation: str,
+    ) -> AgentPlanRunDE:
+        if updated is None:
+            raise RuntimeError(
+                "Agent plan run update conflict during "
+                f"{operation}: stale row_version for run_id={run_id}."
+            )
+        return updated
+
     async def create_run(
         self,
         request: PlanRunRequest,
@@ -1175,10 +1189,14 @@ class RelationalPlanRunStore(IPlanRunStore):
             }
         )
         if getattr(run_row, "root_run_id", None) is None:
-            run_row = await self._run_service.update_with_row_version(
-                {"id": run_row.id},
-                expected_row_version=run_row.row_version,
-                changes={"root_run_id": run_row.id},
+            run_row = self._require_updated_row(
+                await self._run_service.update_with_row_version(
+                    {"id": run_row.id},
+                    expected_row_version=run_row.row_version,
+                    changes={"root_run_id": run_row.id},
+                ),
+                run_id=str(run_row.id),
+                operation="run creation",
             )
         return self._row_to_run(run_row)
 
@@ -1190,39 +1208,43 @@ class RelationalPlanRunStore(IPlanRunStore):
 
     async def save_run(self, run: PreparedPlanRun) -> PreparedPlanRun:
         run_uuid = uuid.UUID(run.run_id)
-        updated = await self._run_service.update_with_row_version(
-            {"id": run_uuid},
-            expected_row_version=run.row_version,
-            changes={
-                "status": run.status.value,
-                "service_route_key": run.service_route_key,
-                "request_json": dict(run.request_snapshot),
-                "policy_json": _serialize_policy(run.policy),
-                "run_state_json": _serialize_state(run.state),
-                "metadata_json": dict(run.metadata),
-                "parent_run_id": _uuid_or_none(
-                    None if run.lineage is None else run.lineage.parent_run_id
-                ),
-                "root_run_id": _uuid_or_none(
-                    None if run.lineage is None else run.lineage.root_run_id
-                ),
-                "agent_key": _normalize_optional_text(
-                    None if run.lineage is None else run.lineage.agent_key
-                )
-                or run.policy.agent_key,
-                "spawned_by_step_no": None
-                if run.lineage is None
-                else run.lineage.spawned_by_step_no,
-                "join_state_json": _serialize_join_state(run.join_state),
-                "current_sequence_no": run.cursor.next_sequence_no - 1,
-                "next_wakeup_at": run.next_wakeup_at,
-                "lease_owner": None if run.lease is None else run.lease.owner,
-                "lease_expires_at": None
-                if run.lease is None
-                else run.lease.expires_at,
-                "final_outcome_json": _serialize_outcome(run.final_outcome),
-                "last_error": run.state.last_error,
-            },
+        updated = self._require_updated_row(
+            await self._run_service.update_with_row_version(
+                {"id": run_uuid},
+                expected_row_version=run.row_version,
+                changes={
+                    "status": run.status.value,
+                    "service_route_key": run.service_route_key,
+                    "request_json": dict(run.request_snapshot),
+                    "policy_json": _serialize_policy(run.policy),
+                    "run_state_json": _serialize_state(run.state),
+                    "metadata_json": dict(run.metadata),
+                    "parent_run_id": _uuid_or_none(
+                        None if run.lineage is None else run.lineage.parent_run_id
+                    ),
+                    "root_run_id": _uuid_or_none(
+                        None if run.lineage is None else run.lineage.root_run_id
+                    ),
+                    "agent_key": _normalize_optional_text(
+                        None if run.lineage is None else run.lineage.agent_key
+                    )
+                    or run.policy.agent_key,
+                    "spawned_by_step_no": None
+                    if run.lineage is None
+                    else run.lineage.spawned_by_step_no,
+                    "join_state_json": _serialize_join_state(run.join_state),
+                    "current_sequence_no": run.cursor.next_sequence_no - 1,
+                    "next_wakeup_at": run.next_wakeup_at,
+                    "lease_owner": None if run.lease is None else run.lease.owner,
+                    "lease_expires_at": None
+                    if run.lease is None
+                    else run.lease.expires_at,
+                    "final_outcome_json": _serialize_outcome(run.final_outcome),
+                    "last_error": run.state.last_error,
+                },
+            ),
+            run_id=run.run_id,
+            operation="run save",
         )
         return self._row_to_run(updated)
 
@@ -1243,10 +1265,14 @@ class RelationalPlanRunStore(IPlanRunStore):
                 "occurred_at": step.occurred_at or _utc_now(),
             }
         )
-        updated = await self._run_service.update_with_row_version(
-            {"id": run_row.id},
-            expected_row_version=run_row.row_version,
-            changes={"current_sequence_no": step.sequence_no},
+        updated = self._require_updated_row(
+            await self._run_service.update_with_row_version(
+                {"id": run_row.id},
+                expected_row_version=run_row.row_version,
+                changes={"current_sequence_no": step.sequence_no},
+            ),
+            run_id=run_id,
+            operation="step append",
         )
         return PlanRunCursor(
             run_id=str(updated.id),
@@ -1269,13 +1295,17 @@ class RelationalPlanRunStore(IPlanRunStore):
             if _normalize_optional_text(row.lease_owner) != _normalize_optional_text(owner):
                 return None
         expires_at = now.replace(microsecond=0) + timedelta(seconds=lease_seconds)
-        updated = await self._run_service.update_with_row_version(
-            {"id": row.id},
-            expected_row_version=row.row_version,
-            changes={
-                "lease_owner": owner,
-                "lease_expires_at": expires_at,
-            },
+        updated = self._require_updated_row(
+            await self._run_service.update_with_row_version(
+                {"id": row.id},
+                expected_row_version=row.row_version,
+                changes={
+                    "lease_owner": owner,
+                    "lease_expires_at": expires_at,
+                },
+            ),
+            run_id=run_id,
+            operation="lease acquisition",
         )
         return PlanLease(owner=owner, expires_at=updated.lease_expires_at)
 
@@ -1285,10 +1315,14 @@ class RelationalPlanRunStore(IPlanRunStore):
             return
         if _normalize_optional_text(row.lease_owner) != _normalize_optional_text(owner):
             return
-        await self._run_service.update_with_row_version(
-            {"id": row.id},
-            expected_row_version=row.row_version,
-            changes={"lease_owner": None, "lease_expires_at": None},
+        self._require_updated_row(
+            await self._run_service.update_with_row_version(
+                {"id": row.id},
+                expected_row_version=row.row_version,
+                changes={"lease_owner": None, "lease_expires_at": None},
+            ),
+            run_id=run_id,
+            operation="lease release",
         )
 
     async def list_runnable_runs(
@@ -1334,17 +1368,21 @@ class RelationalPlanRunStore(IPlanRunStore):
         existing_outcome = _deserialize_outcome(row.final_outcome_json)
         if existing_outcome is not None:
             return existing_outcome
-        updated = await self._run_service.update_with_row_version(
-            {"id": row.id},
-            expected_row_version=row.row_version,
-            changes={
-                "status": _outcome_status_to_run_status(outcome).value,
-                "final_outcome_json": _serialize_outcome(outcome),
-                "last_error": outcome.error_message,
-                "next_wakeup_at": None,
-                "lease_owner": None,
-                "lease_expires_at": None,
-            },
+        updated = self._require_updated_row(
+            await self._run_service.update_with_row_version(
+                {"id": row.id},
+                expected_row_version=row.row_version,
+                changes={
+                    "status": _outcome_status_to_run_status(outcome).value,
+                    "final_outcome_json": _serialize_outcome(outcome),
+                    "last_error": outcome.error_message,
+                    "next_wakeup_at": None,
+                    "lease_owner": None,
+                    "lease_expires_at": None,
+                },
+            ),
+            run_id=run_id,
+            operation="run finalization",
         )
         return _deserialize_outcome(updated.final_outcome_json) or outcome
 

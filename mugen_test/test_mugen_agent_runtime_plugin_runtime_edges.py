@@ -1359,6 +1359,102 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cursor.next_sequence_no, 2)
         self.assertEqual(steps[0].step_kind, PlanRunStepKind.EFFECT)
 
+    async def test_relational_plan_run_store_raises_explicit_stale_row_version_errors(
+        self,
+    ) -> None:
+        run_service = _FakeRunService()
+        step_service = _FakeStepService()
+        store = RelationalPlanRunStore(run_service=run_service, step_service=step_service)
+        base_policy = AgentRuntimePolicy(enabled=True, background_enabled=True)
+
+        saved_run = await store.create_run(
+            _request(mode=PlanRunMode.BACKGROUND),
+            state=PlanRunState(goal="saved"),
+            policy=base_policy,
+        )
+        run_service.update_with_row_version = AsyncMock(return_value=None)
+        with self.assertRaisesRegex(RuntimeError, "stale row_version"):
+            await store.save_run(saved_run)
+
+        append_run_service = _FakeRunService()
+        append_step_service = _FakeStepService()
+        append_store = RelationalPlanRunStore(
+            run_service=append_run_service,
+            step_service=append_step_service,
+        )
+        append_run = await append_store.create_run(
+            _request(mode=PlanRunMode.BACKGROUND),
+            state=PlanRunState(goal="append"),
+            policy=base_policy,
+        )
+        append_run_service.update_with_row_version = AsyncMock(return_value=None)
+        with self.assertRaisesRegex(RuntimeError, "stale row_version"):
+            await append_store.append_step(
+                run_id=append_run.run_id,
+                step=PlanRunStep(
+                    run_id=append_run.run_id,
+                    sequence_no=append_run.cursor.next_sequence_no,
+                    step_kind=PlanRunStepKind.EFFECT,
+                    payload={"step": "append"},
+                    occurred_at=datetime.now(timezone.utc),
+                ),
+            )
+
+        lease_run_service = _FakeRunService()
+        lease_store = RelationalPlanRunStore(
+            run_service=lease_run_service,
+            step_service=_FakeStepService(),
+        )
+        lease_run = await lease_store.create_run(
+            _request(mode=PlanRunMode.BACKGROUND),
+            state=PlanRunState(goal="lease"),
+            policy=base_policy,
+        )
+        lease_run_service.update_with_row_version = AsyncMock(return_value=None)
+        with self.assertRaisesRegex(RuntimeError, "stale row_version"):
+            await lease_store.acquire_lease(
+                run_id=lease_run.run_id,
+                owner="worker-1",
+                lease_seconds=30,
+            )
+
+        finalize_run_service = _FakeRunService()
+        finalize_store = RelationalPlanRunStore(
+            run_service=finalize_run_service,
+            step_service=_FakeStepService(),
+        )
+        finalize_run = await finalize_store.create_run(
+            _request(mode=PlanRunMode.BACKGROUND),
+            state=PlanRunState(goal="finalize"),
+            policy=base_policy,
+        )
+        finalize_run_service.update_with_row_version = AsyncMock(return_value=None)
+        with self.assertRaisesRegex(RuntimeError, "stale row_version"):
+            await finalize_store.finalize_run(
+                run_id=finalize_run.run_id,
+                outcome=PlanOutcome(status=PlanOutcomeStatus.COMPLETED),
+            )
+
+        release_run_service = _FakeRunService()
+        release_store = RelationalPlanRunStore(
+            run_service=release_run_service,
+            step_service=_FakeStepService(),
+        )
+        release_run = await release_store.create_run(
+            _request(mode=PlanRunMode.BACKGROUND),
+            state=PlanRunState(goal="release"),
+            policy=base_policy,
+        )
+        release_row = release_run_service.rows[uuid.UUID(release_run.run_id)]
+        release_row.lease_owner = "worker-1"
+        release_row.lease_expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        release_run_service.update_with_row_version = AsyncMock(return_value=None)
+        with self.assertRaisesRegex(RuntimeError, "stale row_version"):
+            await release_store.release_lease(
+                run_id=release_run.run_id,
+                owner="worker-1",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
