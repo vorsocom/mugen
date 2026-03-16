@@ -199,9 +199,9 @@ Decision semantics:
   persist a join barrier, and resume the parent after required children finish.
 - `STOP`: terminate without further action.
 
-Current reference behavior: delegated `JoinState.timeout_at` is persisted as
-reserved metadata only. The current runtime does not auto-timeout waiting
-parents from that field.
+Current reference behavior: when delegated `JoinState.timeout_at` is present
+and expires before required children finish, the parent run finalizes using
+`JoinPolicy.on_required_child_failed`.
 
 Contract guarantee: decisions describe what should happen next. They do not
 perform execution side effects directly.

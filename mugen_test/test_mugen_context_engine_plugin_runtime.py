@@ -713,7 +713,9 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         existing_row = SimpleNamespace(
             id=uuid.uuid4(),
+            scope_key=runtime_module.scope_key(_scope()),
             revision=2,
+            row_version=3,
             current_objective="Existing objective",
             entities={"ticket": "A-1"},
             constraints=["constraint"],
@@ -734,8 +736,8 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         event_log_service = SimpleNamespace(
             _rsg=event_log_rsg,
             table="context_event_log",
-            count=AsyncMock(return_value=3),
             create=AsyncMock(),
+            delete=AsyncMock(),
         )
         store = RelationalContextStateStore(
             snapshot_service=snapshot_service,
@@ -762,6 +764,10 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created_state.routing["service_route_key"], "top-level-route")
         snapshot_service.create.assert_awaited_once()
         self.assertEqual(event_log_service.create.await_count, 1)
+        self.assertEqual(
+            event_log_service.create.await_args_list[0].args[0]["sequence_no"],
+            1,
+        )
 
         updated_state = await store.save(
             request=_request(
@@ -783,6 +789,14 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated_state.routing["tenant_resolution"], None)
         snapshot_service.update.assert_awaited_once()
         self.assertEqual(event_log_service.create.await_count, 3)
+        self.assertEqual(
+            event_log_service.create.await_args_list[1].args[0]["sequence_no"],
+            5,
+        )
+        self.assertEqual(
+            event_log_service.create.await_args_list[2].args[0]["sequence_no"],
+            6,
+        )
 
         await store.clear(_request())
         snapshot_service.delete.assert_awaited()
@@ -792,6 +806,407 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                 _request(user_message={"nested": True})
             ),  # pylint: disable=protected-access
             "{'nested': True}",
+        )
+
+    async def test_state_store_retries_snapshot_conflicts_and_rolls_back_failed_events(
+        self,
+    ) -> None:
+        scope_key_value = runtime_module.scope_key(_scope())
+        first_row = SimpleNamespace(
+            id=uuid.uuid4(),
+            tenant_id=_tenant_uuid(),
+            scope_key=scope_key_value,
+            platform="matrix",
+            channel_id="matrix",
+            room_id="room-1",
+            sender_id="user-1",
+            conversation_id="room-1",
+            case_id=None,
+            workflow_id="wf-1",
+            current_objective="before",
+            entities={"ticket": "A-1"},
+            constraints=["constraint"],
+            unresolved_slots=["email"],
+            commitments=["reply"],
+            safety_flags=["audit"],
+            routing={"service_route_key": "route.before"},
+            summary="summary",
+            revision=2,
+            last_message_id="msg-before",
+            last_trace_id="trace-before",
+            attributes={"outcome": "completed"},
+            row_version=4,
+        )
+        replacement_row = SimpleNamespace(
+            **{
+                **first_row.__dict__,
+                "id": uuid.uuid4(),
+                "revision": 3,
+                "row_version": 7,
+            }
+        )
+
+        class _SnapshotService:
+            def __init__(self) -> None:
+                self.get_calls = 0
+                self.deleted: list[dict] = []
+                self.rows = {
+                    ("tenant_scope", 0): None,
+                    ("tenant_scope", 1): replacement_row,
+                }
+                self.current = replacement_row
+
+            async def get(self, where):
+                _ = where
+                self.get_calls += 1
+                if self.get_calls <= 2:
+                    return self.rows[("tenant_scope", self.get_calls - 1)]
+                return self.current
+
+            async def create(self, payload):
+                raise RuntimeError("duplicate snapshot row")
+
+            async def update_with_row_version(
+                self,
+                where,
+                *,
+                expected_row_version,
+                changes,
+            ):
+                _ = where
+                if self.current.row_version != expected_row_version:
+                    return None
+                for key, value in changes.items():
+                    setattr(self.current, key, value)
+                self.current.row_version += 1
+                return self.current
+
+            async def delete_with_row_version(self, where, *, expected_row_version):
+                _ = where
+                if self.current.row_version != expected_row_version:
+                    return None
+                self.deleted.append(where)
+                self.current = None
+                return None
+
+            async def delete(self, where):
+                self.deleted.append(where)
+                self.current = None
+                return None
+
+        snapshot_service = _SnapshotService()
+        event_log_service = SimpleNamespace(
+            create=AsyncMock(
+                side_effect=[None, RuntimeError("assistant event failed")]
+            ),
+            delete=AsyncMock(),
+            _rsg=SimpleNamespace(delete_many=AsyncMock()),
+            table="context_event_log",
+        )
+        store = RelationalContextStateStore(
+            snapshot_service=snapshot_service,
+            event_log_service=event_log_service,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "assistant event failed"):
+            await store.save(
+                request=_request(trace_id="trace-rollback"),
+                prepared=_prepared(),
+                completion=CompletionResponse(content="assistant answer"),
+                final_user_responses=[],
+                outcome=TurnOutcome.COMPLETED,
+            )
+
+        self.assertEqual(snapshot_service.current.revision, 3)
+        self.assertEqual(snapshot_service.current.current_objective, "before")
+        self.assertEqual(event_log_service.delete.await_count, 2)
+        self.assertEqual(
+            event_log_service.delete.await_args_list[0].args[0]["sequence_no"],
+            8,
+        )
+        self.assertEqual(
+            event_log_service.delete.await_args_list[1].args[0]["sequence_no"],
+            7,
+        )
+
+        stale_row = SimpleNamespace(**{**first_row.__dict__, "row_version": 10})
+
+        class _ConflictSnapshotService:
+            async def get(self, where):
+                _ = where
+                return stale_row
+
+            async def update_with_row_version(
+                self,
+                where,
+                *,
+                expected_row_version,
+                changes,
+            ):
+                _ = (where, expected_row_version, changes)
+                return None
+
+        conflict_store = RelationalContextStateStore(
+            snapshot_service=_ConflictSnapshotService(),
+            event_log_service=SimpleNamespace(
+                create=AsyncMock(),
+                delete=AsyncMock(),
+                _rsg=SimpleNamespace(delete_many=AsyncMock()),
+                table="context_event_log",
+            ),
+        )
+        with self.assertRaisesRegex(RuntimeError, "snapshot update conflict"):
+            await conflict_store.save(
+                request=_request(trace_id="trace-conflict"),
+                prepared=_prepared(),
+                completion=None,
+                final_user_responses=[],
+                outcome=TurnOutcome.COMPLETION_FAILED,
+            )
+
+    async def test_state_store_save_adds_notes_when_snapshot_rollback_conflicts(
+        self,
+    ) -> None:
+        current_row = SimpleNamespace(
+            id=uuid.uuid4(),
+            tenant_id=_tenant_uuid(),
+            scope_key=runtime_module.scope_key(_scope()),
+            platform="matrix",
+            channel_id="matrix",
+            room_id="room-1",
+            sender_id="user-1",
+            conversation_id="room-1",
+            case_id=None,
+            workflow_id="wf-1",
+            current_objective="before",
+            entities={"ticket": "A-1"},
+            constraints=["constraint"],
+            unresolved_slots=["email"],
+            commitments=["reply"],
+            safety_flags=["audit"],
+            routing={"service_route_key": "route.before"},
+            summary="summary",
+            revision=2,
+            last_message_id="msg-before",
+            last_trace_id="trace-before",
+            attributes={"outcome": "completed"},
+            row_version=4,
+        )
+
+        class _RollbackConflictSnapshotService:
+            def __init__(self, row) -> None:
+                self.row = row
+                self.update_calls = 0
+
+            async def get(self, where):
+                _ = where
+                return self.row
+
+            async def update_with_row_version(
+                self,
+                where,
+                *,
+                expected_row_version,
+                changes,
+            ):
+                _ = where
+                self.update_calls += 1
+                if self.update_calls == 2:
+                    return None
+                if self.row.row_version != expected_row_version:
+                    return None
+                for key, value in changes.items():
+                    setattr(self.row, key, value)
+                self.row.row_version += 1
+                return self.row
+
+        snapshot_service = _RollbackConflictSnapshotService(current_row)
+        event_log_service = SimpleNamespace(
+            create=AsyncMock(
+                side_effect=[None, RuntimeError("assistant event failed")]
+            ),
+            delete=AsyncMock(),
+            _rsg=SimpleNamespace(delete_many=AsyncMock()),
+            table="context_event_log",
+        )
+        store = RelationalContextStateStore(
+            snapshot_service=snapshot_service,
+            event_log_service=event_log_service,
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "assistant event failed",
+        ) as error_ctx:
+            await store.save(
+                request=_request(trace_id="trace-note"),
+                prepared=_prepared(),
+                completion=CompletionResponse(content="assistant answer"),
+                final_user_responses=[],
+                outcome=TurnOutcome.COMPLETED,
+            )
+
+        self.assertIn(
+            "Context state rollback failed",
+            "\n".join(getattr(error_ctx.exception, "__notes__", [])),
+        )
+
+    async def test_state_store_snapshot_helpers_cover_create_and_rollback_edges(
+        self,
+    ) -> None:
+        payload = {"tenant_id": _tenant_uuid(), "scope_key": "scope"}
+        request = _request(trace_id="trace-edge")
+        tenant_id = _tenant_uuid()
+        scope_key_value = runtime_module.scope_key(request.scope)
+
+        create_failure_store = RelationalContextStateStore(
+            snapshot_service=SimpleNamespace(
+                create=AsyncMock(side_effect=RuntimeError("create failed")),
+                get=AsyncMock(return_value=None),
+            ),
+            event_log_service=SimpleNamespace(),
+        )
+        with self.assertRaisesRegex(RuntimeError, "create failed"):
+            await create_failure_store._persist_snapshot(
+                tenant_id=tenant_id,
+                scope_key_value=scope_key_value,
+                existing=None,
+                payload=payload,
+            )
+
+        revision_mismatch_row = SimpleNamespace(
+            id=uuid.uuid4(),
+            revision=9,
+            last_message_id=request.message_id,
+            last_trace_id=request.trace_id,
+            row_version=1,
+        )
+        message_mismatch_row = SimpleNamespace(
+            id=uuid.uuid4(),
+            revision=3,
+            last_message_id="other-message",
+            last_trace_id=request.trace_id,
+            row_version=1,
+        )
+        trace_mismatch_row = SimpleNamespace(
+            id=uuid.uuid4(),
+            revision=3,
+            last_message_id=request.message_id,
+            last_trace_id="other-trace",
+            row_version=1,
+        )
+        guard_service = SimpleNamespace(
+            get=AsyncMock(
+                side_effect=[
+                    None,
+                    revision_mismatch_row,
+                    message_mismatch_row,
+                    trace_mismatch_row,
+                ]
+            ),
+            delete=AsyncMock(),
+            update=AsyncMock(),
+        )
+        guard_store = RelationalContextStateStore(
+            snapshot_service=guard_service,
+            event_log_service=SimpleNamespace(),
+        )
+        for _ in range(4):
+            await guard_store._rollback_snapshot(
+                tenant_id=tenant_id,
+                scope_key_value=scope_key_value,
+                request=request,
+                previous_payload={"revision": 2},
+                failed_revision=3,
+            )
+        guard_service.delete.assert_not_awaited()
+        guard_service.update.assert_not_awaited()
+
+        delete_with_version_service = SimpleNamespace(
+            get=AsyncMock(
+                return_value=SimpleNamespace(
+                    id=uuid.uuid4(),
+                    revision=3,
+                    last_message_id=request.message_id,
+                    last_trace_id=request.trace_id,
+                    row_version=5,
+                )
+            ),
+            delete_with_row_version=AsyncMock(return_value=None),
+            delete=AsyncMock(),
+        )
+        delete_with_version_store = RelationalContextStateStore(
+            snapshot_service=delete_with_version_service,
+            event_log_service=SimpleNamespace(),
+        )
+        await delete_with_version_store._rollback_snapshot(
+            tenant_id=tenant_id,
+            scope_key_value=scope_key_value,
+            request=request,
+            previous_payload=None,
+            failed_revision=3,
+        )
+        delete_with_version_service.delete_with_row_version.assert_awaited_once()
+        delete_with_version_service.delete.assert_not_awaited()
+
+        fallback_delete_service = SimpleNamespace(
+            get=AsyncMock(
+                return_value=SimpleNamespace(
+                    id=uuid.uuid4(),
+                    revision=3,
+                    last_message_id=request.message_id,
+                    last_trace_id=request.trace_id,
+                    row_version="stale",
+                )
+            ),
+            delete=AsyncMock(),
+        )
+        fallback_delete_store = RelationalContextStateStore(
+            snapshot_service=fallback_delete_service,
+            event_log_service=SimpleNamespace(),
+        )
+        await fallback_delete_store._rollback_snapshot(
+            tenant_id=tenant_id,
+            scope_key_value=scope_key_value,
+            request=request,
+            previous_payload=None,
+            failed_revision=3,
+        )
+        fallback_delete_service.delete.assert_awaited_once()
+
+    async def test_state_store_event_rollback_edges_cover_missing_delete_and_user_only(
+        self,
+    ) -> None:
+        request = _request(trace_id="trace-events")
+        tenant_id = _tenant_uuid()
+        scope_key_value = runtime_module.scope_key(request.scope)
+
+        no_delete_store = RelationalContextStateStore(
+            snapshot_service=SimpleNamespace(),
+            event_log_service=SimpleNamespace(),
+        )
+        await no_delete_store._rollback_turn_events(
+            tenant_id=tenant_id,
+            scope_key_value=scope_key_value,
+            assistant_response=None,
+            revision=3,
+        )
+
+        delete_service = SimpleNamespace(delete=AsyncMock())
+        delete_store = RelationalContextStateStore(
+            snapshot_service=SimpleNamespace(),
+            event_log_service=delete_service,
+        )
+        await delete_store._rollback_turn_events(
+            tenant_id=tenant_id,
+            scope_key_value=scope_key_value,
+            assistant_response=None,
+            revision=3,
+        )
+        self.assertEqual(delete_service.delete.await_count, 1)
+        self.assertEqual(
+            delete_service.delete.await_args_list[0].args[0]["sequence_no"],
+            5,
         )
 
     async def test_relational_cache_covers_parse_get_put_and_invalidate(self) -> None:

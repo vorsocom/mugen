@@ -1183,6 +1183,14 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 terminal_children[child_run_id] = child_run
 
         completed_ids = set(join_state.completed_child_run_ids) | set(terminal_children)
+        timeout_outcome = self._join_timeout_outcome(
+            join_state=join_state,
+            completed_ids=completed_ids,
+        )
+        if timeout_outcome is not None:
+            run.join_state = None
+            run.next_wakeup_at = None
+            return (), timeout_outcome, True
         if required_ids - completed_ids:
             run.join_state.completed_child_run_ids = tuple(sorted(completed_ids))
             run.status = PlanRunStatus.WAITING
@@ -1320,6 +1328,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
             required_child_run_ids=tuple(required_child_run_ids),
             completed_child_run_ids=(),
             last_joined_sequence_no=decision_sequence_no,
+            timeout_at=self._join_timeout_at(decision.join_policy),
             policy=decision.join_policy or JoinPolicy(),
             metadata={
                 "delegations": [
@@ -1350,6 +1359,43 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         )
         await self._record_outcome(request=request, run=run, outcome=outcome)
         return outcome
+
+    def _join_timeout_outcome(
+        self,
+        *,
+        join_state: JoinState,
+        completed_ids: set[str],
+    ) -> PlanOutcome | None:
+        timeout_at = join_state.timeout_at
+        if timeout_at is None or timeout_at > _utc_now():
+            return None
+        pending_ids = sorted(
+            set(join_state.required_child_run_ids) - set(completed_ids)
+        )
+        return PlanOutcome(
+            status=join_state.policy.on_required_child_failed,
+            error_message="join_timeout_elapsed",
+            metadata={
+                "timed_out_at": timeout_at.isoformat(),
+                "waiting_on_child_run_ids": pending_ids,
+            },
+        )
+
+    def _join_timeout_at(self, join_policy: JoinPolicy | None) -> datetime | None:
+        if join_policy is None:
+            return None
+        metadata = dict(join_policy.metadata or {})
+        timeout_at = metadata.get("timeout_at")
+        if isinstance(timeout_at, datetime):
+            return timeout_at
+        if isinstance(timeout_at, str) and timeout_at.strip() != "":
+            return datetime.fromisoformat(timeout_at)
+        timeout_seconds = metadata.get("timeout_seconds")
+        if isinstance(timeout_seconds, bool):
+            return None
+        if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
+            return _utc_now() + timedelta(seconds=float(timeout_seconds))
+        return None
 
     def _child_request_metadata(
         self,

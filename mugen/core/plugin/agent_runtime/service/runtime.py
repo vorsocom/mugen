@@ -1255,17 +1255,15 @@ class RelationalPlanRunStore(IPlanRunStore):
         step: PlanRunStep,
     ) -> PlanRunCursor:
         run_row = await self._require_run_row(run_id)
-        await self._step_service.create(
-            {
-                "tenant_id": run_row.tenant_id,
-                "run_id": run_row.id,
-                "sequence_no": step.sequence_no,
-                "step_kind": step.step_kind.value,
-                "payload_json": dict(step.payload),
-                "occurred_at": step.occurred_at or _utc_now(),
-            }
-        )
-        updated = self._require_updated_row(
+        previous_sequence_no = int(run_row.current_sequence_no or 0)
+        expected_sequence_no = previous_sequence_no + 1
+        if int(step.sequence_no or 0) != expected_sequence_no:
+            raise RuntimeError(
+                "Agent plan step sequence mismatch "
+                f"for run_id={run_id}: expected {expected_sequence_no}, "
+                f"got {step.sequence_no}."
+            )
+        reserved = self._require_updated_row(
             await self._run_service.update_with_row_version(
                 {"id": run_row.id},
                 expected_row_version=run_row.row_version,
@@ -1274,10 +1272,34 @@ class RelationalPlanRunStore(IPlanRunStore):
             run_id=run_id,
             operation="step append",
         )
+        try:
+            await self._step_service.create(
+                {
+                    "tenant_id": run_row.tenant_id,
+                    "run_id": run_row.id,
+                    "sequence_no": step.sequence_no,
+                    "step_kind": step.step_kind.value,
+                    "payload_json": dict(step.payload),
+                    "occurred_at": step.occurred_at or _utc_now(),
+                }
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            try:
+                await self._rollback_reserved_step_sequence(
+                    run_id=run_id,
+                    reserved_row=reserved,
+                    previous_sequence_no=previous_sequence_no,
+                )
+            except Exception as rollback_exc:  # pylint: disable=broad-exception-caught
+                exc.add_note(
+                    "Agent step sequence rollback failed "
+                    f"({type(rollback_exc).__name__}: {rollback_exc})."
+                )
+            raise
         return PlanRunCursor(
-            run_id=str(updated.id),
-            next_sequence_no=int(updated.current_sequence_no or 0) + 1,
-            status=PlanRunStatus(str(updated.status)),
+            run_id=str(reserved.id),
+            next_sequence_no=int(reserved.current_sequence_no or 0) + 1,
+            status=PlanRunStatus(str(reserved.status)),
         )
 
     async def acquire_lease(
@@ -1344,7 +1366,12 @@ class RelationalPlanRunStore(IPlanRunStore):
             if row.lease_expires_at is not None and row.lease_expires_at > current:
                 continue
             join_ready = await self._join_barrier_satisfied(row)
+            join_timed_out = self._join_timed_out(row=row, current=current)
             if getattr(row, "join_state_json", None) is not None and join_ready is False:
+                if join_timed_out:
+                    due.append(self._row_to_run(row))
+                    if len(due) >= limit:
+                        break
                 continue
             if join_ready:
                 due.append(self._row_to_run(row))
@@ -1487,6 +1514,34 @@ class RelationalPlanRunStore(IPlanRunStore):
             if child_row.status in self._terminal_statuses
         }
         return set(join_state.required_child_run_ids).issubset(terminal_ids)
+
+    @staticmethod
+    def _join_timed_out(
+        *,
+        row: AgentPlanRunDE,
+        current: datetime,
+    ) -> bool:
+        join_state = _deserialize_join_state(getattr(row, "join_state_json", None))
+        if join_state is None or join_state.timeout_at is None:
+            return False
+        return join_state.timeout_at <= current
+
+    async def _rollback_reserved_step_sequence(
+        self,
+        *,
+        run_id: str,
+        reserved_row: AgentPlanRunDE,
+        previous_sequence_no: int,
+    ) -> None:
+        self._require_updated_row(
+            await self._run_service.update_with_row_version(
+                {"id": reserved_row.id},
+                expected_row_version=reserved_row.row_version,
+                changes={"current_sequence_no": previous_sequence_no},
+            ),
+            run_id=run_id,
+            operation="step append rollback",
+        )
 
     def _row_to_run(self, row: AgentPlanRunDE) -> PreparedPlanRun:
         run_id = str(row.id)

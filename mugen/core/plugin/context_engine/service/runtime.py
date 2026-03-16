@@ -146,6 +146,10 @@ def _assistant_text(
     return None
 
 
+class _StateSnapshotConflictError(RuntimeError):
+    """Signal an optimistic-concurrency conflict while saving state."""
+
+
 class ContextStateSnapshotService(  # pylint: disable=too-few-public-methods
     IRelationalService[ContextStateSnapshotDE]
 ):
@@ -1178,15 +1182,146 @@ class RelationalContextStateStore(IContextStateStore):
     ) -> ContextState:
         tenant_id = _parse_tenant_uuid(request.scope.tenant_id)
         scope_key_value = scope_key(request.scope)
-        existing = await self._snapshot_service.get(
-            {"tenant_id": tenant_id, "scope_key": scope_key_value}
-        )
         assistant_response = _assistant_text(
             completion=completion,
             final_user_responses=final_user_responses,
         )
+        previous_payload = None
+        next_state = None
+        for _ in range(2):
+            existing = await self._snapshot_service.get(
+                {"tenant_id": tenant_id, "scope_key": scope_key_value}
+            )
+            previous_payload = (
+                None
+                if existing is None
+                else self._snapshot_payload_from_row(
+                    tenant_id=tenant_id,
+                    row=existing,
+                )
+            )
+            next_state = self._next_state(
+                request=request,
+                existing=existing,
+                outcome=outcome,
+            )
+            payload = self._snapshot_payload(
+                tenant_id=tenant_id,
+                scope_key_value=scope_key_value,
+                request=request,
+                state=next_state,
+            )
+            try:
+                await self._persist_snapshot(
+                    tenant_id=tenant_id,
+                    scope_key_value=scope_key_value,
+                    existing=existing,
+                    payload=payload,
+                )
+            except _StateSnapshotConflictError:
+                continue
+            break
+        else:
+            raise RuntimeError("Context state snapshot update conflict.")
+
+        try:
+            await self._append_turn_events(
+                request=request,
+                assistant_response=assistant_response,
+                revision=next_state.revision,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            for rollback in (
+                self._rollback_turn_events(
+                    tenant_id=tenant_id,
+                    scope_key_value=scope_key_value,
+                    assistant_response=assistant_response,
+                    revision=next_state.revision,
+                ),
+                self._rollback_snapshot(
+                    tenant_id=tenant_id,
+                    scope_key_value=scope_key_value,
+                    request=request,
+                    previous_payload=previous_payload,
+                    failed_revision=next_state.revision,
+                ),
+            ):
+                try:
+                    await rollback
+                except (
+                    Exception
+                ) as rollback_exc:  # pylint: disable=broad-exception-caught
+                    exc.add_note(
+                        "Context state rollback failed "
+                        f"({type(rollback_exc).__name__}: {rollback_exc})."
+                    )
+            raise
+        return next_state
+
+    async def clear(self, request: ContextTurnRequest) -> None:
+        tenant_id = _parse_tenant_uuid(request.scope.tenant_id)
+        scope_key_value = scope_key(request.scope)
+        await self._snapshot_service.delete(
+            {"tenant_id": tenant_id, "scope_key": scope_key_value}
+        )
+        # The base service does not expose a bulk-delete helper.
+        # pylint: disable=protected-access
+        await self._event_log_service._rsg.delete_many(
+            self._event_log_service.table,
+            {
+                "tenant_id": tenant_id,
+                "scope_key": scope_key_value,
+            },
+        )
+
+    async def _append_turn_events(
+        self,
+        *,
+        request: ContextTurnRequest,
+        assistant_response: str | None,
+        revision: int,
+    ) -> None:
+        tenant_id = _parse_tenant_uuid(request.scope.tenant_id)
+        scope_key_value = scope_key(request.scope)
+        next_sequence = self._event_sequence_no(revision=revision)
+        await self._event_log_service.create(
+            {
+                "tenant_id": tenant_id,
+                "scope_key": scope_key_value,
+                "sequence_no": next_sequence,
+                "role": "user",
+                "content": request.user_message,
+                "message_id": request.message_id,
+                "trace_id": request.trace_id,
+                "source": "user_turn",
+                "occurred_at": _utc_now(),
+            }
+        )
+        if assistant_response is None:
+            return
+        await self._event_log_service.create(
+            {
+                "tenant_id": tenant_id,
+                "scope_key": scope_key_value,
+                "sequence_no": next_sequence + 1,
+                "role": "assistant",
+                "content": assistant_response,
+                "message_id": request.message_id,
+                "trace_id": request.trace_id,
+                "source": "assistant_turn",
+                "occurred_at": _utc_now(),
+            }
+        )
+
+    def _next_state(
+        self,
+        *,
+        request: ContextTurnRequest,
+        existing,
+        outcome: TurnOutcome,
+    ) -> ContextState:
         next_revision = int(0 if existing is None else existing.revision or 0) + 1
-        next_state = ContextState(
+        return ContextState(
             current_objective=self._objective_from_request(request),
             entities=dict((existing.entities if existing is not None else {}) or {}),
             constraints=list(
@@ -1216,7 +1351,16 @@ class RelationalContextStateStore(IContextStateStore):
                 "outcome": outcome.value,
             },
         )
-        payload = {
+
+    @staticmethod
+    def _snapshot_payload(
+        *,
+        tenant_id: uuid.UUID,
+        scope_key_value: str,
+        request: ContextTurnRequest,
+        state: ContextState,
+    ) -> dict[str, Any]:
+        return {
             "tenant_id": tenant_id,
             "scope_key": scope_key_value,
             "platform": request.scope.platform,
@@ -1226,93 +1370,171 @@ class RelationalContextStateStore(IContextStateStore):
             "conversation_id": request.scope.conversation_id,
             "case_id": request.scope.case_id,
             "workflow_id": request.scope.workflow_id,
-            "current_objective": next_state.current_objective,
-            "entities": next_state.entities,
-            "constraints": next_state.constraints,
-            "unresolved_slots": next_state.unresolved_slots,
-            "commitments": next_state.commitments,
-            "safety_flags": next_state.safety_flags,
-            "routing": next_state.routing,
-            "summary": next_state.summary,
-            "revision": next_state.revision,
+            "current_objective": state.current_objective,
+            "entities": state.entities,
+            "constraints": state.constraints,
+            "unresolved_slots": state.unresolved_slots,
+            "commitments": state.commitments,
+            "safety_flags": state.safety_flags,
+            "routing": state.routing,
+            "summary": state.summary,
+            "revision": state.revision,
             "last_message_id": request.message_id,
             "last_trace_id": request.trace_id,
-            "attributes": next_state.metadata,
+            "attributes": state.metadata,
         }
-        if existing is None or existing.id is None:
-            await self._snapshot_service.create(payload)
-        else:
-            await self._snapshot_service.update(
-                {"tenant_id": tenant_id, "id": existing.id},
-                payload,
-            )
 
-        await self._append_turn_events(
-            request=request,
-            assistant_response=assistant_response,
-        )
-        return next_state
+    @staticmethod
+    def _snapshot_payload_from_row(
+        *,
+        tenant_id: uuid.UUID,
+        row,
+    ) -> dict[str, Any]:
+        return {
+            "tenant_id": tenant_id,
+            "scope_key": row.scope_key,
+            "platform": getattr(row, "platform", None),
+            "channel_id": getattr(row, "channel_id", None),
+            "room_id": getattr(row, "room_id", None),
+            "sender_id": getattr(row, "sender_id", None),
+            "conversation_id": getattr(row, "conversation_id", None),
+            "case_id": getattr(row, "case_id", None),
+            "workflow_id": getattr(row, "workflow_id", None),
+            "current_objective": getattr(row, "current_objective", None),
+            "entities": dict(getattr(row, "entities", None) or {}),
+            "constraints": list(getattr(row, "constraints", None) or []),
+            "unresolved_slots": list(getattr(row, "unresolved_slots", None) or []),
+            "commitments": list(getattr(row, "commitments", None) or []),
+            "safety_flags": list(getattr(row, "safety_flags", None) or []),
+            "routing": dict(getattr(row, "routing", None) or {}),
+            "summary": getattr(row, "summary", None),
+            "revision": int(getattr(row, "revision", None) or 0),
+            "last_message_id": getattr(row, "last_message_id", None),
+            "last_trace_id": getattr(row, "last_trace_id", None),
+            "attributes": dict(getattr(row, "attributes", None) or {}),
+        }
 
-    async def clear(self, request: ContextTurnRequest) -> None:
-        tenant_id = _parse_tenant_uuid(request.scope.tenant_id)
-        scope_key_value = scope_key(request.scope)
-        await self._snapshot_service.delete(
-            {"tenant_id": tenant_id, "scope_key": scope_key_value}
-        )
-        # The base service does not expose a bulk-delete helper.
-        # pylint: disable=protected-access
-        await self._event_log_service._rsg.delete_many(
-            self._event_log_service.table,
-            {
-                "tenant_id": tenant_id,
-                "scope_key": scope_key_value,
-            },
-        )
-
-    async def _append_turn_events(
+    async def _persist_snapshot(
         self,
         *,
-        request: ContextTurnRequest,
-        assistant_response: str | None,
-    ) -> None:
-        tenant_id = _parse_tenant_uuid(request.scope.tenant_id)
-        scope_key_value = scope_key(request.scope)
-        sequence = await self._event_log_service.count(
-            filter_groups=[
-                FilterGroup(
-                    where={"tenant_id": tenant_id, "scope_key": scope_key_value}
+        tenant_id: uuid.UUID,
+        scope_key_value: str,
+        existing,
+        payload: dict[str, Any],
+    ):
+        if existing is None or existing.id is None:
+            try:
+                return await self._snapshot_service.create(payload)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                latest = await self._snapshot_service.get(
+                    {"tenant_id": tenant_id, "scope_key": scope_key_value}
                 )
-            ]
+                if latest is not None:
+                    raise _StateSnapshotConflictError(
+                        "Context state snapshot create conflict."
+                    ) from exc
+                raise
+
+        updated = await self._update_snapshot_row(
+            tenant_id=tenant_id,
+            row=existing,
+            payload=payload,
         )
-        next_sequence = sequence + 1
-        await self._event_log_service.create(
-            {
-                "tenant_id": tenant_id,
-                "scope_key": scope_key_value,
-                "sequence_no": next_sequence,
-                "role": "user",
-                "content": request.user_message,
-                "message_id": request.message_id,
-                "trace_id": request.trace_id,
-                "source": "user_turn",
-                "occurred_at": _utc_now(),
-            }
+        if updated is None:
+            raise _StateSnapshotConflictError(
+                "Context state snapshot update conflict."
+            )
+        return updated
+
+    async def _update_snapshot_row(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        row,
+        payload: dict[str, Any],
+    ):
+        updater = getattr(self._snapshot_service, "update_with_row_version", None)
+        row_version = getattr(row, "row_version", None)
+        if callable(updater) and isinstance(row_version, int):
+            return await updater(
+                {"tenant_id": tenant_id, "id": row.id},
+                expected_row_version=row_version,
+                changes=payload,
+            )
+        return await self._snapshot_service.update(
+            {"tenant_id": tenant_id, "id": row.id},
+            payload,
         )
-        if assistant_response is None:
+
+    async def _rollback_snapshot(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        scope_key_value: str,
+        request: ContextTurnRequest,
+        previous_payload: dict[str, Any] | None,
+        failed_revision: int,
+    ) -> None:
+        current = await self._snapshot_service.get(
+            {"tenant_id": tenant_id, "scope_key": scope_key_value}
+        )
+        if current is None or current.id is None:
             return
-        await self._event_log_service.create(
-            {
-                "tenant_id": tenant_id,
-                "scope_key": scope_key_value,
-                "sequence_no": next_sequence + 1,
-                "role": "assistant",
-                "content": assistant_response,
-                "message_id": request.message_id,
-                "trace_id": request.trace_id,
-                "source": "assistant_turn",
-                "occurred_at": _utc_now(),
-            }
+        if int(getattr(current, "revision", 0) or 0) != failed_revision:
+            return
+        if getattr(current, "last_message_id", None) != request.message_id:
+            return
+        if getattr(current, "last_trace_id", None) != request.trace_id:
+            return
+
+        if previous_payload is None:
+            deleter = getattr(self._snapshot_service, "delete_with_row_version", None)
+            row_version = getattr(current, "row_version", None)
+            if callable(deleter) and isinstance(row_version, int):
+                await deleter(
+                    {"tenant_id": tenant_id, "id": current.id},
+                    expected_row_version=row_version,
+                )
+                return
+            await self._snapshot_service.delete(
+                {"tenant_id": tenant_id, "id": current.id}
+            )
+            return
+
+        updated = await self._update_snapshot_row(
+            tenant_id=tenant_id,
+            row=current,
+            payload=previous_payload,
         )
+        if updated is None:
+            raise RuntimeError("Context state snapshot rollback conflict.")
+
+    async def _rollback_turn_events(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        scope_key_value: str,
+        assistant_response: str | None,
+        revision: int,
+    ) -> None:
+        deleter = getattr(self._event_log_service, "delete", None)
+        if callable(deleter) is not True:
+            return
+        sequence_nos = [self._event_sequence_no(revision=revision)]
+        if assistant_response is not None:
+            sequence_nos.append(sequence_nos[0] + 1)
+        for sequence_no in reversed(sequence_nos):
+            await deleter(
+                {
+                    "tenant_id": tenant_id,
+                    "scope_key": scope_key_value,
+                    "sequence_no": sequence_no,
+                }
+            )
+
+    @staticmethod
+    def _event_sequence_no(*, revision: int) -> int:
+        return max(((int(revision) - 1) * 2) + 1, 1)
 
     @staticmethod
     def _objective_from_request(request: ContextTurnRequest) -> str:

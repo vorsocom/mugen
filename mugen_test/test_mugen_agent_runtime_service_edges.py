@@ -1140,12 +1140,58 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
             run=waiting_run,
         )
         self.assertEqual(observations, ())
-        self.assertEqual(outcome.status, PlanOutcomeStatus.WAITING)
+        self.assertEqual(outcome.status, PlanOutcomeStatus.HANDOFF)
+        self.assertEqual(outcome.error_message, "join_timeout_elapsed")
         self.assertEqual(
             outcome.metadata["waiting_on_child_run_ids"],
             ["child-pending"],
         )
+        self.assertTrue(finalize_pending)
+
+        still_waiting_run = _run(
+            run_id="run-still-waiting",
+            mode=PlanRunMode.BACKGROUND,
+            request=_request(mode=PlanRunMode.BACKGROUND),
+            status=PlanRunStatus.WAITING,
+        )
+        still_waiting_run.join_state = JoinState(
+            child_run_ids=("child-pending",),
+            required_child_run_ids=("child-pending",),
+        )
+        observations, outcome, finalize_pending = await runtime._resume_join_state(  # pylint: disable=protected-access
+            request=_request(mode=PlanRunMode.BACKGROUND),
+            run=still_waiting_run,
+        )
+        self.assertEqual(observations, ())
+        self.assertEqual(outcome.status, PlanOutcomeStatus.WAITING)
         self.assertFalse(finalize_pending)
+        self.assertEqual(
+            outcome.metadata["waiting_on_child_run_ids"],
+            ["child-pending"],
+        )
+        self.assertEqual(still_waiting_run.status, PlanRunStatus.WAITING)
+
+        timeout_at = datetime.now(timezone.utc)
+        self.assertIsNone(
+            runtime._join_timeout_at(None)  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            runtime._join_timeout_at(  # pylint: disable=protected-access
+                JoinPolicy(metadata={"timeout_at": timeout_at})
+            ),
+            timeout_at,
+        )
+        self.assertEqual(
+            runtime._join_timeout_at(  # pylint: disable=protected-access
+                JoinPolicy(metadata={"timeout_at": timeout_at.isoformat()})
+            ),
+            timeout_at,
+        )
+        self.assertIsNone(
+            runtime._join_timeout_at(  # pylint: disable=protected-access
+                JoinPolicy(metadata={"timeout_seconds": True})
+            )
+        )
 
         self.assertIsNone(
             runtime._terminal_outcome_from_join_state(  # pylint: disable=protected-access
@@ -1238,6 +1284,7 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
             run=optional_run,
             decision=PlanDecision(
                 kind=PlanDecisionKind.DELEGATE,
+                join_policy=JoinPolicy(metadata={"timeout_seconds": 30}),
                 delegations=(
                     DelegationInstruction(
                         agent_key="specialist.lookup",
@@ -1249,6 +1296,7 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(optional_outcome.status, PlanOutcomeStatus.WAITING)
         self.assertEqual(optional_run.join_state.required_child_run_ids, ())
+        self.assertIsNotNone(optional_run.join_state.timeout_at)
 
     async def test_agent_runtime_run_loop_terminal_and_wait_paths(self) -> None:
         def _make_runtime(decision, *, allow_wait=False, eval_response=None):

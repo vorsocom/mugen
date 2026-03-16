@@ -1294,6 +1294,16 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             state=PlanRunState(goal="second due"),
             policy=base_policy,
         )
+        timed_out_join = await store.create_run(
+            _request(mode=PlanRunMode.BACKGROUND),
+            state=PlanRunState(goal="timed out join", status=PlanRunStatus.WAITING),
+            policy=base_policy,
+            join_state=JoinState(
+                child_run_ids=("child-pending",),
+                required_child_run_ids=("child-pending",),
+                timeout_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            ),
+        )
 
         active_row = run_service.rows[uuid.UUID(active_lease.run_id)]
         active_row.lease_owner = "worker-1"
@@ -1328,7 +1338,12 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertIn(due_runs[0].run_id, {due.run_id, second_due.run_id})
         self.assertEqual(
             {item.run_id for item in all_due_runs},
-            {due.run_id, active_lease.run_id, second_due.run_id},
+            {
+                due.run_id,
+                active_lease.run_id,
+                second_due.run_id,
+                timed_out_join.run_id,
+            },
         )
 
         due.state.summary = "saved"
@@ -1399,6 +1414,99 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
                     occurred_at=datetime.now(timezone.utc),
                 ),
             )
+        self.assertEqual(append_step_service.rows, [])
+
+        rollback_run_service = _FakeRunService()
+
+        class _FailingStepService(_FakeStepService):
+            async def create(self, payload: dict) -> SimpleNamespace:
+                _ = payload
+                raise RuntimeError("step insert failed")
+
+        rollback_store = RelationalPlanRunStore(
+            run_service=rollback_run_service,
+            step_service=_FailingStepService(),
+        )
+        rollback_run = await rollback_store.create_run(
+            _request(mode=PlanRunMode.BACKGROUND),
+            state=PlanRunState(goal="rollback"),
+            policy=base_policy,
+        )
+        rollback_row = rollback_run_service.rows[uuid.UUID(rollback_run.run_id)]
+        with self.assertRaisesRegex(RuntimeError, "step insert failed"):
+            await rollback_store.append_step(
+                run_id=rollback_run.run_id,
+                step=PlanRunStep(
+                    run_id=rollback_run.run_id,
+                    sequence_no=rollback_run.cursor.next_sequence_no,
+                    step_kind=PlanRunStepKind.EFFECT,
+                    payload={"step": "rollback"},
+                    occurred_at=datetime.now(timezone.utc),
+                ),
+            )
+        self.assertEqual(rollback_row.current_sequence_no, 0)
+
+        mismatch_store = RelationalPlanRunStore(
+            run_service=_FakeRunService(),
+            step_service=_FakeStepService(),
+        )
+        mismatch_run = await mismatch_store.create_run(
+            _request(mode=PlanRunMode.BACKGROUND),
+            state=PlanRunState(goal="mismatch"),
+            policy=base_policy,
+        )
+        with self.assertRaisesRegex(RuntimeError, "sequence mismatch"):
+            await mismatch_store.append_step(
+                run_id=mismatch_run.run_id,
+                step=PlanRunStep(
+                    run_id=mismatch_run.run_id,
+                    sequence_no=mismatch_run.cursor.next_sequence_no + 1,
+                    step_kind=PlanRunStepKind.EFFECT,
+                    payload={"step": "mismatch"},
+                    occurred_at=datetime.now(timezone.utc),
+                ),
+            )
+
+        class _FailingRollbackRunService(_FakeRunService):
+            async def update_with_row_version(
+                self,
+                where: dict,
+                *,
+                expected_row_version: int | None,
+                changes: dict,
+            ) -> SimpleNamespace | None:
+                if changes.get("current_sequence_no") == 0:
+                    return None
+                return await super().update_with_row_version(
+                    where,
+                    expected_row_version=expected_row_version,
+                    changes=changes,
+                )
+
+        rollback_note_store = RelationalPlanRunStore(
+            run_service=_FailingRollbackRunService(),
+            step_service=_FailingStepService(),
+        )
+        rollback_note_run = await rollback_note_store.create_run(
+            _request(mode=PlanRunMode.BACKGROUND),
+            state=PlanRunState(goal="rollback-note"),
+            policy=base_policy,
+        )
+        with self.assertRaisesRegex(RuntimeError, "step insert failed") as error_ctx:
+            await rollback_note_store.append_step(
+                run_id=rollback_note_run.run_id,
+                step=PlanRunStep(
+                    run_id=rollback_note_run.run_id,
+                    sequence_no=rollback_note_run.cursor.next_sequence_no,
+                    step_kind=PlanRunStepKind.EFFECT,
+                    payload={"step": "rollback-note"},
+                    occurred_at=datetime.now(timezone.utc),
+                ),
+            )
+        self.assertIn(
+            "Agent step sequence rollback failed",
+            "\n".join(getattr(error_ctx.exception, "__notes__", [])),
+        )
 
         lease_run_service = _FakeRunService()
         lease_store = RelationalPlanRunStore(
@@ -1454,6 +1562,30 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
                 run_id=release_run.run_id,
                 owner="worker-1",
             )
+
+    async def test_relational_plan_run_store_returns_timed_out_joins_when_limited(
+        self,
+    ) -> None:
+        run_service = _FakeRunService()
+        store = RelationalPlanRunStore(
+            run_service=run_service,
+            step_service=_FakeStepService(),
+        )
+        policy = AgentRuntimePolicy(enabled=True, background_enabled=True)
+        timed_out = await store.create_run(
+            _request(mode=PlanRunMode.BACKGROUND),
+            state=PlanRunState(goal="timed-out", status=PlanRunStatus.WAITING),
+            policy=policy,
+            join_state=JoinState(
+                child_run_ids=("child-1",),
+                required_child_run_ids=("child-1",),
+                timeout_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            ),
+        )
+
+        due = await store.list_runnable_runs(limit=1)
+
+        self.assertEqual([item.run_id for item in due], [timed_out.run_id])
 
 
 if __name__ == "__main__":
