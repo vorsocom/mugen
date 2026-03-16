@@ -148,8 +148,11 @@ muGen includes a release automation script that mirrors the release workflow:
 # On develop, prepare a release branch and run full gates.
 poetry run python scripts/release.py prepare --bump patch --python "$(poetry run which python)"
 
-# Finish release: merge/tag/push and merge back into develop.
+# Finish release: open the release PR to main.
 poetry run python scripts/release.py finish --version 0.43.3
+
+# After the release PR is merged on main, tag it, sync develop, and clean up.
+poetry run python scripts/release.py publish --version 0.43.3
 ```
 
 A manual GitHub Actions workflow is also available at `.github/workflows/release.yml`.

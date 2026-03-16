@@ -10,6 +10,7 @@ on:
         options:
           - prepare
           - finish
+          - publish
       bump:
         description: "Semver bump for prepare mode (ignored if version is set)"
         required: true
@@ -20,7 +21,7 @@ on:
           - minor
           - major
       version:
-        description: "Explicit release version (required for finish mode)"
+        description: "Explicit release version (required for finish/publish modes)"
         required: false
         type: string
       run_gates:
@@ -31,6 +32,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   release:
@@ -90,6 +92,7 @@ jobs:
       - name: Run Release Automation
         env:
           ACP_E2E_STARTUP_TIMEOUT_SECS: "90"
+          GH_TOKEN: ${{ github.token }}
           MUGEN_E2E_CONFIG_FILE: mugen.e2e.toml
           MUGEN_CONFIG_FILE: mugen.e2e.toml
         run: |
@@ -121,6 +124,16 @@ jobs:
             fi
 
             poetry run python scripts/release.py finish --version "${{ inputs.version }}"
+            exit 0
+          fi
+
+          if [[ "${{ inputs.mode }}" == "publish" ]]; then
+            if [[ -z "${{ inputs.version }}" ]]; then
+              echo "ERROR: version is required for publish mode." >&2
+              exit 1
+            fi
+
+            poetry run python scripts/release.py publish --version "${{ inputs.version }}"
             exit 0
           fi
 
