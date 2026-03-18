@@ -56,6 +56,34 @@ from mugen.core.plugin.acp.contract.sdk.resource import (
     SoftDeletePolicy,
 )
 from mugen.core.plugin.acp.api.validation.generic import RowVersionValidation
+from mugen.core.plugin.billing.api.validation import (
+    BillingAccountCreateValidation,
+    BillingAccountUpdateValidation,
+    BillingAdjustmentCreateValidation,
+    BillingAdjustmentUpdateValidation,
+    BillingCreditNoteCreateValidation,
+    BillingCreditNoteUpdateValidation,
+    BillingEntitlementBucketCreateValidation,
+    BillingEntitlementBucketUpdateValidation,
+    BillingInvoiceCreateValidation,
+    BillingInvoiceLineCreateValidation,
+    BillingInvoiceLineUpdateValidation,
+    BillingInvoiceUpdateValidation,
+    BillingLedgerEntryCreateValidation,
+    BillingPaymentAllocationCreateValidation,
+    BillingPaymentCreateValidation,
+    BillingPaymentUpdateValidation,
+    BillingPriceCreateValidation,
+    BillingPriceUpdateValidation,
+    BillingProductCreateValidation,
+    BillingProductUpdateValidation,
+    BillingRunCreateValidation,
+    BillingRunUpdateValidation,
+    BillingSubscriptionCreateValidation,
+    BillingSubscriptionUpdateValidation,
+    BillingUsageAllocationCreateValidation,
+    BillingUsageEventCreateValidation,
+)
 from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
@@ -118,14 +146,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Code", "DisplayName"),
-                update_schema=(
-                    "Code",
-                    "DisplayName",
-                    "Email",
-                    "ExternalRef",
-                    "Attributes",
-                ),
+                create_schema=BillingAccountCreateValidation,
+                update_schema=BillingAccountUpdateValidation,
             ),
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
@@ -142,8 +164,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Code", "Name"),
-                update_schema=("Code", "Name", "Description", "Attributes"),
+                create_schema=BillingProductCreateValidation,
+                update_schema=BillingProductUpdateValidation,
             ),
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
@@ -162,26 +184,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "ProductId",
-                    "Code",
-                    "PriceType",
-                    "Currency",
-                    "MeterCode",
-                ),
-                update_schema=(
-                    "Code",
-                    "PriceType",
-                    "Currency",
-                    "UnitAmount",
-                    "IntervalUnit",
-                    "IntervalCount",
-                    "TrialPeriodDays",
-                    "UsageUnit",
-                    "MeterCode",
-                    "Attributes",
-                ),
+                create_schema=BillingPriceCreateValidation,
+                update_schema=BillingPriceUpdateValidation,
             ),
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
@@ -201,14 +205,8 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "AccountId", "PriceId"),
-                update_schema=(
-                    "CurrentPeriodStart",
-                    "CurrentPeriodEnd",
-                    "CancelAt",
-                    "ExternalRef",
-                    "Attributes",
-                ),
+                create_schema=BillingSubscriptionCreateValidation,
+                update_schema=BillingSubscriptionUpdateValidation,
             ),
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
@@ -241,23 +239,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "RunType",
-                    "PeriodStart",
-                    "PeriodEnd",
-                    "IdempotencyKey",
-                ),
-                update_schema=(
-                    "AccountId",
-                    "SubscriptionId",
-                    "Status",
-                    "StartedAt",
-                    "FinishedAt",
-                    "ExternalRef",
-                    "ErrorMessage",
-                    "Attributes",
-                ),
+                create_schema=BillingRunCreateValidation,
+                update_schema=BillingRunUpdateValidation,
             ),
         },
         {
@@ -268,7 +251,7 @@ def contribute(
             "allow_update": False,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "AccountId", "MeterCode", "Quantity"),
+                create_schema=BillingUsageEventCreateValidation,
             ),
         },
         {
@@ -282,25 +265,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "AccountId",
-                    "MeterCode",
-                    "PeriodStart",
-                    "PeriodEnd",
-                    "IncludedQuantity",
-                ),
-                update_schema=(
-                    "SubscriptionId",
-                    "PriceId",
-                    "MeterCode",
-                    "PeriodStart",
-                    "PeriodEnd",
-                    "IncludedQuantity",
-                    "RolloverQuantity",
-                    "ExternalRef",
-                    "Attributes",
-                ),
+                create_schema=BillingEntitlementBucketCreateValidation,
+                update_schema=BillingEntitlementBucketUpdateValidation,
             ),
         },
         {
@@ -314,12 +280,7 @@ def contribute(
             "allow_update": False,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "UsageEventId",
-                    "EntitlementBucketId",
-                    "AllocatedQuantity",
-                ),
+                create_schema=BillingUsageAllocationCreateValidation,
             ),
         },
         {
@@ -331,18 +292,8 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "AccountId", "Currency"),
-                update_schema=(
-                    "AccountId",
-                    "SubscriptionId",
-                    "Number",
-                    "Currency",
-                    "SubtotalAmount",
-                    "TaxAmount",
-                    "TotalAmount",
-                    "DueAt",
-                    "Attributes",
-                ),
+                create_schema=BillingInvoiceCreateValidation,
+                update_schema=BillingInvoiceUpdateValidation,
             ),
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
@@ -376,18 +327,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "AccountId", "Currency"),
-                update_schema=(
-                    "InvoiceId",
-                    "Status",
-                    "Number",
-                    "Currency",
-                    "TotalAmount",
-                    "IssuedAt",
-                    "VoidedAt",
-                    "ExternalRef",
-                    "Attributes",
-                ),
+                create_schema=BillingCreditNoteCreateValidation,
+                update_schema=BillingCreditNoteUpdateValidation,
             ),
         },
         {
@@ -398,15 +339,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "AccountId", "Kind", "Currency", "Amount"),
-                update_schema=(
-                    "InvoiceId",
-                    "CreditNoteId",
-                    "OccurredAt",
-                    "Reason",
-                    "ExternalRef",
-                    "Attributes",
-                ),
+                create_schema=BillingAdjustmentCreateValidation,
+                update_schema=BillingAdjustmentUpdateValidation,
             ),
         },
         {
@@ -417,17 +351,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "InvoiceId", "Quantity", "Amount"),
-                update_schema=(
-                    "PriceId",
-                    "Description",
-                    "Quantity",
-                    "UnitAmount",
-                    "Amount",
-                    "PeriodStart",
-                    "PeriodEnd",
-                    "Attributes",
-                ),
+                create_schema=BillingInvoiceLineCreateValidation,
+                update_schema=BillingInvoiceLineUpdateValidation,
             ),
         },
         {
@@ -438,18 +363,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "AccountId", "Currency", "Amount"),
-                update_schema=(
-                    "InvoiceId",
-                    "Status",
-                    "Currency",
-                    "Amount",
-                    "Provider",
-                    "ExternalRef",
-                    "ReceivedAt",
-                    "FailedAt",
-                    "Attributes",
-                ),
+                create_schema=BillingPaymentCreateValidation,
+                update_schema=BillingPaymentUpdateValidation,
             ),
         },
         {
@@ -464,7 +379,7 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "PaymentId", "InvoiceId", "Amount"),
+                create_schema=BillingPaymentAllocationCreateValidation,
             ),
             "actions": {
                 "sync_invoice": {
@@ -482,13 +397,7 @@ def contribute(
             "allow_update": False,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "AccountId",
-                    "Direction",
-                    "Currency",
-                    "Amount",
-                ),
+                create_schema=BillingLedgerEntryCreateValidation,
             ),
         },
     )

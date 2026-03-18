@@ -6,6 +6,9 @@ import uuid
 
 from pydantic import NonNegativeInt, PositiveInt, model_validator
 
+from mugen.core.plugin.acp.api.validation.crud_builder import (
+    build_update_validation_from_pascal,
+)
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 
 
@@ -58,6 +61,26 @@ class MetricDefinitionCreateValidation(IValidationBase):
         return self
 
 
+MetricDefinitionUpdateValidation = build_update_validation_from_pascal(
+    "MetricDefinitionUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for MetricDefinition.",
+    optional_fields=(
+        "Code",
+        "Name",
+        "FormulaType",
+        "SourceTable",
+        "SourceTimeColumn",
+        "SourceValueColumn",
+        "ScopeColumn",
+        "SourceFilter",
+        "Description",
+        "IsActive",
+        "Attributes",
+    ),
+)
+
+
 class AggregationJobCreateValidation(IValidationBase):
     """Validate generic create inputs for AggregationJob."""
 
@@ -85,6 +108,21 @@ class AggregationJobCreateValidation(IValidationBase):
             raise ValueError("IdempotencyKey cannot be empty if provided.")
 
         return self
+
+
+AggregationJobUpdateValidation = build_update_validation_from_pascal(
+    "AggregationJobUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for AggregationJob.",
+    optional_fields=(
+        "Status",
+        "StartedAt",
+        "FinishedAt",
+        "LastRunAt",
+        "ErrorMessage",
+        "Attributes",
+    ),
+)
 
 
 class MetricRunAggregationValidation(IValidationBase):
@@ -178,6 +216,23 @@ class ReportDefinitionCreateValidation(IValidationBase):
         return self
 
 
+ReportDefinitionUpdateValidation = build_update_validation_from_pascal(
+    "ReportDefinitionUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for ReportDefinition.",
+    optional_fields=(
+        "Code",
+        "Name",
+        "Description",
+        "MetricCodes",
+        "FiltersJson",
+        "GroupByJson",
+        "IsActive",
+        "Attributes",
+    ),
+)
+
+
 class ReportSnapshotCreateValidation(IValidationBase):
     """Validate generic create inputs for ReportSnapshot."""
 
@@ -218,6 +273,22 @@ class ReportSnapshotCreateValidation(IValidationBase):
             raise ValueError("ScopeKey cannot be empty if provided.")
 
         return self
+
+
+ReportSnapshotUpdateValidation = build_update_validation_from_pascal(
+    "ReportSnapshotUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for ReportSnapshot.",
+    optional_fields=(
+        "ReportDefinitionId",
+        "MetricCodes",
+        "WindowStart",
+        "WindowEnd",
+        "ScopeKey",
+        "Note",
+        "Attributes",
+    ),
+)
 
 
 class ReportSnapshotGenerateValidation(IValidationBase):
@@ -396,3 +467,21 @@ class KpiThresholdCreateValidation(IValidationBase):
             raise ValueError("Description cannot be empty if provided.")
 
         return self
+
+
+KpiThresholdUpdateValidation = build_update_validation_from_pascal(
+    "KpiThresholdUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for KpiThreshold.",
+    optional_fields=(
+        "ScopeKey",
+        "TargetValue",
+        "WarnLow",
+        "WarnHigh",
+        "CriticalLow",
+        "CriticalHigh",
+        "Description",
+        "IsActive",
+        "Attributes",
+    ),
+)

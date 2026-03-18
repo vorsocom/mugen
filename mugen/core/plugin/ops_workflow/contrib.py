@@ -38,9 +38,20 @@ from mugen.core.plugin.ops_workflow.api.validation import (
     WorkflowCancelInstanceValidation,
     WorkflowCompleteTaskValidation,
     WorkflowCompensateValidation,
+    WorkflowDefinitionCreateValidation,
+    WorkflowDefinitionUpdateValidation,
+    WorkflowInstanceCreateValidation,
+    WorkflowInstanceUpdateValidation,
     WorkflowRejectValidation,
     WorkflowReplayValidation,
     WorkflowStartInstanceValidation,
+    WorkflowStateCreateValidation,
+    WorkflowStateUpdateValidation,
+    WorkflowTaskCreateValidation,
+    WorkflowTransitionCreateValidation,
+    WorkflowTransitionUpdateValidation,
+    WorkflowVersionCreateValidation,
+    WorkflowVersionUpdateValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -83,14 +94,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Key", "Name"),
-                update_schema=(
-                    "Key",
-                    "Name",
-                    "Description",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=WorkflowDefinitionCreateValidation,
+                update_schema=WorkflowDefinitionUpdateValidation,
             ),
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
@@ -110,18 +115,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "WorkflowDefinitionId",
-                    "VersionNumber",
-                ),
-                update_schema=(
-                    "Status",
-                    "PublishedAt",
-                    "PublishedByUserId",
-                    "IsDefault",
-                    "Attributes",
-                ),
+                create_schema=WorkflowVersionCreateValidation,
+                update_schema=WorkflowVersionUpdateValidation,
             ),
         },
         {
@@ -132,14 +127,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "WorkflowVersionId", "Key", "Name"),
-                update_schema=(
-                    "Key",
-                    "Name",
-                    "IsInitial",
-                    "IsTerminal",
-                    "Attributes",
-                ),
+                create_schema=WorkflowStateCreateValidation,
+                update_schema=WorkflowStateUpdateValidation,
             ),
         },
         {
@@ -150,24 +139,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "WorkflowVersionId",
-                    "Key",
-                    "FromStateId",
-                    "ToStateId",
-                ),
-                update_schema=(
-                    "Key",
-                    "FromStateId",
-                    "ToStateId",
-                    "RequiresApproval",
-                    "AutoAssignUserId",
-                    "AutoAssignQueue",
-                    "CompensationJson",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=WorkflowTransitionCreateValidation,
+                update_schema=WorkflowTransitionUpdateValidation,
             ),
         },
         {
@@ -182,20 +155,8 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "WorkflowDefinitionId",
-                    "WorkflowVersionId",
-                    "Title",
-                ),
-                update_schema=(
-                    "Title",
-                    "ExternalRef",
-                    "SubjectNamespace",
-                    "SubjectId",
-                    "SubjectRef",
-                    "Attributes",
-                ),
+                create_schema=WorkflowInstanceCreateValidation,
+                update_schema=WorkflowInstanceUpdateValidation,
             ),
             "actions": {
                 "start_instance": {
@@ -247,12 +208,7 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "WorkflowInstanceId",
-                    "TaskKind",
-                    "Title",
-                ),
+                create_schema=WorkflowTaskCreateValidation,
             ),
             "actions": {
                 "assign_task": {

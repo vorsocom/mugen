@@ -30,8 +30,30 @@ from mugen.core.plugin.acp.contract.sdk.resource import (
 from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.ops_vpn.api.validation import (
+    ScorecardPolicyCreateValidation,
+    ScorecardPolicyUpdateValidation,
+    TaxonomyCategoryCreateValidation,
+    TaxonomyCategoryUpdateValidation,
+    TaxonomyDomainCreateValidation,
+    TaxonomyDomainUpdateValidation,
+    TaxonomySubcategoryCreateValidation,
+    TaxonomySubcategoryUpdateValidation,
+    VendorCapabilityCreateValidation,
+    VendorCapabilityUpdateValidation,
+    VendorCategoryCreateValidation,
+    VendorCategoryUpdateValidation,
     VendorPerformanceEventCreateValidation,
     VendorScorecardRollupValidation,
+    VendorCreateValidation,
+    VendorUpdateValidation,
+    VendorVerificationArtifactCreateValidation,
+    VendorVerificationArtifactUpdateValidation,
+    VendorVerificationCheckCreateValidation,
+    VendorVerificationCheckUpdateValidation,
+    VendorVerificationCreateValidation,
+    VendorVerificationUpdateValidation,
+    VerificationCriterionCreateValidation,
+    VerificationCriterionUpdateValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -77,8 +99,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Code", "Name"),
-                update_schema=("Code", "Name", "Description", "Attributes"),
+                create_schema=TaxonomyDomainCreateValidation,
+                update_schema=TaxonomyDomainUpdateValidation,
             ),
         },
         {
@@ -89,8 +111,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "TaxonomyDomainId", "Code", "Name"),
-                update_schema=("Code", "Name", "Description", "Attributes"),
+                create_schema=TaxonomyCategoryCreateValidation,
+                update_schema=TaxonomyCategoryUpdateValidation,
             ),
         },
         {
@@ -101,8 +123,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "TaxonomyCategoryId", "Code", "Name"),
-                update_schema=("Code", "Name", "Description", "Attributes"),
+                create_schema=TaxonomySubcategoryCreateValidation,
+                update_schema=TaxonomySubcategoryUpdateValidation,
             ),
         },
         {
@@ -116,14 +138,8 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Code", "DisplayName"),
-                update_schema=(
-                    "Code",
-                    "DisplayName",
-                    "ReverificationCadenceDays",
-                    "ExternalRef",
-                    "Attributes",
-                ),
+                create_schema=VendorCreateValidation,
+                update_schema=VendorUpdateValidation,
             ),
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
@@ -162,8 +178,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "VendorId", "CategoryCode"),
-                update_schema=("DisplayName", "Attributes"),
+                create_schema=VendorCategoryCreateValidation,
+                update_schema=VendorCategoryUpdateValidation,
             ),
         },
         {
@@ -174,13 +190,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": True,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "VendorId",
-                    "CapabilityCode",
-                    "ServiceRegion",
-                ),
-                update_schema=("Attributes",),
+                create_schema=VendorCapabilityCreateValidation,
+                update_schema=VendorCapabilityUpdateValidation,
             ),
         },
         {
@@ -191,14 +202,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "VendorId", "VerificationType", "Status"),
-                update_schema=(
-                    "CheckedAt",
-                    "DueAt",
-                    "CheckedByUserId",
-                    "Notes",
-                    "Attributes",
-                ),
+                create_schema=VendorVerificationCreateValidation,
+                update_schema=VendorVerificationUpdateValidation,
             ),
         },
         {
@@ -211,15 +216,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Code", "Name"),
-                update_schema=(
-                    "Name",
-                    "Description",
-                    "VerificationType",
-                    "IsRequired",
-                    "SortOrder",
-                    "Attributes",
-                ),
+                create_schema=VerificationCriterionCreateValidation,
+                update_schema=VerificationCriterionUpdateValidation,
             ),
         },
         {
@@ -230,17 +228,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "VendorVerificationId", "CriterionCode"),
-                update_schema=(
-                    "CriterionId",
-                    "Status",
-                    "IsRequired",
-                    "CheckedAt",
-                    "DueAt",
-                    "CheckedByUserId",
-                    "Notes",
-                    "Attributes",
-                ),
+                create_schema=VendorVerificationCheckCreateValidation,
+                update_schema=VendorVerificationCheckUpdateValidation,
             ),
         },
         {
@@ -253,16 +242,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "VendorVerificationId", "ArtifactType"),
-                update_schema=(
-                    "VerificationCheckId",
-                    "Uri",
-                    "ContentHash",
-                    "UploadedByUserId",
-                    "UploadedAt",
-                    "Notes",
-                    "Attributes",
-                ),
+                create_schema=VendorVerificationArtifactCreateValidation,
+                update_schema=VendorVerificationArtifactUpdateValidation,
             ),
         },
         {
@@ -288,18 +269,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Code"),
-                update_schema=(
-                    "DisplayName",
-                    "TimeToQuoteWeight",
-                    "CompletionRateWeight",
-                    "ComplaintRateWeight",
-                    "ResponseSlaWeight",
-                    "MinSampleSize",
-                    "MinimumOverallScore",
-                    "RequireAllMetrics",
-                    "Attributes",
-                ),
+                create_schema=ScorecardPolicyCreateValidation,
+                update_schema=ScorecardPolicyUpdateValidation,
             ),
         },
         {
