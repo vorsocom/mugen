@@ -6,6 +6,9 @@ import uuid
 
 from pydantic import Field, NonNegativeInt, PositiveInt, model_validator
 
+from mugen.core.plugin.acp.api.validation.crud_builder import (
+    build_update_validation_from_pascal,
+)
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.ops_governance.domain.resource_type import (
     canonicalize_resource_type,
@@ -110,6 +113,26 @@ class PolicyDefinitionCreateValidation(IValidationBase):
         return self
 
 
+PolicyDefinitionUpdateValidation = build_update_validation_from_pascal(
+    "PolicyDefinitionUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for PolicyDefinition.",
+    optional_fields=(
+        "Code",
+        "Name",
+        "Description",
+        "PolicyType",
+        "RuleRef",
+        "EvaluationMode",
+        "Engine",
+        "DocumentJson",
+        "Version",
+        "IsActive",
+        "Attributes",
+    ),
+)
+
+
 class RetentionPolicyCreateValidation(IValidationBase):
     """Validate generic create inputs for RetentionPolicy."""
 
@@ -155,6 +178,27 @@ class RetentionPolicyCreateValidation(IValidationBase):
         return self
 
 
+RetentionPolicyUpdateValidation = build_update_validation_from_pascal(
+    "RetentionPolicyUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for RetentionPolicy.",
+    optional_fields=(
+        "Code",
+        "Name",
+        "TargetNamespace",
+        "TargetEntity",
+        "Description",
+        "RetentionDays",
+        "RedactionAfterDays",
+        "LegalHoldAllowed",
+        "ActionMode",
+        "DownstreamJobRef",
+        "IsActive",
+        "Attributes",
+    ),
+)
+
+
 class DataHandlingRecordCreateValidation(IValidationBase):
     """Validate generic create inputs for DataHandlingRecord."""
 
@@ -197,6 +241,29 @@ class DataHandlingRecordCreateValidation(IValidationBase):
         if self.evidence_ref is not None and not (self.evidence_ref or "").strip():
             raise ValueError("EvidenceRef cannot be empty if provided.")
         return self
+
+
+DataHandlingRecordUpdateValidation = build_update_validation_from_pascal(
+    "DataHandlingRecordUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for DataHandlingRecord.",
+    optional_fields=(
+        "RetentionPolicyId",
+        "SubjectNamespace",
+        "SubjectId",
+        "SubjectRef",
+        "RequestType",
+        "RequestStatus",
+        "RequestedAt",
+        "DueAt",
+        "CompletedAt",
+        "ResolutionNote",
+        "HandledByUserId",
+        "EvidenceRef",
+        "EvidenceBlobId",
+        "Meta",
+    ),
+)
 
 
 class RecordConsentActionValidation(IValidationBase):
@@ -370,6 +437,25 @@ class RetentionClassCreateValidation(IValidationBase):
         if self.description is not None and not (self.description or "").strip():
             raise ValueError("Description cannot be empty if provided.")
         return self
+
+
+RetentionClassUpdateValidation = build_update_validation_from_pascal(
+    "RetentionClassUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for RetentionClass.",
+    optional_fields=(
+        "Code",
+        "Name",
+        "ResourceType",
+        "RetentionDays",
+        "RedactionAfterDays",
+        "PurgeGraceDays",
+        "LegalHoldAllowed",
+        "IsActive",
+        "Description",
+        "Attributes",
+    ),
+)
 
 
 class LegalHoldCreateValidation(IValidationBase):

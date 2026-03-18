@@ -82,14 +82,20 @@ def _validate_capabilities_json(
         if retry_status_codes is not None:
             if not isinstance(retry_status_codes, list) or not retry_status_codes:
                 raise ValueError(
-                    f"{field_name}[{cap_name}].RetryStatusCodes must be a non-empty array."
+                    (
+                        f"{field_name}[{cap_name}].RetryStatusCodes must be "
+                        "a non-empty array."
+                    )
                 )
             for code in retry_status_codes:
                 try:
                     parsed = int(code)
                 except (TypeError, ValueError) as exc:
                     raise ValueError(
-                        f"{field_name}[{cap_name}].RetryStatusCodes must contain integers."
+                        (
+                            f"{field_name}[{cap_name}].RetryStatusCodes must "
+                            "contain integers."
+                        )
                     ) from exc
                 if parsed < 100 or parsed > 599:
                     raise ValueError(
@@ -236,6 +242,57 @@ class ConnectorInstanceCreateValidation(IValidationBase):
         self.escalation_policy_key = _normalize_optional_text(
             self.escalation_policy_key
         )
+
+        return self
+
+
+class ConnectorInstanceUpdateValidation(IValidationBase):
+    """Validate PATCH payloads for ConnectorInstance."""
+
+    connector_type_id: uuid.UUID | None = None
+    connector_type_key: str | None = None
+    display_name: str | None = None
+    config_json: Any | None = None
+    secret_ref: str | None = None
+    status: Literal["active", "disabled", "error"] | None = None
+    escalation_policy_key: str | None = None
+    retry_policy_json: Any | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "ConnectorInstanceUpdateValidation":
+        fields_set = set(self.model_fields_set)
+        if not fields_set:
+            raise ValueError(
+                "At least one mutable ConnectorInstance field must be provided."
+            )
+
+        if "connector_type_key" in fields_set:
+            self.connector_type_key = _normalize_optional_text(self.connector_type_key)
+            if self.connector_type_key is None:
+                raise ValueError("ConnectorTypeKey cannot be empty when provided.")
+
+        if "display_name" in fields_set:
+            self.display_name = _normalize_optional_text(self.display_name)
+            if self.display_name is None:
+                raise ValueError("DisplayName must be non-empty when provided.")
+
+        if "secret_ref" in fields_set:
+            self.secret_ref = _normalize_optional_text(self.secret_ref)
+            if self.secret_ref is None:
+                raise ValueError("SecretRef must be non-empty when provided.")
+
+        if "config_json" in fields_set and not isinstance(self.config_json, dict):
+            raise ValueError("ConfigJson must be an object when provided.")
+
+        if "retry_policy_json" in fields_set and self.retry_policy_json is not None:
+            if not isinstance(self.retry_policy_json, dict):
+                raise ValueError("RetryPolicyJson must be an object when provided.")
+
+        if "escalation_policy_key" in fields_set:
+            self.escalation_policy_key = _normalize_optional_text(
+                self.escalation_policy_key
+            )
 
         return self
 

@@ -29,6 +29,7 @@ from mugen.core.plugin.ops_connector.api.validation import (
     ConnectorInstanceCreateValidation,
     ConnectorInstanceInvokeValidation,
     ConnectorInstanceTestConnectionValidation,
+    ConnectorInstanceUpdateValidation,
     ConnectorTypeCreateValidation,
     ConnectorTypeUpdateValidation,
 )
@@ -93,16 +94,7 @@ def contribute(
             "allow_manage": True,
             "crud": CrudPolicy(
                 create_schema=ConnectorInstanceCreateValidation,
-                update_schema=(
-                    "ConnectorTypeId",
-                    "DisplayName",
-                    "ConfigJson",
-                    "SecretRef",
-                    "Status",
-                    "EscalationPolicyKey",
-                    "RetryPolicyJson",
-                    "Attributes",
-                ),
+                update_schema=ConnectorInstanceUpdateValidation,
             ),
             "actions": {
                 "test_connection": {

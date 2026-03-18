@@ -51,6 +51,7 @@ _bootstrap_namespace_packages()
 # pylint: disable=wrong-import-position
 from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
 from mugen.core.plugin.acp.api import crud as crud_mod
+from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.contract.sdk.resource import SoftDeleteMode
 
 
@@ -71,6 +72,16 @@ class _CreateSchema(BaseModel):
 
 
 class _UpdateSchema(BaseModel):
+    display_name: str | None = None
+    tenant_id: uuid.UUID | None = None
+
+
+class _AliasCreateSchema(IValidationBase):
+    display_name: str
+    tenant_id: uuid.UUID | None = None
+
+
+class _AliasUpdateSchema(IValidationBase):
     display_name: str | None = None
     tenant_id: uuid.UUID | None = None
 
@@ -401,6 +412,13 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             {"name": "Bob", "tenant_id": tenant_id},
         )
 
+        typed_alias_data = crud_mod._build_create_data(
+            {"DisplayName": "Carol", "TenantId": str(uuid.uuid4())},
+            _AliasCreateSchema,
+            tenant_scoped=True,
+        )
+        self.assertEqual(typed_alias_data, {"display_name": "Carol"})
+
         with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as ex:
                 crud_mod._build_create_data({}, ("Name",), tenant_scoped=False)
@@ -430,6 +448,13 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             tenant_scoped=False,
         )
         self.assertEqual(typed_update_non_tenant, {"display_name": "Alice"})
+
+        typed_alias_update = crud_mod._build_update_data(
+            {"DisplayName": "Alice"},
+            _AliasUpdateSchema,
+            tenant_scoped=False,
+        )
+        self.assertEqual(typed_alias_update, {"display_name": "Alice"})
 
         with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as ex:

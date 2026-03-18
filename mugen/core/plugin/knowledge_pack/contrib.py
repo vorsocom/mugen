@@ -28,7 +28,13 @@ from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.knowledge_pack.api.validation import (
     KnowledgeEntryCreateValidation,
+    KnowledgeEntryRevisionUpdateValidation,
+    KnowledgeEntryUpdateValidation,
     KnowledgeEntryRevisionCreateValidation,
+    KnowledgePackCreateValidation,
+    KnowledgePackUpdateValidation,
+    KnowledgePackVersionCreateValidation,
+    KnowledgePackVersionUpdateValidation,
     KnowledgePackApproveValidation,
     KnowledgePackArchiveValidation,
     KnowledgePackPublishValidation,
@@ -36,6 +42,7 @@ from mugen.core.plugin.knowledge_pack.api.validation import (
     KnowledgePackRollbackVersionValidation,
     KnowledgePackSubmitForReviewValidation,
     KnowledgeScopeCreateValidation,
+    KnowledgeScopeUpdateValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -79,15 +86,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Key", "Name"),
-                update_schema=(
-                    "Key",
-                    "Name",
-                    "Description",
-                    "IsActive",
-                    "CurrentVersionId",
-                    "Attributes",
-                ),
+                create_schema=KnowledgePackCreateValidation,
+                update_schema=KnowledgePackUpdateValidation,
             ),
         },
         {
@@ -102,12 +102,8 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "KnowledgePackId",
-                    "VersionNumber",
-                ),
-                update_schema=("Note", "Attributes"),
+                create_schema=KnowledgePackVersionCreateValidation,
+                update_schema=KnowledgePackVersionUpdateValidation,
             ),
             "actions": {
                 "submit_for_review": {
@@ -153,13 +149,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=KnowledgeEntryCreateValidation,
-                update_schema=(
-                    "EntryKey",
-                    "Title",
-                    "Summary",
-                    "IsActive",
-                    "Attributes",
-                ),
+                update_schema=KnowledgeEntryUpdateValidation,
             ),
         },
         {
@@ -173,14 +163,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=KnowledgeEntryRevisionCreateValidation,
-                update_schema=(
-                    "Body",
-                    "BodyJson",
-                    "Channel",
-                    "Locale",
-                    "Category",
-                    "Attributes",
-                ),
+                update_schema=KnowledgeEntryRevisionUpdateValidation,
             ),
         },
         {
@@ -206,13 +189,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=KnowledgeScopeCreateValidation,
-                update_schema=(
-                    "Channel",
-                    "Locale",
-                    "Category",
-                    "IsActive",
-                    "Attributes",
-                ),
+                update_schema=KnowledgeScopeUpdateValidation,
             ),
         },
     )

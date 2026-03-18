@@ -10,6 +10,7 @@ from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 from mugen.core.plugin.acp.sdk.runtime_binder import AdminRuntimeBinder
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.ops_connector.api.validation import (
+    ConnectorInstanceUpdateValidation,
     ConnectorTypeUpdateValidation,
 )
 from mugen.core.plugin.ops_connector.contrib import contribute
@@ -67,6 +68,10 @@ class TestOpsConnectorContribBinding(unittest.TestCase):
             connector_types.crud.update_schema,
             ConnectorTypeUpdateValidation,
         )
+        self.assertEqual(
+            connector_instances.crud.update_schema,
+            ConnectorInstanceUpdateValidation,
+        )
 
         self.assertIn("ops_connector_type", fake_rsg.tables)
         self.assertIn("ops_connector_instance", fake_rsg.tables)
@@ -119,3 +124,62 @@ class TestOpsConnectorContribBinding(unittest.TestCase):
             connector_call_log_edm.entity_set_name,
             "OpsConnectorCallLogs",
         )
+
+    def test_connector_instance_update_validation_normalizes_and_rejects_invalid_values(
+        self,
+    ) -> None:
+        validation = ConnectorInstanceUpdateValidation(
+            connector_type_key=" stripe ",
+            display_name=" Stripe Production ",
+            config_json={"mode": "live"},
+            secret_ref=" billing.stripe ",
+            retry_policy_json={"max_attempts": 3},
+            escalation_policy_key=" ops.escalate ",
+        )
+        self.assertEqual(validation.connector_type_key, "stripe")
+        self.assertEqual(validation.display_name, "Stripe Production")
+        self.assertEqual(validation.secret_ref, "billing.stripe")
+        self.assertEqual(validation.config_json, {"mode": "live"})
+        self.assertEqual(validation.retry_policy_json, {"max_attempts": 3})
+        self.assertEqual(validation.escalation_policy_key, "ops.escalate")
+
+        simple_validation = ConnectorInstanceUpdateValidation(
+            display_name=" Backoffice connector "
+        )
+        self.assertEqual(simple_validation.display_name, "Backoffice connector")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "At least one mutable ConnectorInstance field must be provided.",
+        ):
+            ConnectorInstanceUpdateValidation()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "ConnectorTypeKey cannot be empty when provided.",
+        ):
+            ConnectorInstanceUpdateValidation(connector_type_key=" ")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "DisplayName must be non-empty when provided.",
+        ):
+            ConnectorInstanceUpdateValidation(display_name=" ")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "SecretRef must be non-empty when provided.",
+        ):
+            ConnectorInstanceUpdateValidation(secret_ref=" ")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "ConfigJson must be an object when provided.",
+        ):
+            ConnectorInstanceUpdateValidation(config_json=[])
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "RetryPolicyJson must be an object when provided.",
+        ):
+            ConnectorInstanceUpdateValidation(retry_policy_json=[])

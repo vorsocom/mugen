@@ -28,18 +28,23 @@ from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.ops_reporting.api.validation import (
     AggregationJobCreateValidation,
+    AggregationJobUpdateValidation,
     ExportJobBuildValidation,
     ExportJobCreateValidation,
     ExportJobVerifyValidation,
     KpiThresholdCreateValidation,
+    KpiThresholdUpdateValidation,
     MetricDefinitionCreateValidation,
+    MetricDefinitionUpdateValidation,
     MetricRecomputeWindowValidation,
     MetricRunAggregationValidation,
     ReportDefinitionCreateValidation,
+    ReportDefinitionUpdateValidation,
     ReportSnapshotArchiveValidation,
     ReportSnapshotCreateValidation,
     ReportSnapshotGenerateValidation,
     ReportSnapshotPublishValidation,
+    ReportSnapshotUpdateValidation,
     ReportSnapshotVerifyValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
@@ -86,19 +91,7 @@ def contribute(
             "allow_manage": True,
             "crud": CrudPolicy(
                 create_schema=MetricDefinitionCreateValidation,
-                update_schema=(
-                    "Code",
-                    "Name",
-                    "FormulaType",
-                    "SourceTable",
-                    "SourceTimeColumn",
-                    "SourceValueColumn",
-                    "ScopeColumn",
-                    "SourceFilter",
-                    "Description",
-                    "IsActive",
-                    "Attributes",
-                ),
+                update_schema=MetricDefinitionUpdateValidation,
             ),
             "actions": {
                 "run_aggregation": {
@@ -139,14 +132,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=AggregationJobCreateValidation,
-                update_schema=(
-                    "Status",
-                    "StartedAt",
-                    "FinishedAt",
-                    "LastRunAt",
-                    "ErrorMessage",
-                    "Attributes",
-                ),
+                update_schema=AggregationJobUpdateValidation,
             ),
         },
         {
@@ -161,16 +147,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=ReportDefinitionCreateValidation,
-                update_schema=(
-                    "Code",
-                    "Name",
-                    "Description",
-                    "MetricCodes",
-                    "FiltersJson",
-                    "GroupByJson",
-                    "IsActive",
-                    "Attributes",
-                ),
+                update_schema=ReportDefinitionUpdateValidation,
             ),
         },
         {
@@ -186,15 +163,7 @@ def contribute(
             "allow_manage": True,
             "crud": CrudPolicy(
                 create_schema=ReportSnapshotCreateValidation,
-                update_schema=(
-                    "ReportDefinitionId",
-                    "MetricCodes",
-                    "WindowStart",
-                    "WindowEnd",
-                    "ScopeKey",
-                    "Note",
-                    "Attributes",
-                ),
+                update_schema=ReportSnapshotUpdateValidation,
             ),
             "actions": {
                 "generate_snapshot": {
@@ -273,17 +242,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=KpiThresholdCreateValidation,
-                update_schema=(
-                    "ScopeKey",
-                    "TargetValue",
-                    "WarnLow",
-                    "WarnHigh",
-                    "CriticalLow",
-                    "CriticalHigh",
-                    "Description",
-                    "IsActive",
-                    "Attributes",
-                ),
+                update_schema=KpiThresholdUpdateValidation,
             ),
             "soft_delete": SoftDeletePolicy(),
         },
