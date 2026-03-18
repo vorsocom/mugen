@@ -27,17 +27,27 @@ from mugen.core.plugin.acp.contract.sdk.resource import (
 from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.ops_sla.api.validation import (
+    SlaCalendarCreateValidation,
+    SlaCalendarUpdateValidation,
     SlaClockCreateValidation,
+    SlaClockDefinitionCreateValidation,
+    SlaClockDefinitionUpdateValidation,
     SlaClockMarkBreachedValidation,
     SlaClockPauseValidation,
     SlaClockResumeValidation,
     SlaClockStartValidation,
     SlaClockStopValidation,
     SlaClockTickValidation,
+    SlaClockUpdateValidation,
+    SlaEscalationPolicyCreateValidation,
+    SlaEscalationPolicyUpdateValidation,
     SlaEscalationEvaluateValidation,
     SlaEscalationExecuteValidation,
     SlaEscalationTestValidation,
+    SlaPolicyCreateValidation,
+    SlaPolicyUpdateValidation,
     SlaTargetCreateValidation,
+    SlaTargetUpdateValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -82,15 +92,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Code", "Name"),
-                update_schema=(
-                    "Code",
-                    "Name",
-                    "Description",
-                    "CalendarId",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=SlaPolicyCreateValidation,
+                update_schema=SlaPolicyUpdateValidation,
             ),
         },
         {
@@ -105,18 +108,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Code", "Name", "Timezone"),
-                update_schema=(
-                    "Code",
-                    "Name",
-                    "Timezone",
-                    "BusinessStartTime",
-                    "BusinessEndTime",
-                    "BusinessDays",
-                    "HolidayRefs",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=SlaCalendarCreateValidation,
+                update_schema=SlaCalendarUpdateValidation,
             ),
         },
         {
@@ -132,15 +125,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=SlaTargetCreateValidation,
-                update_schema=(
-                    "Metric",
-                    "Priority",
-                    "Severity",
-                    "TargetMinutes",
-                    "WarnBeforeMinutes",
-                    "AutoBreach",
-                    "Attributes",
-                ),
+                update_schema=SlaTargetUpdateValidation,
             ),
         },
         {
@@ -157,21 +142,7 @@ def contribute(
             "allow_manage": True,
             "crud": CrudPolicy(
                 create_schema=SlaClockCreateValidation,
-                update_schema=(
-                    "PolicyId",
-                    "CalendarId",
-                    "TargetId",
-                    "ClockDefinitionId",
-                    "TraceId",
-                    "TrackedNamespace",
-                    "TrackedId",
-                    "TrackedRef",
-                    "Metric",
-                    "Priority",
-                    "Severity",
-                    "WarnedOffsetsJson",
-                    "Attributes",
-                ),
+                update_schema=SlaClockUpdateValidation,
             ),
             "actions": {
                 "start_clock": {
@@ -218,23 +189,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "Code",
-                    "Name",
-                    "Metric",
-                    "TargetMinutes",
-                ),
-                update_schema=(
-                    "Code",
-                    "Name",
-                    "Description",
-                    "Metric",
-                    "TargetMinutes",
-                    "WarnOffsetsJson",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=SlaClockDefinitionCreateValidation,
+                update_schema=SlaClockDefinitionUpdateValidation,
             ),
         },
         {
@@ -262,21 +218,8 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "PolicyKey",
-                    "Name",
-                ),
-                update_schema=(
-                    "PolicyKey",
-                    "Name",
-                    "Description",
-                    "Priority",
-                    "TriggersJson",
-                    "ActionsJson",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=SlaEscalationPolicyCreateValidation,
+                update_schema=SlaEscalationPolicyUpdateValidation,
             ),
             "actions": {
                 "evaluate": {

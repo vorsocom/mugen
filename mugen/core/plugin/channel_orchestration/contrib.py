@@ -24,16 +24,33 @@ from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.channel_orchestration.api.validation import (
     ApplyThrottleValidation,
+    BlocklistEntryCreateValidation,
+    BlocklistEntryUpdateValidation,
     BlockSenderActionValidation,
+    ChannelProfileCreateValidation,
+    ChannelProfileUpdateValidation,
+    ConversationStateCreateValidation,
+    ConversationStateUpdateValidation,
     EscalateConversationValidation,
     EvaluateIntakeValidation,
     IngressBindingCreateValidation,
+    IngressBindingUpdateValidation,
+    IntakeRuleCreateValidation,
+    IntakeRuleUpdateValidation,
+    OrchestrationPolicyCreateValidation,
+    OrchestrationPolicyUpdateValidation,
     RouteConversationValidation,
+    RoutingRuleCreateValidation,
+    RoutingRuleUpdateValidation,
     SetFallbackValidation,
+    ThrottleRuleCreateValidation,
+    ThrottleRuleUpdateValidation,
     UnblockSenderActionValidation,
     WorkItemCreateFromChannelValidation,
+    WorkItemCreateValidation,
     WorkItemLinkToCaseValidation,
     WorkItemReplayValidation,
+    WorkItemUpdateValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -77,22 +94,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "ChannelKey",
-                    "ProfileKey",
-                    "ClientProfileId",
-                    "ServiceRouteDefaultKey",
-                ),
-                update_schema=(
-                    "ClientProfileId",
-                    "DisplayName",
-                    "ServiceRouteDefaultKey",
-                    "RouteDefaultKey",
-                    "PolicyId",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=ChannelProfileCreateValidation,
+                update_schema=ChannelProfileUpdateValidation,
             ),
         },
         {
@@ -107,15 +110,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=IngressBindingCreateValidation,
-                update_schema=(
-                    "ChannelProfileId",
-                    "ChannelKey",
-                    "IdentifierType",
-                    "IdentifierValue",
-                    "ServiceRouteKey",
-                    "IsActive",
-                    "Attributes",
-                ),
+                update_schema=IngressBindingUpdateValidation,
             ),
         },
         {
@@ -129,22 +124,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "Name",
-                    "MatchKind",
-                    "MatchValue",
-                ),
-                update_schema=(
-                    "ChannelProfileId",
-                    "Name",
-                    "MatchKind",
-                    "MatchValue",
-                    "RouteKey",
-                    "Priority",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=IntakeRuleCreateValidation,
+                update_schema=IntakeRuleUpdateValidation,
             ),
         },
         {
@@ -158,21 +139,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "RouteKey",
-                ),
-                update_schema=(
-                    "ChannelProfileId",
-                    "RouteKey",
-                    "TargetQueueName",
-                    "OwnerUserId",
-                    "TargetServiceKey",
-                    "TargetNamespace",
-                    "Priority",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=RoutingRuleCreateValidation,
+                update_schema=RoutingRuleUpdateValidation,
             ),
         },
         {
@@ -186,23 +154,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "Code",
-                    "Name",
-                ),
-                update_schema=(
-                    "Code",
-                    "Name",
-                    "HoursMode",
-                    "EscalationMode",
-                    "FallbackPolicy",
-                    "FallbackTarget",
-                    "EscalationTarget",
-                    "EscalationAfterSeconds",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=OrchestrationPolicyCreateValidation,
+                update_schema=OrchestrationPolicyUpdateValidation,
             ),
         },
         {
@@ -217,27 +170,8 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "SenderKey",
-                ),
-                update_schema=(
-                    "ChannelProfileId",
-                    "PolicyId",
-                    "SenderKey",
-                    "ExternalConversationRef",
-                    "Status",
-                    "ServiceRouteKey",
-                    "RouteKey",
-                    "AssignedQueueName",
-                    "AssignedOwnerUserId",
-                    "AssignedServiceKey",
-                    "FallbackMode",
-                    "FallbackTarget",
-                    "FallbackReason",
-                    "IsFallbackActive",
-                    "Attributes",
-                ),
+                create_schema=ConversationStateCreateValidation,
+                update_schema=ConversationStateUpdateValidation,
             ),
             "actions": {
                 "evaluate_intake": {
@@ -278,22 +212,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "Code",
-                ),
-                update_schema=(
-                    "ChannelProfileId",
-                    "Code",
-                    "SenderScope",
-                    "WindowSeconds",
-                    "MaxMessages",
-                    "BlockOnViolation",
-                    "BlockDurationSeconds",
-                    "Priority",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=ThrottleRuleCreateValidation,
+                update_schema=ThrottleRuleUpdateValidation,
             ),
         },
         {
@@ -308,18 +228,8 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "SenderKey",
-                ),
-                update_schema=(
-                    "ChannelProfileId",
-                    "SenderKey",
-                    "Reason",
-                    "ExpiresAt",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=BlocklistEntryCreateValidation,
+                update_schema=BlocklistEntryUpdateValidation,
             ),
             "actions": {
                 "block_sender": {
@@ -358,22 +268,8 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "TraceId",
-                    "Source",
-                ),
-                update_schema=(
-                    "Source",
-                    "Participants",
-                    "Content",
-                    "Attachments",
-                    "Signals",
-                    "Extractions",
-                    "LinkedCaseId",
-                    "LinkedWorkflowInstanceId",
-                    "Attributes",
-                ),
+                create_schema=WorkItemCreateValidation,
+                update_schema=WorkItemUpdateValidation,
             ),
             "actions": {
                 "create_from_channel": {

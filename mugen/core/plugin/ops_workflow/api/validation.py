@@ -6,7 +6,117 @@ import uuid
 
 from pydantic import NonNegativeInt, model_validator
 
+from mugen.core.plugin.acp.api.validation.crud_builder import (
+    build_create_validation_from_pascal,
+    build_update_validation_from_pascal,
+)
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
+
+WorkflowDefinitionCreateValidation = build_create_validation_from_pascal(
+    "WorkflowDefinitionCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for WorkflowDefinition.",
+    required_fields=("TenantId", "Key", "Name"),
+)
+
+WorkflowDefinitionUpdateValidation = build_update_validation_from_pascal(
+    "WorkflowDefinitionUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for WorkflowDefinition.",
+    optional_fields=("Key", "Name", "Description", "IsActive", "Attributes"),
+)
+
+WorkflowVersionCreateValidation = build_create_validation_from_pascal(
+    "WorkflowVersionCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for WorkflowVersion.",
+    required_fields=("TenantId", "WorkflowDefinitionId", "VersionNumber"),
+)
+
+WorkflowVersionUpdateValidation = build_update_validation_from_pascal(
+    "WorkflowVersionUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for WorkflowVersion.",
+    optional_fields=(
+        "Status",
+        "PublishedAt",
+        "PublishedByUserId",
+        "IsDefault",
+        "Attributes",
+    ),
+)
+
+WorkflowStateCreateValidation = build_create_validation_from_pascal(
+    "WorkflowStateCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for WorkflowState.",
+    required_fields=("TenantId", "WorkflowVersionId", "Key", "Name"),
+)
+
+WorkflowStateUpdateValidation = build_update_validation_from_pascal(
+    "WorkflowStateUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for WorkflowState.",
+    optional_fields=("Key", "Name", "IsInitial", "IsTerminal", "Attributes"),
+)
+
+WorkflowTransitionCreateValidation = build_create_validation_from_pascal(
+    "WorkflowTransitionCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for WorkflowTransition.",
+    required_fields=(
+        "TenantId",
+        "WorkflowVersionId",
+        "Key",
+        "FromStateId",
+        "ToStateId",
+    ),
+)
+
+WorkflowTransitionUpdateValidation = build_update_validation_from_pascal(
+    "WorkflowTransitionUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for WorkflowTransition.",
+    optional_fields=(
+        "Key",
+        "FromStateId",
+        "ToStateId",
+        "RequiresApproval",
+        "AutoAssignUserId",
+        "AutoAssignQueue",
+        "CompensationJson",
+        "IsActive",
+        "Attributes",
+    ),
+)
+
+WorkflowInstanceCreateValidation = build_create_validation_from_pascal(
+    "WorkflowInstanceCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for WorkflowInstance.",
+    required_fields=("TenantId", "WorkflowDefinitionId", "WorkflowVersionId", "Title"),
+)
+
+WorkflowInstanceUpdateValidation = build_update_validation_from_pascal(
+    "WorkflowInstanceUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for WorkflowInstance.",
+    optional_fields=(
+        "Title",
+        "ExternalRef",
+        "SubjectNamespace",
+        "SubjectId",
+        "SubjectRef",
+        "Attributes",
+    ),
+)
+
+WorkflowTaskCreateValidation = build_create_validation_from_pascal(
+    "WorkflowTaskCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for WorkflowTask.",
+    required_fields=("TenantId", "WorkflowInstanceId", "TaskKind", "Title"),
+)
 
 
 class WorkflowStartInstanceValidation(IValidationBase):

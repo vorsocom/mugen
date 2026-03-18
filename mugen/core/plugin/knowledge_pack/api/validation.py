@@ -5,7 +5,46 @@ import uuid
 
 from pydantic import PositiveInt, model_validator
 
+from mugen.core.plugin.acp.api.validation.crud_builder import (
+    build_create_validation_from_pascal,
+    build_update_validation_from_pascal,
+)
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
+
+KnowledgePackCreateValidation = build_create_validation_from_pascal(
+    "KnowledgePackCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for KnowledgePack.",
+    required_fields=("TenantId", "Key", "Name"),
+)
+
+KnowledgePackUpdateValidation = build_update_validation_from_pascal(
+    "KnowledgePackUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for KnowledgePack.",
+    optional_fields=(
+        "Key",
+        "Name",
+        "Description",
+        "IsActive",
+        "CurrentVersionId",
+        "Attributes",
+    ),
+)
+
+KnowledgePackVersionCreateValidation = build_create_validation_from_pascal(
+    "KnowledgePackVersionCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for KnowledgePackVersion.",
+    required_fields=("TenantId", "KnowledgePackId", "VersionNumber"),
+)
+
+KnowledgePackVersionUpdateValidation = build_update_validation_from_pascal(
+    "KnowledgePackVersionUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for KnowledgePackVersion.",
+    optional_fields=("Note", "Attributes"),
+)
 
 
 class KnowledgePackVersionActionValidation(IValidationBase):
@@ -68,6 +107,14 @@ class KnowledgeEntryCreateValidation(IValidationBase):
         return self
 
 
+KnowledgeEntryUpdateValidation = build_update_validation_from_pascal(
+    "KnowledgeEntryUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for KnowledgeEntry.",
+    optional_fields=("EntryKey", "Title", "Summary", "IsActive", "Attributes"),
+)
+
+
 class KnowledgeEntryRevisionCreateValidation(IValidationBase):
     """Validate generic create inputs for KnowledgeEntryRevision."""
 
@@ -109,6 +156,14 @@ class KnowledgeEntryRevisionCreateValidation(IValidationBase):
         return self
 
 
+KnowledgeEntryRevisionUpdateValidation = build_update_validation_from_pascal(
+    "KnowledgeEntryRevisionUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for KnowledgeEntryRevision.",
+    optional_fields=("Body", "BodyJson", "Channel", "Locale", "Category", "Attributes"),
+)
+
+
 class KnowledgeScopeCreateValidation(IValidationBase):
     """Validate generic create inputs for KnowledgeScope."""
 
@@ -135,3 +190,11 @@ class KnowledgeScopeCreateValidation(IValidationBase):
             raise ValueError("Category cannot be empty if provided.")
 
         return self
+
+
+KnowledgeScopeUpdateValidation = build_update_validation_from_pascal(
+    "KnowledgeScopeUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for KnowledgeScope.",
+    optional_fields=("Channel", "Locale", "Category", "IsActive", "Attributes"),
+)

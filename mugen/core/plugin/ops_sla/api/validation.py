@@ -6,7 +6,56 @@ import uuid
 
 from pydantic import NonNegativeInt, PositiveInt, model_validator
 
+from mugen.core.plugin.acp.api.validation.crud_builder import (
+    build_create_validation_from_pascal,
+    build_update_validation_from_pascal,
+)
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
+
+SlaPolicyCreateValidation = build_create_validation_from_pascal(
+    "SlaPolicyCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for SlaPolicy.",
+    required_fields=("TenantId", "Code", "Name"),
+)
+
+SlaPolicyUpdateValidation = build_update_validation_from_pascal(
+    "SlaPolicyUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for SlaPolicy.",
+    optional_fields=(
+        "Code",
+        "Name",
+        "Description",
+        "CalendarId",
+        "IsActive",
+        "Attributes",
+    ),
+)
+
+SlaCalendarCreateValidation = build_create_validation_from_pascal(
+    "SlaCalendarCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for SlaCalendar.",
+    required_fields=("TenantId", "Code", "Name", "Timezone"),
+)
+
+SlaCalendarUpdateValidation = build_update_validation_from_pascal(
+    "SlaCalendarUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for SlaCalendar.",
+    optional_fields=(
+        "Code",
+        "Name",
+        "Timezone",
+        "BusinessStartTime",
+        "BusinessEndTime",
+        "BusinessDays",
+        "HolidayRefs",
+        "IsActive",
+        "Attributes",
+    ),
+)
 
 
 class SlaClockCreateValidation(IValidationBase):
@@ -156,3 +205,86 @@ class SlaTargetCreateValidation(IValidationBase):
             raise ValueError("Severity cannot be empty if provided.")
 
         return self
+
+
+SlaTargetUpdateValidation = build_update_validation_from_pascal(
+    "SlaTargetUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for SlaTarget.",
+    optional_fields=(
+        "Metric",
+        "Priority",
+        "Severity",
+        "TargetMinutes",
+        "WarnBeforeMinutes",
+        "AutoBreach",
+        "Attributes",
+    ),
+)
+
+SlaClockUpdateValidation = build_update_validation_from_pascal(
+    "SlaClockUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for SlaClock.",
+    optional_fields=(
+        "PolicyId",
+        "CalendarId",
+        "TargetId",
+        "ClockDefinitionId",
+        "TraceId",
+        "TrackedNamespace",
+        "TrackedId",
+        "TrackedRef",
+        "Metric",
+        "Priority",
+        "Severity",
+        "WarnedOffsetsJson",
+        "Attributes",
+    ),
+)
+
+SlaClockDefinitionCreateValidation = build_create_validation_from_pascal(
+    "SlaClockDefinitionCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for SlaClockDefinition.",
+    required_fields=("TenantId", "Code", "Name", "Metric", "TargetMinutes"),
+)
+
+SlaClockDefinitionUpdateValidation = build_update_validation_from_pascal(
+    "SlaClockDefinitionUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for SlaClockDefinition.",
+    optional_fields=(
+        "Code",
+        "Name",
+        "Description",
+        "Metric",
+        "TargetMinutes",
+        "WarnOffsetsJson",
+        "IsActive",
+        "Attributes",
+    ),
+)
+
+SlaEscalationPolicyCreateValidation = build_create_validation_from_pascal(
+    "SlaEscalationPolicyCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for SlaEscalationPolicy.",
+    required_fields=("TenantId", "PolicyKey", "Name"),
+)
+
+SlaEscalationPolicyUpdateValidation = build_update_validation_from_pascal(
+    "SlaEscalationPolicyUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for SlaEscalationPolicy.",
+    optional_fields=(
+        "PolicyKey",
+        "Name",
+        "Description",
+        "Priority",
+        "TriggersJson",
+        "ActionsJson",
+        "IsActive",
+        "Attributes",
+    ),
+)

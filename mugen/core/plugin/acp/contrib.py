@@ -68,8 +68,12 @@ from mugen.core.plugin.acp.api.validation.action import (
     UsersActionProvision,
 )
 from mugen.core.plugin.acp.api.validation.generic import (
+    GlobalRoleMembershipCreateValidation,
     NoValidationSchema,
+    RoleMembershipCreateValidation,
     RowVersionValidation,
+    SystemFlagCreateValidation,
+    SystemFlagUpdateValidation,
 )
 from mugen.core.plugin.acp.api.validation.foundation import (
     DedupAcquireValidation,
@@ -103,13 +107,21 @@ from mugen.core.plugin.acp.api.validation.rbac import (
     RoleCreateValidation,
     RoleUpdateValidation,
 )
+from mugen.core.plugin.acp.api.validation.runtime import (
+    MessagingClientProfileCreateValidation,
+    MessagingClientProfileUpdateValidation,
+    RuntimeConfigProfileCreateValidation,
+    RuntimeConfigProfileUpdateValidation,
+)
 from mugen.core.plugin.acp.api.validation.tenant import (
+    TenantCreateValidation,
     TenantDomainCreateValidation,
     TenantDomainUpdateValidation,
     TenantInvitationCreateValidation,
     TenantInvitationUpdateValidation,
     TenantMembershipCreateValidation,
     TenantMembershipUpdateValidation,
+    TenantUpdateValidation,
 )
 from mugen.core.plugin.acp.contract.sdk.binding import (
     TableSpec,
@@ -280,6 +292,9 @@ def contribute(
             "allow_delete": True,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "crud": CrudPolicy(
+                create_schema=GlobalRoleMembershipCreateValidation,
+            ),
         },
         {
             "set": "PermissionEntries",
@@ -406,6 +421,9 @@ def contribute(
             "allow_delete": True,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "crud": CrudPolicy(
+                create_schema=RoleMembershipCreateValidation,
+            ),
         },
         {
             "set": "SystemFlags",
@@ -423,6 +441,10 @@ def contribute(
                     "is_admin_action": True,
                 },
             },
+            "crud": CrudPolicy(
+                create_schema=SystemFlagCreateValidation,
+                update_schema=SystemFlagUpdateValidation,
+            ),
         },
         {
             "set": "Tenants",
@@ -449,8 +471,8 @@ def contribute(
                 },
             },
             "crud": CrudPolicy(
-                create_schema=("Name", "Slug"),
-                update_schema=("Name", "Slug"),
+                create_schema=TenantCreateValidation,
+                update_schema=TenantUpdateValidation,
             ),
         },
         {
@@ -662,23 +684,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "Category",
-                    "ProfileKey",
-                    "DisplayName",
-                    "IsActive",
-                    "SettingsJson",
-                    "Attributes",
-                ),
-                update_schema=(
-                    "Category",
-                    "ProfileKey",
-                    "DisplayName",
-                    "IsActive",
-                    "SettingsJson",
-                    "Attributes",
-                ),
+                create_schema=RuntimeConfigProfileCreateValidation,
+                update_schema=RuntimeConfigProfileUpdateValidation,
             ),
         },
         {
@@ -692,33 +699,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=(
-                    "TenantId",
-                    "PlatformKey",
-                    "ProfileKey",
-                    "DisplayName",
-                    "IsActive",
-                    "Settings",
-                    "SecretRefs",
-                    "PathToken",
-                    "RecipientUserId",
-                    "AccountNumber",
-                    "PhoneNumberId",
-                    "Provider",
-                ),
-                update_schema=(
-                    "PlatformKey",
-                    "ProfileKey",
-                    "DisplayName",
-                    "IsActive",
-                    "Settings",
-                    "SecretRefs",
-                    "PathToken",
-                    "RecipientUserId",
-                    "AccountNumber",
-                    "PhoneNumberId",
-                    "Provider",
-                ),
+                create_schema=MessagingClientProfileCreateValidation,
+                update_schema=MessagingClientProfileUpdateValidation,
             ),
         },
         {

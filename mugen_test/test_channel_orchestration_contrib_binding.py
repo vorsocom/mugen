@@ -10,7 +10,11 @@ from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 from mugen.core.plugin.acp.sdk.runtime_binder import AdminRuntimeBinder
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.channel_orchestration.api.validation import (
+    ChannelProfileCreateValidation,
+    ChannelProfileUpdateValidation,
+    ConversationStateUpdateValidation,
     IngressBindingCreateValidation,
+    IngressBindingUpdateValidation,
 )
 from mugen.core.plugin.channel_orchestration.contrib import contribute
 from mugen.core.plugin.channel_orchestration.service.blocklist_entry import (
@@ -135,20 +139,24 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
             OrchestrationEventService,
         )
         self.assertIs(
+            channel_profiles.crud.create_schema,
+            ChannelProfileCreateValidation,
+        )
+        self.assertIs(
+            channel_profiles.crud.update_schema,
+            ChannelProfileUpdateValidation,
+        )
+        self.assertIs(
             ingress_bindings.crud.create_schema,
             IngressBindingCreateValidation,
         )
-        self.assertIn(
-            "ServiceRouteDefaultKey",
-            channel_profiles.crud.create_schema,
-        )
-        self.assertIn(
-            "ServiceRouteKey",
+        self.assertIs(
             ingress_bindings.crud.update_schema,
+            IngressBindingUpdateValidation,
         )
-        self.assertIn(
-            "ServiceRouteKey",
+        self.assertIs(
             states.crud.update_schema,
+            ConversationStateUpdateValidation,
         )
 
         self.assertIn("evaluate_intake", states.capabilities.actions)
@@ -179,3 +187,74 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
         self.assertEqual(validation.identifier_type, "path_token")
         self.assertEqual(validation.identifier_value, "token")
         self.assertEqual(validation.service_route_key, "valet.core")
+
+    def test_channel_profile_validation_allows_omitted_service_route_default_key(
+        self,
+    ) -> None:
+        validation = ChannelProfileCreateValidation(
+            tenant_id="11111111-1111-1111-1111-111111111111",
+            channel_key=" whatsapp ",
+            profile_key=" default ",
+        )
+
+        self.assertEqual(validation.channel_key, "whatsapp")
+        self.assertEqual(validation.profile_key, "default")
+        self.assertIsNone(validation.service_route_default_key)
+
+    def test_channel_profile_create_validation_rejects_blank_required_fields(
+        self,
+    ) -> None:
+        validation = ChannelProfileCreateValidation(
+            tenant_id="11111111-1111-1111-1111-111111111111",
+            channel_key=" whatsapp ",
+            profile_key=" default ",
+            service_route_default_key="   ",
+        )
+        self.assertEqual(validation.channel_key, "whatsapp")
+        self.assertEqual(validation.profile_key, "default")
+        self.assertIsNone(validation.service_route_default_key)
+
+        with self.assertRaisesRegex(ValueError, "ChannelKey must be non-empty."):
+            ChannelProfileCreateValidation(
+                tenant_id="11111111-1111-1111-1111-111111111111",
+                channel_key=" ",
+                profile_key="default",
+            )
+
+        with self.assertRaisesRegex(ValueError, "ProfileKey must be non-empty."):
+            ChannelProfileCreateValidation(
+                tenant_id="11111111-1111-1111-1111-111111111111",
+                channel_key="whatsapp",
+                profile_key=" ",
+            )
+
+    def test_channel_profile_update_validation_requires_non_empty_patch_values(
+        self,
+    ) -> None:
+        validation = ChannelProfileUpdateValidation(
+            display_name=" Default channel ",
+            service_route_default_key=" valet.core ",
+            route_default_key=" urgent ",
+        )
+        self.assertEqual(validation.display_name, "Default channel")
+        self.assertEqual(validation.service_route_default_key, "valet.core")
+        self.assertEqual(validation.route_default_key, "urgent")
+
+        null_patch = ChannelProfileUpdateValidation(
+            display_name=None,
+            is_active=True,
+        )
+        self.assertIsNone(null_patch.display_name)
+        self.assertTrue(null_patch.is_active)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "At least one mutable field must be provided.",
+        ):
+            ChannelProfileUpdateValidation()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "ServiceRouteDefaultKey must be non-empty when provided.",
+        ):
+            ChannelProfileUpdateValidation(service_route_default_key=" ")

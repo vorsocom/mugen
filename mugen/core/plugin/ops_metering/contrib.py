@@ -27,7 +27,10 @@ from mugen.core.plugin.acp.contract.sdk.resource import (
 from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.ops_metering.api.validation import (
+    MeterDefinitionCreateValidation,
+    MeterDefinitionUpdateValidation,
     MeterPolicyCreateValidation,
+    MeterPolicyUpdateValidation,
     UsageRecordCreateValidation,
     UsageRecordRateValidation,
     UsageRecordVoidValidation,
@@ -36,6 +39,7 @@ from mugen.core.plugin.ops_metering.api.validation import (
     UsageSessionResumeValidation,
     UsageSessionStartValidation,
     UsageSessionStopValidation,
+    UsageSessionUpdateValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -79,15 +83,8 @@ def contribute(
             "allow_update": True,
             "allow_delete": False,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Code", "Unit", "AggregationMode"),
-                update_schema=(
-                    "Code",
-                    "Unit",
-                    "AggregationMode",
-                    "Description",
-                    "IsActive",
-                    "Attributes",
-                ),
+                create_schema=MeterDefinitionCreateValidation,
+                update_schema=MeterDefinitionUpdateValidation,
             ),
         },
         {
@@ -102,22 +99,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=MeterPolicyCreateValidation,
-                update_schema=(
-                    "Code",
-                    "Name",
-                    "Description",
-                    "CapMinutes",
-                    "CapUnits",
-                    "CapTasks",
-                    "MultiplierBps",
-                    "RoundingMode",
-                    "RoundingStep",
-                    "BillableWindowMinutes",
-                    "EffectiveFrom",
-                    "EffectiveTo",
-                    "IsActive",
-                    "Attributes",
-                ),
+                update_schema=MeterPolicyUpdateValidation,
             ),
         },
         {
@@ -133,16 +115,7 @@ def contribute(
             "allow_manage": True,
             "crud": CrudPolicy(
                 create_schema=UsageSessionCreateValidation,
-                update_schema=(
-                    "MeterPolicyId",
-                    "TrackedNamespace",
-                    "TrackedId",
-                    "TrackedRef",
-                    "AccountId",
-                    "SubscriptionId",
-                    "PriceId",
-                    "Attributes",
-                ),
+                update_schema=UsageSessionUpdateValidation,
             ),
             "actions": {
                 "start_session": {

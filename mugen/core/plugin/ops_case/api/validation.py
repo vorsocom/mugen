@@ -6,7 +6,33 @@ import uuid
 
 from pydantic import NonNegativeInt, model_validator
 
+from mugen.core.plugin.acp.api.validation.crud_builder import (
+    build_create_validation_from_pascal,
+    build_update_validation_from_pascal,
+)
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
+
+CaseCreateValidation = build_create_validation_from_pascal(
+    "CaseCreateValidation",
+    module=__name__,
+    doc="Validate create payloads for Case.",
+    required_fields=("TenantId", "Title"),
+)
+
+CaseUpdateValidation = build_update_validation_from_pascal(
+    "CaseUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for Case.",
+    optional_fields=(
+        "Title",
+        "Description",
+        "Priority",
+        "Severity",
+        "DueAt",
+        "SlaTargetAt",
+        "Attributes",
+    ),
+)
 
 
 class CaseTriageValidation(IValidationBase):
@@ -114,3 +140,18 @@ class CaseLinkCreateValidation(IValidationBase):
             raise ValueError("Provide TargetId or TargetRef.")
 
         return self
+
+
+CaseLinkUpdateValidation = build_update_validation_from_pascal(
+    "CaseLinkUpdateValidation",
+    module=__name__,
+    doc="Validate update payloads for CaseLink.",
+    optional_fields=(
+        "TargetNamespace",
+        "TargetId",
+        "TargetRef",
+        "TargetDisplay",
+        "RelationshipKind",
+        "Attributes",
+    ),
+)

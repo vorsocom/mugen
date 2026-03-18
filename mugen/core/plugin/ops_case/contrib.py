@@ -32,11 +32,14 @@ from mugen.core.plugin.ops_case.api.validation import (
     CaseAssignValidation,
     CaseCancelValidation,
     CaseCloseValidation,
+    CaseCreateValidation,
     CaseEscalateValidation,
     CaseLinkCreateValidation,
+    CaseLinkUpdateValidation,
     CaseReopenValidation,
     CaseResolveValidation,
     CaseTriageValidation,
+    CaseUpdateValidation,
 )
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
@@ -86,16 +89,8 @@ def contribute(
             "allow_delete": False,
             "allow_manage": True,
             "crud": CrudPolicy(
-                create_schema=("TenantId", "Title"),
-                update_schema=(
-                    "Title",
-                    "Description",
-                    "Priority",
-                    "Severity",
-                    "DueAt",
-                    "SlaTargetAt",
-                    "Attributes",
-                ),
+                create_schema=CaseCreateValidation,
+                update_schema=CaseUpdateValidation,
             ),
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
@@ -173,14 +168,7 @@ def contribute(
             "allow_delete": False,
             "crud": CrudPolicy(
                 create_schema=CaseLinkCreateValidation,
-                update_schema=(
-                    "TargetNamespace",
-                    "TargetId",
-                    "TargetRef",
-                    "TargetDisplay",
-                    "RelationshipKind",
-                    "Attributes",
-                ),
+                update_schema=CaseLinkUpdateValidation,
             ),
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
