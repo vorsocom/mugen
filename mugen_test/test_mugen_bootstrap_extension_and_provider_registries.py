@@ -462,6 +462,116 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         self.assertIs(spec.interface, ICPExtension)
         self.assertIs(spec.extension_class, _DummyCPExt)
 
+    def test_resolve_configured_extension_spec_falls_back_for_unknown_fw_with_acp_metadata(
+        self,
+    ) -> None:
+        entry = SimpleNamespace(
+            type="fw",
+            token="vorsocom.fw.car_rentals",
+            name="com.vorsocomputing.mugen.car_rentals",
+            namespace="com.vorsocomputing.mugen.car_rentals",
+            contrib="plugins.car_rentals.contrib",
+        )
+
+        with patch.object(
+            ext_mod,
+            "resolve_extension_spec",
+            side_effect=RuntimeError(
+                "Unknown extension token: 'vorsocom.fw.car_rentals'. "
+                "Known tokens: core.fw.acp."
+            ),
+        ):
+            spec = ext_mod.resolve_configured_extension_spec(
+                entry=entry,
+                token="vorsocom.fw.car_rentals",
+                configured_type="fw",
+            )
+
+        self.assertEqual(spec.extension_type, "fw")
+        self.assertIs(spec.interface, IFWExtension)
+        self.assertIs(spec.extension_class, ext_mod._GenericFrameworkExtension)
+
+    def test_resolve_configured_extension_spec_rejects_unknown_fw_missing_acp_metadata(
+        self,
+    ) -> None:
+        entry = SimpleNamespace(
+            type="fw",
+            token="vorsocom.fw.car_rentals",
+            name="com.vorsocomputing.mugen.car_rentals",
+            namespace="com.vorsocomputing.mugen.car_rentals",
+        )
+
+        with (
+            patch.object(
+                ext_mod,
+                "resolve_extension_spec",
+                side_effect=RuntimeError(
+                    "Unknown extension token: 'vorsocom.fw.car_rentals'. "
+                    "Known tokens: core.fw.acp."
+                ),
+            ),
+            self.assertRaisesRegex(
+                ext_mod.DownstreamFrameworkMetadataError,
+                "requires non-empty ACP metadata field\\(s\\): contrib",
+            ),
+        ):
+            ext_mod.resolve_configured_extension_spec(
+                entry=entry,
+                token="vorsocom.fw.car_rentals",
+                configured_type="fw",
+            )
+
+    def test_resolve_configured_extension_spec_preserves_unknown_non_fw_error(
+        self,
+    ) -> None:
+        entry = SimpleNamespace(
+            type="ipc",
+            token="unknown.ipc",
+            name="ignored",
+            namespace="ignored",
+            contrib="ignored",
+        )
+
+        with (
+            patch.object(
+                ext_mod,
+                "resolve_extension_spec",
+                side_effect=RuntimeError(
+                    "Unknown extension token: 'unknown.ipc'. Known tokens: core.ipc.wechat."
+                ),
+            ),
+            self.assertRaisesRegex(RuntimeError, "Unknown extension token: 'unknown.ipc'"),
+        ):
+            ext_mod.resolve_configured_extension_spec(
+                entry=entry,
+                token="unknown.ipc",
+                configured_type="ipc",
+            )
+
+    async def test_generic_framework_extension_is_noop(self) -> None:
+        extension = ext_mod._GenericFrameworkExtension()
+
+        self.assertEqual(extension.platforms, [])
+        self.assertIsNone(await extension.setup(object()))
+
+    def test_validate_downstream_framework_metadata_uses_dict_entries_and_rejects_blank_values(
+        self,
+    ) -> None:
+        entry = {
+            "name": "com.vorsocomputing.mugen.car_rentals",
+            "namespace": "com.vorsocomputing.mugen.car_rentals",
+            "contrib": "   ",
+        }
+
+        with self.assertRaisesRegex(
+            ext_mod.DownstreamFrameworkMetadataError,
+            "requires non-empty ACP metadata field\\(s\\): contrib",
+        ):
+            ext_mod._validate_downstream_framework_metadata(  # pylint: disable=protected-access
+                entry=entry,
+                token="vorsocom.fw.car_rentals",
+            )
+
     def test_parse_plugin_extension_class_ref_rejects_invalid_shape(self) -> None:
         with self.assertRaisesRegex(
             RuntimeError, "Invalid plugin extension class binding"

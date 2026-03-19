@@ -56,6 +56,20 @@ class _ExtensionClassRef:
 _PLUGIN_EXTENSION_TOKEN_REGISTRY_CACHE: dict[str, _ExtensionClassRef] | None = None
 
 
+class DownstreamFrameworkMetadataError(RuntimeError):
+    """Raised when an unknown downstream framework entry lacks ACP metadata."""
+
+
+class _GenericFrameworkExtension(IFWExtension):  # pylint: disable=too-few-public-methods
+    @property
+    def platforms(self) -> list[str]:
+        return []
+
+    async def setup(self, app: Any) -> None:
+        _ = app
+        return None
+
+
 def _normalize_extension_token(token: object) -> str:
     if not isinstance(token, str):
         raise RuntimeError("Invalid extension token: expected a string.")
@@ -90,6 +104,21 @@ def _parse_plugin_extension_class_ref(
         module_path=raw_ref[2],
         class_name=raw_ref[3],
     )
+
+
+def _extension_entry_field(entry: object, field_name: str, default: Any = None) -> Any:
+    if isinstance(entry, dict):
+        return entry.get(field_name, default)
+    return getattr(entry, field_name, default)
+
+
+def _normalized_nonempty_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if normalized == "":
+        return None
+    return normalized
 
 
 def _plugin_extension_token_registry() -> dict[str, _ExtensionClassRef]:
@@ -168,6 +197,52 @@ def resolve_extension_spec(
         token=normalized_token,
         registry=registry,
     )
+
+
+def _is_unknown_extension_token_error(exc: BaseException) -> bool:
+    return isinstance(exc, RuntimeError) and str(exc).startswith(
+        "Unknown extension token:"
+    )
+
+
+def _validate_downstream_framework_metadata(
+    *,
+    entry: object,
+    token: str,
+) -> None:
+    missing_fields: list[str] = []
+    for field_name in ("name", "namespace", "contrib"):
+        if _normalized_nonempty_text(_extension_entry_field(entry, field_name)) is None:
+            missing_fields.append(field_name)
+
+    if missing_fields:
+        joined = ", ".join(missing_fields)
+        raise DownstreamFrameworkMetadataError(
+            "Invalid downstream framework extension configuration: "
+            f"unknown token {token!r} requires non-empty ACP metadata field(s): "
+            f"{joined}."
+        )
+
+
+def resolve_configured_extension_spec(
+    *,
+    entry: object,
+    token: str,
+    configured_type: str,
+) -> ExtensionTokenSpec:
+    normalized_type = str(configured_type or "").strip().lower()
+
+    try:
+        return resolve_extension_spec(token)
+    except RuntimeError as exc:
+        if normalized_type != "fw" or not _is_unknown_extension_token_error(exc):
+            raise
+        _validate_downstream_framework_metadata(entry=entry, token=token)
+        return ExtensionTokenSpec(
+            extension_type="fw",
+            interface=IFWExtension,
+            extension_class=_GenericFrameworkExtension,
+        )
 
 
 class DefaultExtensionRegistry(IExtensionRegistry):
