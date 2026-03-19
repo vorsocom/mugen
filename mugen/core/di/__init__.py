@@ -80,6 +80,7 @@ from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchem
 from mugen.core.utility.config_value import (
     parse_nonnegative_finite_float,
     parse_optional_positive_finite_float,
+    parse_optional_positive_int,
 )
 from mugen.core.utility.platform_runtime_profile import build_config_namespace
 from mugen.core.utility.platforms import normalize_platforms, unknown_platforms
@@ -290,6 +291,139 @@ def _validate_optional_nonnegative_timeout_like_value(
     )
 
 
+def _validate_optional_boolean(
+    value: object,
+    *,
+    path: str,
+) -> None:
+    if value is None:
+        return
+    if not isinstance(value, bool):
+        raise RuntimeError(f"Invalid configuration: {path} must be a boolean.")
+
+
+def _validate_optional_nonempty_string(
+    value: object,
+    *,
+    path: str,
+) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or value.strip() == "":
+        raise RuntimeError(
+            f"Invalid configuration: {path} must be a non-empty string."
+        )
+
+
+def _validate_optional_string_array(
+    value: object,
+    *,
+    path: str,
+) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise RuntimeError(
+            f"Invalid configuration: {path} must be an array of strings."
+        )
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or item.strip() == "":
+            raise RuntimeError(
+                f"Invalid configuration: {path}[{index}] must be a non-empty string."
+            )
+
+
+_AGENT_RUNTIME_POLICY_KEYS = {
+    "enabled",
+    "current_turn_enabled",
+    "background_enabled",
+    "agent_key",
+    "planner_key",
+    "evaluator_key",
+    "response_synthesizer_key",
+    "capability_allow",
+    "delegate_agent_allow",
+    "max_iterations",
+    "max_background_iterations",
+    "lease_seconds",
+    "wait_seconds_default",
+}
+
+
+def _validate_agent_runtime_policy_fields(
+    section: dict,
+    *,
+    path: str,
+) -> None:
+    for key in ("enabled", "current_turn_enabled", "background_enabled"):
+        _validate_optional_boolean(section.get(key), path=f"{path}.{key}")
+    for key in (
+        "agent_key",
+        "planner_key",
+        "evaluator_key",
+        "response_synthesizer_key",
+    ):
+        _validate_optional_nonempty_string(section.get(key), path=f"{path}.{key}")
+    for key in ("capability_allow", "delegate_agent_allow"):
+        _validate_optional_string_array(section.get(key), path=f"{path}.{key}")
+    for key in (
+        "max_iterations",
+        "max_background_iterations",
+        "lease_seconds",
+        "wait_seconds_default",
+    ):
+        if key not in section:
+            continue
+        parse_optional_positive_int(section.get(key), f"{path}.{key}")
+
+
+def _validate_agent_runtime_entry_schema(
+    entry: object,
+    *,
+    path: str,
+) -> None:
+    if not isinstance(entry, dict):
+        raise RuntimeError(f"Invalid configuration: {path} must be a table.")
+    _ensure_only_known_keys(
+        entry,
+        path=path,
+        allowed=_AGENT_RUNTIME_POLICY_KEYS | {"service_route_key"},
+    )
+    _validate_agent_runtime_policy_fields(entry, path=path)
+    _validate_optional_nonempty_string(
+        entry.get("service_route_key"),
+        path=f"{path}.service_route_key",
+    )
+
+
+def _validate_agent_runtime_schema(
+    section: object,
+    *,
+    path: str,
+) -> None:
+    if not isinstance(section, dict):
+        raise RuntimeError(f"Invalid configuration: {path} must be a table.")
+    _ensure_only_known_keys(
+        section,
+        path=path,
+        allowed=_AGENT_RUNTIME_POLICY_KEYS | {"agents", "routes"},
+    )
+    _validate_agent_runtime_policy_fields(section, path=path)
+    for key in ("agents", "routes"):
+        entries = section.get(key)
+        if entries is None:
+            continue
+        if not isinstance(entries, list):
+            raise RuntimeError(
+                f"Invalid configuration: {path}.{key} must be an array."
+            )
+        for index, entry in enumerate(entries):
+            _validate_agent_runtime_entry_schema(
+                entry,
+                path=f"{path}.{key}[{index}]",
+            )
+
+
 def _validate_extension_entry_schema(
     entry: object,
     *,
@@ -352,6 +486,7 @@ def _validate_core_module_schema(config: dict) -> None:
         mugen_cfg,
         path="mugen",
         allowed={
+            "agent_runtime",
             "assistant",
             "beta",
             "commands",
@@ -365,6 +500,13 @@ def _validate_core_module_schema(config: dict) -> None:
             "storage",
         },
     )
+
+    agent_runtime_cfg = mugen_cfg.get("agent_runtime")
+    if agent_runtime_cfg is not None:
+        _validate_agent_runtime_schema(
+            agent_runtime_cfg,
+            path="mugen.agent_runtime",
+        )
 
     runtime_cfg = mugen_cfg.get("runtime")
     if not isinstance(runtime_cfg, dict):
