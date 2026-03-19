@@ -66,7 +66,7 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
         platform_service = SimpleNamespace(extension_supported=Mock(return_value=True))
 
         with patch(
-            "mugen.resolve_extension_spec",
+            "mugen.resolve_configured_extension_spec",
             return_value=ExtensionTokenSpec("cp", ICPExtension, _DummyCPExt),
         ):
             await mugen_mod.register_extensions(
@@ -104,7 +104,7 @@ class TestMugenInitProvidersAndCPBranch(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "mugen.resolve_extension_spec",
+                "mugen.resolve_configured_extension_spec",
                 return_value=ExtensionTokenSpec("cp", ICPExtension, _DummyCPExt),
             ),
             self.assertLogs("test_app", level="WARNING") as logger,

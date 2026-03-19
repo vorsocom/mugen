@@ -72,9 +72,10 @@ from mugen.bootstrap_state import (
 from mugen.config import AppConfig
 from mugen.core.bootstrap.extensions import (
     DefaultExtensionRegistry,
+    DownstreamFrameworkMetadataError,
     configured_extensions,
     parse_bool as _parse_ext_bool,
-    resolve_extension_spec,
+    resolve_configured_extension_spec,
 )
 from mugen.core import di
 from mugen.core.api import api
@@ -1355,7 +1356,11 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
             continue
 
         try:
-            spec = resolve_extension_spec(token)
+            spec = resolve_configured_extension_spec(
+                entry=ext_cfg,
+                token=token,
+                configured_type=configured_type,
+            )
             resolved_type = spec.extension_type
             if configured_type not in {"", resolved_type}:
                 raise ExtensionLoadError(
@@ -1372,6 +1377,8 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
                 critical=critical,
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
+            if isinstance(exc, DownstreamFrameworkMetadataError):
+                raise ExtensionLoadError(str(exc)) from exc
             if critical:
                 logger.error(
                     "Critical extension bootstrap failed "

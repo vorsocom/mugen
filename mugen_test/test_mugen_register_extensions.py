@@ -11,6 +11,7 @@ from quart import Quart
 import mugen as mugen_mod
 from mugen.core.bootstrap.extensions import ExtensionTokenSpec
 from mugen.core.contract.extension.cp import ICPExtension
+from mugen.core.contract.extension.fw import IFWExtension
 from mugen import BootstrapConfigError, ExtensionLoadError, register_extensions
 
 
@@ -35,6 +36,16 @@ class _DummyCPExt(ICPExtension):
 
     async def process_message(self, message: str, room_id: str, user_id: str):
         _ = (message, room_id, user_id)
+        return None
+
+
+class _DummyFWExt(IFWExtension):
+    @property
+    def platforms(self) -> list[str]:
+        return []
+
+    async def setup(self, app):  # noqa: ANN001
+        _ = app
         return None
 
 
@@ -159,7 +170,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         )
         registry = _RegistryStub(result=True)
         with patch(
-            "mugen.resolve_extension_spec",
+            "mugen.resolve_configured_extension_spec",
             return_value=ExtensionTokenSpec("cp", ICPExtension, _DummyCPExt),
         ):
             await register_extensions(
@@ -212,7 +223,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         registry = _RegistryStub(result=True)
 
         with patch(
-            "mugen.resolve_extension_spec",
+            "mugen.resolve_configured_extension_spec",
             return_value=ExtensionTokenSpec("cp", ICPExtension, _DummyCPExt),
         ):
             report = await register_extensions(
@@ -223,6 +234,110 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(report, {"cp": ["core.cp.clear_history"]})
+
+    async def test_register_extensions_allows_unknown_downstream_fw_with_acp_metadata(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _base_cfg(
+            [
+                SimpleNamespace(type="fw", token="core.fw.acp"),
+                SimpleNamespace(
+                    type="fw",
+                    token="vorsocom.fw.car_rentals",
+                    name="com.vorsocomputing.mugen.car_rentals",
+                    namespace="com.vorsocomputing.mugen.car_rentals",
+                    contrib="plugins.car_rentals.contrib",
+                ),
+            ]
+        )
+        registry = _RegistryStub(result=True)
+
+        def _resolve(token: object, *, scope: str = "any") -> ExtensionTokenSpec:
+            _ = scope
+            if token == "core.fw.acp":
+                return ExtensionTokenSpec("fw", IFWExtension, _DummyFWExt)
+            raise RuntimeError(
+                f"Unknown extension token: {token!r}. Known tokens: core.fw.acp."
+            )
+
+        with patch(
+            "mugen.core.bootstrap.extensions.resolve_extension_spec",
+            side_effect=_resolve,
+        ):
+            report = await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
+                extension_registry_provider=lambda: registry,
+            )
+
+        self.assertEqual(
+            report,
+            {"fw": ["core.fw.acp", "vorsocom.fw.car_rentals"]},
+        )
+        self.assertEqual(len(registry.calls), 2)
+        self.assertEqual(registry.calls[1]["extension_type"], "fw")
+        self.assertEqual(registry.calls[1]["token"], "vorsocom.fw.car_rentals")
+
+    async def test_register_extensions_rejects_unknown_downstream_fw_missing_acp_metadata(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _base_cfg(
+            [
+                SimpleNamespace(type="fw", token="core.fw.acp"),
+                SimpleNamespace(
+                    type="fw",
+                    token="vorsocom.fw.car_rentals",
+                    name="com.vorsocomputing.mugen.car_rentals",
+                    namespace="com.vorsocomputing.mugen.car_rentals",
+                    critical=False,
+                ),
+            ]
+        )
+
+        def _resolve(token: object, *, scope: str = "any") -> ExtensionTokenSpec:
+            _ = scope
+            if token == "core.fw.acp":
+                return ExtensionTokenSpec("fw", IFWExtension, _DummyFWExt)
+            raise RuntimeError(
+                f"Unknown extension token: {token!r}. Known tokens: core.fw.acp."
+            )
+
+        with (
+            patch(
+                "mugen.core.bootstrap.extensions.resolve_extension_spec",
+                side_effect=_resolve,
+            ),
+            self.assertRaisesRegex(
+                ExtensionLoadError,
+                "requires non-empty ACP metadata field\\(s\\): contrib",
+            ),
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
+            )
+
+    async def test_register_extensions_fails_for_critical_unknown_ipc_token(self) -> None:
+        app = Quart("test_app")
+        config = _base_cfg(
+            [
+                SimpleNamespace(
+                    type="ipc",
+                    token="unknown.ipc",
+                    critical=True,
+                )
+            ]
+        )
+        with self.assertRaises(ExtensionLoadError):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
+            )
 
     async def test_register_extensions_rejects_removed_core_extensions_key(self) -> None:
         app = Quart("test_app")
