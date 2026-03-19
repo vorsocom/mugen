@@ -267,6 +267,52 @@ class TestDISchemaValidationBranches(unittest.TestCase):
             path="mugen.modules.extensions[0]",
         )
 
+    def test_core_schema_accepts_agent_runtime_config(self) -> None:
+        cfg = _valid_core_config()
+        cfg["mugen"]["agent_runtime"] = {
+            "enabled": True,
+            "current_turn_enabled": True,
+            "background_enabled": False,
+            "agent_key": "coordinator.root",
+            "planner_key": "llm_default",
+            "evaluator_key": "llm_default",
+            "response_synthesizer_key": "text_default",
+            "capability_allow": ["acp__OpsCases__assign"],
+            "delegate_agent_allow": ["specialist.lookup"],
+            "max_iterations": 4,
+            "max_background_iterations": 8,
+            "lease_seconds": 60,
+            "wait_seconds_default": 30,
+            "agents": [
+                {
+                    "agent_key": "coordinator.root",
+                    "planner_key": "llm_default",
+                    "delegate_agent_allow": [
+                        "specialist.lookup",
+                        "specialist.audit",
+                    ],
+                },
+                {
+                    "agent_key": "specialist.lookup",
+                    "service_route_key": "support.lookup",
+                    "planner_key": "lookup_planner",
+                },
+            ],
+            "routes": [
+                {
+                    "service_route_key": "support.primary",
+                    "background_enabled": True,
+                    "agent_key": "coordinator.root",
+                    "capability_allow": [
+                        "acp__OpsCases__assign",
+                        "acp__OpsCases__escalate",
+                    ],
+                }
+            ],
+        }
+
+        di._validate_core_module_schema(cfg)  # pylint: disable=protected-access
+
     def test_core_schema_rejects_invalid_shapes_and_tokens(self) -> None:
         cases: list[tuple[dict, str]] = []
 
@@ -387,6 +433,65 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         cfg = _valid_core_config()
         cfg["acp"] = {"namespace": "com.vorsocomputing.mugen.acp"}
         cases.append((cfg, "acp.namespace is no longer supported"))
+
+        for candidate, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(RuntimeError, re.escape(message)):
+                    di._validate_core_module_schema(candidate)
+
+    def test_core_schema_rejects_invalid_agent_runtime_shapes(self) -> None:
+        cases: list[tuple[dict, str]] = []
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["agent_runtime"] = []
+        cases.append((cfg, "mugen.agent_runtime must be a table"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["agent_runtime"] = {"unexpected": True}
+        cases.append((cfg, "unknown key(s) at mugen.agent_runtime"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["agent_runtime"] = {"enabled": "yes"}
+        cases.append((cfg, "mugen.agent_runtime.enabled must be a boolean"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["agent_runtime"] = {"capability_allow": "cap.lookup"}
+        cases.append(
+            (
+                cfg,
+                "mugen.agent_runtime.capability_allow must be an array of strings",
+            )
+        )
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["agent_runtime"] = {"capability_allow": ["cap.lookup", ""]}
+        cases.append(
+            (
+                cfg,
+                "mugen.agent_runtime.capability_allow[1] must be a non-empty string",
+            )
+        )
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["agent_runtime"] = {"max_iterations": 0}
+        cases.append((cfg, "mugen.agent_runtime.max_iterations must be greater than 0"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["agent_runtime"] = {"agents": {}}
+        cases.append((cfg, "mugen.agent_runtime.agents must be an array"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["agent_runtime"] = {"routes": [None]}
+        cases.append((cfg, "mugen.agent_runtime.routes[0] must be a table"))
+
+        cfg = _valid_core_config()
+        cfg["mugen"]["agent_runtime"] = {"agents": [{"service_route_key": ""}]}
+        cases.append(
+            (
+                cfg,
+                "mugen.agent_runtime.agents[0].service_route_key must be a non-empty string",
+            )
+        )
 
         for candidate, message in cases:
             with self.subTest(message=message):
