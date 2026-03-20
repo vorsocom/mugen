@@ -104,11 +104,15 @@ def _request(
     service_route_key: str | None = "support.primary",
     agent_key: str | None = None,
     sender_id: str | None = "22222222-2222-2222-2222-222222222222",
+    message_id: str | None = None,
+    trace_id: str | None = None,
 ) -> PlanRunRequest:
     return PlanRunRequest(
         mode=mode,
         scope=_scope(sender_id=sender_id),
         user_message="Handle the request",
+        message_id=message_id,
+        trace_id=trace_id,
         service_route_key=service_route_key,
         agent_key=agent_key,
         prepared_context=prepared_context,
@@ -329,6 +333,31 @@ class _ACPService:
     async def action_plain(self, *, tenant_id, where):
         self.calls.append({"tenant_id": tenant_id, "where": where})
         return {"status": "plain"}
+
+    async def action_request_context(
+        self,
+        *,
+        scope,
+        ingress_metadata,
+        message_id,
+        trace_id,
+        data,
+    ):
+        self.calls.append(
+            {
+                "kind": "request_context",
+                "scope": scope,
+                "ingress_metadata": ingress_metadata,
+                "message_id": message_id,
+                "trace_id": trace_id,
+                "data": data,
+            }
+        )
+        return {"status": "contextual"}
+
+    async def action_data_only(self, *, data):
+        self.calls.append({"kind": "data_only", "data": data})
+        return {"status": "data_only"}
 
 
 class _AdminRegistry:
@@ -1192,6 +1221,98 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             request.scope.tenant_id,
         )
         logging_gateway.warning.assert_called_once()
+
+    async def test_acp_capability_provider_execute_injects_request_context_only_when_requested(
+        self,
+    ) -> None:
+        service = _ACPService()
+        resource = SimpleNamespace(
+            entity_set="ticket",
+            service_key="ticket_service",
+            capabilities=SimpleNamespace(actions={}),
+        )
+        registry = _AdminRegistry(
+            resources={"ticket": resource},
+            services={"ticket_service": service},
+        )
+        provider = ACPActionCapabilityProvider(
+            admin_registry=registry,
+            logging_gateway=Mock(),
+        )
+        request = _request(
+            message_id="msg-1",
+            trace_id="trace-1",
+            metadata={"auth_user_id": "33333333-3333-3333-3333-333333333333"},
+        )
+        run = _run(request=request)
+
+        contextual_descriptor = CapabilityDescriptor(
+            key="acp__ticket__request_context",
+            title="Context",
+            metadata={
+                "entity_set": "ticket",
+                "action_name": "request_context",
+                "schema": _ActionSchema,
+            },
+        )
+        data_only_descriptor = CapabilityDescriptor(
+            key="acp__ticket__data_only",
+            title="Data Only",
+            metadata={
+                "entity_set": "ticket",
+                "action_name": "data_only",
+                "schema": _ActionSchema,
+            },
+        )
+
+        contextual_result = await provider.execute(
+            request,
+            run,
+            CapabilityInvocation(
+                capability_key="acp__ticket__request_context",
+                arguments={"note": "inject"},
+            ),
+            contextual_descriptor,
+            policy=run.policy,
+        )
+        data_only_result = await provider.execute(
+            request,
+            run,
+            CapabilityInvocation(
+                capability_key="acp__ticket__data_only",
+                arguments={"note": "plain"},
+            ),
+            data_only_descriptor,
+            policy=run.policy,
+        )
+
+        contextual_call = next(
+            call for call in service.calls if call.get("kind") == "request_context"
+        )
+        data_only_call = next(
+            call for call in service.calls if call.get("kind") == "data_only"
+        )
+
+        self.assertTrue(contextual_result.ok)
+        self.assertTrue(data_only_result.ok)
+        self.assertIs(contextual_call["scope"], request.scope)
+        self.assertEqual(
+            contextual_call["ingress_metadata"],
+            dict(request.ingress_metadata),
+        )
+        self.assertEqual(contextual_call["message_id"], "msg-1")
+        self.assertEqual(contextual_call["trace_id"], "trace-1")
+        self.assertEqual(
+            contextual_call["data"],
+            {"validated": True, "note": "inject"},
+        )
+        self.assertEqual(
+            data_only_call,
+            {
+                "kind": "data_only",
+                "data": {"validated": True, "note": "plain"},
+            },
+        )
 
     async def test_allowlist_guard_and_response_synthesizer_cover_all_paths(self) -> None:
         request = _request()
