@@ -216,6 +216,23 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
 
         return None
 
+    @staticmethod
+    def _extract_flow_reply_metadata(message: dict) -> dict[str, Any] | None:
+        if message.get("type") != "interactive":
+            return None
+        interactive = message.get("interactive", {})
+        if not isinstance(interactive, dict) or interactive.get("type") != "nfm_reply":
+            return None
+        nfm_reply = interactive.get("nfm_reply", {})
+        if not isinstance(nfm_reply, dict):
+            return None
+        return {
+            "type": "nfm_reply",
+            "flow_token": nfm_reply.get("flow_token"),
+            "flow_name": nfm_reply.get("flow_name"),
+            "response_json": nfm_reply.get("response_json"),
+        }
+
     def _resolve_event_dedup_ttl_seconds(self) -> int:
         raw_value = getattr(
             getattr(getattr(self._config, "whatsapp", SimpleNamespace()), "webhook", None),
@@ -675,6 +692,14 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                 sender=sender,
                             )
                         else:
+                            ingress_metadata = {
+                                "ingress_route": dict(ingress_route),
+                            }
+                            flow_reply_metadata = self._extract_flow_reply_metadata(message)
+                            if flow_reply_metadata is not None:
+                                ingress_metadata["whatsapp_flow_reply"] = (
+                                    flow_reply_metadata
+                                )
                             message_responses = (
                                 await self._messaging_service.handle_text_message(
                                     "whatsapp",
@@ -684,6 +709,8 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                                     message_context=self._compose_message_context(
                                         ingress_route=ingress_route,
                                     ),
+                                    ingress_metadata=ingress_metadata,
+                                    message_id=message_id,
                                 )
                             )
                     case "video":
