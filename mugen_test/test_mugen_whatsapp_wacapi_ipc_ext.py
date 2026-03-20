@@ -552,6 +552,48 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    def test_extract_flow_reply_metadata_detects_nfm_reply(self) -> None:
+        self.assertEqual(
+            WhatsAppWACAPIIPCExtension._extract_flow_reply_metadata(
+                {
+                    "type": "interactive",
+                    "interactive": {
+                        "type": "nfm_reply",
+                        "nfm_reply": {
+                            "flow_token": "flow-token-1",
+                            "flow_name": "booking_lookup",
+                            "response_json": {"quote_id": "q-1"},
+                        },
+                    },
+                }
+            ),
+            {
+                "type": "nfm_reply",
+                "flow_token": "flow-token-1",
+                "flow_name": "booking_lookup",
+                "response_json": {"quote_id": "q-1"},
+            },
+        )
+        self.assertIsNone(
+            WhatsAppWACAPIIPCExtension._extract_flow_reply_metadata(
+                {
+                    "type": "interactive",
+                    "interactive": {"type": "button_reply"},
+                }
+            )
+        )
+        self.assertIsNone(
+            WhatsAppWACAPIIPCExtension._extract_flow_reply_metadata(
+                {
+                    "type": "interactive",
+                    "interactive": {
+                        "type": "nfm_reply",
+                        "nfm_reply": "bad-payload",
+                    },
+                }
+            )
+        )
+
     async def test_user_access_policy_replies_and_returns_early(self) -> None:
         client = _make_client()
         client.user_access_policy.return_value = MessagingClientUserAccessPolicy(
@@ -734,6 +776,8 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="15550003",
             message="incoming",
             message_context=ANY,
+            ingress_metadata=ANY,
+            message_id="wamid-2",
         )
         user_service.add_known_user.assert_awaited_once_with(
             "15550003",
@@ -788,6 +832,8 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="15550001",
             message="hello",
             message_context=ANY,
+            ingress_metadata=ANY,
+            message_id="wamid-thinking-error",
         )
         warning_messages = [
             call.args[0] for call in logging_gateway.warning.call_args_list
@@ -969,7 +1015,89 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     sender="15550088",
                     message=expected_text,
                     message_context=ANY,
+                    ingress_metadata=ANY,
+                    message_id=incoming_message["id"],
                 )
+
+    async def test_text_path_passes_ingress_metadata_and_message_id(self) -> None:
+        messaging_service = _make_messaging_service()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            messaging_service=messaging_service,
+            user_service=_make_user_service(known_users={"15550123": "known"}),
+        )
+        payload = _make_request(
+            _make_message_event(
+                {
+                    "id": "wamid-text-metadata",
+                    "type": "text",
+                    "text": {"body": "hello"},
+                },
+                sender="15550123",
+            )
+        )
+
+        await ext._wacapi_event(payload)  # pylint: disable=protected-access
+
+        call = messaging_service.handle_text_message.await_args
+        self.assertEqual(call.args, ("whatsapp",))
+        self.assertEqual(call.kwargs["room_id"], "15550123")
+        self.assertEqual(call.kwargs["sender"], "15550123")
+        self.assertEqual(call.kwargs["message"], "hello")
+        self.assertEqual(call.kwargs["message_id"], "wamid-text-metadata")
+        ingress_metadata = call.kwargs["ingress_metadata"]
+        self.assertIsInstance(ingress_metadata, dict)
+        self.assertNotIn("whatsapp_flow_reply", ingress_metadata)
+        ingress_route = ingress_metadata["ingress_route"]
+        self.assertEqual(ingress_route["platform"], "whatsapp")
+        self.assertEqual(ingress_route["channel_key"], "whatsapp")
+        self.assertEqual(
+            ingress_route["identifier_claims"]["identifier_value"],
+            "pnid-1",
+        )
+
+    async def test_nfm_reply_keeps_text_fallback_and_attaches_structured_metadata(
+        self,
+    ) -> None:
+        messaging_service = _make_messaging_service()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            messaging_service=messaging_service,
+            user_service=_make_user_service(known_users={"15550124": "known"}),
+        )
+        payload = _make_request(
+            _make_message_event(
+                {
+                    "id": "wamid-flow-1",
+                    "type": "interactive",
+                    "interactive": {
+                        "type": "nfm_reply",
+                        "nfm_reply": {
+                            "flow_token": "flow-token-9",
+                            "flow_name": "booking_quote",
+                            "response_json": {"pickup_date": "2026-03-20"},
+                        },
+                    },
+                },
+                sender="15550124",
+            )
+        )
+
+        await ext._wacapi_event(payload)  # pylint: disable=protected-access
+
+        call = messaging_service.handle_text_message.await_args
+        self.assertEqual(call.kwargs["message"], '{"pickup_date": "2026-03-20"}')
+        self.assertEqual(call.kwargs["message_id"], "wamid-flow-1")
+        self.assertEqual(
+            call.kwargs["ingress_metadata"]["whatsapp_flow_reply"],
+            {
+                "type": "nfm_reply",
+                "flow_token": "flow-token-9",
+                "flow_name": "booking_quote",
+                "response_json": {"pickup_date": "2026-03-20"},
+            },
+        )
+        self.assertIn("ingress_route", call.kwargs["ingress_metadata"])
 
     async def test_button_message_without_extractable_text_delegates_to_handlers(
         self,
@@ -1250,6 +1378,8 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="15550100",
             message="first",
             message_context=ANY,
+            ingress_metadata=ANY,
+            message_id="wamid-fanout-1",
         )
         messaging_service.handle_text_message.assert_any_await(
             "whatsapp",
@@ -1257,6 +1387,8 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="15550100",
             message="second",
             message_context=ANY,
+            ingress_metadata=ANY,
+            message_id="wamid-fanout-2",
         )
 
     async def test_status_event_routes_to_message_handlers(self) -> None:
@@ -1359,6 +1491,8 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="15550110",
             message="still processed",
             message_context=ANY,
+            ingress_metadata=ANY,
+            message_id="wamid-good-1",
         )
 
     async def test_duplicate_message_event_is_acknowledged_without_reprocessing(
@@ -1403,6 +1537,8 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="15550044",
             message="hello",
             message_context=ANY,
+            ingress_metadata=ANY,
+            message_id="wamid-dupe-1",
         )
         logging_gateway.debug.assert_any_call("Skip duplicate WhatsApp message event.")
 
@@ -1902,6 +2038,8 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             sender="15550011",
             message="hello",
             message_context=ANY,
+            ingress_metadata=ANY,
+            message_id="wamid-allow",
         )
         client.send_text_message.assert_not_awaited()
 

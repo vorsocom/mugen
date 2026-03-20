@@ -998,6 +998,14 @@ class ACPActionCapabilityProvider(ICapabilityProvider):
             kwargs["auth_user_id"] = uuid.UUID(normalized_auth)
         if "data" in signature.parameters:
             kwargs["data"] = validated
+        for param_name, param_value in (
+            ("scope", request.scope),
+            ("ingress_metadata", dict(request.ingress_metadata)),
+            ("message_id", request.message_id),
+            ("trace_id", request.trace_id),
+        ):
+            if param_name in signature.parameters:
+                kwargs[param_name] = param_value
 
         try:
             result = await handler(**kwargs)
