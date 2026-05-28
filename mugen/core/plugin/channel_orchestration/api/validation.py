@@ -167,12 +167,53 @@ IntakeRuleUpdateValidation = build_update_validation_from_pascal(
     ),
 )
 
-RoutingRuleCreateValidation = build_create_validation_from_pascal(
-    "RoutingRuleCreateValidation",
-    module=__name__,
-    doc="Validate create payloads for routing rules.",
-    required_fields=("TenantId", "RouteKey"),
-)
+class RoutingRuleCreateValidation(IValidationBase):
+    """Validate create payloads for routing rules."""
+
+    tenant_id: uuid.UUID
+    route_key: str
+
+    channel_profile_id: uuid.UUID | None = None
+    target_queue_name: str | None = None
+    owner_user_id: uuid.UUID | None = None
+    target_service_key: str | None = None
+    target_namespace: str | None = None
+    priority: NonNegativeInt | None = None
+    is_active: bool | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "RoutingRuleCreateValidation":
+        self.route_key = self.route_key.strip()
+        if self.route_key == "":
+            raise ValueError("RouteKey must be non-empty.")
+
+        for field_name in (
+            "target_queue_name",
+            "target_service_key",
+            "target_namespace",
+        ):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            normalized = str(value).strip()
+            if normalized == "":
+                raise ValueError(
+                    f"{''.join(part.title() for part in field_name.split('_'))} "
+                    "must be non-empty when provided."
+                )
+            setattr(self, field_name, normalized)
+
+        if (
+            self.target_queue_name is None
+            and self.owner_user_id is None
+            and self.target_service_key is None
+        ):
+            raise ValueError(
+                "Provide TargetQueueName, OwnerUserId, or TargetServiceKey."
+            )
+
+        return self
 
 RoutingRuleUpdateValidation = build_update_validation_from_pascal(
     "RoutingRuleUpdateValidation",
