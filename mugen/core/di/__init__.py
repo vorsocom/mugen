@@ -444,6 +444,8 @@ def _validate_extension_entry_schema(
             "namespace",
             "models",
             "contrib",
+            "runtime_module",
+            "runtime_class",
         },
     )
     token = entry.get("token")
@@ -466,6 +468,34 @@ def _validate_extension_entry_schema(
             f"Invalid configuration: {path}.type={ext_type!r} is unsupported. "
             "Legacy CTX/RAG extensions were replaced by the context engine service."
         )
+
+    has_runtime_module = "runtime_module" in entry
+    has_runtime_class = "runtime_class" in entry
+    if has_runtime_module or has_runtime_class:
+        if not isinstance(ext_type, str) or ext_type.strip().lower() != "fw":
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"{path}.runtime_module and {path}.runtime_class are only supported "
+                "for framework extensions."
+            )
+        runtime_module = entry.get("runtime_module")
+        runtime_class = entry.get("runtime_class")
+        if not isinstance(runtime_module, str) or runtime_module.strip() == "":
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"{path}.runtime_module must be a non-empty string when provided."
+            )
+        if not isinstance(runtime_class, str) or runtime_class.strip() == "":
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"{path}.runtime_class must be a non-empty string when provided."
+            )
+        if ":" in runtime_module or ":" in runtime_class:
+            raise RuntimeError(
+                "Invalid configuration: "
+                f"{path}.runtime_module and {path}.runtime_class must use separate "
+                "module/class fields; module:Class unsupported."
+            )
 
     migration_track = entry.get("migration_track")
     if migration_track is not None:
