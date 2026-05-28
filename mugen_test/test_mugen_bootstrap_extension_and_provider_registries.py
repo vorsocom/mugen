@@ -491,6 +491,159 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         self.assertIs(spec.interface, IFWExtension)
         self.assertIs(spec.extension_class, ext_mod._GenericFrameworkExtension)
 
+    def test_resolve_configured_extension_spec_loads_downstream_fw_runtime_class(
+        self,
+    ) -> None:
+        entry = SimpleNamespace(
+            type="fw",
+            token="vorsocom.fw.valet_car_rentals",
+            name="com.vorsocomputing.mugen.valet_car_rentals",
+            namespace="com.vorsocomputing.mugen.valet_car_rentals",
+            contrib="car_rentals_extension.contrib",
+            runtime_module="car_rentals_extension.fw_ext",
+            runtime_class="CarRentalsFWExtension",
+        )
+
+        with patch.object(
+            ext_mod,
+            "resolve_extension_spec",
+            side_effect=RuntimeError(
+                "Unknown extension token: 'vorsocom.fw.valet_car_rentals'. "
+                "Known tokens: core.fw.acp."
+            ),
+        ), patch(
+            "mugen.core.bootstrap.extensions.importlib.import_module",
+            return_value=SimpleNamespace(CarRentalsFWExtension=_DummyFWExt),
+        ):
+            spec = ext_mod.resolve_configured_extension_spec(
+                entry=entry,
+                token="vorsocom.fw.valet_car_rentals",
+                configured_type="fw",
+            )
+
+        self.assertEqual(spec.extension_type, "fw")
+        self.assertIs(spec.interface, IFWExtension)
+        self.assertIs(spec.extension_class, _DummyFWExt)
+
+    def test_resolve_configured_extension_spec_rejects_incomplete_downstream_runtime(
+        self,
+    ) -> None:
+        entry = SimpleNamespace(
+            type="fw",
+            token="vorsocom.fw.valet_car_rentals",
+            name="com.vorsocomputing.mugen.valet_car_rentals",
+            namespace="com.vorsocomputing.mugen.valet_car_rentals",
+            contrib="car_rentals_extension.contrib",
+            runtime_module="car_rentals_extension.fw_ext",
+        )
+
+        with (
+            patch.object(
+                ext_mod,
+                "resolve_extension_spec",
+                side_effect=RuntimeError(
+                    "Unknown extension token: 'vorsocom.fw.valet_car_rentals'. "
+                    "Known tokens: core.fw.acp."
+                ),
+            ),
+            self.assertRaisesRegex(
+                ext_mod.DownstreamFrameworkRuntimeError,
+                "requires non-empty runtime_module and runtime_class",
+            ),
+        ):
+            ext_mod.resolve_configured_extension_spec(
+                entry=entry,
+                token="vorsocom.fw.valet_car_rentals",
+                configured_type="fw",
+            )
+
+    def test_resolve_configured_extension_spec_rejects_module_class_downstream_runtime(
+        self,
+    ) -> None:
+        entry = SimpleNamespace(
+            type="fw",
+            token="vorsocom.fw.valet_car_rentals",
+            name="com.vorsocomputing.mugen.valet_car_rentals",
+            namespace="com.vorsocomputing.mugen.valet_car_rentals",
+            contrib="car_rentals_extension.contrib",
+            runtime_module="car_rentals_extension.fw_ext:CarRentalsFWExtension",
+            runtime_class="CarRentalsFWExtension",
+        )
+
+        with (
+            patch.object(
+                ext_mod,
+                "resolve_extension_spec",
+                side_effect=RuntimeError(
+                    "Unknown extension token: 'vorsocom.fw.valet_car_rentals'. "
+                    "Known tokens: core.fw.acp."
+                ),
+            ),
+            self.assertRaisesRegex(
+                ext_mod.DownstreamFrameworkRuntimeError,
+                "module:Class paths are not supported",
+            ),
+        ):
+            ext_mod.resolve_configured_extension_spec(
+                entry=entry,
+                token="vorsocom.fw.valet_car_rentals",
+                configured_type="fw",
+            )
+
+    def test_resolve_configured_extension_spec_rejects_invalid_downstream_runtime_class(
+        self,
+    ) -> None:
+        entry = SimpleNamespace(
+            type="fw",
+            token="vorsocom.fw.valet_car_rentals",
+            name="com.vorsocomputing.mugen.valet_car_rentals",
+            namespace="com.vorsocomputing.mugen.valet_car_rentals",
+            contrib="car_rentals_extension.contrib",
+            runtime_module="car_rentals_extension.fw_ext",
+            runtime_class="CarRentalsFWExtension",
+        )
+
+        def _unknown_token(_token: object, *, scope: str = "any") -> None:
+            _ = scope
+            raise RuntimeError(
+                "Unknown extension token: 'vorsocom.fw.valet_car_rentals'. "
+                "Known tokens: core.fw.acp."
+            )
+
+        cases = (
+            ImportError("missing"),
+            SimpleNamespace(),
+            SimpleNamespace(CarRentalsFWExtension=object()),
+            SimpleNamespace(CarRentalsFWExtension=type("Wrong", (), {})),
+        )
+        for import_result in cases:
+            with self.subTest(import_result=import_result):
+                import_patch_kwargs = (
+                    {"side_effect": import_result}
+                    if isinstance(import_result, BaseException)
+                    else {"return_value": import_result}
+                )
+                with (
+                    patch.object(
+                        ext_mod,
+                        "resolve_extension_spec",
+                        side_effect=_unknown_token,
+                    ),
+                    patch(
+                        "mugen.core.bootstrap.extensions.importlib.import_module",
+                        **import_patch_kwargs,
+                    ),
+                    self.assertRaisesRegex(
+                        ext_mod.DownstreamFrameworkRuntimeError,
+                        "must resolve to an IFWExtension subclass",
+                    ),
+                ):
+                    ext_mod.resolve_configured_extension_spec(
+                        entry=entry,
+                        token="vorsocom.fw.valet_car_rentals",
+                        configured_type="fw",
+                    )
+
     def test_resolve_configured_extension_spec_rejects_unknown_fw_missing_acp_metadata(
         self,
     ) -> None:

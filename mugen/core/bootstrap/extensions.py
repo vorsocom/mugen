@@ -60,6 +60,10 @@ class DownstreamFrameworkMetadataError(RuntimeError):
     """Raised when an unknown downstream framework entry lacks ACP metadata."""
 
 
+class DownstreamFrameworkRuntimeError(RuntimeError):
+    """Raised when an unknown downstream framework entry has invalid runtime config."""
+
+
 class _GenericFrameworkExtension(IFWExtension):  # pylint: disable=too-few-public-methods
     @property
     def platforms(self) -> list[str]:
@@ -148,6 +152,31 @@ def _plugin_extension_token_registry() -> dict[str, _ExtensionClassRef]:
     return parsed_registry
 
 
+def _resolve_extension_spec_from_class_ref(
+    *,
+    token: str,
+    class_ref: _ExtensionClassRef,
+    error_type: type[RuntimeError],
+    error_message: str,
+) -> ExtensionTokenSpec:
+    try:
+        module = importlib.import_module(class_ref.module_path)
+        extension_class = getattr(module, class_ref.class_name)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise error_type(error_message) from exc
+
+    if not isinstance(extension_class, type):
+        raise error_type(error_message)
+    if not issubclass(extension_class, class_ref.interface):
+        raise error_type(error_message)
+
+    return ExtensionTokenSpec(
+        extension_type=class_ref.extension_type,
+        interface=class_ref.interface,
+        extension_class=extension_class,
+    )
+
+
 def _resolve_extension_spec_from_registry(
     *,
     token: str,
@@ -160,23 +189,11 @@ def _resolve_extension_spec_from_registry(
             f"Unknown extension token: {token!r}. Known tokens: {known_tokens}."
         )
 
-    try:
-        module = importlib.import_module(class_ref.module_path)
-        extension_class = getattr(module, class_ref.class_name)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        raise RuntimeError(
-            f"Invalid extension class binding for token: {token!r}."
-        ) from exc
-
-    if not isinstance(extension_class, type):
-        raise RuntimeError(f"Invalid extension class binding for token: {token!r}.")
-    if not issubclass(extension_class, class_ref.interface):
-        raise RuntimeError(f"Invalid extension class binding for token: {token!r}.")
-
-    return ExtensionTokenSpec(
-        extension_type=class_ref.extension_type,
-        interface=class_ref.interface,
-        extension_class=extension_class,
+    return _resolve_extension_spec_from_class_ref(
+        token=token,
+        class_ref=class_ref,
+        error_type=RuntimeError,
+        error_message=f"Invalid extension class binding for token: {token!r}.",
     )
 
 
@@ -224,6 +241,50 @@ def _validate_downstream_framework_metadata(
         )
 
 
+def _resolve_downstream_framework_runtime_spec(
+    *,
+    entry: object,
+    token: str,
+) -> ExtensionTokenSpec | None:
+    raw_runtime_module = _extension_entry_field(entry, "runtime_module")
+    raw_runtime_class = _extension_entry_field(entry, "runtime_class")
+    runtime_module = _normalized_nonempty_text(raw_runtime_module)
+    runtime_class = _normalized_nonempty_text(raw_runtime_class)
+
+    if raw_runtime_module is None and raw_runtime_class is None:
+        return None
+
+    if runtime_module is None or runtime_class is None:
+        raise DownstreamFrameworkRuntimeError(
+            "Invalid downstream framework extension runtime configuration: "
+            f"unknown token {token!r} requires non-empty runtime_module and "
+            "runtime_class when either is provided."
+        )
+    if ":" in runtime_module or ":" in runtime_class:
+        raise DownstreamFrameworkRuntimeError(
+            "Invalid downstream framework extension runtime configuration: "
+            f"unknown token {token!r} must use separate runtime_module and "
+            "runtime_class fields; module:Class paths are not supported."
+        )
+
+    class_ref = _ExtensionClassRef(
+        extension_type="fw",
+        interface=IFWExtension,
+        module_path=runtime_module,
+        class_name=runtime_class,
+    )
+    return _resolve_extension_spec_from_class_ref(
+        token=token,
+        class_ref=class_ref,
+        error_type=DownstreamFrameworkRuntimeError,
+        error_message=(
+            "Invalid downstream framework runtime class binding for token: "
+            f"{token!r} ({runtime_module}.{runtime_class}) must resolve to an "
+            "IFWExtension subclass."
+        ),
+    )
+
+
 def resolve_configured_extension_spec(
     *,
     entry: object,
@@ -238,6 +299,12 @@ def resolve_configured_extension_spec(
         if normalized_type != "fw" or not _is_unknown_extension_token_error(exc):
             raise
         _validate_downstream_framework_metadata(entry=entry, token=token)
+        runtime_spec = _resolve_downstream_framework_runtime_spec(
+            entry=entry,
+            token=token,
+        )
+        if runtime_spec is not None:
+            return runtime_spec
         return ExtensionTokenSpec(
             extension_type="fw",
             interface=IFWExtension,

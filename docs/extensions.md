@@ -74,15 +74,22 @@ namespace = "com.acme.billing"
 contrib = "acme_extension.contrib"
 models = "acme_extension.model"
 migration_track = "acme_extension"
+runtime_module = "acme_extension.fw_ext"
+runtime_class = "BillingFWExtension"
 ```
 
 `type = "ctx"` and `type = "rag"` are rejected by bootstrap validation.
 
+Downstream FW entries may omit `runtime_module` and `runtime_class` when they
+only provide ACP contribution or migration metadata. When both fields are
+present, bootstrap imports the class, verifies that it implements
+`IFWExtension`, instantiates it, and runs `setup()`.
+
 Important current-state note: generic module-path loading for new downstream
-CP/MH/RPP/CT/FW runtime classes is not the bootstrap contract today. The class
+CP/MH/RPP/CT runtime classes is not the bootstrap contract today. The class
 examples below describe the Python interfaces used by core. If you need the
-runtime to instantiate a new non-core extension class directly, treat that as a
-framework-registry change.
+runtime to instantiate a new non-core non-FW extension class directly, treat
+that as a framework-registry change.
 
 ## Message Handler Extensions
 

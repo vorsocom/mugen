@@ -73,6 +73,7 @@ from mugen.config import AppConfig
 from mugen.core.bootstrap.extensions import (
     DefaultExtensionRegistry,
     DownstreamFrameworkMetadataError,
+    DownstreamFrameworkRuntimeError,
     configured_extensions,
     parse_bool as _parse_ext_bool,
     resolve_configured_extension_spec,
@@ -1377,7 +1378,10 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
                 critical=critical,
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            if isinstance(exc, DownstreamFrameworkMetadataError):
+            if isinstance(
+                exc,
+                (DownstreamFrameworkMetadataError, DownstreamFrameworkRuntimeError),
+            ):
                 raise ExtensionLoadError(str(exc)) from exc
             if critical:
                 logger.error(

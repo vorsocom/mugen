@@ -49,6 +49,18 @@ class _DummyFWExt(IFWExtension):
         return None
 
 
+class _RuntimeFWExt(IFWExtension):
+    setup_calls = 0
+
+    @property
+    def platforms(self) -> list[str]:
+        return []
+
+    async def setup(self, app):  # noqa: ANN001
+        type(self).setup_calls += 1
+        app.config["downstream_runtime_fw_setup"] = True
+
+
 def _provider_kwargs(app: Quart) -> dict[str, object]:
     return {
         "ipc_provider": lambda: SimpleNamespace(),
@@ -279,6 +291,98 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(registry.calls), 2)
         self.assertEqual(registry.calls[1]["extension_type"], "fw")
         self.assertEqual(registry.calls[1]["token"], "vorsocom.fw.car_rentals")
+
+    async def test_register_extensions_runs_downstream_fw_runtime_setup(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        _RuntimeFWExt.setup_calls = 0
+        config = _base_cfg(
+            [
+                SimpleNamespace(
+                    type="fw",
+                    token="vorsocom.fw.valet_car_rentals",
+                    name="com.vorsocomputing.mugen.valet_car_rentals",
+                    namespace="com.vorsocomputing.mugen.valet_car_rentals",
+                    contrib="car_rentals_extension.contrib",
+                    runtime_module="car_rentals_extension.fw_ext",
+                    runtime_class="CarRentalsFWExtension",
+                ),
+            ]
+        )
+
+        def _resolve(token: object, *, scope: str = "any") -> ExtensionTokenSpec:
+            _ = scope
+            raise RuntimeError(
+                f"Unknown extension token: {token!r}. Known tokens: core.fw.acp."
+            )
+
+        provider_kwargs = _provider_kwargs(app)
+        provider_kwargs["platform_provider"] = lambda: SimpleNamespace(
+            extension_supported=lambda _ext: True,
+        )
+
+        with patch(
+            "mugen.core.bootstrap.extensions.resolve_extension_spec",
+            side_effect=_resolve,
+        ), patch(
+            "mugen.core.bootstrap.extensions.importlib.import_module",
+            return_value=SimpleNamespace(CarRentalsFWExtension=_RuntimeFWExt),
+        ):
+            report = await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **provider_kwargs,
+            )
+
+        self.assertEqual(report, {"fw": ["vorsocom.fw.valet_car_rentals"]})
+        self.assertTrue(app.config["downstream_runtime_fw_setup"])
+        self.assertEqual(_RuntimeFWExt.setup_calls, 1)
+
+    async def test_register_extensions_rejects_invalid_downstream_fw_runtime_class(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _base_cfg(
+            [
+                SimpleNamespace(
+                    type="fw",
+                    token="vorsocom.fw.valet_car_rentals",
+                    name="com.vorsocomputing.mugen.valet_car_rentals",
+                    namespace="com.vorsocomputing.mugen.valet_car_rentals",
+                    contrib="car_rentals_extension.contrib",
+                    critical=False,
+                    runtime_module="car_rentals_extension.fw_ext",
+                    runtime_class="CarRentalsFWExtension",
+                ),
+            ]
+        )
+
+        def _resolve(token: object, *, scope: str = "any") -> ExtensionTokenSpec:
+            _ = scope
+            raise RuntimeError(
+                f"Unknown extension token: {token!r}. Known tokens: core.fw.acp."
+            )
+
+        with (
+            patch(
+                "mugen.core.bootstrap.extensions.resolve_extension_spec",
+                side_effect=_resolve,
+            ),
+            patch(
+                "mugen.core.bootstrap.extensions.importlib.import_module",
+                side_effect=ImportError("missing"),
+            ),
+            self.assertRaisesRegex(
+                ExtensionLoadError,
+                "Invalid downstream framework runtime class binding",
+            ),
+        ):
+            await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
+            )
 
     async def test_register_extensions_rejects_unknown_downstream_fw_missing_acp_metadata(
         self,

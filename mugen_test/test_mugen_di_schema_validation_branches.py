@@ -245,6 +245,43 @@ class TestDISchemaValidationBranches(unittest.TestCase):
                 {"type": 1, "token": "core.fw.web"},
                 "mugen.modules.extensions\\[0\\].type must be a string",
             ),
+            (
+                {
+                    "type": "cp",
+                    "token": "core.cp.clear_history",
+                    "runtime_module": "plugins.runtime",
+                    "runtime_class": "RuntimeFWExtension",
+                },
+                "runtime_module and mugen.modules.extensions\\[0\\].runtime_class "
+                "are only supported for framework extensions",
+            ),
+            (
+                {
+                    "type": "fw",
+                    "token": "vorsocom.fw.valet_car_rentals",
+                    "runtime_module": "car_rentals_extension.fw_ext",
+                },
+                "mugen.modules.extensions\\[0\\].runtime_class must be a "
+                "non-empty string",
+            ),
+            (
+                {
+                    "type": "fw",
+                    "token": "vorsocom.fw.valet_car_rentals",
+                    "runtime_class": "CarRentalsFWExtension",
+                },
+                "mugen.modules.extensions\\[0\\].runtime_module must be a "
+                "non-empty string",
+            ),
+            (
+                {
+                    "type": "fw",
+                    "token": "vorsocom.fw.valet_car_rentals",
+                    "runtime_module": "car_rentals_extension.fw_ext:CarRentalsFWExtension",
+                    "runtime_class": "CarRentalsFWExtension",
+                },
+                "module:Class unsupported",
+            ),
         )
 
         for entry, pattern in cases:
@@ -263,6 +300,19 @@ class TestDISchemaValidationBranches(unittest.TestCase):
                 "type": "fw",
                 "token": "core.fw.acp",
                 "migration_track": "core",
+            },
+            path="mugen.modules.extensions[0]",
+        )
+
+    def test_validate_extension_entry_schema_accepts_fw_runtime_class_fields(
+        self,
+    ) -> None:
+        di._validate_extension_entry_schema(  # pylint: disable=protected-access
+            {
+                "type": "fw",
+                "token": "vorsocom.fw.valet_car_rentals",
+                "runtime_module": "car_rentals_extension.fw_ext",
+                "runtime_class": "CarRentalsFWExtension",
             },
             path="mugen.modules.extensions[0]",
         )
