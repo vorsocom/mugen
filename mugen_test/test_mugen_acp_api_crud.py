@@ -53,6 +53,9 @@ from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
 from mugen.core.plugin.acp.api import crud as crud_mod
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.contract.sdk.resource import SoftDeleteMode
+from mugen.core.plugin.channel_orchestration.api.validation import (
+    RoutingRuleCreateValidation,
+)
 
 
 class _AbortCalled(Exception):
@@ -419,6 +422,23 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(typed_alias_data, {"display_name": "Carol"})
 
+        routing_data = crud_mod._build_create_data(
+            {
+                "TenantId": str(uuid.uuid4()),
+                "RouteKey": " support ",
+                "TargetQueueName": " frontline ",
+            },
+            RoutingRuleCreateValidation,
+            tenant_scoped=True,
+        )
+        self.assertEqual(
+            routing_data,
+            {
+                "route_key": "support",
+                "target_queue_name": "frontline",
+            },
+        )
+
         with patch.object(crud_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as ex:
                 crud_mod._build_create_data({}, ("Name",), tenant_scoped=False)
@@ -427,6 +447,21 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 crud_mod._build_create_data({}, _CreateSchema, tenant_scoped=False)
             self.assertEqual(ex.exception.code, 400)
+
+            with self.assertRaises(_AbortCalled) as ex:
+                crud_mod._build_create_data(
+                    {
+                        "TenantId": str(uuid.uuid4()),
+                        "RouteKey": "support",
+                    },
+                    RoutingRuleCreateValidation,
+                    tenant_scoped=True,
+                )
+            self.assertEqual(ex.exception.code, 400)
+            self.assertIn(
+                "Provide TargetQueueName, OwnerUserId, or TargetServiceKey.",
+                ex.exception.message or "",
+            )
 
         update_data = crud_mod._build_update_data(
             {"DisplayName": "Alice"},
