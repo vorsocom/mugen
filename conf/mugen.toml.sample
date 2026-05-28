@@ -123,6 +123,9 @@ token = "core.cp.clear_history"
 # name = "com.vorsocomputing.mugen.plugin_name"
 # namespace = "com.vorsocomputing.mugen.plugin_name"
 # contrib = "mugen.core.plugin.plugin_name.contrib"
+# Downstream FW plugins may also declare a runtime class:
+# runtime_module = "my_org.plugin_name.fw_ext"
+# runtime_class = "PluginNameFWExtension"
 # Model-bearing FW plugins should also declare:
 # models = "mugen.core.plugin.plugin_name.model"
 # migration_track = "core"
