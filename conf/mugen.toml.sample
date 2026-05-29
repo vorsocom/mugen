@@ -1035,5 +1035,8 @@ webhook.dedupe_ttl_seconds = 86400
 # WhatsApp webhook path tokens, verification tokens, app secrets, phone-number
 # ids, and Graph API access tokens are managed through ACP
 # MessagingClientProfiles and KeyRefs.
+# WhatsApp Flow Data private key material is also managed through ACP
+# MessagingClientProfiles SecretRefs using flows.private_key and optional
+# flows.private_key_passphrase paths.
 # Optional sender gating and deny replies also live per client profile in
 # MessagingClientProfiles.Settings.user_access.

@@ -246,6 +246,19 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             ),
             {"channel.secret": str(_KEY_REF_ID)},
         )
+        self.assertEqual(
+            profile_mod.MessagingClientProfileService._normalize_platform_secret_refs(
+                platform_key="whatsapp",
+                value={
+                    "flows.private_key": str(_KEY_REF_ID),
+                    "flows.private_key_passphrase": str(_KEY_REF_ID),
+                },
+            ),
+            {
+                "flows.private_key": str(_KEY_REF_ID),
+                "flows.private_key_passphrase": str(_KEY_REF_ID),
+            },
+        )
         with self.assertRaisesRegex(RuntimeError, "SecretRefs.bad must be a valid"):
             profile_mod.MessagingClientProfileService._normalize_secret_refs(
                 {"bad": "not-a-uuid"}
@@ -262,6 +275,14 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             profile_mod.MessagingClientProfileService._normalize_platform_secret_refs(
                 platform_key="line",
                 value={"client.password": str(_KEY_REF_ID)},
+            )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "SecretRefs path 'flows.bad' is not allowed",
+        ):
+            profile_mod.MessagingClientProfileService._normalize_platform_secret_refs(
+                platform_key="whatsapp",
+                value={"flows.bad": str(_KEY_REF_ID)},
             )
         with self.assertRaisesRegex(RuntimeError, "Settings.user_access"):
             profile_mod.MessagingClientProfileService._normalize_settings(

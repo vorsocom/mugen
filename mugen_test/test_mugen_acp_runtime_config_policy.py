@@ -104,6 +104,19 @@ class TestRuntimeConfigPolicy(unittest.TestCase):
             {"client.password": key_ref_id},
         )
         self.assertEqual(
+            policy.normalize_secret_ref_map(
+                platform_key="whatsapp",
+                value={
+                    "FLOWS.PRIVATE_KEY": key_ref_id,
+                    "flows.private_key_passphrase": key_ref_id,
+                },
+            ),
+            {
+                "flows.private_key": key_ref_id,
+                "flows.private_key_passphrase": key_ref_id,
+            },
+        )
+        self.assertEqual(
             policy.normalize_secret_ref_map(platform_key="line", value=None),
             {},
         )
@@ -154,6 +167,14 @@ class TestRuntimeConfigPolicy(unittest.TestCase):
             policy.normalize_secret_ref_map(
                 platform_key="matrix",
                 value={"client.password": "not-a-uuid"},
+            )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "SecretRefs path 'flows.bad' is not allowed",
+        ):
+            policy.normalize_secret_ref_map(
+                platform_key="whatsapp",
+                value={"flows.bad": key_ref_id},
             )
 
     def test_runtime_config_category_profile_and_settings(self) -> None:
