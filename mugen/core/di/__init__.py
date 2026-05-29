@@ -4,6 +4,7 @@ __all__ = [
     "ContainerShutdownError",
     "EXT_SERVICE_AGENT_COMPONENT_REGISTRY",
     "EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY",
+    "EXT_SERVICE_WHATSAPP_FLOW_DATA_REGISTRY",
     "EXT_SERVICE_ADMIN_REGISTRY",
     "EXT_SERVICE_ADMIN_SANDBOX_ENFORCER",
     "EXT_SERVICE_ADMIN_SVC_AUTH",
@@ -95,6 +96,7 @@ EXT_SERVICE_ADMIN_SVC_JWT = "admin_svc_jwt"
 EXT_SERVICE_ADMIN_SVC_AUTH = "admin_svc_auth"
 EXT_SERVICE_AGENT_COMPONENT_REGISTRY = "agent_component_registry"
 EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY = "context_component_registry"
+EXT_SERVICE_WHATSAPP_FLOW_DATA_REGISTRY = "whatsapp_flow_data_registry"
 
 class ContainerBootstrapError(RuntimeError):
     """Raised when DI container bootstrap configuration is invalid."""

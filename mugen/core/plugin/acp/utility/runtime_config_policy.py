@@ -48,6 +48,8 @@ ALLOWED_MESSAGING_SECRET_REF_PATHS: dict[str, frozenset[tuple[str, ...]]] = {
     "whatsapp": frozenset(
         {
             ("app", "secret"),
+            ("flows", "private_key"),
+            ("flows", "private_key_passphrase"),
             ("graphapi", "access_token"),
             ("webhook", "verification_token"),
         }
