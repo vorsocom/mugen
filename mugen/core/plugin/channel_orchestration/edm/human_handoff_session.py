@@ -54,6 +54,14 @@ human_handoff_session_type = EdmType(
             "LastHumanReplyAt",
             TypeRef("Edm.DateTimeOffset"),
         ),
+        "LastUserMessageAt": EdmProperty(
+            "LastUserMessageAt",
+            TypeRef("Edm.DateTimeOffset"),
+        ),
+        "LastTranscriptSequenceNo": EdmProperty(
+            "LastTranscriptSequenceNo",
+            TypeRef("Edm.Int64"),
+        ),
         "LastDeliveryStatus": EdmProperty(
             "LastDeliveryStatus",
             TypeRef("Edm.String"),

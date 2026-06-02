@@ -366,6 +366,7 @@ class ListTranscriptValidation(IValidationBase):
     """Validate payload for list_transcript actions."""
 
     limit: PositiveInt | None = None
+    after_sequence_no: NonNegativeInt | None = None
 
 
 ThrottleRuleCreateValidation = build_create_validation_from_pascal(

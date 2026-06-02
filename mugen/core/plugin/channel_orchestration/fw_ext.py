@@ -11,7 +11,10 @@ from mugen.core.gateway.storage.rdbms.sqla.sqla_gateway import (
     SQLAlchemyRelationalStorageGateway,
 )
 from mugen.core.plugin.channel_orchestration.model import HumanHandoffSession
-from mugen.core.plugin.channel_orchestration.service import HumanHandoffSessionService
+from mugen.core.plugin.channel_orchestration.service import (
+    HumanHandoffReleaseHookRegistry,
+    HumanHandoffSessionService,
+)
 
 _HUMAN_HANDOFF_TABLE = "channel_orchestration_human_handoff_session"
 
@@ -44,6 +47,11 @@ class ChannelOrchestrationFWExtension(
         di.container.register_ext_service(
             di.EXT_SERVICE_HUMAN_HANDOFF,
             handoff_service,
+            override=True,
+        )
+        di.container.register_ext_service(
+            di.EXT_SERVICE_HUMAN_HANDOFF_RELEASE_HOOKS,
+            HumanHandoffReleaseHookRegistry(),
             override=True,
         )
 

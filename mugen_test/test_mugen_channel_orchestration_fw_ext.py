@@ -39,11 +39,22 @@ class TestMugenChannelOrchestrationFWExtension(unittest.IsolatedAsyncioTestCase)
             table=fw_ext_module._HUMAN_HANDOFF_TABLE,
             rsg="rsg",
         )
-        container.register_ext_service.assert_called_once_with(
-            fw_ext_module.di.EXT_SERVICE_HUMAN_HANDOFF,
-            "handoff-service",
-            override=True,
+        self.assertEqual(container.register_ext_service.call_count, 2)
+        handoff_call, release_hook_call = container.register_ext_service.call_args_list
+        self.assertEqual(
+            handoff_call.args,
+            (fw_ext_module.di.EXT_SERVICE_HUMAN_HANDOFF, "handoff-service"),
         )
+        self.assertEqual(handoff_call.kwargs, {"override": True})
+        self.assertEqual(
+            release_hook_call.args[0],
+            fw_ext_module.di.EXT_SERVICE_HUMAN_HANDOFF_RELEASE_HOOKS,
+        )
+        self.assertIsInstance(
+            release_hook_call.args[1],
+            fw_ext_module.HumanHandoffReleaseHookRegistry,
+        )
+        self.assertEqual(release_hook_call.kwargs, {"override": True})
 
     async def test_register_runtime_tables_handles_non_sqla_and_value_error(
         self,
