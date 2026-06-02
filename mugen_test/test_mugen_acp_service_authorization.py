@@ -315,3 +315,151 @@ class TestMugenAcpServiceAuthorization(unittest.IsolatedAsyncioTestCase):
 
         services["ACP.PermissionObject"].get.assert_not_awaited()
         services["ACP.PermissionType"].get.assert_not_awaited()
+
+    async def test_has_permission_for_any_tenant_uses_tenant_role_grant(
+        self,
+    ) -> None:
+        svc, services = self._new_service()
+        user_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        role_id = uuid.uuid4()
+
+        services["ACP.PermissionObject"].get = AsyncMock(
+            return_value=_row_with_id(uuid.uuid4())
+        )
+        services["ACP.PermissionType"].get = AsyncMock(
+            return_value=_row_with_id(uuid.uuid4())
+        )
+        services["ACP.User"].get_expanded = AsyncMock(
+            return_value=SimpleNamespace(global_roles=[])
+        )
+        services["ACP.RoleMembership"].get_role_memberships_by_user = AsyncMock(
+            side_effect=[
+                [
+                    SimpleNamespace(
+                        tenant_id=tenant_id,
+                        role_id=role_id,
+                    )
+                ],
+                [SimpleNamespace(role_id=role_id)],
+            ]
+        )
+        services["ACP.PermissionEntry"].list = AsyncMock(
+            return_value=[SimpleNamespace(permitted=True)]
+        )
+
+        allowed = await svc.has_permission_for_any_tenant(
+            user_id=user_id,
+            permission_object=(
+                "com.vorsocomputing.mugen.human_handoff:operator"
+            ),
+            permission_type=(
+                "com.vorsocomputing.mugen.human_handoff:operator"
+            ),
+            allow_global_admin=True,
+        )
+
+        self.assertTrue(allowed)
+        self.assertEqual(
+            services["ACP.RoleMembership"]
+            .get_role_memberships_by_user.await_args_list[0]
+            .args[0],
+            {"user_id": user_id},
+        )
+        self.assertEqual(
+            services["ACP.RoleMembership"]
+            .get_role_memberships_by_user.await_args_list[1]
+            .args[0],
+            {"tenant_id": tenant_id, "user_id": user_id},
+        )
+
+    async def test_has_permission_for_any_tenant_honors_global_admin(self) -> None:
+        svc, services = self._new_service()
+        user_id = uuid.uuid4()
+
+        services["ACP.PermissionObject"].get = AsyncMock(
+            return_value=_row_with_id(uuid.uuid4())
+        )
+        services["ACP.PermissionType"].get = AsyncMock(
+            return_value=_row_with_id(uuid.uuid4())
+        )
+        services["ACP.User"].get_expanded = AsyncMock(
+            return_value=SimpleNamespace(
+                global_roles=[
+                    SimpleNamespace(namespace="com.vorso", name="administrator")
+                ]
+            )
+        )
+
+        allowed = await svc.has_permission_for_any_tenant(
+            user_id=user_id,
+            permission_object=(
+                "com.vorsocomputing.mugen.human_handoff:operator"
+            ),
+            permission_type=(
+                "com.vorsocomputing.mugen.human_handoff:operator"
+            ),
+            allow_global_admin=True,
+        )
+
+        self.assertTrue(allowed)
+        services["ACP.RoleMembership"].get_role_memberships_by_user.assert_not_awaited()
+
+    async def test_has_permission_for_any_tenant_denies_without_effective_grant(
+        self,
+    ) -> None:
+        svc, services = self._new_service()
+        user_id = uuid.uuid4()
+        tenant_id_one = uuid.uuid4()
+        tenant_id_two = uuid.uuid4()
+
+        services["ACP.PermissionObject"].get = AsyncMock(
+            return_value=_row_with_id(uuid.uuid4())
+        )
+        services["ACP.PermissionType"].get = AsyncMock(
+            return_value=_row_with_id(uuid.uuid4())
+        )
+        services["ACP.User"].get_expanded = AsyncMock(
+            return_value=SimpleNamespace(global_roles=[])
+        )
+        services["ACP.RoleMembership"].get_role_memberships_by_user = AsyncMock(
+            side_effect=[
+                [
+                    SimpleNamespace(tenant_id=None, role_id=uuid.uuid4()),
+                    SimpleNamespace(tenant_id=tenant_id_one, role_id=uuid.uuid4()),
+                    SimpleNamespace(tenant_id=tenant_id_one, role_id=uuid.uuid4()),
+                    SimpleNamespace(tenant_id=tenant_id_two, role_id=uuid.uuid4()),
+                ],
+                [SimpleNamespace(role_id=uuid.uuid4())],
+                [SimpleNamespace(role_id=uuid.uuid4())],
+            ]
+        )
+        services["ACP.PermissionEntry"].list = AsyncMock(return_value=[])
+
+        allowed = await svc.has_permission_for_any_tenant(
+            user_id=user_id,
+            permission_object=(
+                "com.vorsocomputing.mugen.human_handoff:operator"
+            ),
+            permission_type=(
+                "com.vorsocomputing.mugen.human_handoff:operator"
+            ),
+            allow_global_admin=True,
+        )
+
+        self.assertFalse(allowed)
+        self.assertEqual(
+            [
+                call.args[0]
+                for call in (
+                    services["ACP.RoleMembership"]
+                    .get_role_memberships_by_user
+                    .await_args_list
+                )
+            ],
+            [
+                {"user_id": user_id},
+                {"tenant_id": tenant_id_one, "user_id": user_id},
+                {"tenant_id": tenant_id_two, "user_id": user_id},
+            ],
+        )

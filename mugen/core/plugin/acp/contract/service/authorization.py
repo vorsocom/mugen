@@ -22,3 +22,14 @@ class IAuthorizationService(ABC):  # pylint: disable=too-few-public-methods
         """Determine if User with `user_id` can execute `permission_type` action on
         `permission_object`.
         """
+
+    @abstractmethod
+    async def has_permission_for_any_tenant(  # pylint: disable=too-many-arguments
+        self,
+        *,
+        user_id: uuid.UUID,
+        permission_object: str,  # namespace:name
+        permission_type: str,  # namespace:name
+        allow_global_admin: bool = True,
+    ) -> bool:
+        """Return whether the user has the permission globally or for any tenant."""

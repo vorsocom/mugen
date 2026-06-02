@@ -11,6 +11,7 @@ from mugen.core.plugin.acp.contract.sdk.binding import (
 from mugen.core.plugin.acp.contract.sdk.permission import (
     DefaultGlobalGrant,
     PermissionObjectDef,
+    PermissionTypeDef,
 )
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.contract.sdk.resource import (
@@ -56,6 +57,11 @@ from mugen.core.plugin.channel_orchestration.api.validation import (
     WorkItemReplayValidation,
     WorkItemUpdateValidation,
 )
+from mugen.core.plugin.channel_orchestration.human_handoff_auth import (
+    HUMAN_HANDOFF_OPERATOR_PERMISSION,
+    HUMAN_HANDOFF_OPERATOR_PERMISSION_NAME,
+    HUMAN_HANDOFF_PERMISSION_NAMESPACE,
+)
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
 _WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+|\d+")
@@ -76,6 +82,14 @@ def contribute(
     """Contribute channel_orchestration resources into the ACP registry."""
     admin_ns = AdminNs(admin_namespace)
     plugin_ns = AdminNs(plugin_namespace)
+    handoff_operator = PermissionObjectDef(
+        HUMAN_HANDOFF_PERMISSION_NAMESPACE,
+        HUMAN_HANDOFF_OPERATOR_PERMISSION_NAME,
+    )
+    handoff_operator_type = PermissionTypeDef(
+        HUMAN_HANDOFF_PERMISSION_NAMESPACE,
+        HUMAN_HANDOFF_OPERATOR_PERMISSION_NAME,
+    )
 
     registry.register_system_flag(
         SystemFlagDef(
@@ -267,6 +281,14 @@ def contribute(
                 "Durable conversation-scoped human handoff sessions that suppress"
                 " AI handling while active and preserve human replies in context."
             ),
+            "perm_obj": HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            "permissions": {
+                "read": HUMAN_HANDOFF_OPERATOR_PERMISSION,
+                "create": HUMAN_HANDOFF_OPERATOR_PERMISSION,
+                "update": HUMAN_HANDOFF_OPERATOR_PERMISSION,
+                "delete": HUMAN_HANDOFF_OPERATOR_PERMISSION,
+                "manage": HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            },
             "allow_create": False,
             "allow_update": False,
             "allow_delete": False,
@@ -274,22 +296,22 @@ def contribute(
             "crud": CrudPolicy(),
             "actions": {
                 "activate_handoff": {
-                    "perm": admin_ns.verb("manage"),
+                    "perm": HUMAN_HANDOFF_OPERATOR_PERMISSION,
                     "schema": ActivateHandoffValidation,
                     "confirm": "Activate human handoff for this conversation?",
                 },
                 "deactivate_handoff": {
-                    "perm": admin_ns.verb("manage"),
+                    "perm": HUMAN_HANDOFF_OPERATOR_PERMISSION,
                     "schema": DeactivateHandoffValidation,
                     "confirm": "Deactivate human handoff for this conversation?",
                 },
                 "human_reply": {
-                    "perm": admin_ns.verb("manage"),
+                    "perm": HUMAN_HANDOFF_OPERATOR_PERMISSION,
                     "schema": HumanReplyValidation,
                     "confirm": "Send this human reply?",
                 },
                 "list_transcript": {
-                    "perm": admin_ns.verb("read"),
+                    "perm": HUMAN_HANDOFF_OPERATOR_PERMISSION,
                     "schema": ListTranscriptValidation,
                     "confirm": "List the recent transcript for this handoff?",
                 },
@@ -330,6 +352,9 @@ def contribute(
         },
     )
 
+    registry.register_permission_object(handoff_operator)
+    registry.register_permission_type(handoff_operator_type)
+
     objects: list[PermissionObjectDef] = []
     for r in resources:
         obj_name = title_to_snake(r["entity"])
@@ -347,6 +372,14 @@ def contribute(
         for pobj in obj_keys
         for ptyp in admin_verb_keys
     )
+    registry.register_default_global_grant(
+        DefaultGlobalGrant(
+            admin_ns.key("administrator"),
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            True,
+        )
+    )
 
     for r in resources:
         entity_set = r["set"]
@@ -354,6 +387,8 @@ def contribute(
 
         obj_name = title_to_snake(entity)
         pobj = PermissionObjectDef(plugin_ns.ns, obj_name)
+        perm_obj_key = str(r.get("perm_obj", pobj.key))
+        perm_overrides = dict(r.get("permissions", {}))
 
         edm_type_name = f"CHANNELORCH.{entity}"
         service_key = f"{admin_ns.ns}:{edm_type_name}"
@@ -364,15 +399,23 @@ def contribute(
                 namespace=plugin_ns.ns,
                 entity_set=entity_set,
                 edm_type_name=edm_type_name,
-                perm_obj=pobj.key,
+                perm_obj=perm_obj_key,
                 service_key=service_key,
                 permissions=AdminPermissions(
-                    permission_object=pobj.key,
-                    read=admin_ns.verb("read"),
-                    create=admin_ns.verb("create"),
-                    update=admin_ns.verb("update"),
-                    delete=admin_ns.verb("delete"),
-                    manage=admin_ns.verb("manage"),
+                    permission_object=perm_obj_key,
+                    read=str(perm_overrides.get("read", admin_ns.verb("read"))),
+                    create=str(
+                        perm_overrides.get("create", admin_ns.verb("create"))
+                    ),
+                    update=str(
+                        perm_overrides.get("update", admin_ns.verb("update"))
+                    ),
+                    delete=str(
+                        perm_overrides.get("delete", admin_ns.verb("delete"))
+                    ),
+                    manage=str(
+                        perm_overrides.get("manage", admin_ns.verb("manage"))
+                    ),
                 ),
                 capabilities=AdminCapabilities(
                     allow_read=bool(r.get("allow_read", True)),

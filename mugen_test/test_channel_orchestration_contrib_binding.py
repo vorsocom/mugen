@@ -21,6 +21,9 @@ from mugen.core.plugin.channel_orchestration.api.validation import (
     ListTranscriptValidation,
 )
 from mugen.core.plugin.channel_orchestration.contrib import contribute
+from mugen.core.plugin.channel_orchestration.human_handoff_auth import (
+    HUMAN_HANDOFF_OPERATOR_PERMISSION,
+)
 from mugen.core.plugin.channel_orchestration.service.blocklist_entry import (
     BlocklistEntryService,
 )
@@ -189,6 +192,48 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
         self.assertIs(
             handoffs.capabilities.actions["list_transcript"]["schema"],
             ListTranscriptValidation,
+        )
+        self.assertEqual(handoffs.perm_obj, HUMAN_HANDOFF_OPERATOR_PERMISSION)
+        self.assertEqual(
+            handoffs.permissions.permission_object,
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+        )
+        self.assertEqual(
+            handoffs.permissions.read,
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+        )
+        self.assertEqual(
+            handoffs.permissions.manage,
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+        )
+        for action in (
+            "activate_handoff",
+            "deactivate_handoff",
+            "human_reply",
+            "list_transcript",
+        ):
+            self.assertEqual(
+                handoffs.capabilities.actions[action]["perm"],
+                HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            )
+
+        manifest = registry.build_seed_manifest()
+        self.assertIn(
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            [obj.key for obj in manifest.permission_objects],
+        )
+        self.assertIn(
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            [typ.key for typ in manifest.permission_types],
+        )
+        self.assertTrue(
+            any(
+                grant.global_role == admin_ns.key("administrator")
+                and grant.permission_object == HUMAN_HANDOFF_OPERATOR_PERMISSION
+                and grant.permission_type == HUMAN_HANDOFF_OPERATOR_PERMISSION
+                and grant.permitted is True
+                for grant in manifest.default_global_grants
+            )
         )
 
         self.assertIn("evaluate_intake", states.capabilities.actions)
