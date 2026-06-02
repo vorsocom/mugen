@@ -7,6 +7,7 @@ import uuid
 
 from sqlalchemy import (
     CheckConstraint,
+    BigInteger,
     DateTime,
     ForeignKey,
     Index,
@@ -97,6 +98,16 @@ class HumanHandoffSession(ModelBase, TenantScopedMixin):
         nullable=True,
         index=True,
     )
+    last_user_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    last_transcript_sequence_no: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        index=True,
+    )
     last_delivery_status: Mapped[str | None] = mapped_column(
         CITEXT(32),
         nullable=True,
@@ -168,6 +179,13 @@ class HumanHandoffSession(ModelBase, TenantScopedMixin):
                 "length(btrim(last_delivery_error)) > 0"
             ),
             name="ck_chorch_handoff__delivery_error_nonempty_if_set",
+        ),
+        CheckConstraint(
+            (
+                "last_transcript_sequence_no IS NULL OR "
+                "last_transcript_sequence_no >= 0"
+            ),
+            name="ck_chorch_handoff__last_transcript_seq_nonnegative",
         ),
         UniqueConstraint(
             "tenant_id",

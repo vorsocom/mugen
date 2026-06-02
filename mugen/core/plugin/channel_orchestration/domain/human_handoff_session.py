@@ -33,6 +33,8 @@ class HumanHandoffSessionDE(BaseDE, TenantScopedDEMixin):
     deactivation_reason: str | None = None
 
     last_human_reply_at: datetime | None = None
+    last_user_message_at: datetime | None = None
+    last_transcript_sequence_no: int | None = None
     last_delivery_status: str | None = None
     last_delivery_error: str | None = None
     attributes: dict[str, Any] | None = None
