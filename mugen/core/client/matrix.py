@@ -2510,6 +2510,8 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
         self._logging_gateway.debug("Send responses to user.")
 
         for response in message_responses:
+            if response.get("type") == "control":
+                continue
             match response["type"]:
                 case "audio":
                     await self._send_audio_message(

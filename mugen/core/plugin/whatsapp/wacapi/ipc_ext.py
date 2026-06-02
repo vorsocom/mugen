@@ -832,6 +832,9 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         if not isinstance(reply_to, str):
             reply_to = None
 
+        if response_type == "control":
+            return
+
         if response_type == "audio":
             uploaded = await self._upload_response_media(response, "audio")
             if uploaded is None:

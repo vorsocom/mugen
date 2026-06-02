@@ -29,6 +29,10 @@ _bootstrap_namespace_packages()
 # noqa: E402
 # pylint: disable=wrong-import-position
 from mugen.core.plugin.channel_orchestration.api.validation import (
+    ActivateHandoffValidation,
+    DeactivateHandoffValidation,
+    HumanReplyValidation,
+    ListTranscriptValidation,
     IngressBindingCreateValidation,
     RoutingRuleCreateValidation,
 )
@@ -91,6 +95,59 @@ class TestMugenChannelOrchestrationValidation(unittest.TestCase):
                 IdentifierType="phone_number_id",
                 IdentifierValue="   ",
             )
+
+    def test_handoff_validators_normalize_and_reject_invalid_payloads(self) -> None:
+        client_profile_id = uuid.uuid4()
+
+        activate = ActivateHandoffValidation(
+            Platform=" matrix ",
+            ChannelId=" channel ",
+            RoomId=" room ",
+            SenderId=" sender ",
+            ConversationId=" conversation ",
+            ClientProfileId=client_profile_id,
+            ServiceRouteKey=" support ",
+            Reason=" agent requested help ",
+            Metadata={"k": "v"},
+        )
+        self.assertEqual(activate.platform, "matrix")
+        self.assertEqual(activate.channel_id, "channel")
+        self.assertEqual(activate.room_id, "room")
+        self.assertEqual(activate.sender_id, "sender")
+        self.assertEqual(activate.conversation_id, "conversation")
+        self.assertEqual(activate.client_profile_id, client_profile_id)
+        self.assertEqual(activate.service_route_key, "support")
+        self.assertEqual(activate.reason, "agent requested help")
+        self.assertEqual(activate.metadata, {"k": "v"})
+
+        with self.assertRaisesRegex(ValidationError, "Platform must be non-empty."):
+            ActivateHandoffValidation(
+                Platform=" ",
+                RoomId="room",
+                SenderId="sender",
+            )
+
+        with self.assertRaisesRegex(ValidationError, "Content must be non-empty."):
+            HumanReplyValidation(Content="   ")
+
+        reply = HumanReplyValidation(
+            Content=" answer ",
+            MessageId=" reply-1 ",
+            TraceId=" trace-1 ",
+        )
+        self.assertEqual(reply.content, "answer")
+        self.assertEqual(reply.message_id, "reply-1")
+        self.assertEqual(reply.trace_id, "trace-1")
+
+        deactivate = DeactivateHandoffValidation()
+        self.assertIsNone(deactivate.reason)
+
+        deactivate_with_reason = DeactivateHandoffValidation(Reason=" done ")
+        self.assertEqual(deactivate_with_reason.reason, "done")
+
+        self.assertEqual(ListTranscriptValidation(Limit=25).limit, 25)
+        with self.assertRaises(ValidationError):
+            ListTranscriptValidation(Limit=0)
 
     def test_routing_rule_create_validation_accepts_target_variants(self) -> None:
         tenant_id = uuid.uuid4()

@@ -430,6 +430,9 @@ class TelegramBotAPIIPCExtension(IIPCExtension):
     async def _send_response_to_user(self, response: dict, default_chat_id: str) -> None:
         response_type = response.get("type")
 
+        if response_type == "control":
+            return
+
         if response_type == "telegram":
             op = str(response.get("op") or "").strip().lower()
             if op == "send_message":

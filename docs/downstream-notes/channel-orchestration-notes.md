@@ -10,3 +10,5 @@ This index groups downstream implementation notes for the
 ## Notes
 
 - [Channel Orchestration Downstream Integration](./channel-orchestration.md)
+- [Human Handoff Backend Contract](../human-handoff-backend.md)
+- [Human Handoff UI Implementation Note](./human-handoff-ui-implementation.md)

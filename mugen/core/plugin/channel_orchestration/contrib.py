@@ -24,6 +24,7 @@ from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.channel_orchestration.api.validation import (
     ApplyThrottleValidation,
+    ActivateHandoffValidation,
     BlocklistEntryCreateValidation,
     BlocklistEntryUpdateValidation,
     BlockSenderActionValidation,
@@ -31,12 +32,15 @@ from mugen.core.plugin.channel_orchestration.api.validation import (
     ChannelProfileUpdateValidation,
     ConversationStateCreateValidation,
     ConversationStateUpdateValidation,
+    DeactivateHandoffValidation,
     EscalateConversationValidation,
     EvaluateIntakeValidation,
+    HumanReplyValidation,
     IngressBindingCreateValidation,
     IngressBindingUpdateValidation,
     IntakeRuleCreateValidation,
     IntakeRuleUpdateValidation,
+    ListTranscriptValidation,
     OrchestrationPolicyCreateValidation,
     OrchestrationPolicyUpdateValidation,
     RouteConversationValidation,
@@ -255,6 +259,41 @@ def contribute(
             "allow_update": False,
             "allow_delete": False,
             "crud": CrudPolicy(),
+        },
+        {
+            "set": "HumanHandoffSessions",
+            "entity": "HumanHandoffSession",
+            "description": (
+                "Durable conversation-scoped human handoff sessions that suppress"
+                " AI handling while active and preserve human replies in context."
+            ),
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": True,
+            "crud": CrudPolicy(),
+            "actions": {
+                "activate_handoff": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": ActivateHandoffValidation,
+                    "confirm": "Activate human handoff for this conversation?",
+                },
+                "deactivate_handoff": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": DeactivateHandoffValidation,
+                    "confirm": "Deactivate human handoff for this conversation?",
+                },
+                "human_reply": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": HumanReplyValidation,
+                    "confirm": "Send this human reply?",
+                },
+                "list_transcript": {
+                    "perm": admin_ns.verb("read"),
+                    "schema": ListTranscriptValidation,
+                    "confirm": "List the recent transcript for this handoff?",
+                },
+            },
         },
         {
             "set": "WorkItems",

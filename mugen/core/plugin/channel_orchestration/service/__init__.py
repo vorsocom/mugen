@@ -7,6 +7,7 @@ __all__ = [
     "RoutingRuleService",
     "OrchestrationPolicyService",
     "ConversationStateService",
+    "HumanHandoffSessionService",
     "ThrottleRuleService",
     "BlocklistEntryService",
     "OrchestrationEventService",
@@ -17,6 +18,7 @@ from .ingress_binding import IngressBindingService
 from .blocklist_entry import BlocklistEntryService
 from .channel_profile import ChannelProfileService
 from .conversation_state import ConversationStateService
+from .human_handoff_session import HumanHandoffSessionService
 from .intake_rule import IntakeRuleService
 from .orchestration_event import OrchestrationEventService
 from .orchestration_policy import OrchestrationPolicyService

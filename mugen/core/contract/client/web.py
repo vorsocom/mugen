@@ -43,6 +43,16 @@ class IWebClient(ABC):
     ) -> dict[str, Any]:
         """Persist and enqueue a user message for asynchronous processing."""
 
+    async def append_human_reply(
+        self,
+        *,
+        conversation_id: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append one human handoff reply to a web conversation stream."""
+        raise NotImplementedError
+
     @abstractmethod
     async def stream_events(
         self,

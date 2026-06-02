@@ -491,6 +491,9 @@ class SignalRestAPIIPCExtension(IIPCExtension):
     ) -> None:
         response_type = response.get("type")
 
+        if response_type == "control":
+            return
+
         if response_type == "signal":
             op = str(response.get("op") or "").strip().lower()
             recipient = str(response.get("recipient") or default_recipient).strip()

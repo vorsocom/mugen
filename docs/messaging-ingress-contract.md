@@ -98,6 +98,12 @@ The shared ingress worker:
 - writes terminal failures to `messaging_ingress_dead_letter`;
 - marks successful rows `completed`.
 
+If human handoff is active for the resolved conversation scope, the message
+handler stores the inbound user turn in context history and returns a
+`control/human_handoff_active` response. Platform response dispatchers must
+ignore that response and emit no user-visible fallback. See
+[Human Handoff Backend Contract](./human-handoff-backend.md).
+
 ## Normalized IPC Commands
 
 | Platform | Command | Primary `identifier_type` | Typical `source_mode` |

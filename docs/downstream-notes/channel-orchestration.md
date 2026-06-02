@@ -33,6 +33,7 @@ Use core ACP resources directly:
 - `ThrottleRule`
 - `BlocklistEntry`
 - `OrchestrationEvent`
+- `HumanHandoffSession`
 
 `ChannelProfile` now binds to a transport account through
 `ChannelProfile.client_profile_id`.
@@ -113,5 +114,25 @@ used only when bindings or explicit orchestration rules point there.
    then maps payload to normalized sender/context plus channel profile.
 4. Call orchestration actions as needed:
    `evaluate_intake` -> `route` -> `apply_throttle`.
-5. Call `escalate` or `set_fallback` on downstream business triggers.
-6. Use `block_sender` and `unblock_sender` for operator or automation controls.
+5. Call `activate_handoff` when an operator or assistant outcome should move
+   the scope to human ownership.
+6. Call `escalate` or `set_fallback` on downstream business triggers.
+7. Use `block_sender` and `unblock_sender` for operator or automation controls.
+
+## Human Handoff
+
+`HumanHandoffSession` is the durable conversation-scoped resource for operator
+takeover. While a session is active, inbound user turns are written to context
+history and AI handling is suppressed for the matching scope. Human replies are
+stored as assistant-role context events and delivered back through the original
+platform client.
+
+Downstream UI layers should use the ACP actions on `HumanHandoffSessions`:
+
+- `activate_handoff`
+- `deactivate_handoff`
+- `human_reply`
+- `list_transcript`
+
+For payloads, control responses, delivery requirements, and UI expectations,
+see [Human Handoff Backend Contract](../human-handoff-backend.md).
