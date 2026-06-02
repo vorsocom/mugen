@@ -133,6 +133,7 @@ The telnet harness is for development and testing only and is blocked in product
 - [Developing extensions](docs/extensions.md)
 - [Working with gateways](docs/gateways.md)
 - [Web platform support contract](docs/web-support-contract.md)
+- [Human handoff backend contract](docs/human-handoff-backend.md)
 - [Working with services](docs/services.md)
 - [ACP RBAC policy](docs/acp-rbac-policy.md)
 - [Context engine design](docs/context-engine-design.md)

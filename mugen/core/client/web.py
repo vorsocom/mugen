@@ -603,6 +603,40 @@ class DefaultWebClient(IWebClient):
             "accepted_at": now_iso,
         }
 
+    async def append_human_reply(
+        self,
+        *,
+        conversation_id: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append one human-authored assistant reply to the SSE event log."""
+        conversation = self._require_non_empty(conversation_id, "conversation_id")
+        text_content = self._require_non_empty(content, "content")
+        human_message_id = f"human-{uuid.uuid4().hex}"
+        payload = {
+            "job_id": None,
+            "conversation_id": conversation,
+            "client_message_id": human_message_id,
+            "message": {
+                "type": "text",
+                "content": text_content,
+            },
+            "human_handoff": {
+                "metadata": dict(metadata or {}),
+            },
+        }
+        event = await self._append_event(
+            conversation_id=conversation,
+            event_type="message",
+            data=payload,
+        )
+        return {
+            "conversation_id": conversation,
+            "client_message_id": human_message_id,
+            "event_id": event.get("id"),
+        }
+
     async def stream_events(
         self,
         *,
@@ -1351,6 +1385,8 @@ class DefaultWebClient(IWebClient):
                         sender=sender,
                         conversation_id=conversation_id,
                     )
+                    if event is None:
+                        continue
 
                     if await _should_skip_side_effects(f"emit_response_{response_index}"):
                         return
@@ -1555,7 +1591,7 @@ class DefaultWebClient(IWebClient):
         response: Any,
         sender: str,
         conversation_id: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         if not isinstance(response, dict):
             return {
                 "event_type": "message",
@@ -1568,6 +1604,8 @@ class DefaultWebClient(IWebClient):
             }
 
         response_type = str(response.get("type", "")).strip().lower()
+        if response_type == "control":
+            return None
         if response_type == "":
             return {
                 "event_type": "error",

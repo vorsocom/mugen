@@ -287,6 +287,87 @@ ConversationStateUpdateValidation = build_update_validation_from_pascal(
     ),
 )
 
+
+class ActivateHandoffValidation(IValidationBase):
+    """Validate payload for activate_handoff actions."""
+
+    platform: str
+    room_id: str
+    sender_id: str
+
+    channel_id: str | None = None
+    conversation_id: str | None = None
+    client_profile_id: uuid.UUID | None = None
+    service_route_key: str | None = None
+    reason: str | None = None
+    metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "ActivateHandoffValidation":
+        for field_name in ("platform", "room_id", "sender_id"):
+            normalized = str(getattr(self, field_name) or "").strip()
+            if normalized == "":
+                raise ValueError(
+                    f"{''.join(part.title() for part in field_name.split('_'))} "
+                    "must be non-empty."
+                )
+            if field_name == "platform":
+                normalized = normalized.lower()
+            setattr(self, field_name, normalized)
+
+        for field_name in (
+            "channel_id",
+            "conversation_id",
+            "service_route_key",
+            "reason",
+        ):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            setattr(self, field_name, str(value).strip() or None)
+
+        return self
+
+
+class DeactivateHandoffValidation(IValidationBase):
+    """Validate payload for deactivate_handoff actions."""
+
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_reason(self) -> "DeactivateHandoffValidation":
+        if self.reason is not None:
+            self.reason = str(self.reason).strip() or None
+        return self
+
+
+class HumanReplyValidation(IValidationBase):
+    """Validate payload for human_reply actions."""
+
+    content: str
+    message_id: str | None = None
+    trace_id: str | None = None
+    metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "HumanReplyValidation":
+        self.content = str(self.content or "").strip()
+        if self.content == "":
+            raise ValueError("Content must be non-empty.")
+        for field_name in ("message_id", "trace_id"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            setattr(self, field_name, str(value).strip() or None)
+        return self
+
+
+class ListTranscriptValidation(IValidationBase):
+    """Validate payload for list_transcript actions."""
+
+    limit: PositiveInt | None = None
+
+
 ThrottleRuleCreateValidation = build_create_validation_from_pascal(
     "ThrottleRuleCreateValidation",
     module=__name__,

@@ -14,6 +14,7 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.api.decorator.auth import global_auth_required
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.contract.service import (
+    IAuthorizationService,
     IRefreshTokenService,
     ITenantInvitationService,
     IUserService,
@@ -25,6 +26,9 @@ from mugen.core.plugin.acp.contract.service.jwt import (
 )
 from mugen.core.plugin.acp.utility.identity import resolve_acp_admin_namespace
 from mugen.core.plugin.acp.utility.ns import AdminNs
+from mugen.core.plugin.channel_orchestration.human_handoff_auth import (
+    HUMAN_HANDOFF_OPERATOR_PERMISSION,
+)
 
 _EDM_REFRESH_TOKEN = "ACP.RefreshToken"
 _EDM_TENANT_INVITATION = "ACP.TenantInvitation"
@@ -43,8 +47,29 @@ def _jwt_provider():
     return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_SVC_JWT)
 
 
+def _auth_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_SVC_AUTH)
+
+
 def _registry_provider():
     return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
+
+
+async def _session_roles(
+    user,
+    *,
+    auth_svc: IAuthorizationService,
+) -> list[str]:
+    roles = {f"{r.namespace}:{r.name}" for r in (user.global_roles or [])}
+    has_handoff_operator = await auth_svc.has_permission_for_any_tenant(
+        user_id=user.id,
+        permission_object=HUMAN_HANDOFF_OPERATOR_PERMISSION,
+        permission_type=HUMAN_HANDOFF_OPERATOR_PERMISSION,
+        allow_global_admin=True,
+    )
+    if has_handoff_operator:
+        roles.add(HUMAN_HANDOFF_OPERATOR_PERMISSION)
+    return sorted(roles)
 
 
 @api.get("core/acp/v1/auth/.well-known/jwks.json")
@@ -62,6 +87,7 @@ async def user_login(  # pylint: disable=too-many-locals
     logger_provider=_logger_provider,
     jwt_provider=_jwt_provider,
     registry_provider=_registry_provider,
+    auth_provider=_auth_provider,
 ):
     """User login."""
     config: SimpleNamespace = config_provider()
@@ -172,6 +198,13 @@ async def user_login(  # pylint: disable=too-many-locals
         logger.error(e)
         abort(500)
 
+    try:
+        auth_svc: IAuthorizationService = auth_provider()
+        roles = await _session_roles(user, auth_svc=auth_svc)
+    except SQLAlchemyError as e:
+        logger.error(e)
+        abort(500)
+
     return {
         "access_token": access_token,
         "access_token_issued": int(current_time.timestamp()),
@@ -179,7 +212,7 @@ async def user_login(  # pylint: disable=too-many-locals
         "refresh_token": refresh_token,
         "username": user.username,
         "user_id": str(user.id),
-        "roles": [f"{r.namespace}:{r.name}" for r in user.global_roles],
+        "roles": roles,
     }, 200
 
 
@@ -311,6 +344,7 @@ async def user_refresh_login(
     logger_provider=_logger_provider,
     jwt_provider=_jwt_provider,
     registry_provider=_registry_provider,
+    auth_provider=_auth_provider,
 ):
     """Refresh access token."""
     config: SimpleNamespace = config_provider()
@@ -449,6 +483,13 @@ async def user_refresh_login(
         logger.error(e)
         abort(500)
 
+    try:
+        auth_svc: IAuthorizationService = auth_provider()
+        roles = await _session_roles(user, auth_svc=auth_svc)
+    except SQLAlchemyError as e:
+        logger.error(e)
+        abort(500)
+
     return {
         "access_token": access_token,
         "access_token_issued": int(current_time.timestamp()),
@@ -456,5 +497,5 @@ async def user_refresh_login(
         "refresh_token": refresh_token,
         "username": user.username,
         "user_id": str(user.id),
-        "roles": [f"{r.namespace}:{r.name}" for r in user.global_roles],
+        "roles": roles,
     }, 200

@@ -144,6 +144,7 @@ def permission_required(  # pylint: disable=too-many-arguments
 
             resource = registry.get_resource(entity_set)
 
+            perm_type = None
             if permission_type:
                 if ":" not in permission_type:
                     logger.error("Invalid permission type (missing colon).")
@@ -152,8 +153,8 @@ def permission_required(  # pylint: disable=too-many-arguments
                 op = permission_type.split(":", 1)[-1]
                 if not resource.capabilities.op_allowed(op):
                     abort(405, "Action not permitted.")
+                perm_type = getattr(resource.permissions, op, permission_type)
 
-            perm_type = None
             if action_kw:
                 action = kwargs.get(action_kw)
                 if action is None:
@@ -190,7 +191,7 @@ def permission_required(  # pylint: disable=too-many-arguments
                 ok = await auth_svc.has_permission(
                     user_id=user.id,
                     permission_object=resource.perm_obj,
-                    permission_type=permission_type or perm_type,
+                    permission_type=perm_type,
                     tenant_id=tenant_id,
                     allow_global_admin=allow_global_admin,
                 )

@@ -13,10 +13,17 @@ from mugen.core.plugin.channel_orchestration.api.validation import (
     ChannelProfileCreateValidation,
     ChannelProfileUpdateValidation,
     ConversationStateUpdateValidation,
+    ActivateHandoffValidation,
+    DeactivateHandoffValidation,
+    HumanReplyValidation,
     IngressBindingCreateValidation,
     IngressBindingUpdateValidation,
+    ListTranscriptValidation,
 )
 from mugen.core.plugin.channel_orchestration.contrib import contribute
+from mugen.core.plugin.channel_orchestration.human_handoff_auth import (
+    HUMAN_HANDOFF_OPERATOR_PERMISSION,
+)
 from mugen.core.plugin.channel_orchestration.service.blocklist_entry import (
     BlocklistEntryService,
 )
@@ -25,6 +32,9 @@ from mugen.core.plugin.channel_orchestration.service.channel_profile import (
 )
 from mugen.core.plugin.channel_orchestration.service.conversation_state import (
     ConversationStateService,
+)
+from mugen.core.plugin.channel_orchestration.service.human_handoff_session import (
+    HumanHandoffSessionService,
 )
 from mugen.core.plugin.channel_orchestration.service.ingress_binding import (
     IngressBindingService,
@@ -91,6 +101,7 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
         throttles = registry.get_resource("ThrottleRules")
         blocklist = registry.get_resource("BlocklistEntries")
         events = registry.get_resource("OrchestrationEvents")
+        handoffs = registry.get_resource("HumanHandoffSessions")
 
         self.assertIn("channel_orchestration_channel_profile", fake_rsg.tables)
         self.assertIn("channel_orchestration_ingress_binding", fake_rsg.tables)
@@ -101,6 +112,10 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
         self.assertIn("channel_orchestration_throttle_rule", fake_rsg.tables)
         self.assertIn("channel_orchestration_blocklist_entry", fake_rsg.tables)
         self.assertIn("channel_orchestration_orchestration_event", fake_rsg.tables)
+        self.assertIn(
+            "channel_orchestration_human_handoff_session",
+            fake_rsg.tables,
+        )
 
         self.assertIsInstance(
             registry.get_edm_service(channel_profiles.service_key),
@@ -138,6 +153,10 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
             registry.get_edm_service(events.service_key),
             OrchestrationEventService,
         )
+        self.assertIsInstance(
+            registry.get_edm_service(handoffs.service_key),
+            HumanHandoffSessionService,
+        )
         self.assertIs(
             channel_profiles.crud.create_schema,
             ChannelProfileCreateValidation,
@@ -157,6 +176,64 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
         self.assertIs(
             states.crud.update_schema,
             ConversationStateUpdateValidation,
+        )
+        self.assertIs(
+            handoffs.capabilities.actions["activate_handoff"]["schema"],
+            ActivateHandoffValidation,
+        )
+        self.assertIs(
+            handoffs.capabilities.actions["deactivate_handoff"]["schema"],
+            DeactivateHandoffValidation,
+        )
+        self.assertIs(
+            handoffs.capabilities.actions["human_reply"]["schema"],
+            HumanReplyValidation,
+        )
+        self.assertIs(
+            handoffs.capabilities.actions["list_transcript"]["schema"],
+            ListTranscriptValidation,
+        )
+        self.assertEqual(handoffs.perm_obj, HUMAN_HANDOFF_OPERATOR_PERMISSION)
+        self.assertEqual(
+            handoffs.permissions.permission_object,
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+        )
+        self.assertEqual(
+            handoffs.permissions.read,
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+        )
+        self.assertEqual(
+            handoffs.permissions.manage,
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+        )
+        for action in (
+            "activate_handoff",
+            "deactivate_handoff",
+            "human_reply",
+            "list_transcript",
+        ):
+            self.assertEqual(
+                handoffs.capabilities.actions[action]["perm"],
+                HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            )
+
+        manifest = registry.build_seed_manifest()
+        self.assertIn(
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            [obj.key for obj in manifest.permission_objects],
+        )
+        self.assertIn(
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            [typ.key for typ in manifest.permission_types],
+        )
+        self.assertTrue(
+            any(
+                grant.global_role == admin_ns.key("administrator")
+                and grant.permission_object == HUMAN_HANDOFF_OPERATOR_PERMISSION
+                and grant.permission_type == HUMAN_HANDOFF_OPERATOR_PERMISSION
+                and grant.permitted is True
+                for grant in manifest.default_global_grants
+            )
         )
 
         self.assertIn("evaluate_intake", states.capabilities.actions)

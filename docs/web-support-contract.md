@@ -132,6 +132,11 @@ Event types:
 - `system`
 - `thinking`
 
+Human handoff replies are delivered as normal `message` events with
+`job_id = null` and a `human_handoff` metadata object. Frontend clients should
+render them as assistant-side messages. See
+[Human Handoff Backend Contract](./human-handoff-backend.md).
+
 Correlation guarantees:
 - `ack`, `message`, `error`, `system`, and `thinking` events always include `job_id` and `client_message_id` keys in payload data.
 - Stream metadata is included as `data._stream = {version, generation}`.

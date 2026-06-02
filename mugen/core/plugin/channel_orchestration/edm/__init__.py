@@ -11,6 +11,7 @@ __all__ = [
     "blocklist_entry_type",
     "orchestration_event_type",
     "work_item_type",
+    "human_handoff_session_type",
 ]
 
 from mugen.core.plugin.channel_orchestration.edm.ingress_binding import (
@@ -35,3 +36,6 @@ from mugen.core.plugin.channel_orchestration.edm.orchestration_event import (
     orchestration_event_type,
 )
 from mugen.core.plugin.channel_orchestration.edm.work_item import work_item_type
+from mugen.core.plugin.channel_orchestration.edm.human_handoff_session import (
+    human_handoff_session_type,
+)

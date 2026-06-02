@@ -224,3 +224,44 @@ class AuthorizationService(IAuthorizationService):
         if any(e.permitted is False for e in entries):
             return False
         return any(e.permitted is True for e in entries)
+
+    async def has_permission_for_any_tenant(
+        self,
+        *,
+        user_id: uuid.UUID,
+        permission_object: str,
+        permission_type: str,
+        allow_global_admin: bool = True,
+    ) -> bool:
+        if await self.has_permission(
+            user_id=user_id,
+            permission_object=permission_object,
+            permission_type=permission_type,
+            tenant_id=None,
+            allow_global_admin=allow_global_admin,
+        ):
+            return True
+
+        memberships = await self._role_mship_svc.get_role_memberships_by_user(
+            {"user_id": user_id},
+        )
+        tenant_ids: list[uuid.UUID] = []
+        seen: set[uuid.UUID] = set()
+        for membership in memberships:
+            tenant_id = getattr(membership, "tenant_id", None)
+            if tenant_id is None or tenant_id in seen:
+                continue
+            seen.add(tenant_id)
+            tenant_ids.append(tenant_id)
+
+        for tenant_id in tenant_ids:
+            if await self.has_permission(
+                user_id=user_id,
+                permission_object=permission_object,
+                permission_type=permission_type,
+                tenant_id=tenant_id,
+                allow_global_admin=False,
+            ):
+                return True
+
+        return False

@@ -32,6 +32,7 @@ from mugen.core.contract.gateway.completion import (
     CompletionResponse,
 )
 from mugen.core.extension.mh.default_text import DefaultTextMHExtension
+from mugen.core.utility.context_runtime import scope_key
 
 
 class _BaseExt:
@@ -230,6 +231,160 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             successful_cp.process_message.await_args.kwargs["scope"],
             _scope(),
         )
+
+    async def test_active_handoff_suppresses_ai_and_persists_user_turn(self) -> None:
+        ext, completion_gateway, context_engine_service = self._new_ext()
+        handoff_service = SimpleNamespace(
+            active_session_for_request=AsyncMock(
+                return_value=SimpleNamespace(id="session-1")
+            ),
+            append_user_turn=AsyncMock(),
+        )
+
+        with patch.object(
+            ext,
+            "_human_handoff_service",
+            return_value=handoff_service,
+        ):
+            response = await ext.handle_message(
+                platform="matrix",
+                room_id="room-1",
+                sender="user-1",
+                message="need help",
+                message_id="msg-1",
+                trace_id="trace-1",
+                scope=_scope(),
+            )
+
+        self.assertEqual(
+            response,
+            [
+                {
+                    "type": "control",
+                    "op": "human_handoff_active",
+                    "human_handoff_session_id": "session-1",
+                    "scope_key": scope_key(_scope()),
+                }
+            ],
+        )
+        completion_gateway.get_completion.assert_not_awaited()
+        context_engine_service.prepare_turn.assert_not_awaited()
+        handoff_service.append_user_turn.assert_awaited_once()
+        request = handoff_service.append_user_turn.await_args.args[0]
+        self.assertIsInstance(request, ContextTurnRequest)
+        self.assertEqual(request.user_message, "need help")
+        self.assertEqual(request.message_id, "msg-1")
+
+    async def test_handoff_helpers_fail_open_and_suppress_on_append_error(self) -> None:
+        ext, _, _ = self._new_ext()
+        request = ContextTurnRequest(scope=_scope(), user_message="hello")
+
+        with patch.object(ext, "_human_handoff_service", return_value=None):
+            self.assertIsNone(await ext._handle_active_handoff(request=request))  # pylint: disable=protected-access
+            await ext._activate_handoff_if_requested(  # pylint: disable=protected-access
+                request=request,
+                reason="needs help",
+            )
+
+        failing_lookup = SimpleNamespace(
+            active_session_for_request=AsyncMock(side_effect=RuntimeError("lookup")),
+        )
+        with patch.object(ext, "_human_handoff_service", return_value=failing_lookup):
+            self.assertIsNone(await ext._handle_active_handoff(request=request))  # pylint: disable=protected-access
+
+        failing_append = SimpleNamespace(
+            active_session_for_request=AsyncMock(
+                return_value=SimpleNamespace(id=None)
+            ),
+            append_user_turn=AsyncMock(side_effect=RuntimeError("append")),
+        )
+        with patch.object(ext, "_human_handoff_service", return_value=failing_append):
+            control = await ext._handle_active_handoff(request=request)  # pylint: disable=protected-access
+        self.assertEqual(control["op"], "human_handoff_active")
+        self.assertIsNone(control["human_handoff_session_id"])
+
+        failing_activation = SimpleNamespace(
+            activate_for_turn=AsyncMock(side_effect=RuntimeError("activate")),
+        )
+        with patch.object(ext, "_human_handoff_service", return_value=failing_activation):
+            await ext._activate_handoff_if_requested(  # pylint: disable=protected-access
+                request=request,
+                reason="needs help",
+            )
+        ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
+
+    def test_handoff_reason_and_service_lookup_fallbacks(self) -> None:
+        self.assertIsNone(
+            DefaultTextMHExtension._agent_handoff_reason(  # pylint: disable=protected-access
+                PlanOutcome(status=PlanOutcomeStatus.COMPLETED)
+            )
+        )
+        self.assertEqual(
+            DefaultTextMHExtension._agent_handoff_reason(  # pylint: disable=protected-access
+                PlanOutcome(
+                    status=PlanOutcomeStatus.HANDOFF,
+                    metadata={"reason": " operator needed "},
+                )
+            ),
+            "operator needed",
+        )
+        self.assertEqual(
+            DefaultTextMHExtension._agent_handoff_reason(  # pylint: disable=protected-access
+                PlanOutcome(status=PlanOutcomeStatus.HANDOFF)
+            ),
+            "agent requested human handoff",
+        )
+
+        ext, _, _ = self._new_ext()
+        container = SimpleNamespace(
+            get_ext_service=Mock(side_effect=RuntimeError("missing"))
+        )
+        with patch("mugen.core.extension.mh.default_text.di.container", container):
+            self.assertIsNone(ext._human_handoff_service())  # pylint: disable=protected-access
+
+    async def test_agent_handoff_outcome_activates_handoff_session(self) -> None:
+        agent = Mock(spec=IAgentRuntime)
+        agent.is_enabled_for_request = AsyncMock(return_value=True)
+        agent.run_current_turn = AsyncMock(
+            return_value=PlanOutcome(
+                status=PlanOutcomeStatus.HANDOFF,
+                assistant_response="A human will continue from here.",
+                error_message="needs operator review",
+            )
+        )
+        ext, completion_gateway, context_engine_service = self._new_ext(
+            agent_runtime_service=agent,
+        )
+        handoff_service = SimpleNamespace(
+            active_session_for_request=AsyncMock(return_value=None),
+            activate_for_turn=AsyncMock(),
+        )
+
+        with patch.object(
+            ext,
+            "_human_handoff_service",
+            return_value=handoff_service,
+        ):
+            response = await ext.handle_message(
+                platform="matrix",
+                room_id="room-1",
+                sender="user-1",
+                message="handoff please",
+                scope=_scope(),
+            )
+
+        self.assertEqual(
+            response,
+            [{"type": "text", "content": "A human will continue from here."}],
+        )
+        completion_gateway.get_completion.assert_not_awaited()
+        handoff_service.activate_for_turn.assert_awaited_once()
+        self.assertEqual(
+            handoff_service.activate_for_turn.await_args.kwargs["reason"],
+            "needs operator review",
+        )
+        commit_kwargs = context_engine_service.commit_turn.await_args.kwargs
+        self.assertEqual(commit_kwargs["outcome"], TurnOutcome.BLOCKED)
 
     async def test_handle_message_runs_context_engine_completion_rpp_ct_and_commit(self) -> None:
         rpp = _RppExt(supported=True, response="revised answer")

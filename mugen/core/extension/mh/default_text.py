@@ -9,6 +9,7 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+from mugen.core import di
 from mugen.core.contract.agent import (
     IAgentRuntime,
     PlanOutcome,
@@ -81,16 +82,6 @@ class DefaultTextMHExtension(IMHExtension):
         if not isinstance(scope, ContextScope):
             raise TypeError("DefaultTextMHExtension requires ContextScope.")
 
-        command_responses = await self._run_command_extensions(
-            platform=platform,
-            room_id=room_id,
-            sender=sender,
-            message=message,
-            scope=scope,
-        )
-        if command_responses:
-            return command_responses
-
         turn_request = ContextTurnRequest(
             scope=scope,
             message_id=message_id,
@@ -103,12 +94,36 @@ class DefaultTextMHExtension(IMHExtension):
 
         lock = self._get_room_lock(scope)
         async with lock:
+            handoff_control = await self._handle_active_handoff(request=turn_request)
+            if handoff_control is not None:
+                return [handoff_control]
+
+            command_responses = await self._run_command_extensions(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+                scope=scope,
+            )
+            if command_responses:
+                return command_responses
+
             prepared = await self._context_engine_service.prepare_turn(turn_request)
-            completion, assistant_response, final_user_responses, outcome_override = (
+            (
+                completion,
+                assistant_response,
+                final_user_responses,
+                outcome_override,
+                handoff_reason,
+            ) = (
                 await self._run_agent_or_completion(
                     request=turn_request,
                     prepared=prepared,
                 )
+            )
+            await self._activate_handoff_if_requested(
+                request=turn_request,
+                reason=handoff_reason,
             )
             assistant_response = await self._preprocess_assistant_response(
                 platform=platform,
@@ -162,6 +177,7 @@ class DefaultTextMHExtension(IMHExtension):
         str,
         list[dict[str, Any]],
         TurnOutcome | None,
+        str | None,
     ]:
         if self._agent_runtime_service is not None:
             agent_request = PlanRunRequest(
@@ -186,6 +202,7 @@ class DefaultTextMHExtension(IMHExtension):
                         assistant_response,
                         final_user_responses,
                         self._agent_turn_outcome(outcome),
+                        self._agent_handoff_reason(outcome),
                     )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 self._logging_gateway.warning(
@@ -200,7 +217,81 @@ class DefaultTextMHExtension(IMHExtension):
             assistant_response,
             [{"type": "text", "content": assistant_response}],
             None,
+            None,
         )
+
+    async def _handle_active_handoff(
+        self,
+        *,
+        request: ContextTurnRequest,
+    ) -> dict[str, Any] | None:
+        service = self._human_handoff_service()
+        if service is None:
+            return None
+        try:
+            session = await service.active_session_for_request(request)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "DefaultTextMHExtension.handle_message: "
+                "Human handoff lookup failed; continuing normal handling "
+                f"(error={type(exc).__name__}: {exc})."
+            )
+            return None
+        if session is None:
+            return None
+        try:
+            await service.append_user_turn(request)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "DefaultTextMHExtension.handle_message: "
+                "Human handoff user-turn persistence failed; suppressing AI "
+                f"(error={type(exc).__name__}: {exc})."
+            )
+        return {
+            "type": "control",
+            "op": "human_handoff_active",
+            "human_handoff_session_id": (
+                None if session.id is None else str(session.id)
+            ),
+            "scope_key": scope_key(request.scope),
+        }
+
+    async def _activate_handoff_if_requested(
+        self,
+        *,
+        request: ContextTurnRequest,
+        reason: str | None,
+    ) -> None:
+        if reason is None:
+            return
+        service = self._human_handoff_service()
+        if service is None:
+            return
+        try:
+            await service.activate_for_turn(request, reason=reason)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logging_gateway.warning(
+                "DefaultTextMHExtension.handle_message: "
+                "Human handoff activation failed "
+                f"(error={type(exc).__name__}: {exc})."
+            )
+
+    @staticmethod
+    def _agent_handoff_reason(outcome: PlanOutcome) -> str | None:
+        if outcome.status != PlanOutcomeStatus.HANDOFF:
+            return None
+        if outcome.error_message is not None:
+            return outcome.error_message
+        reason = outcome.metadata.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            return reason.strip()
+        return "agent requested human handoff"
+
+    def _human_handoff_service(self) -> Any | None:
+        try:
+            return di.container.get_ext_service(di.EXT_SERVICE_HUMAN_HANDOFF, None)
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None
 
     async def _run_command_extensions(
         self,
