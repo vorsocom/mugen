@@ -11,6 +11,7 @@ __all__ = [
     "BlocklistEntryDE",
     "OrchestrationEventDE",
     "WorkItemDE",
+    "HumanHandoffSessionDE",
 ]
 
 from mugen.core.plugin.channel_orchestration.domain.ingress_binding import (
@@ -35,3 +36,6 @@ from mugen.core.plugin.channel_orchestration.domain.orchestration_event import (
     OrchestrationEventDE,
 )
 from mugen.core.plugin.channel_orchestration.domain.work_item import WorkItemDE
+from mugen.core.plugin.channel_orchestration.domain.human_handoff_session import (
+    HumanHandoffSessionDE,
+)

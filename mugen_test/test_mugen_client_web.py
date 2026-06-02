@@ -4044,6 +4044,77 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(missing_type["event_type"], "error")
 
+        control_event = await self.client._response_to_event(  # pylint: disable=protected-access
+            response={"type": "control", "op": "human_handoff_active"},
+            sender="user-1",
+            conversation_id="conv-d",
+        )
+        self.assertIsNone(control_event)
+
+        with patch.object(
+            self.client,
+            "_append_event",
+            new=AsyncMock(return_value={"id": "event-1"}),
+        ) as append_event:
+            human_reply = await self.client.append_human_reply(
+                conversation_id="conv-d",
+                content="Human answer",
+                metadata={"case": "123"},
+            )
+        self.assertEqual(human_reply["event_id"], "event-1")
+        append_payload = append_event.await_args.kwargs
+        self.assertEqual(append_payload["conversation_id"], "conv-d")
+        self.assertEqual(append_payload["event_type"], "message")
+        self.assertEqual(
+            append_payload["data"]["message"],
+            {"type": "text", "content": "Human answer"},
+        )
+        self.assertEqual(
+            append_payload["data"]["human_handoff"]["metadata"],
+            {"case": "123"},
+        )
+
+        control_cfg = _build_config(basedir=self.tmpdir.name)
+        control_relational = _InMemoryWebRelationalGateway()
+        control_client = DefaultWebClient(
+            config=control_cfg,
+            ipc_service=Mock(),
+            media_storage_gateway=_build_media_gateway(
+                config=control_cfg,
+                keyval_storage_gateway=_InMemoryKeyVal(),
+                logging_gateway=self.logger,
+            ),
+            web_runtime_store=_build_runtime_store(
+                config=control_cfg,
+                relational_storage_gateway=control_relational,
+                logging_gateway=self.logger,
+            ),
+            logging_gateway=self.logger,
+            messaging_service=self.messaging,
+            user_service=Mock(),
+        )
+        await control_client.enqueue_message(
+            auth_user="user-1",
+            conversation_id="conv-control",
+            message_type="text",
+            text="hello",
+        )
+        claimed_control = await control_client._claim_next_job()  # pylint: disable=protected-access
+        control_client._dispatch_job_to_messaging = AsyncMock(  # pylint: disable=protected-access
+            return_value=[{"type": "control", "op": "human_handoff_active"}]
+        )
+        await control_client._process_claimed_job(claimed_control)  # pylint: disable=protected-access
+        async with control_client._storage_lock:  # pylint: disable=protected-access
+            control_events = await control_client._read_replay_events_unlocked(  # pylint: disable=protected-access
+                conversation_id="conv-control",
+                last_event_id=None,
+            )
+        self.assertNotIn(
+            "message",
+            [event["event"] for event in control_events[1:]],
+        )
+        await control_client.close()
+
         text_event = await self.client._response_to_event(  # pylint: disable=protected-access
             response={"type": "text", "content": None},
             sender="user-1",

@@ -2,6 +2,7 @@
 
 - [Platform Runtime Profiles](./platform-runtime-profiles.md)
 - [Messaging Ingress Contract](./messaging-ingress-contract.md)
+- [Human Handoff Backend Contract](./human-handoff-backend.md)
 - [Matrix Support Contract](./matrix-support-contract.md)
 - [LINE Support Contract](./line-support-contract.md)
 - [Signal Support Contract](./signal-support-contract.md)

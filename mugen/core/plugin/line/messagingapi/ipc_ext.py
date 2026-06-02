@@ -611,6 +611,9 @@ class LineMessagingAPIIPCExtension(IIPCExtension):
             if not isinstance(response, dict):
                 continue
 
+            if response.get("type") == "control":
+                continue
+
             if response.get("type") == "line":
                 consumed = await self._handle_line_envelope_response(
                     response=response,
