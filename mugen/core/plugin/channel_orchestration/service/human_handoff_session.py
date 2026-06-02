@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = ["HumanHandoffSessionService"]
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
 import uuid
@@ -21,6 +22,9 @@ from mugen.core.plugin.channel_orchestration.api.validation import (
     DeactivateHandoffValidation,
     HumanReplyValidation,
     ListTranscriptValidation,
+)
+from mugen.core.plugin.channel_orchestration.contract.service import (
+    HumanHandoffReleased,
 )
 from mugen.core.plugin.channel_orchestration.domain import HumanHandoffSessionDE
 from mugen.core.plugin.channel_orchestration.service.orchestration_event import (
@@ -292,7 +296,7 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
             return {"Decision": "inactive"}, 200
 
         now = self._now_utc()
-        await self.update(
+        updated_session = await self.update(
             {"tenant_id": tenant_id, "id": entity_id},
             {
                 "status": "inactive",
@@ -301,14 +305,36 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
                 "deactivation_reason": data.reason,
             },
         )
+        release_session = self._released_session(
+            session=updated_session or session,
+            deactivated_at=now,
+            deactivated_by_user_id=auth_user_id,
+            deactivation_reason=data.reason,
+        )
         await self._append_handoff_event(
             tenant_id=tenant_id,
-            session=session,
+            session=release_session,
             actor_user_id=auth_user_id,
             event_type="deactivate_handoff",
             decision="inactive",
             reason=data.reason,
             payload=None,
+        )
+        hook_decision, hook_reason = await self._notify_release_hook(
+            tenant_id=tenant_id,
+            session=release_session,
+            actor_user_id=auth_user_id,
+            reason=data.reason,
+            deactivated_at=now,
+        )
+        await self._append_handoff_event(
+            tenant_id=tenant_id,
+            session=release_session,
+            actor_user_id=auth_user_id,
+            event_type="handoff_release_hook",
+            decision=hook_decision,
+            reason=hook_reason,
+            payload=self._release_hook_payload(session=release_session),
         )
         return {"Decision": "inactive"}, 200
 
@@ -425,6 +451,69 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
         if session is None:
             abort(404, "Human handoff session not found.")
         return session
+
+    @staticmethod
+    def _released_session(
+        *,
+        session: HumanHandoffSessionDE,
+        deactivated_at: datetime,
+        deactivated_by_user_id: uuid.UUID | None,
+        deactivation_reason: str | None,
+    ) -> HumanHandoffSessionDE:
+        return replace(
+            session,
+            status="inactive",
+            deactivated_at=deactivated_at,
+            deactivated_by_user_id=deactivated_by_user_id,
+            deactivation_reason=deactivation_reason,
+        )
+
+    @staticmethod
+    def _release_hook_payload(
+        *,
+        session: HumanHandoffSessionDE,
+    ) -> dict[str, Any]:
+        client_profile_id = session.client_profile_id
+        return {
+            "platform": session.platform,
+            "channel_id": session.channel_id,
+            "room_id": session.room_id,
+            "sender_id": session.sender_id,
+            "conversation_id": session.conversation_id,
+            "client_profile_id": (
+                None if client_profile_id is None else str(client_profile_id)
+            ),
+            "service_route_key": session.service_route_key,
+        }
+
+    async def _notify_release_hook(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        session: HumanHandoffSessionDE,
+        actor_user_id: uuid.UUID | None,
+        reason: str | None,
+        deactivated_at: datetime,
+    ) -> tuple[str, str | None]:
+        registry = di.container.get_ext_service(
+            di.EXT_SERVICE_HUMAN_HANDOFF_RELEASE_HOOKS,
+            None,
+        )
+        if registry is None:
+            return "not_configured", None
+
+        release_event = HumanHandoffReleased(
+            tenant_id=tenant_id,
+            session=session,
+            actor_user_id=actor_user_id,
+            reason=reason,
+            deactivated_at=deactivated_at,
+        )
+        try:
+            decision = await registry.notify_release(release_event)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return "failed", self._delivery_error(exc)
+        return self._normalize_optional_text(decision) or "sent", None
 
     async def _active_session(
         self,

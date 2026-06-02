@@ -16,7 +16,13 @@ from mugen.core.plugin.channel_orchestration.api.validation import (
     HumanReplyValidation,
     ListTranscriptValidation,
 )
+from mugen.core.plugin.channel_orchestration.contract.service import (
+    HumanHandoffReleased,
+)
 from mugen.core.plugin.channel_orchestration.domain import HumanHandoffSessionDE
+from mugen.core.plugin.channel_orchestration.service.human_handoff_release import (
+    HumanHandoffReleaseHookRegistry,
+)
 from mugen.core.plugin.channel_orchestration.service.human_handoff_session import (
     HumanHandoffSessionService,
 )
@@ -149,6 +155,330 @@ class TestMugenChannelOrchestrationHumanHandoffService(
         self.assertEqual(changes["status"], "inactive")
         self.assertEqual(changes["deactivated_by_user_id"], actor_id)
         self.assertEqual(changes["deactivation_reason"], "operator done")
+
+    async def test_deactivate_handoff_invokes_matching_release_hook(self) -> None:
+        service = _service()
+        tenant_id = uuid.uuid4()
+        session_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        profile_id = uuid.uuid4()
+        session = HumanHandoffSessionDE(
+            id=session_id,
+            tenant_id=tenant_id,
+            scope_key="scope-1",
+            platform="whatsapp",
+            channel_id="wa-channel",
+            room_id="room-1",
+            sender_id="sender-1",
+            conversation_id="conversation-1",
+            client_profile_id=profile_id,
+            service_route_key="rentals",
+            status="active",
+        )
+        service.get = AsyncMock(return_value=session)
+        service.update = AsyncMock(return_value=session)
+        service._append_handoff_event = AsyncMock()
+        handler = SimpleNamespace(on_handoff_released=AsyncMock())
+        registry = HumanHandoffReleaseHookRegistry()
+        registry.register_handler(handler, service_route_key="rentals")
+
+        with patch.object(
+            handoff_module.di,
+            "container",
+            new=SimpleNamespace(
+                get_ext_service=Mock(return_value=registry),
+            ),
+        ):
+            result, status = await service.action_deactivate_handoff(
+                tenant_id=tenant_id,
+                entity_id=session_id,
+                where={"tenant_id": tenant_id, "id": session_id},
+                auth_user_id=actor_id,
+                data=DeactivateHandoffValidation.model_validate(
+                    {"Reason": "operator done"}
+                ),
+            )
+
+        self.assertEqual((result, status), ({"Decision": "inactive"}, 200))
+        handler.on_handoff_released.assert_awaited_once()
+        release_event = handler.on_handoff_released.await_args.args[0]
+        self.assertIsInstance(release_event, HumanHandoffReleased)
+        self.assertEqual(release_event.tenant_id, tenant_id)
+        self.assertEqual(release_event.actor_user_id, actor_id)
+        self.assertEqual(release_event.reason, "operator done")
+        self.assertEqual(
+            release_event.deactivated_at,
+            datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(release_event.session.status, "inactive")
+        self.assertEqual(release_event.session.deactivated_by_user_id, actor_id)
+        self.assertEqual(release_event.session.deactivation_reason, "operator done")
+        self.assertEqual(release_event.session.platform, "whatsapp")
+        self.assertEqual(release_event.session.client_profile_id, profile_id)
+        self.assertEqual(release_event.session.service_route_key, "rentals")
+
+        deactivate_event = service._append_handoff_event.await_args_list[0].kwargs
+        hook_event = service._append_handoff_event.await_args_list[1].kwargs
+        self.assertEqual(deactivate_event["event_type"], "deactivate_handoff")
+        self.assertEqual(hook_event["event_type"], "handoff_release_hook")
+        self.assertEqual(hook_event["decision"], "sent")
+        self.assertIsNone(hook_event["reason"])
+        self.assertEqual(
+            hook_event["payload"],
+            {
+                "platform": "whatsapp",
+                "channel_id": "wa-channel",
+                "room_id": "room-1",
+                "sender_id": "sender-1",
+                "conversation_id": "conversation-1",
+                "client_profile_id": str(profile_id),
+                "service_route_key": "rentals",
+            },
+        )
+
+    async def test_deactivate_handoff_records_not_configured_when_hook_missing(
+        self,
+    ) -> None:
+        service = _service()
+        tenant_id = uuid.uuid4()
+        session_id = uuid.uuid4()
+        session = HumanHandoffSessionDE(
+            id=session_id,
+            tenant_id=tenant_id,
+            scope_key="scope-1",
+            status="active",
+        )
+        service.get = AsyncMock(return_value=session)
+        service.update = AsyncMock(return_value=None)
+        service._append_handoff_event = AsyncMock()
+
+        with patch.object(
+            handoff_module.di,
+            "container",
+            new=SimpleNamespace(get_ext_service=Mock(return_value=None)),
+        ):
+            result, status = await service.action_deactivate_handoff(
+                tenant_id=tenant_id,
+                entity_id=session_id,
+                where={"tenant_id": tenant_id, "id": session_id},
+                auth_user_id=uuid.uuid4(),
+                data=DeactivateHandoffValidation(),
+            )
+
+        self.assertEqual((result, status), ({"Decision": "inactive"}, 200))
+        hook_event = service._append_handoff_event.await_args_list[1].kwargs
+        self.assertEqual(hook_event["event_type"], "handoff_release_hook")
+        self.assertEqual(hook_event["decision"], "not_configured")
+        self.assertIsNone(hook_event["reason"])
+        self.assertIsNone(hook_event["payload"]["client_profile_id"])
+
+    async def test_deactivate_handoff_records_skipped_for_empty_hook_registry(
+        self,
+    ) -> None:
+        service = _service()
+        tenant_id = uuid.uuid4()
+        session_id = uuid.uuid4()
+        session = HumanHandoffSessionDE(
+            id=session_id,
+            tenant_id=tenant_id,
+            scope_key="scope-1",
+            service_route_key="unmatched",
+            status="active",
+        )
+        service.get = AsyncMock(return_value=session)
+        service.update = AsyncMock(return_value=session)
+        service._append_handoff_event = AsyncMock()
+
+        with patch.object(
+            handoff_module.di,
+            "container",
+            new=SimpleNamespace(
+                get_ext_service=Mock(return_value=HumanHandoffReleaseHookRegistry()),
+            ),
+        ):
+            result, status = await service.action_deactivate_handoff(
+                tenant_id=tenant_id,
+                entity_id=session_id,
+                where={"tenant_id": tenant_id, "id": session_id},
+                auth_user_id=uuid.uuid4(),
+                data=DeactivateHandoffValidation(),
+            )
+
+        self.assertEqual((result, status), ({"Decision": "inactive"}, 200))
+        hook_event = service._append_handoff_event.await_args_list[1].kwargs
+        self.assertEqual(hook_event["decision"], "skipped")
+        self.assertIsNone(hook_event["reason"])
+
+    async def test_deactivate_handoff_records_failed_hook_without_failing_release(
+        self,
+    ) -> None:
+        service = _service()
+        tenant_id = uuid.uuid4()
+        session_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        session = HumanHandoffSessionDE(
+            id=session_id,
+            tenant_id=tenant_id,
+            scope_key="scope-1",
+            service_route_key="rentals",
+            status="active",
+        )
+        service.get = AsyncMock(return_value=session)
+        service.update = AsyncMock(return_value=None)
+        service._append_handoff_event = AsyncMock()
+        handler = SimpleNamespace(
+            on_handoff_released=AsyncMock(side_effect=RuntimeError("hook down"))
+        )
+        registry = HumanHandoffReleaseHookRegistry()
+        registry.register_handler(handler, service_route_key="rentals")
+
+        with patch.object(
+            handoff_module.di,
+            "container",
+            new=SimpleNamespace(get_ext_service=Mock(return_value=registry)),
+        ):
+            result, status = await service.action_deactivate_handoff(
+                tenant_id=tenant_id,
+                entity_id=session_id,
+                where={"tenant_id": tenant_id, "id": session_id},
+                auth_user_id=actor_id,
+                data=DeactivateHandoffValidation.model_validate(
+                    {"Reason": "done"}
+                ),
+            )
+
+        self.assertEqual((result, status), ({"Decision": "inactive"}, 200))
+        update_changes = service.update.await_args.args[1]
+        self.assertEqual(update_changes["status"], "inactive")
+        handler.on_handoff_released.assert_awaited_once()
+        hook_event = service._append_handoff_event.await_args_list[1].kwargs
+        self.assertEqual(hook_event["decision"], "failed")
+        self.assertIn("RuntimeError: hook down", hook_event["reason"])
+
+    async def test_notify_release_hook_defaults_blank_decision_to_sent(self) -> None:
+        service = _service()
+        registry = SimpleNamespace(notify_release=AsyncMock(return_value=" "))
+
+        with patch.object(
+            handoff_module.di,
+            "container",
+            new=SimpleNamespace(get_ext_service=Mock(return_value=registry)),
+        ):
+            decision, reason = await service._notify_release_hook(
+                tenant_id=uuid.uuid4(),
+                session=HumanHandoffSessionDE(status="inactive"),
+                actor_user_id=None,
+                reason=None,
+                deactivated_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual((decision, reason), ("sent", None))
+
+    async def test_handoff_release_registry_selects_route_before_fallback(
+        self,
+    ) -> None:
+        tenant_id = uuid.uuid4()
+        profile_id = uuid.uuid4()
+        event = HumanHandoffReleased(
+            tenant_id=tenant_id,
+            session=HumanHandoffSessionDE(
+                tenant_id=tenant_id,
+                platform="WhatsApp",
+                client_profile_id=profile_id,
+                service_route_key="rentals",
+            ),
+            actor_user_id=uuid.uuid4(),
+            reason="done",
+            deactivated_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        wrong_profile = SimpleNamespace(on_handoff_released=AsyncMock())
+        route_handler = SimpleNamespace(on_handoff_released=AsyncMock())
+        fallback_handler = SimpleNamespace(on_handoff_released=AsyncMock())
+        registry = HumanHandoffReleaseHookRegistry()
+        registry.register_handler(
+            wrong_profile,
+            service_route_key="rentals",
+            client_profile_id=uuid.uuid4(),
+        )
+        registry.register_handler(
+            fallback_handler,
+            platform="whatsapp",
+            client_profile_id=str(profile_id),
+        )
+        registry.register_handler(route_handler, service_route_key="rentals")
+
+        self.assertIs(registry.select_handler(event), route_handler)
+        self.assertEqual(await registry.notify_release(event), "sent")
+        route_handler.on_handoff_released.assert_awaited_once_with(event)
+        fallback_handler.on_handoff_released.assert_not_called()
+        wrong_profile.on_handoff_released.assert_not_called()
+
+    async def test_handoff_release_registry_uses_specific_fallback_handler(
+        self,
+    ) -> None:
+        tenant_id = uuid.uuid4()
+        profile_id = uuid.uuid4()
+        event = HumanHandoffReleased(
+            tenant_id=tenant_id,
+            session=HumanHandoffSessionDE(
+                tenant_id=tenant_id,
+                platform="telegram",
+                client_profile_id=profile_id,
+                service_route_key="missing-route",
+            ),
+            actor_user_id=None,
+            reason=None,
+            deactivated_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        global_handler = SimpleNamespace(on_handoff_released=AsyncMock())
+        platform_handler = SimpleNamespace(on_handoff_released=AsyncMock())
+        profile_handler = SimpleNamespace(on_handoff_released=AsyncMock())
+        wrong_platform = SimpleNamespace(on_handoff_released=AsyncMock())
+        registry = HumanHandoffReleaseHookRegistry()
+        registry.register_handler(global_handler)
+        registry.register_handler(platform_handler, platform="telegram")
+        registry.register_handler(profile_handler, client_profile_id=profile_id)
+        registry.register_handler(wrong_platform, platform="signal")
+
+        self.assertIs(registry.select_handler(event), platform_handler)
+        self.assertEqual(await registry.notify_release(event), "sent")
+        platform_handler.on_handoff_released.assert_awaited_once_with(event)
+        global_handler.on_handoff_released.assert_not_called()
+        profile_handler.on_handoff_released.assert_not_called()
+        wrong_platform.on_handoff_released.assert_not_called()
+
+    async def test_handoff_release_registry_skips_when_no_handler_matches(
+        self,
+    ) -> None:
+        tenant_id = uuid.uuid4()
+        event = HumanHandoffReleased(
+            tenant_id=tenant_id,
+            session=HumanHandoffSessionDE(
+                tenant_id=tenant_id,
+                platform="signal",
+                service_route_key=None,
+            ),
+            actor_user_id=None,
+            reason=None,
+            deactivated_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        registry = HumanHandoffReleaseHookRegistry()
+        registry.register_handler(
+            SimpleNamespace(on_handoff_released=AsyncMock()),
+            platform="telegram",
+        )
+
+        self.assertIsNone(registry.select_handler(event))
+        self.assertEqual(await registry.notify_release(event), "skipped")
+
+    def test_handoff_release_registry_rejects_invalid_handler(self) -> None:
+        registry = HumanHandoffReleaseHookRegistry()
+
+        with self.assertRaisesRegex(
+            TypeError,
+            "handler must define on_handoff_released.",
+        ):
+            registry.register_handler(SimpleNamespace())
 
     async def test_append_context_event_advances_snapshot_revision(self) -> None:
         service = _service()
