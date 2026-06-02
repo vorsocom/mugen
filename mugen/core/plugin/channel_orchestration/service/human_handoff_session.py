@@ -4,8 +4,10 @@ from __future__ import annotations
 
 __all__ = ["HumanHandoffSessionService"]
 
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
+import json
 from typing import Any, Mapping
 import uuid
 
@@ -17,6 +19,7 @@ from mugen.core.contract.context import ContextScope, ContextTurnRequest
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
 from mugen.core.contract.gateway.storage.rdbms.types import FilterGroup, OrderBy
+from mugen.core.contract.gateway.storage.rdbms.types import ScalarFilter, ScalarFilterOp
 from mugen.core.plugin.channel_orchestration.api.validation import (
     ActivateHandoffValidation,
     DeactivateHandoffValidation,
@@ -26,7 +29,10 @@ from mugen.core.plugin.channel_orchestration.api.validation import (
 from mugen.core.plugin.channel_orchestration.contract.service import (
     HumanHandoffReleased,
 )
-from mugen.core.plugin.channel_orchestration.domain import HumanHandoffSessionDE
+from mugen.core.plugin.channel_orchestration.domain import (
+    HumanHandoffSessionDE,
+    OrchestrationEventDE,
+)
 from mugen.core.plugin.channel_orchestration.service.orchestration_event import (
     OrchestrationEventService,
 )
@@ -48,6 +54,9 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
     _MAX_TRANSCRIPT_LIMIT = 200
     _EVENT_SEQUENCE_ATTEMPTS = 3
     _SNAPSHOT_UPDATE_ATTEMPTS = 3
+    _STREAM_REPLAY_LIMIT = 100
+    _STREAM_POLL_SECONDS = 1.0
+    _STREAM_KEEPALIVE_SECONDS = 15.0
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
         super().__init__(
@@ -206,6 +215,11 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
             "deactivated_at": None,
             "deactivated_by_user_id": None,
             "deactivation_reason": None,
+            "last_user_message_at": None,
+            "last_transcript_sequence_no": None,
+            "last_human_reply_at": None,
+            "last_delivery_status": None,
+            "last_delivery_error": None,
             "attributes": dict(metadata or {}),
         }
         session = await self._upsert_active_session(payload=payload)
@@ -222,8 +236,11 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
 
     async def append_user_turn(self, request: ContextTurnRequest) -> None:
         """Persist an inbound user turn while handoff suppresses AI handling."""
-        await self._append_context_event(
-            tenant_id=uuid.UUID(str(request.scope.tenant_id)),
+        occurred_at = self._now_utc()
+        tenant_id = uuid.UUID(str(request.scope.tenant_id))
+        session = await self.active_session_for_request(request)
+        sequence_no = await self._append_context_event(
+            tenant_id=tenant_id,
             scope_key_value=scope_key(request.scope),
             role="user",
             content=request.user_message,
@@ -231,6 +248,32 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
             trace_id=request.trace_id,
             source="human_handoff_user_turn",
             scope=request.scope,
+            session=session,
+            occurred_at=occurred_at,
+        )
+        if session is None or session.id is None:
+            return
+        updated = await self._update_transcript_markers(
+            tenant_id=tenant_id,
+            session=session,
+            sequence_no=sequence_no,
+            last_user_message_at=occurred_at,
+        )
+        await self._append_handoff_event(
+            tenant_id=tenant_id,
+            session=updated or session,
+            actor_user_id=None,
+            event_type="handoff.transcript_appended",
+            decision="user",
+            reason=None,
+            payload={
+                "role": "user",
+                "sequence_no": sequence_no,
+                "message_id": request.message_id,
+                "trace_id": request.trace_id,
+                "source": "human_handoff_user_turn",
+            },
+            occurred_at=occurred_at,
         )
 
     async def action_activate_handoff(
@@ -262,6 +305,11 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
                 "deactivated_at": None,
                 "deactivated_by_user_id": None,
                 "deactivation_reason": None,
+                "last_user_message_at": None,
+                "last_transcript_sequence_no": None,
+                "last_human_reply_at": None,
+                "last_delivery_status": None,
+                "last_delivery_error": None,
                 "attributes": dict(data.metadata or {}),
             }
         )
@@ -352,7 +400,8 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
         if session.status != "active":
             abort(409, "Human handoff session is not active.")
 
-        await self._append_context_event(
+        occurred_at = self._now_utc()
+        sequence_no = await self._append_context_event(
             tenant_id=tenant_id,
             scope_key_value=str(session.scope_key),
             role="assistant",
@@ -361,6 +410,7 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
             trace_id=data.trace_id,
             source="human_handoff",
             session=session,
+            occurred_at=occurred_at,
         )
 
         delivery_status, delivery_error = await self._deliver_human_reply(
@@ -368,26 +418,54 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
             content=data.content,
             metadata=dict(data.metadata or {}),
         )
-        await self.update(
+        updated_session = await self.update(
             {"tenant_id": tenant_id, "id": entity_id},
             {
-                "last_human_reply_at": self._now_utc(),
+                "last_human_reply_at": occurred_at,
+                "last_transcript_sequence_no": sequence_no,
                 "last_delivery_status": delivery_status,
                 "last_delivery_error": delivery_error,
             },
         )
+        event_session = updated_session or replace(
+            session,
+            last_human_reply_at=occurred_at,
+            last_transcript_sequence_no=sequence_no,
+            last_delivery_status=delivery_status,
+            last_delivery_error=delivery_error,
+        )
         await self._append_handoff_event(
             tenant_id=tenant_id,
-            session=session,
+            session=event_session,
+            actor_user_id=auth_user_id,
+            event_type="handoff.transcript_appended",
+            decision="assistant",
+            reason=None,
+            payload={
+                "role": "assistant",
+                "sequence_no": sequence_no,
+                "message_id": data.message_id,
+                "trace_id": data.trace_id,
+                "source": "human_handoff",
+            },
+            occurred_at=occurred_at,
+        )
+        await self._append_handoff_event(
+            tenant_id=tenant_id,
+            session=event_session,
             actor_user_id=auth_user_id,
             event_type="human_reply",
             decision=delivery_status,
             reason=delivery_error,
             payload={
+                "sequence_no": sequence_no,
+                "delivery_status": delivery_status,
+                "delivery_error": delivery_error,
                 "message_id": data.message_id,
                 "trace_id": data.trace_id,
                 "metadata": dict(data.metadata or {}),
             },
+            occurred_at=occurred_at,
         )
         return {
             "Decision": "replied",
@@ -412,7 +490,40 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
             int(data.limit or self._DEFAULT_TRANSCRIPT_LIMIT),
             self._MAX_TRANSCRIPT_LIMIT,
         )
+        after_sequence_no = data.after_sequence_no
+        filter_group = FilterGroup(
+            where={
+                "tenant_id": tenant_id,
+                "scope_key": str(session.scope_key),
+            }
+        )
+        order_by = [OrderBy("sequence_no", descending=True)]
+        query_limit = limit
+        if after_sequence_no is not None:
+            filter_group = FilterGroup(
+                where={
+                    "tenant_id": tenant_id,
+                    "scope_key": str(session.scope_key),
+                },
+                scalar_filters=[
+                    ScalarFilter(
+                        "sequence_no",
+                        ScalarFilterOp.GT,
+                        int(after_sequence_no),
+                    )
+                ],
+            )
+            order_by = [OrderBy("sequence_no", descending=False)]
+            query_limit = limit + 1
         rows = await self._context_event_service.list(
+            filter_groups=[filter_group],
+            order_by=order_by,
+            limit=query_limit,
+        )
+        has_more = len(rows) > limit
+        if has_more:
+            rows = list(rows)[:limit]
+        latest_rows = await self._context_event_service.list(
             filter_groups=[
                 FilterGroup(
                     where={
@@ -422,10 +533,14 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
                 )
             ],
             order_by=[OrderBy("sequence_no", descending=True)],
-            limit=limit,
+            limit=1,
         )
+        latest_sequence_no = latest_rows[0].sequence_no if latest_rows else None
+        ordered_rows = list(rows)
+        if after_sequence_no is None:
+            ordered_rows = list(reversed(ordered_rows))
         transcript = []
-        for row in reversed(list(rows)):
+        for row in ordered_rows:
             transcript.append(
                 {
                     "SequenceNo": row.sequence_no,
@@ -441,7 +556,12 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
                     ),
                 }
             )
-        return {"Items": transcript, "Count": len(transcript)}, 200
+        return {
+            "Items": transcript,
+            "Count": len(transcript),
+            "LatestSequenceNo": latest_sequence_no,
+            "HasMore": has_more,
+        }, 200
 
     async def _get_session_for_action(self, *, where: dict) -> HumanHandoffSessionDE:
         try:
@@ -486,6 +606,26 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
             "service_route_key": session.service_route_key,
         }
 
+    async def _update_transcript_markers(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        session: HumanHandoffSessionDE,
+        sequence_no: int,
+        last_user_message_at: datetime | None = None,
+    ) -> HumanHandoffSessionDE | None:
+        if session.id is None:
+            return None
+        changes: dict[str, Any] = {
+            "last_transcript_sequence_no": sequence_no,
+        }
+        if last_user_message_at is not None:
+            changes["last_user_message_at"] = last_user_message_at
+        return await self.update(
+            {"tenant_id": tenant_id, "id": session.id},
+            changes,
+        )
+
     async def _notify_release_hook(
         self,
         *,
@@ -514,6 +654,329 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
         except Exception as exc:  # pylint: disable=broad-exception-caught
             return "failed", self._delivery_error(exc)
         return self._normalize_optional_text(decision) or "sent", None
+
+    async def stream_handoff_events(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        last_event_id: str | None = None,
+        session_id: uuid.UUID | None = None,
+        status: str | None = None,
+    ):
+        """Stream replay and live handoff events as SSE payload chunks."""
+        session_id_text = None if session_id is None else str(session_id)
+        status_filter = self._normalize_optional_text(status)
+        cursor_event, reset_reason = await self._resolve_stream_cursor(
+            tenant_id=tenant_id,
+            last_event_id=last_event_id,
+        )
+        replay_events = []
+        if cursor_event is not None:
+            replay_events = await self._stream_events_since(
+                tenant_id=tenant_id,
+                cursor_event=cursor_event,
+            )
+        latest_event = cursor_event or await self._latest_stream_event(
+            tenant_id=tenant_id,
+        )
+        highest_occurred_at = (
+            latest_event.occurred_at
+            if latest_event is not None
+            else datetime.min.replace(tzinfo=timezone.utc)
+        )
+        seen_event_ids = {
+            event.id for event in replay_events if event.id is not None
+        }
+        if latest_event is not None and latest_event.id is not None:
+            seen_event_ids.add(latest_event.id)
+
+        async def _event_stream():
+            next_ping_at = (
+                asyncio.get_running_loop().time() + self._STREAM_KEEPALIVE_SECONDS
+            )
+            nonlocal highest_occurred_at
+            if reset_reason is not None:
+                yield self._format_sse_event(
+                    self._stream_reset_payload(
+                        tenant_id=tenant_id,
+                        reason=reset_reason,
+                    )
+                )
+
+            for event in replay_events:
+                payload = self._stream_payload_for_event(
+                    tenant_id=tenant_id,
+                    event=event,
+                    session_id_filter=session_id_text,
+                    status_filter=status_filter,
+                )
+                if payload is None:
+                    continue
+                yield self._format_sse_event(payload)
+                if event.occurred_at is not None:
+                    highest_occurred_at = max(highest_occurred_at, event.occurred_at)
+
+            while True:
+                rows = await self._stream_events_after_timestamp(
+                    tenant_id=tenant_id,
+                    occurred_at=highest_occurred_at,
+                )
+                yielded = False
+                for event in rows:
+                    if event.id in seen_event_ids:
+                        continue
+                    if event.id is not None:
+                        seen_event_ids.add(event.id)
+                    payload = self._stream_payload_for_event(
+                        tenant_id=tenant_id,
+                        event=event,
+                        session_id_filter=session_id_text,
+                        status_filter=status_filter,
+                    )
+                    if event.occurred_at is not None:
+                        highest_occurred_at = max(
+                            highest_occurred_at,
+                            event.occurred_at,
+                        )
+                    if payload is None:
+                        continue
+                    yielded = True
+                    yield self._format_sse_event(payload)
+
+                if yielded:
+                    next_ping_at = (
+                        asyncio.get_running_loop().time()
+                        + self._STREAM_KEEPALIVE_SECONDS
+                    )
+                    continue
+
+                loop_now = asyncio.get_running_loop().time()
+                if loop_now >= next_ping_at:
+                    yield ": ping\n\n"
+                    next_ping_at = loop_now + self._STREAM_KEEPALIVE_SECONDS
+                await asyncio.sleep(self._STREAM_POLL_SECONDS)
+
+        return _event_stream()
+
+    async def _resolve_stream_cursor(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        last_event_id: str | None,
+    ) -> tuple[OrchestrationEventDE | None, str | None]:
+        normalized = self._normalize_optional_text(last_event_id)
+        if normalized is None:
+            return None, None
+        cursor_uuid = self._parse_stream_event_id(
+            tenant_id=tenant_id,
+            event_id=normalized,
+        )
+        if cursor_uuid is None:
+            return None, "cursor_unavailable"
+        cursor_event = await self._event_service.get(
+            {"tenant_id": tenant_id, "id": cursor_uuid}
+        )
+        if cursor_event is None:
+            return None, "cursor_unavailable"
+        return cursor_event, None
+
+    async def _latest_stream_event(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+    ) -> OrchestrationEventDE | None:
+        rows = await self._event_service.list(
+            filter_groups=[
+                FilterGroup(
+                    where={
+                        "tenant_id": tenant_id,
+                        "source": "human_handoff",
+                    }
+                )
+            ],
+            order_by=[
+                OrderBy("occurred_at", descending=True),
+                OrderBy("id", descending=True),
+            ],
+            limit=1,
+        )
+        return rows[0] if rows else None
+
+    async def _stream_events_since(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        cursor_event: OrchestrationEventDE,
+    ) -> list[OrchestrationEventDE]:
+        if cursor_event.occurred_at is None:
+            return []
+        rows = await self._stream_events_after_timestamp(
+            tenant_id=tenant_id,
+            occurred_at=cursor_event.occurred_at,
+            limit=self._STREAM_REPLAY_LIMIT + 1,
+        )
+        output: list[OrchestrationEventDE] = []
+        cursor_seen = False
+        for row in rows:
+            if row.id == cursor_event.id:
+                cursor_seen = True
+                continue
+            if not cursor_seen:
+                continue
+            output.append(row)
+        return output[: self._STREAM_REPLAY_LIMIT]
+
+    async def _stream_events_after_timestamp(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        occurred_at: datetime,
+        limit: int | None = None,
+    ) -> list[OrchestrationEventDE]:
+        return list(
+            await self._event_service.list(
+                filter_groups=[
+                    FilterGroup(
+                        where={
+                            "tenant_id": tenant_id,
+                            "source": "human_handoff",
+                        },
+                        scalar_filters=[
+                            ScalarFilter(
+                                "occurred_at",
+                                ScalarFilterOp.GTE,
+                                occurred_at,
+                            )
+                        ],
+                    )
+                ],
+                order_by=[
+                    OrderBy("occurred_at", descending=False),
+                    OrderBy("id", descending=False),
+                ],
+                limit=limit or self._STREAM_REPLAY_LIMIT,
+            )
+        )
+
+    @staticmethod
+    def _parse_stream_event_id(
+        *,
+        tenant_id: uuid.UUID,
+        event_id: str,
+    ) -> uuid.UUID | None:
+        parts = event_id.rsplit(":", 1)
+        raw_uuid = parts[-1]
+        if len(parts) == 2 and parts[0] != str(tenant_id):
+            return None
+        try:
+            return uuid.UUID(raw_uuid)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _stream_event_id(
+        *,
+        tenant_id: uuid.UUID,
+        event: OrchestrationEventDE,
+    ) -> str | None:
+        if event.id is None:
+            return None
+        return f"{tenant_id}:{event.id}"
+
+    @classmethod
+    def _stream_reset_payload(
+        cls,
+        *,
+        tenant_id: uuid.UUID,
+        reason: str,
+    ) -> dict[str, Any]:
+        return {
+            "event_type": "handoff.stream_reset",
+            "tenant_id": str(tenant_id),
+            "reason": reason,
+        }
+
+    @classmethod
+    def _stream_payload_for_event(
+        cls,
+        *,
+        tenant_id: uuid.UUID,
+        event: OrchestrationEventDE,
+        session_id_filter: str | None,
+        status_filter: str | None,
+    ) -> dict[str, Any] | None:
+        raw_payload = dict(event.payload or {})
+        session_id = cls._normalize_optional_text(raw_payload.get("session_id"))
+        if session_id is None:
+            return None
+        if session_id_filter is not None and session_id != session_id_filter:
+            return None
+        status = cls._normalize_optional_text(raw_payload.get("status"))
+        if status_filter is not None and status != status_filter:
+            return None
+        event_type = cls._public_stream_event_type(event=event, payload=raw_payload)
+        if event_type is None:
+            return None
+        occurred_at = event.occurred_at
+        output: dict[str, Any] = {
+            "event_id": cls._stream_event_id(tenant_id=tenant_id, event=event),
+            "tenant_id": str(tenant_id),
+            "session_id": session_id,
+            "event_type": event_type,
+            "occurred_at": None if occurred_at is None else occurred_at.isoformat(),
+        }
+        sequence_no = raw_payload.get("sequence_no")
+        if sequence_no is not None:
+            output["sequence_no"] = sequence_no
+        delivery_status = raw_payload.get("delivery_status") or event.decision
+        delivery_error = raw_payload.get("delivery_error") or event.reason
+        if event_type in {"handoff.reply_delivered", "handoff.reply_failed"}:
+            output["delivery_status"] = delivery_status
+            output["delivery_error"] = delivery_error
+        return output
+
+    @classmethod
+    def _public_stream_event_type(
+        cls,
+        *,
+        event: OrchestrationEventDE,
+        payload: dict[str, Any],
+    ) -> str | None:
+        event_type = cls._normalize_optional_text(event.event_type)
+        if event_type == "activate_handoff":
+            return "handoff.session_activated"
+        if event_type == "deactivate_handoff":
+            return "handoff.session_released"
+        if event_type == "handoff_release_hook":
+            return "handoff.session_updated"
+        if event_type == "handoff.transcript_appended":
+            return "handoff.transcript_appended"
+        if event_type == "human_reply":
+            decision = cls._normalize_optional_text(payload.get("delivery_status"))
+            decision = decision or cls._normalize_optional_text(event.decision)
+            if decision == "sent":
+                return "handoff.reply_delivered"
+            if decision == "failed":
+                return "handoff.reply_failed"
+        return None
+
+    @staticmethod
+    def _format_sse_event(payload: dict[str, Any]) -> str:
+        event_type = str(payload.get("event_type") or "message")
+        event_id = payload.get("event_id")
+        lines = []
+        if event_id is not None:
+            lines.append(f"id: {event_id}")
+        lines.append(f"event: {event_type}")
+        lines.append(
+            "data: "
+            + json.dumps(
+                payload,
+                default=str,
+                separators=(",", ":"),
+            )
+        )
+        return "\n".join(lines) + "\n\n"
 
     async def _active_session(
         self,
@@ -583,8 +1046,10 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
         source: str,
         scope: ContextScope | None = None,
         session: HumanHandoffSessionDE | None = None,
-    ) -> None:
+        occurred_at: datetime | None = None,
+    ) -> int:
         sequence_no = None
+        event_occurred_at = occurred_at or self._now_utc()
         for _attempt in range(self._EVENT_SEQUENCE_ATTEMPTS):
             latest = await self._context_event_service.list(
                 filter_groups=[
@@ -612,7 +1077,7 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
                         "message_id": self._normalize_optional_text(message_id),
                         "trace_id": self._normalize_optional_text(trace_id),
                         "source": source,
-                        "occurred_at": self._now_utc(),
+                        "occurred_at": event_occurred_at,
                     }
                 )
                 break
@@ -633,6 +1098,7 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
             scope=scope,
             session=session,
         )
+        return int(sequence_no or 1)
 
     async def _advance_context_snapshot(
         self,
@@ -808,7 +1274,9 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
         decision: str | None,
         reason: str | None,
         payload: dict[str, Any] | None,
+        occurred_at: datetime | None = None,
     ) -> None:
+        event_payload = self._handoff_event_payload(session=session, payload=payload)
         await self._event_service.create(
             {
                 "tenant_id": tenant_id,
@@ -819,12 +1287,43 @@ class HumanHandoffSessionService(IRelationalService[HumanHandoffSessionDE]):
                 "event_type": event_type,
                 "decision": self._normalize_optional_text(decision),
                 "reason": self._normalize_optional_text(reason),
-                "payload": payload,
+                "payload": event_payload,
                 "actor_user_id": actor_user_id,
-                "occurred_at": self._now_utc(),
+                "occurred_at": occurred_at or self._now_utc(),
                 "source": "human_handoff",
             }
         )
+
+    @staticmethod
+    def _handoff_event_payload(
+        *,
+        session: HumanHandoffSessionDE,
+        payload: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        output = dict(payload or {})
+        output.setdefault(
+            "session_id",
+            None if session.id is None else str(session.id),
+        )
+        output.setdefault("scope_key", session.scope_key)
+        output.setdefault("platform", session.platform)
+        output.setdefault("channel_id", session.channel_id)
+        output.setdefault("room_id", session.room_id)
+        output.setdefault("sender_id", session.sender_id)
+        output.setdefault("conversation_id", session.conversation_id)
+        output.setdefault(
+            "client_profile_id",
+            None
+            if session.client_profile_id is None
+            else str(session.client_profile_id),
+        )
+        output.setdefault("service_route_key", session.service_route_key)
+        output.setdefault("status", session.status)
+        output.setdefault(
+            "last_transcript_sequence_no",
+            session.last_transcript_sequence_no,
+        )
+        return output
 
     async def _deliver_human_reply(
         self,
