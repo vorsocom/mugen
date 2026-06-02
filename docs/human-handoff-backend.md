@@ -53,6 +53,30 @@ updates that session instead of creating parallel active ownership.
 should pass the same platform and conversation identifiers used by the original
 channel adapter so active-handoff checks match subsequent inbound user turns.
 
+## Authorization
+
+Human handoff exposes a stable operator permission:
+
+```text
+com.vorsocomputing.mugen.human_handoff:operator
+```
+
+This permission is returned in the auth session `roles` array when a user has
+it for at least one tenant, or when the user is a global ACP administrator.
+Downstream UIs should use that value for route visibility instead of checking
+the global ACP administrator role directly.
+
+Server-side access remains tenant-scoped. A tenant role can grant the operator
+permission for that tenant by granting the canonical permission object/type pair
+`com.vorsocomputing.mugen.human_handoff:operator`. The user can then list
+sessions, read transcripts, send human replies, activate handoff, and
+deactivate handoff only through the authorized tenant route. Operators do not
+receive access to other tenants' handoff sessions.
+
+Global ACP administrators receive the effective operator permission through the
+ACP seed manifest and continue to have access after UI route gates switch to
+the handoff-specific permission.
+
 ## Activation Sources
 
 Handoff can be activated in two ways:

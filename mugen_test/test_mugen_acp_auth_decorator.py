@@ -11,6 +11,9 @@ from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from sqlalchemy.exc import SQLAlchemyError
 
 from mugen.core.plugin.acp.api.decorator import auth as auth_decorator
+from mugen.core.plugin.channel_orchestration.human_handoff_auth import (
+    HUMAN_HANDOFF_OPERATOR_PERMISSION,
+)
 
 
 class _AbortCalled(Exception):
@@ -750,4 +753,175 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             )(endpoint)
             with self.assertRaises(_AbortCalled) as ex:
                 await denied(entity_set="Users")
+            self.assertEqual(ex.exception.code, 403)
+
+    async def test_permission_required_enforces_handoff_operator_tenant_scope(
+        self,
+    ) -> None:
+        user_id = uuid.uuid4()
+        allowed_tenant = uuid.uuid4()
+        denied_tenant = uuid.uuid4()
+        resource = SimpleNamespace(
+            capabilities=_FakeCapabilities(
+                allowed_ops={"read"},
+                actions={
+                    "human_reply": {
+                        "perm": HUMAN_HANDOFF_OPERATOR_PERMISSION,
+                        "is_admin_action": False,
+                    },
+                    "deactivate_handoff": {
+                        "perm": HUMAN_HANDOFF_OPERATOR_PERMISSION,
+                        "is_admin_action": False,
+                    },
+                    "list_transcript": {
+                        "perm": HUMAN_HANDOFF_OPERATOR_PERMISSION,
+                        "is_admin_action": False,
+                    },
+                },
+            ),
+            permissions=SimpleNamespace(
+                read=HUMAN_HANDOFF_OPERATOR_PERMISSION,
+                manage=HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            ),
+            perm_obj=HUMAN_HANDOFF_OPERATOR_PERMISSION,
+        )
+        registry = _FakeRegistry(
+            schema_index={"HumanHandoffSessions": object()},
+            resource=resource,
+        )
+
+        async def _has_permission(**kwargs):
+            self.assertEqual(
+                kwargs["permission_object"],
+                HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            )
+            self.assertEqual(
+                kwargs["permission_type"],
+                HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            )
+            return kwargs["tenant_id"] == allowed_tenant
+
+        auth_svc = SimpleNamespace(
+            has_permission=AsyncMock(side_effect=_has_permission)
+        )
+
+        async def endpoint(**kwargs):
+            return kwargs
+
+        read_wrapped = auth_decorator.permission_required(
+            permission_type=":read",
+            tenant_kw="tenant_id",
+            config_provider=self._config,
+            logger_provider=lambda: Mock(),
+            registry_provider=lambda: registry,
+            auth_provider=lambda: auth_svc,
+        )(endpoint)
+
+        with (
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
+            patch.object(
+                auth_decorator,
+                "_require_user_from_token",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        id=user_id,
+                        global_roles=[],
+                    )
+                ),
+            ),
+        ):
+            result = await read_wrapped(
+                entity_set="HumanHandoffSessions",
+                tenant_id=str(allowed_tenant),
+            )
+        self.assertEqual(result["auth_user"], str(user_id))
+
+        action_wrapped = auth_decorator.permission_required(
+            action_kw="action",
+            tenant_kw="tenant_id",
+            config_provider=self._config,
+            logger_provider=lambda: Mock(),
+            registry_provider=lambda: registry,
+            auth_provider=lambda: auth_svc,
+        )(endpoint)
+
+        with (
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
+            patch.object(
+                auth_decorator,
+                "_require_user_from_token",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        id=user_id,
+                        global_roles=[],
+                    )
+                ),
+            ),
+        ):
+            result = await action_wrapped(
+                entity_set="HumanHandoffSessions",
+                action="human_reply",
+                tenant_id=str(allowed_tenant),
+            )
+        self.assertEqual(result["auth_user"], str(user_id))
+
+        with (
+            patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
+            patch.object(
+                auth_decorator,
+                "_require_user_from_token",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        id=user_id,
+                        global_roles=[],
+                    )
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await action_wrapped(
+                    entity_set="HumanHandoffSessions",
+                    action="deactivate_handoff",
+                    tenant_id=str(denied_tenant),
+                )
+            self.assertEqual(ex.exception.code, 403)
+
+        auth_svc.has_permission = AsyncMock(return_value=False)
+        with (
+            patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
+            patch.object(
+                auth_decorator,
+                "_require_user_from_token",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        id=user_id,
+                        global_roles=[],
+                    )
+                ),
+            ),
+        ):
+            with self.assertRaises(_AbortCalled) as ex:
+                await action_wrapped(
+                    entity_set="HumanHandoffSessions",
+                    action="list_transcript",
+                    tenant_id=str(allowed_tenant),
+                )
             self.assertEqual(ex.exception.code, 403)

@@ -306,11 +306,38 @@ Recommended UI mapping:
 
 ### Permissions
 
-Use the ACP manage permission for handoff actions. A typical downstream policy:
+Gate the operator console route on this session role string:
 
-- support agent: read sessions, list transcript, send human replies,
-  deactivate own sessions;
-- supervisor: read all sessions, reassign ownership, deactivate any session;
+```text
+com.vorsocomputing.mugen.human_handoff:operator
+```
+
+The core auth session includes that value in the frontend-visible `roles` array
+when the user has the effective handoff operator permission for at least one
+tenant, or when the user is a global ACP administrator. The UI does not need to
+check `com.vorsocomputing.mugen.acp:administrator` directly for this route.
+
+Server-side API authorization remains tenant-scoped:
+
+- tenant operators can list sessions, read transcripts, send replies, activate
+  handoff, and deactivate handoff only for authorized tenants;
+- tenant operators receive `403` for other tenants;
+- users without the operator permission receive `403`;
+- global ACP administrators retain access through the effective operator
+  permission.
+
+Downstream tenant roles can grant access by granting:
+
+```text
+com.vorsocomputing.mugen.human_handoff:operator
+```
+
+A typical downstream policy:
+
+- support operator: active-session inbox, transcript, replies, activation, and
+  release for assigned tenants;
+- supervisor: broader queue visibility and reassignment controls in the
+  downstream UI;
 - admin: all session actions and audit/event access.
 
 Core does not enforce queue assignment semantics beyond ACP auth and action
