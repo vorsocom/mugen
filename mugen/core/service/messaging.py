@@ -18,7 +18,10 @@ from mugen.core.contract.extension.mh import IMHExtension
 from mugen.core.contract.extension.rpp import IRPPExtension
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.contract.service.messaging import IMessagingService, MessagingTurnRequest
+from mugen.core.contract.service.messaging import (
+    IMessagingService,
+    MessagingTurnRequest,
+)
 from mugen.core.contract.service.user import IUserService
 from mugen.core.domain.use_case import NormalizeComposedMessageUseCase
 from mugen.core.service.context_scope_resolution import context_scope_from_ingress_route
@@ -69,12 +72,20 @@ class DefaultMessagingService(IMessagingService):
         )
 
     def _resolve_extension_timeout_seconds(self) -> float | None:
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-        ).strip().lower()
+        environment = (
+            str(
+                getattr(
+                    getattr(self._config, "mugen", SimpleNamespace()), "environment", ""
+                )
+            )
+            .strip()
+            .lower()
+        )
         production_mode = environment == "production"
         messaging_cfg = getattr(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "messaging", None),
+            getattr(
+                getattr(self._config, "mugen", SimpleNamespace()), "messaging", None
+            ),
             "extension_timeout_seconds",
             None,
         )
@@ -178,12 +189,27 @@ class DefaultMessagingService(IMessagingService):
             trace_id=trace_id,
             scope=scope,
         )
+        return await self._await_extension_handler(
+            extension=extension,
+            kind="mh",
+            operation_label="Messaging extension handler",
+            awaitable=coroutine,
+        )
+
+    async def _await_extension_handler(
+        self,
+        *,
+        extension: Any,
+        kind: str,
+        operation_label: str,
+        awaitable: Any,
+    ) -> Any | None:
         extension_name = f"{type(extension).__module__}.{type(extension).__qualname__}"
 
         timeout_seconds = self._extension_timeout_seconds
         if timeout_seconds is None:
             try:
-                return await coroutine
+                return await awaitable
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -191,9 +217,9 @@ class DefaultMessagingService(IMessagingService):
                 self._handle_extension_handler_failure(
                     extension_name=extension_name,
                     extension=extension,
-                    kind="mh",
+                    kind=kind,
                     message=(
-                        "Messaging extension handler failed "
+                        f"{operation_label} failed "
                         f"(extension={extension_name} "
                         f"error_type={type(exc).__name__} error={exc})."
                     ),
@@ -202,15 +228,15 @@ class DefaultMessagingService(IMessagingService):
                 return None
 
         try:
-            return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
+            return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
         except asyncio.TimeoutError as exc:
             self._increment_extension_metric("messaging.extensions.timeout")
             self._handle_extension_handler_failure(
                 extension_name=extension_name,
                 extension=extension,
-                kind="mh",
+                kind=kind,
                 message=(
-                    "Messaging extension handler timed out "
+                    f"{operation_label} timed out "
                     f"(extension={extension_name} "
                     f"timeout_seconds={timeout_seconds})."
                 ),
@@ -224,15 +250,120 @@ class DefaultMessagingService(IMessagingService):
             self._handle_extension_handler_failure(
                 extension_name=extension_name,
                 extension=extension,
-                kind="mh",
+                kind=kind,
                 message=(
-                    "Messaging extension handler failed "
+                    f"{operation_label} failed "
                     f"(extension={extension_name} "
                     f"error_type={type(exc).__name__} error={exc})."
                 ),
                 cause=exc,
             )
             return None
+
+    async def _collect_command_extension_responses(
+        self,
+        *,
+        platform: str,
+        room_id: str,
+        sender: str,
+        message: dict | str,
+        scope: ContextScope,
+    ) -> tuple[bool, list[dict]]:
+        if not isinstance(message, str):
+            return False, []
+        user_message = message.strip()
+        if user_message == "":
+            return False, []
+
+        command_scope = self._command_scope_for_sender(
+            scope=scope,
+            platform=platform,
+            room_id=room_id,
+            sender=sender,
+        )
+        command_matched = False
+        responses: list[dict] = []
+        for cp_ext in self._cp_extensions:
+            if not cp_ext.platform_supported(platform):
+                continue
+            commands = getattr(cp_ext, "commands", None)
+            if not isinstance(commands, list) or user_message not in commands:
+                continue
+            command_matched = True
+            command_response = await self._await_extension_handler(
+                extension=cp_ext,
+                kind="cp",
+                operation_label="Command extension handler",
+                awaitable=cp_ext.process_message(
+                    message,
+                    room_id,
+                    sender,
+                    scope=command_scope,
+                ),
+            )
+            responses += self._normalize_response_payload_list(
+                payload=command_response,
+                stage="cp.process_message",
+                ext=cp_ext,
+            )
+        return command_matched, responses
+
+    @staticmethod
+    def _command_scope_for_sender(
+        *,
+        scope: ContextScope,
+        platform: str,
+        room_id: str,
+        sender: str,
+    ) -> ContextScope:
+        sender_id = sender.strip()
+        if sender_id == "":
+            sender_id = scope.sender_id
+        return ContextScope(
+            tenant_id=scope.tenant_id,
+            platform=scope.platform if scope.platform is not None else platform,
+            channel_id=scope.channel_id if scope.channel_id is not None else platform,
+            room_id=scope.room_id if scope.room_id is not None else room_id,
+            sender_id=sender_id,
+            conversation_id=(
+                scope.conversation_id if scope.conversation_id is not None else room_id
+            ),
+            case_id=scope.case_id,
+            workflow_id=scope.workflow_id,
+        )
+
+    def _normalize_response_payload_list(
+        self,
+        *,
+        payload: Any,
+        stage: str,
+        ext: Any,
+    ) -> list[dict]:
+        if payload is None:
+            return []
+        if not isinstance(payload, list):
+            self._log_invalid_payload(stage, ext, "response payload list", payload)
+            return []
+        normalized: list[dict] = []
+        for item in payload:
+            if isinstance(item, dict):
+                normalized.append(item)
+                continue
+            self._log_invalid_payload(stage, ext, "response payload item", item)
+        return normalized
+
+    def _log_invalid_payload(
+        self,
+        stage: str,
+        ext: Any,
+        expected: str,
+        payload: Any,
+    ) -> None:
+        self._logging_gateway.warning(
+            "Messaging extension handler returned invalid "
+            f"{expected} in {stage} for {type(ext).__name__} "
+            f"(payload_type={type(payload).__name__})."
+        )
 
     @staticmethod
     def _extension_platform_key(ext: Any) -> tuple[str, ...]:
@@ -280,15 +411,17 @@ class DefaultMessagingService(IMessagingService):
         trace_id: str | None = None,
         scope: ContextScope | None = None,
     ) -> list[dict] | None:
-        resolved_scope, resolved_context, _, resolved_metadata = self._resolve_turn_scope(
-            platform=platform,
-            room_id=room_id,
-            sender=sender,
-            message=message,
-            message_context=message_context,
-            attachment_context=None,
-            ingress_metadata=ingress_metadata,
-            scope=scope,
+        resolved_scope, resolved_context, _, resolved_metadata = (
+            self._resolve_turn_scope(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+                message_context=message_context,
+                attachment_context=None,
+                ingress_metadata=ingress_metadata,
+                scope=scope,
+            )
         )
         handler_responses = await self._collect_message_handler_responses(
             platform=platform,
@@ -398,15 +531,17 @@ class DefaultMessagingService(IMessagingService):
         trace_id: str | None = None,
         scope: ContextScope | None = None,
     ) -> list[dict] | None:
-        resolved_scope, resolved_context, _, resolved_metadata = self._resolve_turn_scope(
-            platform=platform,
-            room_id=room_id,
-            sender=sender,
-            message=message,
-            message_context=message_context,
-            attachment_context=None,
-            ingress_metadata=ingress_metadata,
-            scope=scope,
+        resolved_scope, resolved_context, _, resolved_metadata = (
+            self._resolve_turn_scope(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+                message_context=message_context,
+                attachment_context=None,
+                ingress_metadata=ingress_metadata,
+                scope=scope,
+            )
         )
         handler_responses = await self._collect_message_handler_responses(
             platform=platform,
@@ -446,15 +581,17 @@ class DefaultMessagingService(IMessagingService):
         trace_id: str | None = None,
         scope: ContextScope | None = None,
     ) -> list[dict] | None:
-        resolved_scope, resolved_context, _, resolved_metadata = self._resolve_turn_scope(
-            platform=platform,
-            room_id=room_id,
-            sender=sender,
-            message=message,
-            message_context=message_context,
-            attachment_context=None,
-            ingress_metadata=ingress_metadata,
-            scope=scope,
+        resolved_scope, resolved_context, _, resolved_metadata = (
+            self._resolve_turn_scope(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+                message_context=message_context,
+                attachment_context=None,
+                ingress_metadata=ingress_metadata,
+                scope=scope,
+            )
         )
         handler_responses = await self._collect_message_handler_responses(
             platform=platform,
@@ -507,6 +644,18 @@ class DefaultMessagingService(IMessagingService):
                 scope=scope,
             )
         )
+        command_matched, command_responses = (
+            await self._collect_command_extension_responses(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+                scope=resolved_scope,
+            )
+        )
+        if command_matched:
+            return command_responses
+
         handler_responses = await self._collect_message_handler_responses(
             platform=platform,
             room_id=room_id,
@@ -552,15 +701,17 @@ class DefaultMessagingService(IMessagingService):
         trace_id: str | None = None,
         scope: ContextScope | None = None,
     ) -> list[dict] | None:
-        resolved_scope, resolved_context, _, resolved_metadata = self._resolve_turn_scope(
-            platform=platform,
-            room_id=room_id,
-            sender=sender,
-            message=message,
-            message_context=message_context,
-            attachment_context=None,
-            ingress_metadata=ingress_metadata,
-            scope=scope,
+        resolved_scope, resolved_context, _, resolved_metadata = (
+            self._resolve_turn_scope(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+                message_context=message_context,
+                attachment_context=None,
+                ingress_metadata=ingress_metadata,
+                scope=scope,
+            )
         )
         handler_responses = await self._collect_message_handler_responses(
             platform=platform,
@@ -702,7 +853,10 @@ class DefaultMessagingService(IMessagingService):
             supported_message_types = getattr(mh_ext, "message_types", [])
             if not isinstance(supported_message_types, list):
                 continue
-            if not any(message_type in supported_message_types for message_type in message_types):
+            if not any(
+                message_type in supported_message_types
+                for message_type in message_types
+            ):
                 continue
             resp = await self._invoke_message_handler(
                 extension=mh_ext,
@@ -763,7 +917,9 @@ class DefaultMessagingService(IMessagingService):
                 "caption": attachment.get("caption"),
                 "composition_mode": composition_mode,
             }
-            inferred_type = self._infer_media_message_type(message_payload.get("mime_type"))
+            inferred_type = self._infer_media_message_type(
+                message_payload.get("mime_type")
+            )
             handler_responses = await self._collect_message_handler_responses(
                 platform=platform,
                 room_id=room_id,
@@ -792,7 +948,9 @@ class DefaultMessagingService(IMessagingService):
         scope: ContextScope | None,
     ) -> tuple[ContextScope, list[dict], list[dict], dict[str, Any]]:
         normalized_message_context = self._normalize_context_items(message_context)
-        normalized_attachment_context = self._normalize_context_items(attachment_context)
+        normalized_attachment_context = self._normalize_context_items(
+            attachment_context
+        )
         merged_metadata = self._merge_ingress_metadata(
             message=message,
             ingress_metadata=ingress_metadata,
@@ -810,7 +968,9 @@ class DefaultMessagingService(IMessagingService):
                 sender_id=sender,
                 ingress_route=ingress_route,
                 ingress_metadata=merged_metadata,
-                conversation_id=self._metadata_text(merged_metadata.get("conversation_id"))
+                conversation_id=self._metadata_text(
+                    merged_metadata.get("conversation_id")
+                )
                 or room_id,
                 case_id=self._metadata_text(merged_metadata.get("case_id")),
                 workflow_id=self._metadata_text(merged_metadata.get("workflow_id")),
@@ -834,9 +994,11 @@ class DefaultMessagingService(IMessagingService):
                         if scope.tenant_id != str(GLOBAL_TENANT_ID)
                         else "fallback_global"
                     ),
-                    "reason_code": None
-                    if scope.tenant_id != str(GLOBAL_TENANT_ID)
-                    else "explicit_scope",
+                    "reason_code": (
+                        None
+                        if scope.tenant_id != str(GLOBAL_TENANT_ID)
+                        else "explicit_scope"
+                    ),
                     "source": f"{platform}.messaging",
                 }
                 resolved_route["tenant_resolution"] = tenant_resolution
@@ -914,7 +1076,9 @@ class DefaultMessagingService(IMessagingService):
         ingress_route: dict[str, Any],
     ) -> list[dict]:
         for item in message_context:
-            if item.get("type") == "ingress_route" and isinstance(item.get("content"), dict):
+            if item.get("type") == "ingress_route" and isinstance(
+                item.get("content"), dict
+            ):
                 return message_context
         return [
             *message_context,
@@ -931,7 +1095,9 @@ class DefaultMessagingService(IMessagingService):
         if isinstance(ingress_route, dict):
             route_tenant_id = str(ingress_route.get("tenant_id") or "")
             if route_tenant_id not in {"", scope.tenant_id}:
-                raise RuntimeError("Ingress route tenant_id does not match ContextScope.")
+                raise RuntimeError(
+                    "Ingress route tenant_id does not match ContextScope."
+                )
             normalized = dict(ingress_route)
             normalized["tenant_id"] = scope.tenant_id
             normalized.setdefault("platform", scope.platform or platform)
@@ -940,9 +1106,9 @@ class DefaultMessagingService(IMessagingService):
             return normalized
         return {
             "tenant_id": scope.tenant_id,
-            "tenant_slug": "global"
-            if scope.tenant_id == str(GLOBAL_TENANT_ID)
-            else None,
+            "tenant_slug": (
+                "global" if scope.tenant_id == str(GLOBAL_TENANT_ID) else None
+            ),
             "platform": scope.platform or platform,
             "channel_key": scope.channel_id or platform,
             "identifier_claims": {},
