@@ -145,6 +145,71 @@ Workflow action payloads include the current `RowVersion`:
 }
 ```
 
+### Authorization
+
+`knowledge_pack` ACP resources are tenant-scoped. Global ACP administrators
+receive seeded access through the ACP manifest, but tenant members must be
+granted tenant-scoped ACP roles and permission entries for the tenant they are
+allowed to manage.
+
+Downstream UIs should not gate knowledge-pack configuration screens on the
+global ACP administrator role. Use the stable feature permission below for
+route visibility:
+
+```text
+com.vorsocomputing.mugen.knowledge_pack:configurator
+```
+
+That permission is returned in the ACP auth `roles` array when the user has it
+for at least one tenant, or when the user is a global ACP administrator. It is a
+coarse UI visibility signal. Server-side access remains enforced by the tenant
+ACP routes and the concrete resource/action grants described below.
+
+For tenant authoring access, grant tenant roles permission entries against the
+knowledge-pack resource permission objects using standard ACP permission types:
+
+| Capability | Permission object | Permission type |
+| --- | --- | --- |
+| Read packs, versions, entries, revisions, approvals, scopes | `com.vorsocomputing.mugen.knowledge_pack:<resource_object>` | `com.vorsocomputing.mugen.acp:read` |
+| Create packs, versions, entries, revisions, scopes | `com.vorsocomputing.mugen.knowledge_pack:<resource_object>` | `com.vorsocomputing.mugen.acp:create` |
+| Update packs, versions, entries, revisions, scopes | `com.vorsocomputing.mugen.knowledge_pack:<resource_object>` | `com.vorsocomputing.mugen.acp:update` |
+
+Resource object names are the snake_case form of the ACP entity:
+
+- `knowledge_pack`
+- `knowledge_pack_version`
+- `knowledge_entry`
+- `knowledge_entry_revision`
+- `knowledge_approval`
+- `knowledge_scope`
+
+The default ACP admin namespace is `com.vorsocomputing.mugen.acp`; if a
+deployment overrides the ACP framework namespace, use that configured namespace
+for standard `read`, `create`, and `update` permission types.
+
+Version lifecycle actions use action-specific permission types on the
+`knowledge_pack_version` permission object:
+
+| Action | Permission type |
+| --- | --- |
+| `submit_for_review` | `com.vorsocomputing.mugen.knowledge_pack:submit_for_review` |
+| `approve` | `com.vorsocomputing.mugen.knowledge_pack:approve` |
+| `reject` | `com.vorsocomputing.mugen.knowledge_pack:reject` |
+| `publish` | `com.vorsocomputing.mugen.knowledge_pack:publish` |
+| `archive` | `com.vorsocomputing.mugen.knowledge_pack:archive` |
+| `rollback_version` | `com.vorsocomputing.mugen.knowledge_pack:rollback_version` |
+
+This allows downstream products to split tenant roles by responsibility:
+
+- readers get `read` grants plus the configurator visibility permission;
+- authors get `create` and `update` grants plus `submit_for_review`;
+- reviewers get `approve` and `reject`;
+- publishers get `publish`, `archive`, and `rollback_version`.
+
+If a deployment overrides the knowledge-pack plugin namespace, use the
+configured namespace for resource permission objects and lifecycle action
+permission types. The stable configurator permission remains unchanged.
+
 ### Scope Semantics
 
 `KnowledgeScopeService.list_published_revisions(...)` returns only revisions
@@ -263,6 +328,10 @@ tested those dimensions.
 Downstream implementations should cover:
 
 - ACP create/update validation for blank and valid scope fields.
+- Tenant RBAC tests proving non-admin tenant users can access only the
+  knowledge-pack resource/action permissions their tenant role grants.
+- Auth-session tests proving `com.vorsocomputing.mugen.knowledge_pack:configurator`
+  is returned for tenant users who have the feature visibility grant.
 - Version workflow tests for submit, approve, publish, archive, and rollback.
 - Published-only retrieval tests.
 - Route/profile tests:

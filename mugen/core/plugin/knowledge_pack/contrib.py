@@ -14,6 +14,7 @@ from mugen.core.plugin.acp.contract.sdk.binding import (
 from mugen.core.plugin.acp.contract.sdk.permission import (
     DefaultGlobalGrant,
     PermissionObjectDef,
+    PermissionTypeDef,
 )
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.contract.sdk.resource import (
@@ -26,6 +27,11 @@ from mugen.core.plugin.acp.contract.sdk.resource import (
 )
 from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
+from mugen.core.plugin.knowledge_pack.auth import (
+    KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+    KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION_NAME,
+    KNOWLEDGE_PACK_PERMISSION_NAMESPACE,
+)
 from mugen.core.plugin.knowledge_pack.api.validation import (
     KnowledgeEntryCreateValidation,
     KnowledgeEntryRevisionUpdateValidation,
@@ -47,6 +53,14 @@ from mugen.core.plugin.knowledge_pack.api.validation import (
 from mugen.core.utility.string.case_conversion_helper import title_to_snake
 
 _WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+|\d+")
+_VERSION_ACTIONS = (
+    "submit_for_review",
+    "approve",
+    "reject",
+    "publish",
+    "archive",
+    "rollback_version",
+)
 
 
 def _humanize(s: str) -> str:
@@ -64,6 +78,14 @@ def contribute(
     """Contribute knowledge_pack resources into the ACP registry."""
     admin_ns = AdminNs(admin_namespace)
     plugin_ns = AdminNs(plugin_namespace)
+    configurator_permission = PermissionObjectDef(
+        KNOWLEDGE_PACK_PERMISSION_NAMESPACE,
+        KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION_NAME,
+    )
+    configurator_permission_type = PermissionTypeDef(
+        KNOWLEDGE_PACK_PERMISSION_NAMESPACE,
+        KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION_NAME,
+    )
 
     registry.register_system_flag(
         SystemFlagDef(
@@ -107,32 +129,32 @@ def contribute(
             ),
             "actions": {
                 "submit_for_review": {
-                    "perm": admin_ns.verb("manage"),
+                    "perm": plugin_ns.verb("submit_for_review"),
                     "schema": KnowledgePackSubmitForReviewValidation,
                     "confirm": "Submit this version for review?",
                 },
                 "approve": {
-                    "perm": admin_ns.verb("manage"),
+                    "perm": plugin_ns.verb("approve"),
                     "schema": KnowledgePackApproveValidation,
                     "confirm": "Approve this version?",
                 },
                 "reject": {
-                    "perm": admin_ns.verb("manage"),
+                    "perm": plugin_ns.verb("reject"),
                     "schema": KnowledgePackRejectValidation,
                     "confirm": "Reject this version back to draft?",
                 },
                 "publish": {
-                    "perm": admin_ns.verb("manage"),
+                    "perm": plugin_ns.verb("publish"),
                     "schema": KnowledgePackPublishValidation,
                     "confirm": "Publish this version?",
                 },
                 "archive": {
-                    "perm": admin_ns.verb("manage"),
+                    "perm": plugin_ns.verb("archive"),
                     "schema": KnowledgePackArchiveValidation,
                     "confirm": "Archive this version?",
                 },
                 "rollback_version": {
-                    "perm": admin_ns.verb("manage"),
+                    "perm": plugin_ns.verb("rollback_version"),
                     "schema": KnowledgePackRollbackVersionValidation,
                     "confirm": "Rollback publication to this version?",
                 },
@@ -194,6 +216,11 @@ def contribute(
         },
     )
 
+    registry.register_permission_object(configurator_permission)
+    registry.register_permission_type(configurator_permission_type)
+    for action in _VERSION_ACTIONS:
+        registry.register_permission_type(PermissionTypeDef(plugin_ns.ns, action))
+
     kp_objects: list[PermissionObjectDef] = []
     for resource in resources:
         obj_name = title_to_snake(resource["entity"])
@@ -210,6 +237,23 @@ def contribute(
         DefaultGlobalGrant(admin_ns.key("administrator"), pobj, ptyp, True)
         for pobj in kp_obj_keys
         for ptyp in admin_verb_keys
+    )
+    registry.register_default_global_grants(
+        DefaultGlobalGrant(
+            admin_ns.key("administrator"),
+            plugin_ns.obj("knowledge_pack_version"),
+            plugin_ns.verb(action),
+            True,
+        )
+        for action in _VERSION_ACTIONS
+    )
+    registry.register_default_global_grant(
+        DefaultGlobalGrant(
+            admin_ns.key("administrator"),
+            KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+            KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+            True,
+        )
     )
 
     for resource in resources:
