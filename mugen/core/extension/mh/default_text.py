@@ -55,7 +55,9 @@ class DefaultTextMHExtension(IMHExtension):
         self._logging_gateway = logging_gateway
         self._messaging_service = messaging_service
         self._extension_timeout_seconds = self._resolve_extension_timeout_seconds()
-        self._ct_trigger_prefilter_enabled = self._resolve_ct_trigger_prefilter_enabled()
+        self._ct_trigger_prefilter_enabled = (
+            self._resolve_ct_trigger_prefilter_enabled()
+        )
 
     @property
     def message_types(self) -> list[str]:
@@ -98,16 +100,6 @@ class DefaultTextMHExtension(IMHExtension):
             if handoff_control is not None:
                 return [handoff_control]
 
-            command_responses = await self._run_command_extensions(
-                platform=platform,
-                room_id=room_id,
-                sender=sender,
-                message=message,
-                scope=scope,
-            )
-            if command_responses:
-                return command_responses
-
             prepared = await self._context_engine_service.prepare_turn(turn_request)
             (
                 completion,
@@ -115,11 +107,9 @@ class DefaultTextMHExtension(IMHExtension):
                 final_user_responses,
                 outcome_override,
                 handoff_reason,
-            ) = (
-                await self._run_agent_or_completion(
-                    request=turn_request,
-                    prepared=prepared,
-                )
+            ) = await self._run_agent_or_completion(
+                request=turn_request,
+                prepared=prepared,
             )
             await self._activate_handoff_if_requested(
                 request=turn_request,
@@ -190,7 +180,9 @@ class DefaultTextMHExtension(IMHExtension):
                 prepared_context=prepared,
             )
             try:
-                if await self._agent_runtime_service.is_enabled_for_request(agent_request):
+                if await self._agent_runtime_service.is_enabled_for_request(
+                    agent_request
+                ):
                     outcome = await self._agent_runtime_service.run_current_turn(
                         agent_request
                     )
@@ -293,45 +285,6 @@ class DefaultTextMHExtension(IMHExtension):
         except Exception:  # pylint: disable=broad-exception-caught
             return None
 
-    async def _run_command_extensions(
-        self,
-        *,
-        platform: str,
-        room_id: str,
-        sender: str,
-        message: dict | str,
-        scope: ContextScope,
-    ) -> list[dict]:
-        if not isinstance(message, str):
-            return []
-        user_message = message.strip()
-        if user_message == "":
-            return []
-
-        responses: list[dict] = []
-        for cp_ext in self._messaging_service.cp_extensions:
-            if not cp_ext.platform_supported(platform):
-                continue
-            commands = getattr(cp_ext, "commands", None)
-            if not isinstance(commands, list) or user_message not in commands:
-                continue
-            command_response = await self._await_extension_call(
-                stage="cp.process_message",
-                ext=cp_ext,
-                awaitable=cp_ext.process_message(
-                    message,
-                    room_id,
-                    sender,
-                    scope=scope,
-                ),
-            )
-            responses += self._normalize_response_payload_list(
-                payload=command_response,
-                stage="cp.process_message",
-                ext=cp_ext,
-            )
-        return responses
-
     async def _complete(
         self,
         prepared,
@@ -340,7 +293,9 @@ class DefaultTextMHExtension(IMHExtension):
             completion = await self._completion_gateway.get_completion(
                 prepared.completion_request
             )
-            return completion, self._coerce_to_text(getattr(completion, "content", None))
+            return completion, self._coerce_to_text(
+                getattr(completion, "content", None)
+            )
         except CompletionGatewayError as exc:
             self._logging_gateway.warning(
                 "DefaultTextMHExtension.handle_message: "
@@ -538,40 +493,6 @@ class DefaultTextMHExtension(IMHExtension):
                 f"Extension failure in {stage} for {type(ext).__name__}: {exc}"
             )
         return None
-
-    def _normalize_response_payload_list(
-        self,
-        *,
-        payload: Any,
-        stage: str,
-        ext: Any | None = None,
-    ) -> list[dict]:
-        if payload is None:
-            return []
-        if not isinstance(payload, list):
-            self._log_invalid_payload(stage, ext, "response payload list", payload)
-            return []
-        normalized: list[dict] = []
-        for item in payload:
-            if isinstance(item, dict):
-                normalized.append(item)
-                continue
-            self._log_invalid_payload(stage, ext, "response payload item", item)
-        return normalized
-
-    def _log_invalid_payload(
-        self,
-        stage: str,
-        ext: Any | None,
-        expected: str,
-        payload: Any,
-    ) -> None:
-        ext_name = "unknown" if ext is None else type(ext).__name__
-        self._logging_gateway.warning(
-            "DefaultTextMHExtension.handle_message: "
-            f"Invalid {expected} in {stage} for {ext_name} "
-            f"(payload_type={type(payload).__name__})."
-        )
 
     @staticmethod
     def _coerce_to_text(value: Any) -> str:
