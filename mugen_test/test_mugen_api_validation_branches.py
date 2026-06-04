@@ -20,6 +20,7 @@ from mugen.core.plugin.knowledge_pack.api.validation import (
     KnowledgeEntryCreateValidation,
     KnowledgeEntryRevisionCreateValidation,
     KnowledgeScopeCreateValidation,
+    KnowledgeScopeUpdateValidation,
 )
 from mugen.core.plugin.ops_case.api.validation import (
     CaseAssignValidation,
@@ -444,6 +445,14 @@ class TestMugenApiValidationBranches(unittest.TestCase):
             KnowledgeScopeCreateValidation(**{**base_scope, "locale": " "})
         with self.assertRaises(ValidationError):
             KnowledgeScopeCreateValidation(**{**base_scope, "category": " "})
+        with self.assertRaises(ValidationError):
+            KnowledgeScopeCreateValidation(**{**base_scope, "service_route_key": " "})
+        with self.assertRaises(ValidationError):
+            KnowledgeScopeCreateValidation(**{**base_scope, "client_profile_key": " "})
+        with self.assertRaises(ValidationError):
+            KnowledgeScopeUpdateValidation(service_route_key=" ")
+        with self.assertRaises(ValidationError):
+            KnowledgeScopeUpdateValidation(client_profile_key=" ")
 
         valid_entry = KnowledgeEntryCreateValidation(
             **{**base_entry, "entry_key": "entry", "title": "Title", "summary": "s"}
@@ -454,9 +463,22 @@ class TestMugenApiValidationBranches(unittest.TestCase):
         )
         self.assertIsNotNone(valid_revision)
         valid_scope = KnowledgeScopeCreateValidation(
-            **{**base_scope, "channel": "web", "locale": "en-US", "category": "faq"}
+            **{
+                **base_scope,
+                "channel": "web",
+                "locale": "en-US",
+                "category": "faq",
+                "service_route_key": "support.primary",
+                "client_profile_key": "default",
+            }
         )
         self.assertIsNotNone(valid_scope)
+        valid_scope_update = KnowledgeScopeUpdateValidation(
+            service_route_key=" support.primary ",
+            client_profile_key=" default ",
+        )
+        self.assertEqual(valid_scope_update.service_route_key, "support.primary")
+        self.assertEqual(valid_scope_update.client_profile_key, "default")
 
     def test_ops_metering_validators(self) -> None:
         tenant_id = uuid.uuid4()

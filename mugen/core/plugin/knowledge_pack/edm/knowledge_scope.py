@@ -31,6 +31,8 @@ knowledge_scope_type = EdmType(
         "Channel": EdmProperty("Channel", TypeRef("Edm.String")),
         "Locale": EdmProperty("Locale", TypeRef("Edm.String")),
         "Category": EdmProperty("Category", TypeRef("Edm.String")),
+        "ServiceRouteKey": EdmProperty("ServiceRouteKey", TypeRef("Edm.String")),
+        "ClientProfileKey": EdmProperty("ClientProfileKey", TypeRef("Edm.String")),
         "IsActive": EdmProperty("IsActive", TypeRef("Edm.Boolean"), nullable=False),
         "Attributes": EdmProperty(
             "Attributes",

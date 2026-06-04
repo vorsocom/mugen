@@ -70,6 +70,19 @@ def _parse_tenant_uuid(scope) -> uuid.UUID:
     return uuid.UUID(str(scope.tenant_id))
 
 
+def _request_ingress_text(request: ContextTurnRequest, key: str) -> str | None:
+    ingress_metadata = dict(request.ingress_metadata or {})
+    ingress_route = ingress_metadata.get("ingress_route")
+    if isinstance(ingress_route, dict):
+        route_value = ingress_route.get(key)
+        if isinstance(route_value, str) and route_value.strip() != "":
+            return route_value.strip()
+    value = ingress_metadata.get(key)
+    if isinstance(value, str) and value.strip() != "":
+        return value.strip()
+    return None
+
+
 def _memory_partition_matches(partition: dict[str, Any] | None, scope) -> bool:
     if not isinstance(partition, dict):
         return True
@@ -362,6 +375,8 @@ class KnowledgePackContributor(IContextContributor):
             channel=request.scope.channel_id or request.scope.platform,
             locale=locale if isinstance(locale, str) else None,
             category=category if isinstance(category, str) else None,
+            service_route_key=_request_ingress_text(request, "service_route_key"),
+            client_profile_key=_request_ingress_text(request, "client_profile_key"),
         )
         candidates: list[ContextCandidate] = []
         for revision in revisions:
