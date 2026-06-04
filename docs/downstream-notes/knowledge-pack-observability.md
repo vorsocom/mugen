@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Last Updated: 2026-06-04
 
 ## Context
 
@@ -41,6 +41,9 @@ No required schema changes, but include these fields in telemetry events:
 - `knowledge_entry_revision_id`
 - `channel`
 - `locale`
+- `category`
+- `service_route_key`
+- `client_profile_key`
 - `ranking_policy_version`
 - `index_version`
 
@@ -59,6 +62,7 @@ Recommended logs:
 
 - Query hash and filters applied
 - Candidate counts before/after scope filtering
+- Candidate counts by exact route/profile match vs generic fallback
 - Top result IDs and scores
 
 ### Operational Notes
@@ -71,6 +75,8 @@ Recommended logs:
 
 - Synthetic checks for publish -> searchable latency SLO.
 - Drift job compares published revision counts vs index counts.
+- Drift job compares projected route/profile scope fields against
+  `KnowledgeScopes`.
 - Alert-fire drill for dead-letter queue growth.
 - Security test confirming scope mismatch metric stays zero.
 

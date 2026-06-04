@@ -50,6 +50,9 @@ Every downstream note should include:
 - `downstream-plugin-authoring-guardrails.md` - Cross-cutting downstream
   guardrails for ACP-based plugin authoring (mixins, typing, partial-index
   migration ownership, formatting, and validation workflow).
+- `knowledge-pack-developer-guide.md` - Current downstream guide for
+  `knowledge_pack` ACP lifecycle, route/profile scoping, context-engine wiring,
+  and search projection boundaries.
 - `knowledge-pack-notes.md` - Consolidated index for all
   `knowledge_pack`-related downstream notes.
 - `ops-case-notes.md` - Consolidated index for all `ops_case`-related
