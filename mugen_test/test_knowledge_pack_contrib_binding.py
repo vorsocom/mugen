@@ -9,6 +9,9 @@ from mugen.core.plugin.acp.contract.sdk.permission import (
 from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 from mugen.core.plugin.acp.sdk.runtime_binder import AdminRuntimeBinder
 from mugen.core.plugin.acp.utility.ns import AdminNs
+from mugen.core.plugin.knowledge_pack.auth import (
+    KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+)
 from mugen.core.plugin.knowledge_pack.contrib import contribute
 from mugen.core.plugin.knowledge_pack.service.knowledge_approval import (
     KnowledgeApprovalService,
@@ -109,9 +112,62 @@ class TestKnowledgePackContribBinding(unittest.TestCase):
         self.assertIn("publish", versions.capabilities.actions)
         self.assertIn("archive", versions.capabilities.actions)
         self.assertIn("rollback_version", versions.capabilities.actions)
+        for action in (
+            "submit_for_review",
+            "approve",
+            "reject",
+            "publish",
+            "archive",
+            "rollback_version",
+        ):
+            self.assertEqual(
+                versions.capabilities.actions[action]["perm"],
+                f"com.test.knowledge_pack:{action}",
+            )
 
         version_type = registry.schema.get_type("KNOWLEDGEPACK.KnowledgePackVersion")
         self.assertEqual(version_type.entity_set_name, "KnowledgePackVersions")
 
         scope_type = registry.schema.get_type("KNOWLEDGEPACK.KnowledgeScope")
         self.assertEqual(scope_type.entity_set_name, "KnowledgeScopes")
+
+        manifest = registry.build_seed_manifest()
+        self.assertIn(
+            KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+            [obj.key for obj in manifest.permission_objects],
+        )
+        self.assertIn(
+            KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+            [typ.key for typ in manifest.permission_types],
+        )
+        self.assertTrue(
+            any(
+                grant.global_role == admin_ns.key("administrator")
+                and grant.permission_object == KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION
+                and grant.permission_type == KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION
+                and grant.permitted is True
+                for grant in manifest.default_global_grants
+            )
+        )
+        for action in (
+            "submit_for_review",
+            "approve",
+            "reject",
+            "publish",
+            "archive",
+            "rollback_version",
+        ):
+            self.assertIn(
+                f"com.test.knowledge_pack:{action}",
+                [typ.key for typ in manifest.permission_types],
+            )
+            self.assertTrue(
+                any(
+                    grant.global_role == admin_ns.key("administrator")
+                    and grant.permission_object
+                    == "com.test.knowledge_pack:knowledge_pack_version"
+                    and grant.permission_type == f"com.test.knowledge_pack:{action}"
+                    and grant.permitted is True
+                    for grant in manifest.default_global_grants
+                )
+            )

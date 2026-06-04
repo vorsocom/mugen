@@ -29,6 +29,9 @@ from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.channel_orchestration.human_handoff_auth import (
     HUMAN_HANDOFF_OPERATOR_PERMISSION,
 )
+from mugen.core.plugin.knowledge_pack.auth import (
+    KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+)
 
 _EDM_REFRESH_TOKEN = "ACP.RefreshToken"
 _EDM_TENANT_INVITATION = "ACP.TenantInvitation"
@@ -61,14 +64,18 @@ async def _session_roles(
     auth_svc: IAuthorizationService,
 ) -> list[str]:
     roles = {f"{r.namespace}:{r.name}" for r in (user.global_roles or [])}
-    has_handoff_operator = await auth_svc.has_permission_for_any_tenant(
-        user_id=user.id,
-        permission_object=HUMAN_HANDOFF_OPERATOR_PERMISSION,
-        permission_type=HUMAN_HANDOFF_OPERATOR_PERMISSION,
-        allow_global_admin=True,
-    )
-    if has_handoff_operator:
-        roles.add(HUMAN_HANDOFF_OPERATOR_PERMISSION)
+    for permission in (
+        HUMAN_HANDOFF_OPERATOR_PERMISSION,
+        KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+    ):
+        has_permission = await auth_svc.has_permission_for_any_tenant(
+            user_id=user.id,
+            permission_object=permission,
+            permission_type=permission,
+            allow_global_admin=True,
+        )
+        if has_permission:
+            roles.add(permission)
     return sorted(roles)
 
 
