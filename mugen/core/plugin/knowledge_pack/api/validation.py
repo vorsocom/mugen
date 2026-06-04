@@ -174,6 +174,8 @@ class KnowledgeScopeCreateValidation(IValidationBase):
     channel: str | None = None
     locale: str | None = None
     category: str | None = None
+    service_route_key: str | None = None
+    client_profile_key: str | None = None
 
     is_active: bool | None = None
     attributes: dict[str, Any] | None = None
@@ -189,6 +191,16 @@ class KnowledgeScopeCreateValidation(IValidationBase):
         if self.category is not None and not (self.category or "").strip():
             raise ValueError("Category cannot be empty if provided.")
 
+        if self.service_route_key is not None and not (
+            self.service_route_key or ""
+        ).strip():
+            raise ValueError("ServiceRouteKey cannot be empty if provided.")
+
+        if self.client_profile_key is not None and not (
+            self.client_profile_key or ""
+        ).strip():
+            raise ValueError("ClientProfileKey cannot be empty if provided.")
+
         return self
 
 
@@ -196,5 +208,13 @@ KnowledgeScopeUpdateValidation = build_update_validation_from_pascal(
     "KnowledgeScopeUpdateValidation",
     module=__name__,
     doc="Validate update payloads for KnowledgeScope.",
-    optional_fields=("Channel", "Locale", "Category", "IsActive", "Attributes"),
+    optional_fields=(
+        "Channel",
+        "Locale",
+        "Category",
+        "ServiceRouteKey",
+        "ClientProfileKey",
+        "IsActive",
+        "Attributes",
+    ),
 )

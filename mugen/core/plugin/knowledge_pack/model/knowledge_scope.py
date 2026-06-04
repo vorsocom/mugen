@@ -65,6 +65,18 @@ class KnowledgeScope(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    service_route_key: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+
+    client_profile_key: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+        index=True,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -94,7 +106,10 @@ class KnowledgeScope(ModelBase, TenantScopedMixin):
         ForeignKeyConstraint(
             ("tenant_id", "knowledge_entry_revision_id"),
             (
-                f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_entry_revision.tenant_id",
+                (
+                    f"{CORE_SCHEMA_TOKEN}."
+                    "knowledge_pack_knowledge_entry_revision.tenant_id"
+                ),
                 f"{CORE_SCHEMA_TOKEN}.knowledge_pack_knowledge_entry_revision.id",
             ),
             name="fkx_knowledge_scope__tenant_entry_revision",
@@ -112,6 +127,20 @@ class KnowledgeScope(ModelBase, TenantScopedMixin):
             "category IS NULL OR length(btrim(category)) > 0",
             name="ck_knowledge_scope__category_nonempty_if_set",
         ),
+        CheckConstraint(
+            (
+                "service_route_key IS NULL OR "
+                "length(btrim(service_route_key)) > 0"
+            ),
+            name="ck_knowledge_scope__service_route_nonempty_if_set",
+        ),
+        CheckConstraint(
+            (
+                "client_profile_key IS NULL OR "
+                "length(btrim(client_profile_key)) > 0"
+            ),
+            name="ck_knowledge_scope__client_profile_nonempty_if_set",
+        ),
         UniqueConstraint(
             "tenant_id",
             "id",
@@ -123,6 +152,13 @@ class KnowledgeScope(ModelBase, TenantScopedMixin):
             "channel",
             "locale",
             "category",
+            "is_active",
+        ),
+        Index(
+            "ix_knowledge_scope__tenant_route_profile_active",
+            "tenant_id",
+            "service_route_key",
+            "client_profile_key",
             "is_active",
         ),
         {"schema": CORE_SCHEMA_TOKEN},

@@ -1633,7 +1633,18 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         knowledge_candidates = await KnowledgePackContributor(
             knowledge_scope_service=knowledge_scope_service
         ).collect(
-            _request(ingress_metadata={"locale": "en-US", "category": "faq"}),
+            _request(
+                ingress_metadata={
+                    "locale": "en-US",
+                    "category": "faq",
+                    "service_route_key": "top-level",
+                    "client_profile_key": "top-profile",
+                    "ingress_route": {
+                        "service_route_key": "valet.customer_inbox",
+                        "client_profile_key": "matrix-primary",
+                    },
+                }
+            ),
             policy=policy,
             state=None,
         )
@@ -1643,6 +1654,68 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             knowledge_candidates[0].artifact.render_class, "evidence_items"
+        )
+        self.assertEqual(
+            knowledge_scope_service.list_published_revisions.await_args.kwargs[
+                "service_route_key"
+            ],
+            "valet.customer_inbox",
+        )
+        self.assertEqual(
+            knowledge_scope_service.list_published_revisions.await_args.kwargs[
+                "client_profile_key"
+            ],
+            "matrix-primary",
+        )
+
+        knowledge_scope_service.list_published_revisions.reset_mock()
+        await KnowledgePackContributor(
+            knowledge_scope_service=knowledge_scope_service
+        ).collect(
+            _request(
+                ingress_metadata={
+                    "service_route_key": "top-level",
+                    "client_profile_key": "top-profile",
+                }
+            ),
+            policy=policy,
+            state=None,
+        )
+        self.assertEqual(
+            knowledge_scope_service.list_published_revisions.await_args.kwargs[
+                "service_route_key"
+            ],
+            "top-level",
+        )
+        self.assertEqual(
+            knowledge_scope_service.list_published_revisions.await_args.kwargs[
+                "client_profile_key"
+            ],
+            "top-profile",
+        )
+
+        knowledge_scope_service.list_published_revisions.reset_mock()
+        await KnowledgePackContributor(
+            knowledge_scope_service=knowledge_scope_service
+        ).collect(
+            _request(
+                ingress_metadata={
+                    "service_route_key": " ",
+                    "ingress_route": {"service_route_key": " "},
+                }
+            ),
+            policy=policy,
+            state=None,
+        )
+        self.assertIsNone(
+            knowledge_scope_service.list_published_revisions.await_args.kwargs[
+                "service_route_key"
+            ]
+        )
+        self.assertIsNone(
+            knowledge_scope_service.list_published_revisions.await_args.kwargs[
+                "client_profile_key"
+            ]
         )
 
         conversation_state_service = SimpleNamespace(
