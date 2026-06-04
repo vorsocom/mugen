@@ -6,6 +6,7 @@ from collections import defaultdict
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+import uuid
 
 import mugen.core.service.context_engine as context_engine_module
 from mugen.core.contract.context import (
@@ -36,6 +37,15 @@ from mugen.core.contract.context import (
 from mugen.core.contract.context.result import TurnOutcome
 from mugen.core.contract.gateway.completion import CompletionMessage, CompletionResponse
 from mugen.core.service.context_engine import DefaultContextEngine
+from mugen.core.plugin.context_engine.service.contributor import KnowledgePackContributor
+from mugen.core.plugin.knowledge_pack.domain import (
+    KnowledgeEntryRevisionDE,
+    KnowledgePackVersionDE,
+    KnowledgeScopeDE,
+)
+from mugen.core.plugin.knowledge_pack.service.knowledge_scope import (
+    KnowledgeScopeService,
+)
 from mugen.core.utility.context_runtime import working_set_cache_key
 
 
@@ -597,6 +607,170 @@ class TestDefaultContextEngine(unittest.IsolatedAsyncioTestCase):
             {"retrieval", "prefix_fingerprint"},
         )
         self.assertEqual(len(registry.trace_sinks[0].prepare_calls), 1)
+
+    async def test_prepare_turn_selects_route_profile_scoped_knowledge(self) -> None:
+        tenant_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
+        version_id = uuid.uuid4()
+        generic_revision_id = uuid.uuid4()
+        route_revision_id = uuid.uuid4()
+        unrelated_revision_id = uuid.uuid4()
+        knowledge_scope_service = KnowledgeScopeService(
+            table="knowledge_pack_knowledge_scope",
+            rsg=Mock(),
+        )
+        scopes = [
+            KnowledgeScopeDE(
+                tenant_id=tenant_id,
+                knowledge_pack_version_id=version_id,
+                knowledge_entry_revision_id=generic_revision_id,
+                channel="matrix",
+                service_route_key=None,
+                client_profile_key=None,
+                is_active=True,
+            ),
+            KnowledgeScopeDE(
+                tenant_id=tenant_id,
+                knowledge_pack_version_id=version_id,
+                knowledge_entry_revision_id=route_revision_id,
+                channel="matrix",
+                service_route_key="support.primary",
+                client_profile_key="default",
+                is_active=True,
+            ),
+            KnowledgeScopeDE(
+                tenant_id=tenant_id,
+                knowledge_pack_version_id=version_id,
+                knowledge_entry_revision_id=unrelated_revision_id,
+                channel="matrix",
+                service_route_key="billing",
+                client_profile_key="default",
+                is_active=True,
+            ),
+        ]
+        revisions = {
+            generic_revision_id: KnowledgeEntryRevisionDE(
+                id=generic_revision_id,
+                revision_number=1,
+                status="published",
+                body="generic answer",
+                channel="matrix",
+            ),
+            route_revision_id: KnowledgeEntryRevisionDE(
+                id=route_revision_id,
+                revision_number=2,
+                status="published",
+                body="route answer",
+                channel="matrix",
+            ),
+            unrelated_revision_id: KnowledgeEntryRevisionDE(
+                id=unrelated_revision_id,
+                revision_number=3,
+                status="published",
+                body="unrelated answer",
+                channel="matrix",
+            ),
+        }
+
+        async def list_scopes(*, filter_groups, limit):
+            _ = limit
+            return [
+                scope
+                for scope in scopes
+                if any(
+                    all(
+                        getattr(scope, field) == expected
+                        for field, expected in group.where.items()
+                    )
+                    for group in filter_groups
+                )
+            ]
+
+        async def get_revision(where):
+            return revisions[where["id"]]
+
+        async def list_revisions(*, filter_groups, limit):
+            _ = limit
+            revision_filter = filter_groups[0].scalar_filters[0]
+            revision_ids = set(revision_filter.value)
+            return [
+                revision
+                for revision_id, revision in revisions.items()
+                if revision_id in revision_ids
+            ]
+
+        knowledge_scope_service.list = AsyncMock(side_effect=list_scopes)
+        knowledge_scope_service._version_service.get = AsyncMock(
+            return_value=KnowledgePackVersionDE(status="published")
+        )
+        knowledge_scope_service._revision_service.get = AsyncMock(
+            side_effect=get_revision
+        )
+        knowledge_scope_service._revision_service.list = AsyncMock(
+            side_effect=list_revisions
+        )
+        policy = ContextPolicy(
+            budget=ContextBudget(
+                max_total_tokens=2000,
+                max_selected_artifacts=4,
+                max_evidence_items=4,
+            ),
+            cache_enabled=False,
+        )
+        registry = SimpleNamespace(
+            policy_resolver=_PolicyResolver(policy),
+            state_store=_StateStore(ContextState()),
+            commit_store=_CommitStore(),
+            contributors=(
+                KnowledgePackContributor(
+                    knowledge_scope_service=knowledge_scope_service
+                ),
+            ),
+            guards=(),
+            rankers=(),
+            renderers=(
+                _StructuredRenderer(render_class="evidence_items", lane="evidence"),
+            ),
+            trace_sinks=(),
+        )
+        request = ContextTurnRequest(
+            scope=ContextScope(
+                tenant_id=str(tenant_id),
+                platform="matrix",
+                channel_id="matrix",
+                room_id="room-1",
+                sender_id="user-1",
+                conversation_id="room-1",
+            ),
+            user_message="hello",
+            ingress_metadata={
+                "ingress_route": {
+                    "service_route_key": "support.primary",
+                    "client_profile_key": "default",
+                }
+            },
+        )
+        engine = DefaultContextEngine(config=SimpleNamespace(), logging_gateway=Mock())
+
+        with patch(
+            "mugen.core.service.context_engine._context_component_registry_provider",
+            return_value=registry,
+        ):
+            prepared = await engine.prepare_turn(request)
+
+        excerpts = [
+            candidate.artifact.content["excerpt"]
+            for candidate in prepared.bundle.selected_candidates
+        ]
+        self.assertEqual(excerpts, ["route answer", "generic answer"])
+        evidence_message = prepared.completion_request.messages[0]
+        self.assertEqual(evidence_message.content["context_lane"], "evidence")
+        self.assertEqual(
+            [
+                item["content"]["excerpt"]
+                for item in evidence_message.content["items"]
+            ],
+            ["route answer", "generic answer"],
+        )
 
     async def test_commit_turn_persists_state_memory_cache_and_trace(self) -> None:
         registry = self._new_registry()

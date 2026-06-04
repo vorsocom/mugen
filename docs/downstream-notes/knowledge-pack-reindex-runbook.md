@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Last Updated: 2026-06-04
 
 ## Context
 
@@ -20,7 +20,7 @@ cause stale results or downtime.
 ## Core vs Downstream Boundary
 
 - Core responsibilities:
-  - Provide immutable published revisions and version metadata.
+  - Provide immutable published revisions, version metadata, and scope metadata.
   - Preserve lifecycle history for replay.
 - Downstream responsibilities:
   - Build/rebuild index projections.
@@ -65,9 +65,14 @@ Standard procedure:
 5. Cut over read traffic.
 6. Keep old index for rollback window.
 
+Parity checks must include scope metadata, including `service_route_key` and
+`client_profile_key`; a count-only parity check can miss route/profile leakage.
+
 ## Validation
 
 - Completeness checks: published revision counts match source-of-truth.
+- Scope checks: indexed `channel`, `locale`, `category`, `service_route_key`,
+  and `client_profile_key` match `KnowledgeScopes`.
 - Spot relevance checks on sampled high-volume queries.
 - Latency checks before and after cutover.
 - Rollback drill proving previous index can be restored quickly.

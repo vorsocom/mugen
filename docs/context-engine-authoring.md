@@ -425,6 +425,14 @@ that ownership boundary.
 Current core plugin implementation detail: `ContextSourceBindings` map to allow
 rules. Deny rules still come from `ContextPolicies`.
 
+Knowledge-pack evidence has an additional pre-policy retrieval filter:
+`KnowledgePackContributor` passes ingress `service_route_key` and
+`client_profile_key` into `KnowledgeScopeService.list_published_revisions(...)`
+before artifacts are emitted. `ContextSourceBindings` can then further allow
+or drop emitted `knowledge_pack_revision` artifacts, but source bindings do not
+currently carry `client_profile_key`; profile-specific evidence isolation should
+be modeled on `KnowledgeScopes`.
+
 ## Reference Implementations
 
 Reference implementations in core:

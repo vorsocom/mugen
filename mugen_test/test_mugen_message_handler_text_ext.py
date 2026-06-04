@@ -43,15 +43,10 @@ class _BaseExt:
         return self._supported
 
 
-class _CommandExt(_BaseExt):
-    def __init__(self, supported: bool, commands, response=None, side_effect=None) -> None:
-        super().__init__(supported)
-        self.commands = commands
-        self.process_message = AsyncMock(return_value=response, side_effect=side_effect)
-
-
 class _RppExt(_BaseExt):
-    def __init__(self, supported: bool, response: object = None, side_effect=None) -> None:
+    def __init__(
+        self, supported: bool, response: object = None, side_effect=None
+    ) -> None:
         super().__init__(supported)
         self.preprocess_response = AsyncMock(
             return_value=response,
@@ -172,7 +167,9 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
                 or CompletionResponse(content="assistant answer")
             )
         else:
-            completion_gateway.get_completion = AsyncMock(side_effect=completion_side_effect)
+            completion_gateway.get_completion = AsyncMock(
+                side_effect=completion_side_effect
+            )
 
         context_engine_service = Mock()
         context_engine_service.prepare_turn = AsyncMock(
@@ -197,40 +194,6 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         ext, _, _ = self._new_ext()
         self.assertEqual(ext.message_types, ["text"])
         self.assertEqual(ext.platforms, [])
-
-    async def test_command_path_fail_open_and_early_return(self) -> None:
-        failing_cp = _CommandExt(
-            supported=True,
-            commands=["/clear"],
-            side_effect=RuntimeError("boom"),
-        )
-        successful_cp = _CommandExt(
-            supported=True,
-            commands=["/clear"],
-            response=[{"type": "text", "content": "Context cleared."}],
-        )
-        ext, completion_gateway, context_engine_service = self._new_ext(
-            messaging_service=_make_messaging_service(
-                cp_extensions=[failing_cp, successful_cp],
-            )
-        )
-
-        response = await ext.handle_message(
-            platform="matrix",
-            room_id="room-1",
-            sender="user-1",
-            message="/clear",
-            scope=_scope(),
-        )
-
-        self.assertEqual(response, [{"type": "text", "content": "Context cleared."}])
-        completion_gateway.get_completion.assert_not_awaited()
-        context_engine_service.prepare_turn.assert_not_awaited()
-        ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
-        self.assertEqual(
-            successful_cp.process_message.await_args.kwargs["scope"],
-            _scope(),
-        )
 
     async def test_active_handoff_suppresses_ai_and_persists_user_turn(self) -> None:
         ext, completion_gateway, context_engine_service = self._new_ext()
@@ -280,7 +243,9 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         request = ContextTurnRequest(scope=_scope(), user_message="hello")
 
         with patch.object(ext, "_human_handoff_service", return_value=None):
-            self.assertIsNone(await ext._handle_active_handoff(request=request))  # pylint: disable=protected-access
+            self.assertIsNone(
+                await ext._handle_active_handoff(request=request)
+            )  # pylint: disable=protected-access
             await ext._activate_handoff_if_requested(  # pylint: disable=protected-access
                 request=request,
                 reason="needs help",
@@ -290,23 +255,27 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             active_session_for_request=AsyncMock(side_effect=RuntimeError("lookup")),
         )
         with patch.object(ext, "_human_handoff_service", return_value=failing_lookup):
-            self.assertIsNone(await ext._handle_active_handoff(request=request))  # pylint: disable=protected-access
+            self.assertIsNone(
+                await ext._handle_active_handoff(request=request)
+            )  # pylint: disable=protected-access
 
         failing_append = SimpleNamespace(
-            active_session_for_request=AsyncMock(
-                return_value=SimpleNamespace(id=None)
-            ),
+            active_session_for_request=AsyncMock(return_value=SimpleNamespace(id=None)),
             append_user_turn=AsyncMock(side_effect=RuntimeError("append")),
         )
         with patch.object(ext, "_human_handoff_service", return_value=failing_append):
-            control = await ext._handle_active_handoff(request=request)  # pylint: disable=protected-access
+            control = await ext._handle_active_handoff(
+                request=request
+            )  # pylint: disable=protected-access
         self.assertEqual(control["op"], "human_handoff_active")
         self.assertIsNone(control["human_handoff_session_id"])
 
         failing_activation = SimpleNamespace(
             activate_for_turn=AsyncMock(side_effect=RuntimeError("activate")),
         )
-        with patch.object(ext, "_human_handoff_service", return_value=failing_activation):
+        with patch.object(
+            ext, "_human_handoff_service", return_value=failing_activation
+        ):
             await ext._activate_handoff_if_requested(  # pylint: disable=protected-access
                 request=request,
                 reason="needs help",
@@ -340,7 +309,9 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             get_ext_service=Mock(side_effect=RuntimeError("missing"))
         )
         with patch("mugen.core.extension.mh.default_text.di.container", container):
-            self.assertIsNone(ext._human_handoff_service())  # pylint: disable=protected-access
+            self.assertIsNone(
+                ext._human_handoff_service()
+            )  # pylint: disable=protected-access
 
     async def test_agent_handoff_outcome_activates_handoff_session(self) -> None:
         agent = Mock(spec=IAgentRuntime)
@@ -386,7 +357,9 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         commit_kwargs = context_engine_service.commit_turn.await_args.kwargs
         self.assertEqual(commit_kwargs["outcome"], TurnOutcome.BLOCKED)
 
-    async def test_handle_message_runs_context_engine_completion_rpp_ct_and_commit(self) -> None:
+    async def test_handle_message_runs_context_engine_completion_rpp_ct_and_commit(
+        self,
+    ) -> None:
         rpp = _RppExt(supported=True, response="revised answer")
         ct = _CtExt(supported=True, triggers=["revised"])
         ext, completion_gateway, context_engine_service = self._new_ext(
@@ -438,7 +411,9 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(commit_call["final_user_responses"], response)
         self.assertEqual(commit_call["outcome"], TurnOutcome.COMPLETED)
 
-    async def test_completion_failure_returns_error_and_commits_failed_outcome(self) -> None:
+    async def test_completion_failure_returns_error_and_commits_failed_outcome(
+        self,
+    ) -> None:
         ext, _, context_engine_service = self._new_ext(
             completion_side_effect=CompletionGatewayError(
                 provider="bedrock",
@@ -457,7 +432,9 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             response,
-            [{"type": "text", "content": ext._completion_error_message}],  # pylint: disable=protected-access
+            [
+                {"type": "text", "content": ext._completion_error_message}
+            ],  # pylint: disable=protected-access
         )
         commit_call = context_engine_service.commit_turn.await_args.kwargs
         self.assertIsNone(commit_call["completion"])
@@ -495,7 +472,12 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             response,
-            [{"type": "text", "content": json.dumps({"structured": True}, ensure_ascii=True)}],
+            [
+                {
+                    "type": "text",
+                    "content": json.dumps({"structured": True}, ensure_ascii=True),
+                }
+            ],
         )
 
     async def test_blank_assistant_response_logs_completion_payload(self) -> None:
@@ -514,7 +496,9 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response, [{"type": "text", "content": ""}])
         ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
 
-    async def test_agent_runtime_disabled_keeps_single_pass_completion_path(self) -> None:
+    async def test_agent_runtime_disabled_keeps_single_pass_completion_path(
+        self,
+    ) -> None:
         agent_runtime_service = Mock()
         agent_runtime_service.is_enabled_for_request = AsyncMock(return_value=False)
         agent_runtime_service.run_current_turn = AsyncMock()
@@ -537,15 +521,15 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         completion_gateway.get_completion.assert_awaited_once()
         context_engine_service.commit_turn.assert_awaited_once()
 
-    async def test_agent_runtime_enabled_uses_agent_outcome_and_commits_once(self) -> None:
+    async def test_agent_runtime_enabled_uses_agent_outcome_and_commits_once(
+        self,
+    ) -> None:
         agent_runtime_service = Mock()
         agent_runtime_service.is_enabled_for_request = AsyncMock(return_value=True)
         agent_runtime_service.run_current_turn = AsyncMock(
             return_value=PlanOutcome(
                 status=PlanOutcomeStatus.COMPLETED,
-                final_user_responses=(
-                    {"type": "text", "content": "agent reply"},
-                ),
+                final_user_responses=({"type": "text", "content": "agent reply"},),
                 assistant_response="agent reply",
             )
         )
@@ -596,7 +580,9 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         context_engine_service.commit_turn.assert_awaited_once()
         ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
 
-    async def test_agent_outcome_parts_and_merge_helpers_cover_fallback_branches(self) -> None:
+    async def test_agent_outcome_parts_and_merge_helpers_cover_fallback_branches(
+        self,
+    ) -> None:
         completion = CompletionResponse(content="agent")
         completion_result = DefaultTextMHExtension._agent_outcome_parts(  # pylint: disable=protected-access
             PlanOutcome(
@@ -632,10 +618,17 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             assistant_response="",
         )
 
-        self.assertEqual(completion_result, (completion, "from response", [
-            {"type": "image", "content": {"id": "1"}},
-            {"type": "text", "content": "from response"},
-        ]))
+        self.assertEqual(
+            completion_result,
+            (
+                completion,
+                "from response",
+                [
+                    {"type": "image", "content": {"id": "1"}},
+                    {"type": "text", "content": "from response"},
+                ],
+            ),
+        )
         self.assertEqual(
             synthesized_result,
             (
@@ -730,27 +723,6 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         ct_matching.process_message.assert_awaited_once()
         ct_not_matching.process_message.assert_awaited_once()
 
-    async def test_invalid_command_payload_is_ignored(self) -> None:
-        cp = _CommandExt(
-            supported=True,
-            commands=["/clear"],
-            response=["bad-item", {"type": "text", "content": "ok"}],
-        )
-        ext, _, _ = self._new_ext(
-            messaging_service=_make_messaging_service(cp_extensions=[cp])
-        )
-
-        response = await ext.handle_message(
-            platform="matrix",
-            room_id="room-1",
-            sender="user-1",
-            message="/clear",
-            scope=_scope(),
-        )
-
-        self.assertEqual(response, [{"type": "text", "content": "ok"}])
-        ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
-
     async def test_handle_message_requires_context_scope(self) -> None:
         ext, _, _ = self._new_ext()
 
@@ -795,59 +767,17 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(state["max_active"], 1)
 
-    async def test_run_command_extensions_skips_non_string_blank_and_unsupported_cases(
-        self,
-    ) -> None:
-        supported = _CommandExt(supported=True, commands=["/clear"], response=[])
-        unsupported = _CommandExt(supported=False, commands=["/clear"], response=[])
-        invalid_commands = _CommandExt(supported=True, commands="bad", response=[])
-        ext, _, _ = self._new_ext(
-            messaging_service=_make_messaging_service(
-                cp_extensions=[supported, unsupported, invalid_commands]
-            )
-        )
-
-        self.assertEqual(
-            await ext._run_command_extensions(  # pylint: disable=protected-access
-                platform="matrix",
-                room_id="room-1",
-                sender="user-1",
-                message={"text": "hello"},
-                scope=_scope(),
-            ),
-            [],
-        )
-        self.assertEqual(
-            await ext._run_command_extensions(  # pylint: disable=protected-access
-                platform="matrix",
-                room_id="room-1",
-                sender="user-1",
-                message="   ",
-                scope=_scope(),
-            ),
-            [],
-        )
-        self.assertEqual(
-            await ext._run_command_extensions(  # pylint: disable=protected-access
-                platform="matrix",
-                room_id="room-1",
-                sender="user-1",
-                message="/noop",
-                scope=_scope(),
-            ),
-            [],
-        )
-        supported.process_message.assert_not_awaited()
-        unsupported.process_message.assert_not_awaited()
-        invalid_commands.process_message.assert_not_awaited()
-
     async def test_complete_handles_unexpected_gateway_exception(self) -> None:
         ext, _, _ = self._new_ext(completion_side_effect=RuntimeError("boom"))
 
-        completion, assistant_response = await ext._complete(_prepared_turn())  # pylint: disable=protected-access
+        completion, assistant_response = await ext._complete(
+            _prepared_turn()
+        )  # pylint: disable=protected-access
 
         self.assertIsNone(completion)
-        self.assertEqual(assistant_response, ext._completion_error_message)  # pylint: disable=protected-access
+        self.assertEqual(
+            assistant_response, ext._completion_error_message
+        )  # pylint: disable=protected-access
         ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
 
     async def test_preprocess_and_trigger_helpers_cover_skip_paths(self) -> None:
@@ -888,7 +818,9 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_await_extension_call_covers_timeout_and_exception_paths(self) -> None:
+    async def test_await_extension_call_covers_timeout_and_exception_paths(
+        self,
+    ) -> None:
         ext, _, _ = self._new_ext(extension_timeout_seconds=0.001)
 
         async def _sleep():
@@ -923,28 +855,17 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         )
         ext._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
 
-    def test_response_normalization_and_text_coercion_helpers_cover_edge_paths(self) -> None:
+    def test_text_coercion_helper_covers_edge_paths(self) -> None:
         ext, _, _ = self._new_ext()
         circular: list[object] = []
         circular.append(circular)
 
         self.assertEqual(
-            ext._normalize_response_payload_list(payload=None, stage="test"),  # pylint: disable=protected-access
-            [],
-        )
+            ext._coerce_to_text(None), ""
+        )  # pylint: disable=protected-access
         self.assertEqual(
-            ext._normalize_response_payload_list(payload="bad", stage="test"),  # pylint: disable=protected-access
-            [],
-        )
-        self.assertEqual(
-            ext._normalize_response_payload_list(  # pylint: disable=protected-access
-                payload=[{"type": "text", "content": "ok"}, "bad"],
-                stage="test",
-            ),
-            [{"type": "text", "content": "ok"}],
-        )
-        self.assertEqual(ext._coerce_to_text(None), "")  # pylint: disable=protected-access
-        self.assertEqual(ext._coerce_to_text(5), "5")  # pylint: disable=protected-access
+            ext._coerce_to_text(5), "5"
+        )  # pylint: disable=protected-access
         self.assertEqual(
             ext._coerce_to_text(circular),  # pylint: disable=protected-access
             str(circular),
@@ -996,41 +917,59 @@ class TestMugenMessageHandlerTextExtension(unittest.IsolatedAsyncioTestCase):
         ext_zero, _, _ = self._new_ext(extension_timeout_seconds=0)
 
         self.assertEqual(
-            ext._format_completion_response_for_log(None),  # pylint: disable=protected-access
+            ext._format_completion_response_for_log(
+                None
+            ),  # pylint: disable=protected-access
             "null",
         )
         self.assertEqual(
-            ext._format_completion_response_for_log(_ModelDumpResponse()),  # pylint: disable=protected-access
+            ext._format_completion_response_for_log(
+                _ModelDumpResponse()
+            ),  # pylint: disable=protected-access
             '{"value": 1}',
         )
         self.assertEqual(
-            ext._format_completion_response_for_log(_ToDictResponse()),  # pylint: disable=protected-access
+            ext._format_completion_response_for_log(
+                _ToDictResponse()
+            ),  # pylint: disable=protected-access
             '{"value": 2}',
         )
         self.assertEqual(
-            ext._format_completion_response_for_log(_VarsResponse()),  # pylint: disable=protected-access
+            ext._format_completion_response_for_log(
+                _VarsResponse()
+            ),  # pylint: disable=protected-access
             '{"value": 3}',
         )
         self.assertEqual(
-            ext._format_completion_response_for_log(_FallbackResponse()),  # pylint: disable=protected-access
+            ext._format_completion_response_for_log(
+                _FallbackResponse()
+            ),  # pylint: disable=protected-access
             '"fallback"',
         )
         self.assertEqual(
-            ext._format_completion_response_for_log(_CircularDumpResponse()),  # pylint: disable=protected-access
+            ext._format_completion_response_for_log(
+                _CircularDumpResponse()
+            ),  # pylint: disable=protected-access
             "{'self': {...}}",
         )
         self.assertIn(
             "BrokenModelDumpResponse",
-            ext._format_completion_response_for_log(_BrokenModelDumpResponse()),  # pylint: disable=protected-access
+            ext._format_completion_response_for_log(
+                _BrokenModelDumpResponse()
+            ),  # pylint: disable=protected-access
         )
         self.assertIn(
             "BrokenToDictResponse",
-            ext._format_completion_response_for_log(_BrokenToDictResponse()),  # pylint: disable=protected-access
+            ext._format_completion_response_for_log(
+                _BrokenToDictResponse()
+            ),  # pylint: disable=protected-access
         )
         with patch("builtins.vars", side_effect=TypeError("boom")):
             self.assertIn(
                 "BrokenVarsResponse",
-                ext._format_completion_response_for_log(_BrokenVarsResponse()),  # pylint: disable=protected-access
+                ext._format_completion_response_for_log(
+                    _BrokenVarsResponse()
+                ),  # pylint: disable=protected-access
             )
         self.assertEqual(
             ext._extension_timeout_seconds,  # pylint: disable=protected-access

@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Last Updated: 2026-06-04
 
 ## Context
 
@@ -22,7 +22,7 @@ published revisions without leaking draft/review content.
 
 - Core responsibilities:
   - Authoritative workflow state and immutability rules.
-  - Scope and version metadata.
+  - Scope and version metadata, including route/profile fields.
   - ACP CRUD/actions and lifecycle transitions.
 - Downstream responsibilities:
   - Search projection schema and indexing strategy.
@@ -35,9 +35,15 @@ published revisions without leaking draft/review content.
 
 ### Data Model
 
-Create downstream projection tables, for example:
+Create downstream projection tables. If one revision has multiple
+`KnowledgeScopes`, preserve those scopes instead of flattening them into one
+mutable row.
+
+Example denormalized projection:
 
 - `downstream_kp_search_doc`
+  - `projection_doc_key TEXT PRIMARY KEY`
+  - `knowledge_scope_id UUID NULL`
   - `knowledge_entry_revision_id UUID NOT NULL`
   - `knowledge_pack_version_id UUID NOT NULL`
   - `knowledge_pack_id UUID NOT NULL`
@@ -45,10 +51,12 @@ Create downstream projection tables, for example:
   - `channel CITEXT NULL`
   - `locale CITEXT NULL`
   - `category CITEXT NULL`
+  - `service_route_key CITEXT NULL`
+  - `client_profile_key CITEXT NULL`
   - `title TEXT NULL`
   - `body TEXT NULL`
   - `indexed_at timestamptz NOT NULL default now()`
-  - unique: `(tenant_id, knowledge_entry_revision_id)`
+  - unique projection key per revision/scope row
 - `downstream_kp_projection_checkpoint`
   - `consumer_name TEXT PRIMARY KEY`
   - `last_event_id BIGINT NOT NULL`
@@ -68,6 +76,9 @@ Create downstream projection tables, for example:
 - Process events in-order per `knowledge_pack_id` where possible.
 - Keep dead-letter queue and a manual replay command for failed events.
 - Run nightly drift job comparing projected revision IDs to published IDs.
+- Include `service_route_key` and `client_profile_key` in drift checks; a
+  projected document with stale route/profile scope can leak evidence into the
+  wrong routed context.
 
 ## Validation
 
@@ -76,6 +87,7 @@ Create downstream projection tables, for example:
 - Rollback swaps active revision set to target version.
 - Duplicate event delivery does not create duplicates.
 - Replay from checkpoint restores identical projection state.
+- Route/profile scope edits update or rebuild affected projected documents.
 
 ## Risks / Open Questions
 

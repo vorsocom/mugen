@@ -64,6 +64,8 @@ class KnowledgeScopeService(
         channel: str | None = None,
         locale: str | None = None,
         category: str | None = None,
+        service_route_key: str | None = None,
+        client_profile_key: str | None = None,
     ) -> Sequence[KnowledgeEntryRevisionDE]:
         """Retrieve published revisions constrained by scope dimensions."""
         where: dict[str, object] = {
@@ -77,13 +79,23 @@ class KnowledgeScopeService(
         if category is not None:
             where["category"] = category
 
+        service_route_options = self._scope_options(service_route_key)
+        client_profile_options = self._scope_options(client_profile_key)
+        filter_groups = [
+            FilterGroup(
+                where={
+                    **where,
+                    "service_route_key": route_option,
+                    "client_profile_key": profile_option,
+                },
+            )
+            for route_option in service_route_options
+            for profile_option in client_profile_options
+        ]
+
         try:
             scopes = await self.list(
-                filter_groups=[
-                    FilterGroup(
-                        where=where,
-                    )
-                ],
+                filter_groups=filter_groups,
                 limit=2_000,
             )
         except SQLAlchemyError:
@@ -92,7 +104,8 @@ class KnowledgeScopeService(
         if not scopes:
             return []
 
-        revision_ids: set[uuid.UUID] = set()
+        revision_scores: dict[uuid.UUID, int] = {}
+        revision_order: dict[uuid.UUID, int] = {}
         for scope in scopes:
             if scope.knowledge_entry_revision_id is None:
                 continue
@@ -123,9 +136,18 @@ class KnowledgeScopeService(
             if revision.status != "published":
                 continue
 
-            revision_ids.add(scope.knowledge_entry_revision_id)
+            revision_id = scope.knowledge_entry_revision_id
+            revision_scores[revision_id] = max(
+                revision_scores.get(revision_id, -1),
+                self._scope_specificity(
+                    scope,
+                    service_route_key=service_route_key,
+                    client_profile_key=client_profile_key,
+                ),
+            )
+            revision_order.setdefault(revision_id, len(revision_order))
 
-        if not revision_ids:
+        if not revision_scores:
             return []
 
         try:
@@ -137,18 +159,49 @@ class KnowledgeScopeService(
                             ScalarFilter(
                                 field="id",
                                 op=ScalarFilterOp.IN,
-                                value=list(revision_ids),
+                                value=list(revision_scores),
                             )
                         ],
                     )
                 ],
-                limit=len(revision_ids),
+                limit=len(revision_scores),
             )
         except SQLAlchemyError:
             abort(500)
 
-        return [
+        published_revisions = [
             revision
             for revision in revisions
             if revision.status == "published"
         ]
+        return sorted(
+            published_revisions,
+            key=lambda revision: (
+                -revision_scores.get(revision.id, 0),
+                revision_order.get(revision.id, len(revision_order)),
+            ),
+        )
+
+    @staticmethod
+    def _scope_options(value: str | None) -> tuple[str | None, ...]:
+        return (None,) if value is None else (None, value)
+
+    @staticmethod
+    def _scope_specificity(
+        scope: KnowledgeScopeDE,
+        *,
+        service_route_key: str | None,
+        client_profile_key: str | None,
+    ) -> int:
+        specificity = 0
+        if (
+            service_route_key is not None
+            and scope.service_route_key == service_route_key
+        ):
+            specificity += 1
+        if (
+            client_profile_key is not None
+            and scope.client_profile_key == client_profile_key
+        ):
+            specificity += 1
+        return specificity

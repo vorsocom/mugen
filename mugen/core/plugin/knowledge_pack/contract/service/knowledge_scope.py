@@ -27,5 +27,7 @@ class IKnowledgeScopeService(
         channel: str | None = None,
         locale: str | None = None,
         category: str | None = None,
+        service_route_key: str | None = None,
+        client_profile_key: str | None = None,
     ) -> Sequence[KnowledgeEntryRevisionDE]:
         """List published knowledge entry revisions filtered by scope."""

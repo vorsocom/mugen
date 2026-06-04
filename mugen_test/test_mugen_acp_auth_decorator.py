@@ -925,3 +925,71 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
                     tenant_id=str(allowed_tenant),
                 )
             self.assertEqual(ex.exception.code, 403)
+
+    async def test_permission_required_uses_knowledge_pack_action_permission(
+        self,
+    ) -> None:
+        user_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        publish_permission = "com.test.knowledge_pack:publish"
+        resource = SimpleNamespace(
+            capabilities=_FakeCapabilities(
+                actions={
+                    "publish": {
+                        "perm": publish_permission,
+                        "is_admin_action": False,
+                    },
+                },
+            ),
+            permissions=SimpleNamespace(manage="com.test.admin:manage"),
+            perm_obj="com.test.knowledge_pack:knowledge_pack_version",
+        )
+        registry = _FakeRegistry(
+            schema_index={"KnowledgePackVersions": object()},
+            resource=resource,
+        )
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+
+        async def endpoint(**kwargs):
+            return kwargs
+
+        wrapped = auth_decorator.permission_required(
+            action_kw="action",
+            tenant_kw="tenant_id",
+            config_provider=self._config,
+            logger_provider=lambda: Mock(),
+            registry_provider=lambda: registry,
+            auth_provider=lambda: auth_svc,
+        )(endpoint)
+
+        with (
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
+            patch.object(
+                auth_decorator,
+                "_require_user_from_token",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        id=user_id,
+                        global_roles=[],
+                    )
+                ),
+            ),
+        ):
+            result = await wrapped(
+                entity_set="KnowledgePackVersions",
+                action="publish",
+                tenant_id=str(tenant_id),
+            )
+
+        self.assertEqual(result["auth_user"], str(user_id))
+        auth_svc.has_permission.assert_awaited_once_with(
+            user_id=user_id,
+            permission_object="com.test.knowledge_pack:knowledge_pack_version",
+            permission_type=publish_permission,
+            tenant_id=tenant_id,
+            allow_global_admin=False,
+        )

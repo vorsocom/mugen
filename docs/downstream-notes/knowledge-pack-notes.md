@@ -2,10 +2,13 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Last Updated: 2026-06-04
 
 ## Notes
 
+- [`knowledge-pack-developer-guide.md`](knowledge-pack-developer-guide.md) -
+  Current downstream developer guide for ACP lifecycle, route/profile scope
+  semantics, context-engine wiring, and search projection boundaries.
 - [`knowledge-pack-bm25.md`](knowledge-pack-bm25.md) - BM25 retrieval pattern
   for published, scope-filtered content.
 - [`knowledge-pack-index-projection-sync.md`](knowledge-pack-index-projection-sync.md)

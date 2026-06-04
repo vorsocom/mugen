@@ -20,6 +20,8 @@ class KnowledgeScopeDE(BaseDE, TenantScopedDEMixin):
     channel: str | None = None
     locale: str | None = None
     category: str | None = None
+    service_route_key: str | None = None
+    client_profile_key: str | None = None
 
     is_active: bool | None = None
     attributes: dict[str, Any] | None = None
