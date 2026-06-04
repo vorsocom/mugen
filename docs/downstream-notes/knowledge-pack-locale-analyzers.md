@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Last Updated: 2026-06-04
 
 ## Context
 
@@ -20,7 +20,8 @@ choose analyzer behavior per locale.
 ## Core vs Downstream Boundary
 
 - Core responsibilities:
-  - Store `KnowledgeScope` locale/channel/category values.
+  - Store `KnowledgeScope` locale/channel/category values and route/profile
+    scope values.
   - Guarantee published workflow state.
 - Downstream responsibilities:
   - Map locale to analyzer/tokenizer configuration.

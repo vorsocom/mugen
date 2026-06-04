@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Last Updated: 2026-06-04
 
 ## Context
 
@@ -46,16 +46,23 @@ Optional downstream config table:
 ### Services / APIs
 
 Pipeline:
-1. Filter by tenant/channel/locale/category and published state.
+1. Filter by tenant, channel, locale, category, route/profile scope, and
+   published state.
 2. Compute lexical score (BM25 or equivalent).
 3. Apply bounded boosts (category, recency, source quality).
 4. Tie-break by deterministic keys (score desc, published_at desc, revision_id).
+
+Route/profile filters should run before any lexical, semantic, or business
+boost. A high score must never overcome tenant, publication, or
+route/profile-scope isolation.
 
 Return debug metadata for internal users:
 
 - `policy_version`
 - `raw_score`
 - `boost_components`
+- `scope_specificity` for route/profile matches when useful to explain why a
+  generic fallback ranked behind a specific match
 
 ### Operational Notes
 

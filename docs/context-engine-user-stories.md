@@ -567,7 +567,11 @@ ingress_metadata = {
     "source": "booking_binding"
   },
   "locale": "en-US",
-  "category": "refunds"
+  "category": "refunds",
+  "ingress_route": {
+    "service_route_key": "concierge.refunds",
+    "client_profile_key": "vip-web"
+  }
 }
 
 user_message = "Can I get a refund if one leg of the package was already used?"
@@ -583,7 +587,9 @@ text is pulled into context
    approved refund sources for this channel.
 2. The state store returns no bounded state for this example.
 3. `KnowledgePackContributor.collect(...)` lists published revisions for the
-   tenant, channel, locale, and category.
+   tenant, channel, locale, category, service route, and client profile. Route
+   and profile matches include exact scopes plus generic `NULL` fallback scopes;
+   unrelated route/profile-specific scopes are excluded.
 4. For each revision, it emits an `evidence` candidate with:
    - `kind="knowledge_span"`
    - `render_class="evidence_items"`

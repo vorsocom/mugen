@@ -328,6 +328,8 @@ different trace behavior than expected.
 - `CompletionRequest.vendor_params["context_policy"]`
 - active `ContextProfiles`, `ContextPolicies`, `ContextContributorBindings`,
   `ContextSourceBindings`, `ContextTracePolicies` rows for the tenant
+- active `KnowledgeScopes` rows for expected `knowledge_pack_revision`
+  evidence, including `service_route_key` and `client_profile_key`
 
 Example resolved policy shape:
 
@@ -400,8 +402,10 @@ Example resolved policy shape:
 7. Compare the matched scope fields against profile fields:
    `platform`, `channel_key`, `service_route_key`, `client_profile_key`.
 8. Inspect contributor and source binding rows for the same tenant.
-9. If trace capture differs from expectation, inspect `ContextTracePolicies`.
-10. Only after policy is confirmed should you inspect selected/dropped artifacts.
+9. Inspect matching `KnowledgeScopes` when the missing or extra evidence comes
+   from `knowledge_pack`.
+10. If trace capture differs from expectation, inspect `ContextTracePolicies`.
+11. Only after policy is confirmed should you inspect selected/dropped artifacts.
 
 ### Example trace interpretation
 

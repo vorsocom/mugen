@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Last Updated: 2026-06-04
 
 ## Context
 
@@ -16,6 +16,8 @@ filters, ranking semantics, and citation payloads.
 - Enforce published-only and scope-bounded filtering before ranking.
 - Include governance identifiers in responses for auditability.
 - Keep retrieval contract read-only against `knowledge_pack`.
+- Treat `service_route_key` and `client_profile_key` as first-class optional
+  scope inputs for routed traffic.
 
 ## Core vs Downstream Boundary
 
@@ -25,7 +27,8 @@ filters, ranking semantics, and citation payloads.
   - Prevent mutation of published revisions.
 - Downstream responsibilities:
   - Define retrieval API payloads and transport protocol.
-  - Map channel context into scope filters.
+  - Map channel context into scope filters, including route/profile metadata
+    when present.
   - Return ranked citations and snippets.
 - Why this boundary:
   - Response shape and integration transport are consumer-specific.
@@ -34,12 +37,20 @@ filters, ranking semantics, and citation payloads.
 
 ### Data Model
 
-No core schema change. Reuse downstream projection rows with:
+Reuse downstream projection rows with:
 
 - revision identifiers
 - scope columns
 - searchable text fields
 - precomputed ranking metadata as needed
+
+Projection schemas should carry `service_route_key` and `client_profile_key`
+when downstream retrieval needs routed/profiled isolation. Existing generic rows
+with `NULL` route/profile fields remain fallback candidates.
+
+A revision may be bound to multiple `KnowledgeScopes`. Downstream projections
+must preserve those scope rows, either by storing a separate scope projection or
+by denormalizing one searchable document per revision/scope row.
 
 ### Services / APIs
 
@@ -52,6 +63,8 @@ Recommended request payload:
   "channel": "whatsapp",
   "locale": "en-US",
   "categories": ["billing-policy"],
+  "service_route_key": "support.primary",
+  "client_profile_key": "whatsapp-a",
   "top_k": 10,
   "min_score": 0.0
 }
@@ -73,10 +86,29 @@ Recommended response payload:
   "filters_applied": {
     "tenant_id": "uuid",
     "channel": "whatsapp",
-    "locale": "en-US"
+    "locale": "en-US",
+    "categories": ["billing-policy"],
+    "service_route_key": "support.primary",
+    "client_profile_key": "whatsapp-a"
   }
 }
 ```
+
+### Scope Semantics
+
+Candidate resolution must use `KnowledgeScopeService.list_published_revisions`
+or the same semantics in a downstream projection:
+
+- only published versions and published revisions are eligible;
+- tenant filtering is mandatory;
+- `channel`, `locale`, and `category` preserve the current exact-filter
+  behavior when the caller supplies values;
+- for `service_route_key` and `client_profile_key`, a supplied request value
+  matches exact scope values plus `NULL` generic fallback scopes;
+- when the request omits `service_route_key` or `client_profile_key`, only
+  `NULL` scope values match for that dimension;
+- duplicate scope matches must return each revision once, with more-specific
+  route/profile matches ordered before generic matches.
 
 ### Operational Notes
 

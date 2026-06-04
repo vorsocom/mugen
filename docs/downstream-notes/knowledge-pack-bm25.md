@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-13
+- Last Updated: 2026-06-04
 
 ## Context
 
@@ -22,7 +22,8 @@ context sent to LLM generation.
 
 - Core responsibilities:
   - Version workflow and governance (`draft/review/approved/published/archived`).
-  - Scope ownership (`channel/locale/category`) and published-content immutability.
+  - Scope ownership (`channel`, `locale`, `category`, `service_route_key`,
+    `client_profile_key`) and published-content immutability.
   - Generic CRUD/action surface via ACP.
 - Downstream responsibilities:
   - Search indexing strategy (BM25 fields, weighting, analyzers, ranking policy).
@@ -36,9 +37,14 @@ context sent to LLM generation.
 
 ### Data Model
 
-Create a downstream search table, for example:
+Create a downstream search projection. If one revision can be exposed through
+multiple `KnowledgeScopes`, either store scopes in a separate projection table
+or denormalize one search row per revision/scope row. For a denormalized
+projection:
 
 - `downstream_kp_search_doc`
+  - `projection_doc_key TEXT PRIMARY KEY`
+  - `knowledge_scope_id UUID NULL`
   - `tenant_id UUID NOT NULL`
   - `knowledge_entry_revision_id UUID NOT NULL`
   - `knowledge_pack_id UUID NOT NULL`
@@ -46,6 +52,8 @@ Create a downstream search table, for example:
   - `channel CITEXT NULL`
   - `locale CITEXT NULL`
   - `category CITEXT NULL`
+  - `service_route_key CITEXT NULL`
+  - `client_profile_key CITEXT NULL`
   - `doc_tsv tsvector NOT NULL`
   - `title TEXT NULL`
   - `body TEXT NULL`
@@ -54,8 +62,11 @@ Create a downstream search table, for example:
 Indexes:
 
 - `GIN (doc_tsv)` for lexical search
-- `BTREE (tenant_id, channel, locale, category)` for scope narrowing
-- Unique on `(tenant_id, knowledge_entry_revision_id)`
+- `BTREE (tenant_id, channel, locale, category)` for legacy scope narrowing
+- `BTREE (tenant_id, service_route_key, client_profile_key)` for routed/profiled
+  scope narrowing
+- Unique projection key per revision/scope row, or a separate scope table keyed
+  by source scope identity
 
 Populate `doc_tsv` with weighted fields, e.g.:
 
@@ -69,9 +80,15 @@ setweight(to_tsvector('english', coalesce(body, '')), 'B')
 Downstream service flow:
 
 1. Resolve candidate revision IDs from published/scope constraints:
-   call `KnowledgeScopeService.list_published_revisions(...)`.
+   call `KnowledgeScopeService.list_published_revisions(...)` with tenant,
+   channel, locale, category, `service_route_key`, and `client_profile_key`.
 2. Execute BM25/`ts_rank_cd` query against projection table using those IDs.
 3. Return top-k snippets and scores to downstream orchestration code.
+
+If a downstream projection performs scope filtering itself, route/profile
+matching must mirror core semantics: supplied request values match exact values
+or `NULL` fallback rows, while missing request values match only `NULL` rows for
+that dimension.
 
 Recommended SQL pattern:
 
@@ -89,12 +106,33 @@ ORDER BY score DESC
 LIMIT :top_k;
 ```
 
+When `:revision_ids` comes from `KnowledgeScopeService`, route/profile fallback
+has already been enforced. If a projection query does not pre-resolve revision
+IDs, use explicit fallback predicates instead of simple equality:
+
+```sql
+AND (
+      (:has_service_route_key AND
+        (s.service_route_key = :service_route_key OR s.service_route_key IS NULL))
+   OR (NOT :has_service_route_key AND s.service_route_key IS NULL)
+)
+AND (
+      (:has_client_profile_key AND
+        (s.client_profile_key = :client_profile_key OR s.client_profile_key IS NULL))
+   OR (NOT :has_client_profile_key AND s.client_profile_key IS NULL)
+)
+```
+
 ### Operational Notes
 
 - Build projection in migration + backfill job.
 - Update projection on publish/archive/rollback events (or periodic reconciler).
 - Never index non-published revisions in the projection table.
-- Keep projection rebuild idempotent by unique revision key.
+- Keep projection rebuild idempotent by stable projection keys or separate
+  source scope keys.
+- Keep `service_route_key` and `client_profile_key` in sync with the
+  authoritative `KnowledgeScopes` rows; stale routed/profiled projection fields
+  are a scope-leak risk.
 
 ## Validation
 
@@ -114,4 +152,3 @@ LIMIT :top_k;
 - Query parser choice: `plainto_tsquery` vs `websearch_to_tsquery`.
 - Reindex strategy for large backfills and zero-downtime rollout.
 - Whether synonym expansion should be SQL-only or preprocessed downstream.
-
