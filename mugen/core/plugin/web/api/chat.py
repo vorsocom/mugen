@@ -17,7 +17,10 @@ from mugen.core.contract.client.web import (
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.api.decorator.auth import global_auth_required
-from mugen.core.plugin.web.api.decorator import web_platform_required
+from mugen.core.plugin.web.api.decorator import (
+    web_access_required,
+    web_platform_required,
+)
 
 _ALLOWED_MESSAGE_TYPES = {"text", "audio", "video", "file", "image"}
 _MEDIA_MESSAGE_TYPES = {"audio", "video", "file", "image"}
@@ -591,6 +594,7 @@ async def _build_structured_message_metadata(
 @api.post("/core/web/v1/messages")
 @web_platform_required
 @global_auth_required
+@web_access_required
 async def web_messages_create(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     auth_user: str,
     config_provider=_config_provider,
@@ -776,6 +780,7 @@ async def web_messages_create(  # pylint: disable=too-many-locals,too-many-branc
 @api.get("/core/web/v1/events")
 @web_platform_required
 @global_auth_required
+@web_access_required
 async def web_events_stream(
     auth_user: str,
     logger_provider=_logger_provider,
@@ -823,6 +828,7 @@ async def web_events_stream(
 @api.get("/core/web/v1/media/<token>")
 @web_platform_required
 @global_auth_required
+@web_access_required
 async def web_media_download(
     token: str,
     auth_user: str,
