@@ -6,9 +6,13 @@ import os
 from types import SimpleNamespace
 import tempfile
 import unittest
+import uuid
 from unittest.mock import AsyncMock, Mock, patch
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from mugen.core.contract.client.web import WebConversationTenantConflictError
+from mugen.core.plugin.web.api import decorator as web_decorator
 from mugen.core.plugin.web.api import chat
 
 
@@ -80,12 +84,100 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
             config="cfg",
             logging_gateway="logger",
             web_client="web-client",
+            get_required_ext_service=lambda key: f"svc:{key}",
         )
 
         with patch.object(chat.di, "container", new=container):
             self.assertEqual(chat._config_provider(), "cfg")
             self.assertEqual(chat._logger_provider(), "logger")
             self.assertEqual(chat._web_client_provider(), "web-client")
+
+        with patch.object(web_decorator.di, "container", new=container):
+            self.assertEqual(
+                web_decorator._auth_provider(),
+                f"svc:{web_decorator.di.EXT_SERVICE_ADMIN_SVC_AUTH}",
+            )
+
+    async def test_web_access_required_paths(self) -> None:
+        user_id = uuid.uuid4()
+        auth_svc = SimpleNamespace(
+            has_permission_for_any_tenant=AsyncMock(return_value=True)
+        )
+        handler = AsyncMock(return_value="ok")
+
+        guarded = web_decorator.web_access_required(
+            handler,
+            auth_provider=lambda: auth_svc,
+            logger_provider=lambda: Mock(),
+        )
+        result = await guarded(auth_user=str(user_id))
+
+        self.assertEqual(result, "ok")
+        handler.assert_awaited_once()
+        auth_svc.has_permission_for_any_tenant.assert_awaited_once_with(
+            user_id=user_id,
+            permission_object=web_decorator.WEB_PLATFORM_ACCESS_PERMISSION,
+            permission_type=web_decorator.WEB_PLATFORM_ACCESS_PERMISSION,
+            allow_global_admin=True,
+        )
+
+        denied_svc = SimpleNamespace(
+            has_permission_for_any_tenant=AsyncMock(return_value=False)
+        )
+        denied_handler = AsyncMock(return_value="denied")
+        denied_guarded = web_decorator.web_access_required(
+            denied_handler,
+            auth_provider=lambda: denied_svc,
+            logger_provider=lambda: Mock(),
+        )
+        with patch.object(web_decorator, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                await denied_guarded(auth_user=str(user_id))
+        self.assertEqual(ex.exception.code, 403)
+        denied_handler.assert_not_awaited()
+
+        logger = Mock()
+        invalid_guarded = web_decorator.web_access_required(
+            AsyncMock(),
+            auth_provider=lambda: denied_svc,
+            logger_provider=lambda: logger,
+        )
+        with patch.object(web_decorator, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                await invalid_guarded(auth_user="not-a-uuid")
+        self.assertEqual(ex.exception.code, 500)
+        logger.error.assert_called_once_with(
+            "Invalid auth_user for web platform access check."
+        )
+
+        failing_svc = SimpleNamespace(
+            has_permission_for_any_tenant=AsyncMock(
+                side_effect=SQLAlchemyError("db")
+            )
+        )
+        logger = Mock()
+        failing_guarded = web_decorator.web_access_required(
+            AsyncMock(),
+            auth_provider=lambda: failing_svc,
+            logger_provider=lambda: logger,
+        )
+        with patch.object(web_decorator, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as ex:
+                await failing_guarded(auth_user=str(user_id))
+        self.assertEqual(ex.exception.code, 500)
+        logger.error.assert_called_once()
+
+        factory_svc = SimpleNamespace(
+            has_permission_for_any_tenant=AsyncMock(return_value=True)
+        )
+        factory_handler = AsyncMock(return_value="factory-ok")
+        factory_guarded = web_decorator.web_access_required(
+            auth_provider=lambda: factory_svc,
+            logger_provider=lambda: Mock(),
+        )(factory_handler)
+
+        self.assertEqual(await factory_guarded(auth_user=str(user_id)), "factory-ok")
+        factory_handler.assert_awaited_once()
 
     async def test_helper_branch_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

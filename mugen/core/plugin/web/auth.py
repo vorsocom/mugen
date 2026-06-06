@@ -1,0 +1,8 @@
+"""Stable permission keys for web platform access."""
+
+WEB_PLATFORM_PERMISSION_NAMESPACE = "com.vorsocomputing.mugen.web"
+WEB_PLATFORM_ACCESS_PERMISSION_NAME = "access"
+WEB_PLATFORM_ACCESS_PERMISSION = (
+    f"{WEB_PLATFORM_PERMISSION_NAMESPACE}:"
+    f"{WEB_PLATFORM_ACCESS_PERMISSION_NAME}"
+)

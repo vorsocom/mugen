@@ -32,6 +32,7 @@ from mugen.core.plugin.channel_orchestration.human_handoff_auth import (
 from mugen.core.plugin.knowledge_pack.auth import (
     KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
 )
+from mugen.core.plugin.web.auth import WEB_PLATFORM_ACCESS_PERMISSION
 
 _EDM_REFRESH_TOKEN = "ACP.RefreshToken"
 _EDM_TENANT_INVITATION = "ACP.TenantInvitation"
@@ -67,6 +68,7 @@ async def _session_roles(
     for permission in (
         HUMAN_HANDOFF_OPERATOR_PERMISSION,
         KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+        WEB_PLATFORM_ACCESS_PERMISSION,
     ):
         has_permission = await auth_svc.has_permission_for_any_tenant(
             user_id=user.id,
