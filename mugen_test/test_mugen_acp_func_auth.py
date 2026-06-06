@@ -151,7 +151,7 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
     async def test_session_roles_includes_knowledge_pack_configurator(self) -> None:
         user = _user()
         auth_svc = SimpleNamespace(
-            has_permission_for_any_tenant=AsyncMock(side_effect=[False, True])
+            has_permission_for_any_tenant=AsyncMock(side_effect=[False, True, False])
         )
 
         roles = await func_auth._session_roles(  # pylint: disable=protected-access
@@ -174,8 +174,27 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
                     permission_type=func_auth.KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
                     allow_global_admin=True,
                 ),
+                call(
+                    user_id=user.id,
+                    permission_object=func_auth.WEB_PLATFORM_ACCESS_PERMISSION,
+                    permission_type=func_auth.WEB_PLATFORM_ACCESS_PERMISSION,
+                    allow_global_admin=True,
+                ),
             ]
         )
+
+    async def test_session_roles_includes_web_platform_access(self) -> None:
+        user = _user()
+        auth_svc = SimpleNamespace(
+            has_permission_for_any_tenant=AsyncMock(side_effect=[False, False, True])
+        )
+
+        roles = await func_auth._session_roles(  # pylint: disable=protected-access
+            user,
+            auth_svc=auth_svc,
+        )
+
+        self.assertEqual(roles, [func_auth.WEB_PLATFORM_ACCESS_PERMISSION])
 
     async def test_user_login_validation_and_lookup_failures(self) -> None:
         user_svc, refresh_svc, jwt_svc, logger = _services()
@@ -341,6 +360,7 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
                 "com.test:admin",
                 func_auth.HUMAN_HANDOFF_OPERATOR_PERMISSION,
                 func_auth.KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+                func_auth.WEB_PLATFORM_ACCESS_PERMISSION,
             ],
         )
         auth_svc.has_permission_for_any_tenant.assert_has_awaits(
@@ -355,6 +375,12 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
                     user_id=user.id,
                     permission_object=func_auth.KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
                     permission_type=func_auth.KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+                    allow_global_admin=True,
+                ),
+                call(
+                    user_id=user.id,
+                    permission_object=func_auth.WEB_PLATFORM_ACCESS_PERMISSION,
+                    permission_type=func_auth.WEB_PLATFORM_ACCESS_PERMISSION,
                     allow_global_admin=True,
                 ),
             ]
@@ -834,6 +860,7 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
                 "com.test:admin",
                 func_auth.HUMAN_HANDOFF_OPERATOR_PERMISSION,
                 func_auth.KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+                func_auth.WEB_PLATFORM_ACCESS_PERMISSION,
             ],
         )
         auth_svc.has_permission_for_any_tenant.assert_has_awaits(
@@ -848,6 +875,12 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
                     user_id=active_user.id,
                     permission_object=func_auth.KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
                     permission_type=func_auth.KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
+                    allow_global_admin=True,
+                ),
+                call(
+                    user_id=active_user.id,
+                    permission_object=func_auth.WEB_PLATFORM_ACCESS_PERMISSION,
+                    permission_type=func_auth.WEB_PLATFORM_ACCESS_PERMISSION,
                     allow_global_admin=True,
                 ),
             ]
