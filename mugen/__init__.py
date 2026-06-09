@@ -45,7 +45,7 @@ import re
 from time import perf_counter
 from types import SimpleNamespace
 
-from quart import Quart
+from quart import Quart, jsonify
 
 from mugen.bootstrap_state import (
     BOOTSTRAP_STATE_KEY,
@@ -417,7 +417,9 @@ def validate_web_relational_runtime_config(
             "relational_storage_gateway provider is unavailable."
         )
 
-    relational_check_readiness = getattr(relational_storage_gateway, "check_readiness", None)
+    relational_check_readiness = getattr(
+        relational_storage_gateway, "check_readiness", None
+    )
     if callable(relational_check_readiness) is not True:
         raise BootstrapConfigError(
             "Relational web storage is configured but "
@@ -512,12 +514,12 @@ def validate_phase_b_runtime_config(
         )
 
     invalid_critical_platforms = [
-        platform
-        for platform in critical_platforms
-        if platform not in active_platforms
+        platform for platform in critical_platforms if platform not in active_platforms
     ]
     if invalid_critical_platforms:
-        active_platforms_text = ", ".join(active_platforms) if active_platforms else "<none>"
+        active_platforms_text = (
+            ", ".join(active_platforms) if active_platforms else "<none>"
+        )
         invalid_platforms_text = ", ".join(invalid_critical_platforms)
         raise BootstrapConfigError(
             "Invalid runtime critical platform configuration. "
@@ -525,11 +527,15 @@ def validate_phase_b_runtime_config(
             f"{invalid_platforms_text}. Enabled platforms: {active_platforms_text}."
         )
 
-    degrade_on_critical_exit = _resolve_degrade_on_critical_exit(config, bootstrap_state)
+    degrade_on_critical_exit = _resolve_degrade_on_critical_exit(
+        config, bootstrap_state
+    )
     return active_platforms, critical_platforms, degrade_on_critical_exit
 
 
-def _resolve_degrade_on_critical_exit(config: SimpleNamespace, bootstrap_state: dict) -> bool:
+def _resolve_degrade_on_critical_exit(
+    config: SimpleNamespace, bootstrap_state: dict
+) -> bool:
     state_value = bootstrap_state.get(_PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY)
     if state_value is not None:
         return _parse_bool(state_value, default=True)
@@ -583,12 +589,16 @@ def _resolve_phase_b_supervision_controls(
         default=3,
     )
     base_backoff_seconds = _resolve_supervisor_backoff_seconds(
-        _read_optional_attr(phase_b_cfg, "supervisor_backoff_base_seconds", default=None),
+        _read_optional_attr(
+            phase_b_cfg, "supervisor_backoff_base_seconds", default=None
+        ),
         field_name="mugen.runtime.phase_b.supervisor_backoff_base_seconds",
         default=1.0,
     )
     max_backoff_seconds = _resolve_supervisor_backoff_seconds(
-        _read_optional_attr(phase_b_cfg, "supervisor_backoff_max_seconds", default=None),
+        _read_optional_attr(
+            phase_b_cfg, "supervisor_backoff_max_seconds", default=None
+        ),
         field_name="mugen.runtime.phase_b.supervisor_backoff_max_seconds",
         default=30.0,
     )
@@ -681,6 +691,11 @@ def create_quart_app(
     # Create new Quart application.
     app = Quart(__name__)
 
+    @app.get("/health")
+    async def health():
+        """Liveness endpoint for load balancers."""
+        return jsonify({"status": "ok"})
+
     # Check for valid configuration name.
     try:
         environment = config.mugen.environment
@@ -750,9 +765,7 @@ async def bootstrap_app(
         bootstrap_state[PHASE_A_BLOCKING_FAILURES_KEY] = ["container_readiness"]
         bootstrap_state[PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY] = []
         bootstrap_state[PHASE_A_ERROR_KEY] = str(exc)
-        raise BootstrapConfigError(
-            f"Container readiness check failed: {exc}"
-        ) from exc
+        raise BootstrapConfigError(f"Container readiness check failed: {exc}") from exc
     readiness_report = di.get_container_readiness_report()
     optional_provider_failures: dict[str, str] = {}
     if readiness_report is not None:
@@ -850,9 +863,8 @@ async def bootstrap_app(
                 failed_messages.append(f"{capability_name}: {capability_error.strip()}")
                 continue
             failed_messages.append(f"{capability_name}: capability unavailable")
-        message = (
-            "Runtime capability requirements failed: "
-            + "; ".join(failed_messages)
+        message = "Runtime capability requirements failed: " + "; ".join(
+            failed_messages
         )
         bootstrap_state[PHASE_A_ERROR_KEY] = message
         raise BootstrapConfigError(message)
@@ -995,14 +1007,13 @@ async def run_platform_clients(
             bootstrap_state.get(SHUTDOWN_REQUESTED_KEY),
             default=False,
         )
-        phase_b_status = str(bootstrap_state.get(PHASE_B_STATUS_KEY, "") or "").strip().lower()
+        phase_b_status = (
+            str(bootstrap_state.get(PHASE_B_STATUS_KEY, "") or "").strip().lower()
+        )
         phase_b_error = bootstrap_state.get(PHASE_B_ERROR_KEY)
         if shutdown_requested and (
             phase_b_status == PHASE_STATUS_DEGRADED
-            or (
-                isinstance(phase_b_error, str)
-                and phase_b_error.strip() != ""
-            )
+            or (isinstance(phase_b_error, str) and phase_b_error.strip() != "")
         ):
             return
         try:
@@ -1070,9 +1081,7 @@ async def run_platform_clients(
             degrade_on_critical_exit=degrade_on_critical_exit,
             shutdown_requested=False,
         )
-        logger.error(
-            f"{platform_name} client failed ({error_message})."
-        )
+        logger.error(f"{platform_name} client failed ({error_message}).")
 
     (
         supervisor_max_restarts,
@@ -1286,7 +1295,9 @@ async def run_platform_clients(
                         break
     except asyncio.exceptions.CancelledError:
         bootstrap_state[SHUTDOWN_REQUESTED_KEY] = True
-        runtime_shutdown_timeout_seconds = _resolve_runtime_shutdown_timeout_seconds(config)
+        runtime_shutdown_timeout_seconds = _resolve_runtime_shutdown_timeout_seconds(
+            config
+        )
         try:
             await cancel_registered_platform_tasks(
                 bootstrap_state,
@@ -1402,16 +1413,12 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
             continue
 
         if registered:
-            logger.debug(
-                f"Registered {resolved_type.upper()} extension: {token}."
-            )
+            logger.debug(f"Registered {resolved_type.upper()} extension: {token}.")
             if resolved_type not in registered_tokens_by_type:
                 registered_tokens_by_type[resolved_type] = set()
             registered_tokens_by_type[resolved_type].add(token)
         else:
-            logger.debug(
-                f"Skipped unsupported extension: {token} ({resolved_type})."
-            )
+            logger.debug(f"Skipped unsupported extension: {token} ({resolved_type}).")
 
     logger.debug(
         "Extension bootstrap sweep completed"
@@ -1591,7 +1598,9 @@ async def run_matrix_client(
 
                 if consecutive_sync_failures >= max_sync_retries:
                     logger.error("Matrix client sync failed after max retries.")
-                    raise RuntimeError("Matrix client sync failed after max retries.") from exc
+                    raise RuntimeError(
+                        "Matrix client sync failed after max retries."
+                    ) from exc
 
                 if runtime_degraded is not True and callable(degraded_callback):
                     degraded_callback(f"{type(exc).__name__}: {exc}")

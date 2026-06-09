@@ -61,6 +61,22 @@ class TestMuGenConfigInitApp(unittest.TestCase):
             # should be handled in the called function.
             self.fail("Exception raised unexpectedly.")
 
+    def test_config_logger_level_overrides_app_default(self) -> None:
+        """Test effect of configured mugen.logger.level."""
+        app = Quart("test_app")
+        app.config["LOG_LEVEL"] = 10
+        dummy_config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                logger=SimpleNamespace(level="INFO"),
+            ),
+            quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
+        )
+
+        Config.init_app(app, config=dummy_config)
+
+        self.assertEqual(app.config["LOG_LEVEL"], 20)
+        self.assertEqual(app.logger.level, 20)
+
     def test_rejects_weak_secret_key(self) -> None:
         app = Quart("test_app")
         app.config["LOG_LEVEL"] = 10

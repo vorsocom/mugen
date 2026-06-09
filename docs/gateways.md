@@ -15,6 +15,9 @@ Runtime configuration uses strict provider tokens (for example `bedrock`,
 `ses`, `twilio`), not
 Python module paths.
 
+For ECS/container overlay examples and selected-provider credential validation,
+see [Container deployment and runtime overlays](container-deployment.md).
+
 ## Completion Gateway Contract
 
 Completion gateways implement:
