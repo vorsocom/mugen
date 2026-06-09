@@ -85,6 +85,10 @@ from mugen.core.utility.config_value import (
     parse_optional_positive_finite_float,
     parse_optional_positive_int,
 )
+from mugen.core.utility.deployment_config import (
+    apply_environment_overrides,
+    validate_production_deployment_config,
+)
 from mugen.core.utility.platform_runtime_profile import build_config_namespace
 from mugen.core.utility.platforms import normalize_platforms, unknown_platforms
 from mugen.core.utility.rdbms_schema import resolve_core_rdbms_schema
@@ -264,10 +268,7 @@ def _supported_constructor_kwargs(
         return provider_kwargs
 
     parameters = tuple(signature.parameters.values())
-    if any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    ):
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
         return provider_kwargs
 
     supported_names = {
@@ -280,9 +281,7 @@ def _supported_constructor_kwargs(
         )
     }
     return {
-        key: value
-        for key, value in provider_kwargs.items()
-        if key in supported_names
+        key: value for key, value in provider_kwargs.items() if key in supported_names
     }
 
 
@@ -317,9 +316,7 @@ def _validate_optional_nonempty_string(
     if value is None:
         return
     if not isinstance(value, str) or value.strip() == "":
-        raise RuntimeError(
-            f"Invalid configuration: {path} must be a non-empty string."
-        )
+        raise RuntimeError(f"Invalid configuration: {path} must be a non-empty string.")
 
 
 def _validate_optional_string_array(
@@ -421,9 +418,7 @@ def _validate_agent_runtime_schema(
         if entries is None:
             continue
         if not isinstance(entries, list):
-            raise RuntimeError(
-                f"Invalid configuration: {path}.{key} must be an array."
-            )
+            raise RuntimeError(f"Invalid configuration: {path}.{key} must be an array.")
         for index, entry in enumerate(entries):
             _validate_agent_runtime_entry_schema(
                 entry,
@@ -1745,6 +1740,8 @@ def _load_config(config_file: str) -> dict:
     try:
         with open(os.path.join(basedir, config_file), "r", encoding="utf8") as f:
             config = tomlkit.loads(f.read()).value
+            apply_environment_overrides(config)
+            validate_production_deployment_config(config)
             # Add base directory to configuration.
             config["basedir"] = basedir
             return config

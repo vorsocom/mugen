@@ -75,6 +75,25 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
             # should be handled in the called function.
             self.fail("Exception raised unexpectedly.")
 
+    async def test_root_health_endpoint_returns_ok(self):
+        """Test output for the root liveness endpoint."""
+        dummy_config = SimpleNamespace(
+            mugen=SimpleNamespace(
+                environment="development",
+            ),
+            quart=SimpleNamespace(secret_key="0123456789abcdef0123456789abcdef"),
+        )
+
+        app = create_quart_app(config_provider=lambda: dummy_config)
+
+        async with app.test_app() as test_app:
+            client = test_app.test_client()
+            response = await client.get("/health")
+            payload = await response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload, {"status": "ok"})
+
     async def test_development_environment(self):
         """Test output for development environment."""
         try:
@@ -176,7 +195,9 @@ class TestMuGenInitCreateQuartApp(unittest.IsolatedAsyncioTestCase):
         logger = unittest.mock.Mock()
         with self.assertRaises(BootstrapConfigError):
             _create_quart_app(
-                config_provider=lambda: (_ for _ in ()).throw(RuntimeError("bad config")),
+                config_provider=lambda: (_ for _ in ()).throw(
+                    RuntimeError("bad config")
+                ),
                 logger_provider=lambda: logger,
             )
         logger.error.assert_called_with("Configuration unavailable.")

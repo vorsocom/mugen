@@ -1,0 +1,100 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: mugen
+      POSTGRES_USER: mugen
+      POSTGRES_PASSWORD: mugen
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mugen -d mugen"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MUGEN_CONFIG_FILE: "${MUGEN_CONFIG_FILE:-conf/mugen.toml.sample}"
+      MUGEN_CONFIG_OVERLAY_FILE: "${MUGEN_CONFIG_OVERLAY_FILE:-}"
+      MUGEN_CONFIG_OVERLAY_JSON: "${MUGEN_CONFIG_OVERLAY_JSON:-}"
+      ENVIRONMENT: development
+      APP_NAME: mugen-api
+      PORT: "8000"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      MUGEN_PLATFORMS: "${MUGEN_PLATFORMS:-web}"
+      MUGEN_PHASE_B_CRITICAL_PLATFORMS: "${MUGEN_PHASE_B_CRITICAL_PLATFORMS:-web}"
+      MUGEN_ENABLED_EXTENSIONS: "${MUGEN_ENABLED_EXTENSIONS:-core.fw.channel_orchestration}"
+      MUGEN_EXTENSIONS_JSON: "${MUGEN_EXTENSIONS_JSON:-}"
+      MUGEN_MIGRATION_TRACKS_JSON: "${MUGEN_MIGRATION_TRACKS_JSON:-}"
+      DATABASE_URL: postgresql+psycopg://mugen:mugen@postgres:5432/mugen
+      SECRET_KEY: "${SECRET_KEY:-local-dev-quart-secret-key-0123456789abcdef}"
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}"
+      ACP_SEED_ACP: "${ACP_SEED_ACP:-true}"
+      ACP_ADMIN_USERNAME: "${ACP_ADMIN_USERNAME:-admin}"
+      ACP_ADMIN_LOGIN_EMAIL: "${ACP_ADMIN_LOGIN_EMAIL:-admin@example.com}"
+      ACP_ADMIN_PASSWORD: "${ACP_ADMIN_PASSWORD:-LocalAdmin1!}"
+      ACP_SECRET_KEY: "${ACP_SECRET_KEY:-local-dev-acp-secret-key-0123456789abcdef}"
+      ACP_MANAGED_SECRET_ENCRYPTION_KEY: "${ACP_MANAGED_SECRET_ENCRYPTION_KEY:-local-dev-acp-managed-secret-key-0123456789abcdef}"
+      ACP_REFRESH_TOKEN_PEPPER: "${ACP_REFRESH_TOKEN_PEPPER:-local-dev-refresh-token-pepper-0123456789abcdef}"
+      ACP_JWT_ACTIVE_KID: "${ACP_JWT_ACTIVE_KID:-local-dev-ed25519}"
+      ACP_JWT_ISSUER: "${ACP_JWT_ISSUER:-mugen-local}"
+      ACP_JWT_AUDIENCE: "${ACP_JWT_AUDIENCE:-mugen-local}"
+      ACP_JWT_CONFIG_JSON: "${ACP_JWT_CONFIG_JSON:-}"
+    command: ["python", "scripts/run_migration_tracks.py", "upgrade", "head"]
+
+  api:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      MUGEN_CONFIG_FILE: "${MUGEN_CONFIG_FILE:-conf/mugen.toml.sample}"
+      MUGEN_CONFIG_OVERLAY_FILE: "${MUGEN_CONFIG_OVERLAY_FILE:-}"
+      MUGEN_CONFIG_OVERLAY_JSON: "${MUGEN_CONFIG_OVERLAY_JSON:-}"
+      ENVIRONMENT: development
+      APP_NAME: mugen-api
+      PORT: "8000"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      MUGEN_PLATFORMS: "${MUGEN_PLATFORMS:-web}"
+      MUGEN_PHASE_B_CRITICAL_PLATFORMS: "${MUGEN_PHASE_B_CRITICAL_PLATFORMS:-web}"
+      MUGEN_ENABLED_EXTENSIONS: "${MUGEN_ENABLED_EXTENSIONS:-core.fw.channel_orchestration}"
+      MUGEN_EXTENSIONS_JSON: "${MUGEN_EXTENSIONS_JSON:-}"
+      MUGEN_MIGRATION_TRACKS_JSON: "${MUGEN_MIGRATION_TRACKS_JSON:-}"
+      DATABASE_URL: postgresql+psycopg://mugen:mugen@postgres:5432/mugen
+      SECRET_KEY: "${SECRET_KEY:-local-dev-quart-secret-key-0123456789abcdef}"
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}"
+      ACP_SEED_ACP: "${ACP_SEED_ACP:-true}"
+      ACP_ADMIN_USERNAME: "${ACP_ADMIN_USERNAME:-admin}"
+      ACP_ADMIN_LOGIN_EMAIL: "${ACP_ADMIN_LOGIN_EMAIL:-admin@example.com}"
+      ACP_ADMIN_PASSWORD: "${ACP_ADMIN_PASSWORD:-LocalAdmin1!}"
+      ACP_SECRET_KEY: "${ACP_SECRET_KEY:-local-dev-acp-secret-key-0123456789abcdef}"
+      ACP_MANAGED_SECRET_ENCRYPTION_KEY: "${ACP_MANAGED_SECRET_ENCRYPTION_KEY:-local-dev-acp-managed-secret-key-0123456789abcdef}"
+      ACP_REFRESH_TOKEN_PEPPER: "${ACP_REFRESH_TOKEN_PEPPER:-local-dev-refresh-token-pepper-0123456789abcdef}"
+      ACP_JWT_ACTIVE_KID: "${ACP_JWT_ACTIVE_KID:-local-dev-ed25519}"
+      ACP_JWT_ISSUER: "${ACP_JWT_ISSUER:-mugen-local}"
+      ACP_JWT_AUDIENCE: "${ACP_JWT_AUDIENCE:-mugen-local}"
+      ACP_JWT_CONFIG_JSON: "${ACP_JWT_CONFIG_JSON:-}"
+      TLS_CERT_FILE: "${TLS_CERT_FILE:-}"
+      TLS_KEY_FILE: "${TLS_KEY_FILE:-}"
+    volumes:
+      - "${TLS_CERT_DIR:-./_dev/tls}:/run/mugen/tls:ro"
+    ports:
+      - "${HOST_PORT:-8000}:${PORT:-8000}"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, os, ssl, urllib.request; port=os.getenv('PORT','8000'); tls=bool(os.getenv('TLS_CERT_FILE')); scheme='https' if tls else 'http'; ctx=ssl._create_unverified_context() if tls else None; assert json.load(urllib.request.urlopen(f'{scheme}://127.0.0.1:{port}/health', timeout=3, context=ctx)) == {'status': 'ok'}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12

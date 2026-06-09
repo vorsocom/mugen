@@ -7,6 +7,10 @@ from pathlib import Path
 import os
 import tomllib
 
+from mugen.core.utility.deployment_config import (
+    apply_environment_overrides,
+    validate_production_deployment_config,
+)
 from mugen.core.utility.rdbms_schema import (
     normalize_track_name,
     resolve_core_rdbms_schema,
@@ -88,6 +92,8 @@ def load_mugen_config(path: Path) -> dict:
 
     if isinstance(data, dict) is not True:
         raise RuntimeError(f"Config file must parse to a TOML table: {path}")
+    apply_environment_overrides(data)
+    validate_production_deployment_config(data)
     return data
 
 
