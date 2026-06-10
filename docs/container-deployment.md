@@ -49,6 +49,9 @@ migration overlays keep their merge behavior:
 - `MUGEN_EXTENSIONS_JSON` merges by normalized extension `token`.
 - `MUGEN_MIGRATION_TRACKS_JSON` merges by migration track `name`.
 - `MUGEN_ENABLED_EXTENSIONS` enables a declared or built-in extension by token.
+  Built-in tokens mirror the core extension entries shown in
+  `conf/mugen.toml.sample`; downstream tokens still need to be declared through
+  `MUGEN_EXTENSIONS_JSON` or a generic config overlay before enabling.
 
 Direct env vars intentionally win over generic overlays. For example, if
 `MUGEN_CONFIG_OVERLAY_JSON` sets `rdbms.sqlalchemy.url` but `DATABASE_URL` is
