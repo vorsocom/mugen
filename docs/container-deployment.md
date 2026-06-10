@@ -14,6 +14,10 @@ overlays from environment variables and secret injection.
 The local `mugen.toml` file is operator-owned runtime state. Do not bake it into
 the image, mount it into ECS, or regenerate it from the sample file.
 
+For a complete AWS operator checklist covering VPCs, security groups, RDS,
+ECR, ECS clusters, task definitions, migration tasks, load balancing, DNS, and
+debug commands, see [ECS Fargate deployment runbook](ecs-fargate-deployment-runbook.md).
+
 ## Runtime Files
 
 | File | Purpose |

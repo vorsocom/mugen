@@ -220,6 +220,10 @@ merge recursively, lists replace, and direct convenience variables such as
 Detailed ECS environment mapping, selected gateway credential validation, and
 provider overlay examples live in
 [Container deployment and runtime overlays](docs/container-deployment.md).
+For an end-to-end AWS operator checklist covering VPCs, security groups, RDS,
+ECR, IAM roles, ECS clusters, migration tasks, load balancing, DNS, and
+troubleshooting, see
+[ECS Fargate deployment runbook](docs/ecs-fargate-deployment-runbook.md).
 
 Compose also sets `MUGEN_ENABLED_EXTENSIONS=core.fw.channel_orchestration` so the
 Channel Orchestration UI resources are registered without editing
@@ -396,12 +400,17 @@ The next deployment step is to wire these runtime inputs into the AWS path:
 GitHub Actions -> ECR -> ECS Fargate -> ALB -> DNS
 ```
 
+Until that automation exists, use the
+[ECS Fargate deployment runbook](docs/ecs-fargate-deployment-runbook.md) for a
+manual first deployment.
+
 ## Read Next
 
 - [Building muGen applications](docs/apps.md)
 - [Downstream architecture conformance](docs/downstream-architecture-conformance.md)
 - [Developing extensions](docs/extensions.md)
 - [Container deployment and runtime overlays](docs/container-deployment.md)
+- [ECS Fargate deployment runbook](docs/ecs-fargate-deployment-runbook.md)
 - [Working with gateways](docs/gateways.md)
 - [Web platform support contract](docs/web-support-contract.md)
 - [Human handoff backend contract](docs/human-handoff-backend.md)
