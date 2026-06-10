@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from quart import Quart
 
+from mugen.core.utility.deployment_config import parse_log_level
 from mugen.core.utility.security import validate_quart_secret_key
 
 
@@ -24,10 +25,21 @@ class Config:  # pylint: disable=too-few-public-methods
     @staticmethod
     def init_app(app: Quart, config: SimpleNamespace):
         """Configuration specific application initialisation."""
-        try:
-            app.logger.setLevel(app.config["LOG_LEVEL"])
-        except KeyError:
+        log_level = app.config.get("LOG_LEVEL")
+        mugen_config = getattr(config, "mugen", None)
+        logger_config = getattr(mugen_config, "logger", None)
+        configured_log_level = getattr(logger_config, "level", None)
+        if configured_log_level is not None:
+            log_level = parse_log_level(
+                configured_log_level,
+                field_name="mugen.logger.level",
+            )
+            app.config["LOG_LEVEL"] = log_level
+
+        if log_level is None:
             app.logger.error("LOG_LEVEL not configured.")
+        else:
+            app.logger.setLevel(log_level)
 
         quart_config = getattr(config, "quart", None)
         if quart_config is None:
