@@ -394,15 +394,18 @@ The default ACP refresh token lifetime is 7 days. Emergency compromise response
 can remove the old key immediately, but existing sessions signed by that key
 will be invalidated.
 
-The next deployment step is to wire these runtime inputs into the AWS path:
+The ECS deployment path is:
 
 ```text
 GitHub Actions -> ECR -> ECS Fargate -> ALB -> DNS
 ```
 
-Until that automation exists, use the
-[ECS Fargate deployment runbook](docs/ecs-fargate-deployment-runbook.md) for a
-manual first deployment.
+Upstream production deployment is automated from `main` through
+`.github/workflows/deploy-ecs.yml` after the AWS resources and GitHub
+Environment variables are configured. Use the
+[ECS Fargate deployment runbook](docs/ecs-fargate-deployment-runbook.md) for
+first-time setup, OIDC/IAM configuration, manual recovery commands, rollback,
+and downstream workflow examples.
 
 ## Read Next
 

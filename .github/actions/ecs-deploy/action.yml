@@ -1,0 +1,250 @@
+name: ECS Deploy
+description: Build, push, migrate, and deploy a muGen ECS Fargate service.
+
+inputs:
+  aws-region:
+    description: AWS region for ECR, ECS, and CloudWatch Logs.
+    required: true
+  aws-account-id:
+    description: AWS account ID that owns the ECR repository.
+    required: true
+  ecr-repository:
+    description: ECR repository name.
+    required: true
+  image-tag:
+    description: Immutable image tag to build and deploy.
+    required: true
+  docker-context:
+    description: Docker build context.
+    required: false
+    default: "."
+  dockerfile:
+    description: Dockerfile path.
+    required: false
+    default: "Dockerfile"
+  ecs-cluster:
+    description: ECS cluster name or ARN.
+    required: true
+  ecs-service:
+    description: ECS service name.
+    required: true
+  ecs-container-name:
+    description: ECS container name in the task definition.
+    required: true
+  task-template:
+    description: Parameterized ECS task definition template path.
+    required: true
+  task-execution-role-arn:
+    description: ECS task execution role ARN.
+    required: true
+  task-role-arn:
+    description: Application task role ARN.
+    required: true
+  task-subnets:
+    description: Comma-separated private subnet IDs for ECS tasks.
+    required: true
+  task-security-groups:
+    description: Comma-separated security group IDs for ECS tasks.
+    required: true
+  assign-public-ip:
+    description: ECS awsvpc assignPublicIp value.
+    required: false
+    default: "DISABLED"
+  health-url:
+    description: Public health URL to smoke test after service stability.
+    required: true
+  migration-command-json:
+    description: JSON array command for the migration one-off task.
+    required: false
+    default: '["python","scripts/run_migration_tracks.py","upgrade","head"]'
+  placeholder-env-prefix:
+    description: Environment variable prefix for task-definition placeholders.
+    required: false
+    default: "TASKDEF_"
+  extra-placeholders-json:
+    description: Optional JSON object with additional task-definition placeholders.
+    required: false
+    default: "{}"
+
+outputs:
+  image-uri:
+    description: Built and pushed ECR image URI.
+    value: ${{ steps.image.outputs.image-uri }}
+  task-definition-arn:
+    description: Registered task definition ARN.
+    value: ${{ steps.register.outputs.task-definition-arn }}
+  migration-task-arn:
+    description: Migration one-off task ARN.
+    value: ${{ steps.migrate.outputs.migration-task-arn }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve Image URI
+      id: image
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        image_uri="${{ inputs.aws-account-id }}.dkr.ecr.${{ inputs.aws-region }}.amazonaws.com/${{ inputs.ecr-repository }}:${{ inputs.image-tag }}"
+        echo "image-uri=$image_uri" >> "$GITHUB_OUTPUT"
+
+    - name: Login To Amazon ECR
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build And Push Image
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        docker build \
+          -f "${{ inputs.dockerfile }}" \
+          -t "${{ steps.image.outputs.image-uri }}" \
+          "${{ inputs.docker-context }}"
+
+        docker push "${{ steps.image.outputs.image-uri }}"
+
+    - name: Render Task Definition
+      id: render
+      shell: bash
+      env:
+        EXTRA_PLACEHOLDERS_JSON: ${{ inputs.extra-placeholders-json }}
+        PLACEHOLDER_ENV_PREFIX: ${{ inputs.placeholder-env-prefix }}
+      run: |
+        set -euo pipefail
+
+        rendered_task_definition="$RUNNER_TEMP/mugen-ecs-task-definition.json"
+        args=(
+          python "$GITHUB_ACTION_PATH/render_task_definition.py"
+          --template "${{ inputs.task-template }}"
+          --output "$rendered_task_definition"
+          --env-prefix "$PLACEHOLDER_ENV_PREFIX"
+          --set "IMAGE_URI=${{ steps.image.outputs.image-uri }}"
+          --set "AWS_REGION=${{ inputs.aws-region }}"
+          --set "ECS_TASK_EXECUTION_ROLE_ARN=${{ inputs.task-execution-role-arn }}"
+          --set "ECS_TASK_ROLE_ARN=${{ inputs.task-role-arn }}"
+        )
+
+        if [[ -n "$EXTRA_PLACEHOLDERS_JSON" && "$EXTRA_PLACEHOLDERS_JSON" != "{}" ]]; then
+          extra_placeholders_file="$RUNNER_TEMP/mugen-ecs-extra-placeholders.json"
+          printf '%s' "$EXTRA_PLACEHOLDERS_JSON" > "$extra_placeholders_file"
+          args+=(--extra-json "$extra_placeholders_file")
+        fi
+
+        "${args[@]}"
+        echo "task-definition-path=$rendered_task_definition" >> "$GITHUB_OUTPUT"
+
+    - name: Register Task Definition
+      id: register
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        task_definition_arn="$(
+          aws ecs register-task-definition \
+            --cli-input-json "file://${{ steps.render.outputs.task-definition-path }}" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text
+        )"
+
+        if [[ -z "$task_definition_arn" || "$task_definition_arn" == "None" ]]; then
+          echo "ERROR: ECS did not return a task definition ARN." >&2
+          exit 1
+        fi
+
+        echo "task-definition-arn=$task_definition_arn" >> "$GITHUB_OUTPUT"
+
+    - name: Run Migration Task
+      id: migrate
+      shell: bash
+      env:
+        MIGRATION_COMMAND_JSON: ${{ inputs.migration-command-json }}
+      run: |
+        set -euo pipefail
+
+        subnets="$(printf '%s' "${{ inputs.task-subnets }}" | tr -d '[:space:]')"
+        security_groups="$(printf '%s' "${{ inputs.task-security-groups }}" | tr -d '[:space:]')"
+        assign_public_ip="$(printf '%s' "${{ inputs.assign-public-ip }}" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
+        if [[ -z "$subnets" ]]; then
+          echo "ERROR: task-subnets must not be empty." >&2
+          exit 1
+        fi
+        if [[ -z "$security_groups" ]]; then
+          echo "ERROR: task-security-groups must not be empty." >&2
+          exit 1
+        fi
+        if [[ -z "$assign_public_ip" ]]; then
+          assign_public_ip="DISABLED"
+        fi
+        case "$assign_public_ip" in
+          ENABLED|DISABLED) ;;
+          *)
+            echo "ERROR: assign-public-ip must be ENABLED or DISABLED." >&2
+            exit 1
+            ;;
+        esac
+
+        network_configuration="awsvpcConfiguration={subnets=[$subnets],securityGroups=[$security_groups],assignPublicIp=$assign_public_ip}"
+        overrides="$(
+          python "$GITHUB_ACTION_PATH/ecs_task_helpers.py" \
+            overrides \
+            --container-name "${{ inputs.ecs-container-name }}" \
+            --command-json "$MIGRATION_COMMAND_JSON"
+        )"
+
+        run_task_output="$(
+          aws ecs run-task \
+            --cluster "${{ inputs.ecs-cluster }}" \
+            --launch-type FARGATE \
+            --task-definition "${{ steps.register.outputs.task-definition-arn }}" \
+            --network-configuration "$network_configuration" \
+            --overrides "$overrides" \
+            --output json
+        )"
+
+        migration_task_arn="$(
+          printf '%s' "$run_task_output" \
+            | python "$GITHUB_ACTION_PATH/ecs_task_helpers.py" task-arn
+        )"
+
+        echo "migration-task-arn=$migration_task_arn" >> "$GITHUB_OUTPUT"
+
+        aws ecs wait tasks-stopped \
+          --cluster "${{ inputs.ecs-cluster }}" \
+          --tasks "$migration_task_arn"
+
+        describe_task_output="$(
+          aws ecs describe-tasks \
+            --cluster "${{ inputs.ecs-cluster }}" \
+            --tasks "$migration_task_arn" \
+            --output json
+        )"
+
+        printf '%s' "$describe_task_output" \
+          | python "$GITHUB_ACTION_PATH/ecs_task_helpers.py" \
+              assert-container-exit-zero \
+              --container-name "${{ inputs.ecs-container-name }}"
+
+    - name: Update ECS Service
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        aws ecs update-service \
+          --cluster "${{ inputs.ecs-cluster }}" \
+          --service "${{ inputs.ecs-service }}" \
+          --task-definition "${{ steps.register.outputs.task-definition-arn }}" \
+          >/dev/null
+
+        aws ecs wait services-stable \
+          --cluster "${{ inputs.ecs-cluster }}" \
+          --services "${{ inputs.ecs-service }}"
+
+    - name: Smoke Test Health Endpoint
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        python "$GITHUB_ACTION_PATH/ecs_task_helpers.py" \
+          assert-health \
+          --url "${{ inputs.health-url }}"

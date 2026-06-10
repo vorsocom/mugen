@@ -1,13 +1,14 @@
 # ECS Fargate Deployment Runbook
 
-Status: Manual first-deployment runbook; CI/CD automation deferred
+Status: Manual first-deployment runbook plus automated push-to-main deployment
 Audience: Operators deploying the muGen API to AWS ECS Fargate
 
 ## Scope
 
 This runbook describes a manual first deployment of the muGen API container to
-AWS ECS Fargate behind an Application Load Balancer. It intentionally keeps DNS
-provider instructions generic and assumes pipeline automation is a follow-up.
+AWS ECS Fargate behind an Application Load Balancer, plus the GitHub Actions
+automation used for later upstream releases. DNS provider instructions are kept
+generic.
 
 Do not copy, mount, upload, or bake local `mugen.toml` into the image or ECS
 task. Production runtime values must come from ECS environment variables and AWS
@@ -112,6 +113,362 @@ export IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/mugen-ap
 Use a unique image tag for every release. Do not use `latest` in the production
 task definition, because ECS rollbacks and audits need an immutable image
 reference.
+
+## Automated Production Deployment
+
+After the one-time AWS resources exist, upstream muGen can deploy automatically
+from `main` with `.github/workflows/deploy-ecs.yml`.
+
+Creating a GitHub Release entry by itself does not deploy ECS. The active
+deployment triggers are:
+
+- a push to `main`,
+- a manual `workflow_dispatch` run from GitHub Actions.
+
+The workflow:
+
+1. Runs on `push` to `main` and `workflow_dispatch`.
+2. Uses the GitHub Environment named `production`.
+3. Authenticates to AWS with GitHub OIDC, not long-lived AWS access keys.
+4. Builds and pushes `mugen-api:${GITHUB_SHA}` to ECR.
+5. Renders `.aws/ecs-task-definition.template.json`.
+6. Registers a new ECS task definition revision.
+7. Runs `python scripts/run_migration_tracks.py upgrade head` as a one-off
+   Fargate task.
+8. Updates the ECS service only after the migration container exits `0`.
+9. Waits for ECS service stability.
+10. Smoke tests `ECS_HEALTHCHECK_URL`, which should point at `/health`.
+
+The upstream workflow deploys only the upstream/core muGen API service.
+Downstream applications must configure their own AWS role, ECR repository, ECS
+service, task template, plugin overlays, migration tracks, and smoke tests.
+
+### GitHub Environment Variables
+
+Create or update the `production` GitHub Environment:
+
+```text
+Repository -> Settings -> Environments -> production
+```
+
+Use these GitHub UI steps:
+
+1. Open the upstream repository on GitHub.
+2. Go to `Settings`.
+3. Go to `Environments`.
+4. Click `New environment` if `production` does not exist.
+5. Name the environment exactly `production`.
+6. Add required reviewers if production deploys should require manual approval.
+7. Add deployment branch restrictions if desired. For the upstream workflow,
+   allow `main`. If you plan to manually dispatch from release tags, allow the
+   matching tag pattern too.
+8. Add the values below under `Environment variables`.
+
+Configure required reviewers or other environment protection rules in the
+environment. The workflow YAML does not need to change when protection rules
+change.
+
+Set these environment variables. They are configuration values and secret ARN
+references, not the runtime secret values themselves.
+
+Use GitHub Environment variables for these values, not repository-level
+variables, unless you intentionally change the workflow to read from repository
+variables outside an environment. The job is scoped to `environment:
+production`, so environment variables are the intended source.
+
+| Variable | Example |
+| --- | --- |
+| `AWS_ROLE_TO_ASSUME` | `arn:aws:iam::<account-id>:role/mugenGithubDeployRole` |
+| `AWS_REGION` | `us-east-1` |
+| `AWS_ACCOUNT_ID` | `<account-id>` |
+| `ECR_REPOSITORY` | `mugen-api` |
+| `ECS_CLUSTER` | `mugen-prod` |
+| `ECS_SERVICE` | Existing ECS service name, for example `mugen-api-service-6p5dx07a` |
+| `ECS_CONTAINER_NAME` | `mugen-api` |
+| `ECS_TASK_EXECUTION_ROLE_ARN` | `arn:aws:iam::<account-id>:role/mugenEcsExecutionRole` |
+| `ECS_TASK_ROLE_ARN` | `arn:aws:iam::<account-id>:role/mugenApiTaskRole` |
+| `ECS_TASK_SUBNETS` | `subnet-private-a,subnet-private-b` |
+| `ECS_TASK_SECURITY_GROUPS` | `sg-mugen-api` |
+| `ECS_ASSIGN_PUBLIC_IP` | `DISABLED` |
+| `ECS_LOG_GROUP` | `/ecs/mugen-api` |
+| `ECS_HEALTHCHECK_URL` | `https://api.example.com/health` |
+| `CORS_ALLOWED_ORIGINS` | `https://app.example.com` |
+| `DATABASE_URL_SECRET_ARN` | Secrets Manager ARN for `DATABASE_URL` |
+| `SECRET_KEY_SECRET_ARN` | Secrets Manager ARN for `SECRET_KEY` |
+| `ACP_ADMIN_USERNAME_SECRET_ARN` | Secrets Manager ARN for `ACP_ADMIN_USERNAME` |
+| `ACP_ADMIN_LOGIN_EMAIL_SECRET_ARN` | Secrets Manager ARN for `ACP_ADMIN_LOGIN_EMAIL` |
+| `ACP_ADMIN_PASSWORD_SECRET_ARN` | Secrets Manager ARN for `ACP_ADMIN_PASSWORD` |
+| `ACP_ADMIN_PASSWORD_HASH_SECRET_ARN` | Secrets Manager ARN for `ACP_ADMIN_PASSWORD_HASH` |
+| `ACP_SECRET_KEY_SECRET_ARN` | Secrets Manager ARN for `ACP_SECRET_KEY` |
+| `ACP_MANAGED_SECRET_ENCRYPTION_KEY_SECRET_ARN` | Secrets Manager ARN for `ACP_MANAGED_SECRET_ENCRYPTION_KEY` |
+| `ACP_REFRESH_TOKEN_PEPPER_SECRET_ARN` | Secrets Manager ARN for `ACP_REFRESH_TOKEN_PEPPER` |
+| `ACP_JWT_CONFIG_JSON_SECRET_ARN` | Secrets Manager ARN for `ACP_JWT_CONFIG_JSON` |
+| `MUGEN_CONFIG_OVERLAY_JSON_SECRET_ARN` | Secrets Manager ARN for `MUGEN_CONFIG_OVERLAY_JSON` |
+
+`ECS_SERVICE` must be the existing service name inside `ECS_CLUSTER`. It is not
+the task-definition family, container name, or desired friendly name unless the
+actual ECS service uses that exact name.
+
+Find the service name with:
+
+```bash
+aws ecs list-services \
+  --cluster mugen-prod
+
+aws ecs describe-services \
+  --cluster mugen-prod \
+  --services <service-name>
+```
+
+Do not store `DATABASE_URL`, `SECRET_KEY`, ACP keys, JWT private keys, or
+provider API keys directly in GitHub variables or secrets for this workflow.
+Store those values in AWS Secrets Manager and place only the ARN references in
+the GitHub Environment variables.
+
+### GitHub OIDC Role
+
+Create one deploy role that trusts GitHub's OIDC provider and is limited to the
+repository and environment that may deploy production. Example trust policy for
+upstream muGen:
+
+First create or verify the GitHub OIDC provider:
+
+1. Open AWS Console.
+2. Go to `IAM`.
+3. Go to `Identity providers`.
+4. If `token.actions.githubusercontent.com` already exists, reuse it.
+5. If it does not exist, choose `Add provider`.
+6. Provider type: `OpenID Connect`.
+7. Provider URL: `https://token.actions.githubusercontent.com`.
+8. Audience: `sts.amazonaws.com`.
+9. Add the provider.
+
+Then create the deploy role:
+
+1. Go to `IAM -> Roles`.
+2. Choose `Create role`.
+3. Trusted entity type: `Web identity`.
+4. Identity provider: `token.actions.githubusercontent.com`.
+5. Audience: `sts.amazonaws.com`.
+6. Continue without attaching broad managed policies.
+7. Role name: `mugenGithubDeployRole`.
+8. Create the role.
+9. Open the role and choose `Trust relationships -> Edit trust policy`.
+10. Replace the generated trust policy with the policy below.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:vorsocom/mugen:environment:production"
+        }
+      }
+    }
+  ]
+}
+```
+
+Downstream repositories must replace `vorsocom/mugen` and `production` with
+their own repository and GitHub Environment.
+
+The deploy role should be able to:
+
+- push images to the configured ECR repository,
+- register task definition revisions,
+- run migration tasks,
+- describe tasks and services,
+- update only the target ECS service,
+- pass only the configured ECS task execution role and application task role.
+
+Use `iam:PassRole` with both a role resource restriction and the condition
+`iam:PassedToService = ecs-tasks.amazonaws.com`.
+
+Attach the deploy permissions as an inline policy:
+
+1. Open `IAM -> Roles -> mugenGithubDeployRole`.
+2. Go to `Permissions`.
+3. Choose `Add permissions`.
+4. Choose `Create inline policy`.
+5. Choose the `JSON` editor.
+6. Paste the policy shape below after replacing placeholders.
+7. Name the policy `MugenEcsDeployPolicy`.
+8. Create the policy.
+
+Example deploy-role policy shape:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EcrAuth",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "PushImage",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:CompleteLayerUpload",
+        "ecr:DescribeRepositories",
+        "ecr:InitiateLayerUpload",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart"
+      ],
+      "Resource": "arn:aws:ecr:<region>:<account-id>:repository/mugen-api"
+    },
+    {
+      "Sid": "RegisterTaskDefinitions",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeTaskDefinition",
+        "ecs:RegisterTaskDefinition"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RunAndInspectMigrationTasks",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeTasks",
+        "ecs:RunTask"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "UpdateOnlyMugenService",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServices",
+        "ecs:UpdateService"
+      ],
+      "Resource": "arn:aws:ecs:<region>:<account-id>:service/mugen-prod/mugen-api"
+    },
+    {
+      "Sid": "PassOnlyMugenTaskRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::<account-id>:role/mugenEcsExecutionRole",
+        "arn:aws:iam::<account-id>:role/mugenApiTaskRole"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
+```
+
+If your organization uses AWS IAM permissions boundaries, apply a boundary that
+does not exceed the same ECR, ECS, and `iam:PassRole` scope. Downstream apps
+should replace repository, cluster, service, and role resources with their own
+names instead of sharing the upstream production deploy role.
+
+The deploy role normally does not need `secretsmanager:GetSecretValue` for app
+runtime secrets. ECS reads task-definition secrets through
+`mugenEcsExecutionRole` when it starts the task. Grant Secrets Manager access to
+the execution role for the exact secret ARN patterns used by the task
+definition.
+
+### Task Template And Reusable Action
+
+The upstream task template is `.aws/ecs-task-definition.template.json`. It
+contains only upstream/core muGen runtime fields. The workflow passes placeholder
+values through environment variables whose names start with `TASKDEF_`; for
+example, `TASKDEF_DATABASE_URL_SECRET_ARN` fills
+`{{DATABASE_URL_SECRET_ARN}}`.
+
+The reusable deployment mechanics live in `.github/actions/ecs-deploy/`. The
+action assumes AWS credentials are already configured and accepts the ECR, ECS,
+network, task template, migration command, and health-check settings as inputs.
+It can be called locally by the upstream workflow or reused by downstream repos
+pinned to a muGen release tag:
+
+```yaml
+- uses: aws-actions/configure-aws-credentials@v4
+  with:
+    role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+    aws-region: ${{ vars.AWS_REGION }}
+
+- uses: vorsocom/mugen/.github/actions/ecs-deploy@v0.51.0
+  env:
+    TASKDEF_ACME_BILLING_CONFIG_JSON_SECRET_ARN: ${{ vars.ACME_BILLING_CONFIG_JSON_SECRET_ARN }}
+  with:
+    aws-region: ${{ vars.AWS_REGION }}
+    aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+    ecr-repository: ${{ vars.ECR_REPOSITORY }}
+    image-tag: ${{ github.sha }}
+    docker-context: .
+    dockerfile: Dockerfile
+    ecs-cluster: ${{ vars.ECS_CLUSTER }}
+    ecs-service: ${{ vars.ECS_SERVICE }}
+    ecs-container-name: ${{ vars.ECS_CONTAINER_NAME }}
+    task-template: .aws/ecs-task-definition.template.json
+    task-execution-role-arn: ${{ vars.ECS_TASK_EXECUTION_ROLE_ARN }}
+    task-role-arn: ${{ vars.ECS_TASK_ROLE_ARN }}
+    task-subnets: ${{ vars.ECS_TASK_SUBNETS }}
+    task-security-groups: ${{ vars.ECS_TASK_SECURITY_GROUPS }}
+    health-url: ${{ vars.ECS_HEALTHCHECK_URL }}
+```
+
+Downstream apps can instead copy the action and template if they need heavier
+customization.
+
+### Downstream Image And Overlay Example
+
+A downstream app should add its code to the image, then declare runtime metadata
+through environment and secret overlays:
+
+```dockerfile
+FROM <account-id>.dkr.ecr.<region>.amazonaws.com/mugen-api:<mugen-release-sha>
+
+COPY plugins/acme_billing /app/plugins/acme_billing
+RUN pip install --no-cache-dir /app/plugins/acme_billing
+```
+
+Downstream task templates typically extend the upstream template with:
+
+```json
+{
+  "environment": [
+    {
+      "name": "MUGEN_ENABLED_EXTENSIONS",
+      "value": "core.fw.channel_orchestration,core.fw.audit,acme.billing"
+    }
+  ],
+  "secrets": [
+    {
+      "name": "MUGEN_EXTENSIONS_JSON",
+      "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:acme/prod/MUGEN_EXTENSIONS_JSON"
+    },
+    {
+      "name": "MUGEN_MIGRATION_TRACKS_JSON",
+      "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:acme/prod/MUGEN_MIGRATION_TRACKS_JSON"
+    },
+    {
+      "name": "ACME_BILLING_CONFIG_JSON",
+      "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:acme/prod/ACME_BILLING_CONFIG_JSON"
+    }
+  ]
+}
+```
+
+The plugin owns the shape and validation of `ACME_BILLING_CONFIG_JSON`. Core
+muGen only validates the generic extension and migration overlay contracts.
 
 ## 1. Create Networking
 
@@ -770,7 +1127,12 @@ Task starts Hypercorn and then stops during bootstrap
 
 ## 16. Release Update Flow
 
-For later releases:
+For normal upstream releases, merge the release to `main`. The
+`deploy-ecs.yml` workflow builds the immutable image, runs migrations, updates
+the ECS service, waits for service stability, and smoke tests `/health`.
+
+Use the manual flow when bootstrapping the first deployment, recovering from a
+partially configured GitHub Environment, or intentionally bypassing automation:
 
 1. Merge or promote the release to `main`, or create a release tag from `main`.
 2. Complete [Production Release Source](#production-release-source) and confirm
@@ -781,3 +1143,19 @@ For later releases:
 6. If migrations exit `0`, update the ECS service to the new revision.
 7. Wait for service stability.
 8. Smoke test `/health` and at least one authenticated API/UI workflow.
+
+Rollback is an ECS service update to a known-good task definition revision:
+
+```bash
+aws ecs update-service \
+  --cluster mugen-prod \
+  --service mugen-api \
+  --task-definition <previous-task-definition-arn>
+
+aws ecs wait services-stable \
+  --cluster mugen-prod \
+  --services mugen-api
+```
+
+Rollbacks do not automatically reverse database migrations. Keep migrations
+backward-compatible whenever possible.
